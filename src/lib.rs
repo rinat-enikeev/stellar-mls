@@ -25,6 +25,7 @@ pub mod circuit;
 pub mod commitment;
 pub mod prover;
 pub mod ceremony;
+mod ffi;
 
 /// Circuit tier definitions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

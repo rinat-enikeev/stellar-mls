@@ -119,22 +119,27 @@ This equation holds for consecutive powers because both sides equal `e(G1, G2)^{
 
 ### Step 5: Key derivation
 
-The final SRS is hashed (SHA-256 of all serialized curve points) to produce a 32-byte seed. This seed drives a ChaCha20 CSPRNG that generates the Groth16 proving and verification keys.
+**In a production ceremony**, the Groth16 keys are derived via Phase 2 of Groth16 MPC: the QAP is evaluated directly on the SRS curve points, so no single machine ever learns the accumulated scalars. This preserves the 1-of-N trust guarantee from the ceremony all the way through to the final keys.
 
-This is deterministic: anyone with the same SRS can independently re-derive the same keys and verify they match.
+**In the reference implementation**, the simulation tracks the accumulated ceremony scalars (τ, α, β) and hashes them (domain-separated SHA-256) into a ChaCha20 seed for arkworks' standard key generation. This means the machine running `derive_keys` knows the full toxic waste. The ceremony's 1-of-N trust guarantee does NOT carry through to the derived keys — it is a simulation of the ceremony protocol, not a production-secure setup. See the "Reference implementation vs production" section below for details.
 
 ### Step 6: Transcript publication
 
-The ceremony produces a transcript — a chain of records, one per contribution:
+The ceremony produces a transcript — a chain of records, one per contribution, along with the SRS snapshot at each step:
 
 ```
 Record j:
-  index:    j
-  proof:    Schnorr-like proof of knowledge
-  srs_hash: SHA-256(SRS after contribution j)
+  index:      j
+  proof:      Schnorr-like proof of knowledge
+  srs_hash:   SHA-256(SRS after contribution j)
+  srs_snapshot: the full SRS after contribution j
 ```
 
-Anyone can verify the transcript by checking the hash chain and the final SRS consistency.
+Anyone can fully verify the transcript by:
+1. Checking the initial SRS + proof via `verify_initial_contribution`
+2. Replaying each subsequent contribution proof against the before/after SRS pairs
+3. Verifying each SRS hash matches the recorded hash
+4. Verifying the final SRS passes full internal consistency checks
 
 ---
 
@@ -165,9 +170,11 @@ There is no way to produce a corrupted SRS that passes all six pairing checks. T
 
 The Schnorr-like proof ensures each contributor actually generated fresh randomness. Without it, a participant could simply republish the previous SRS unchanged (a no-op contribution that doesn't add any security).
 
-### Deterministic key derivation prevents substitution
+### Key derivation trust model
 
-Because key derivation is deterministic from the SRS hash, nobody can substitute different keys after the ceremony. Anyone can verify: `SHA-256(SRS) → seed → ChaCha20 → keys`. If the keys don't match, the derivation was tampered with.
+In a production Phase 2 MPC, keys are derived from SRS curve points via QAP evaluation — no single machine learns the toxic waste. The 1-of-N trust guarantee extends to the final keys.
+
+In the reference implementation's simulation, one machine sees the accumulated scalars during key derivation. This is an inherent limitation of simulating MPC on a single machine. The ceremony protocol itself (contributions, pairing-based verification, transcript) is fully implemented; only the final key derivation step relies on a trusted coordinator.
 
 ---
 
@@ -197,35 +204,39 @@ The `ceremony` module implements the full pipeline:
 |----------|-------------|
 | `initialize()` | First participant: generate (τ, α, β), compute SRS, produce proof |
 | `contribute()` | Subsequent participant: generate (δ_τ, δ_α, δ_β), update SRS, produce proof |
-| `verify_contribution()` | Check a contribution via 6 pairing equations |
-| `verify_consistency()` | Check SRS internal consistency (power sequences) |
-| `hash_srs()` | SHA-256 of all SRS curve points |
-| `derive_keys()` | Deterministic Groth16 key generation from SRS hash |
-| `verify_keys_match_srs()` | Re-derive keys and compare (deterministic verification) |
+| `verify_contribution()` | Check a contribution via 6 pairing equations; rejects identity points and degenerate SRS |
+| `verify_initial_contribution()` | Verify the first SRS + proof against the curve generators |
+| `verify_consistency()` | Check ALL SRS elements for internal consistency (full O(n) pairing check) |
+| `hash_srs()` | SHA-256 of all SRS curve points (with length prefixes) |
+| `derive_keys()` | Groth16 key generation from accumulated ceremony scalars (simulation only) |
 | `compute_circuit_id()` | Compute unique circuit identifier for a tier |
+| `required_degree()` | Compute SRS degree from circuit constraint count |
 | `run_ceremony()` | Orchestrate: initialize → contribute × N → verify → derive keys |
-| `verify_transcript()` | Verify hash chain and final SRS consistency |
+| `verify_transcript()` | Full replay: verify initial contribution, all subsequent proofs, hash chain, and final consistency |
 
-### Test coverage (16 tests)
+### Test coverage (19 tests)
 
 | Test | What it verifies |
 |------|-----------------|
-| Initialize and verify consistency | SRS dimensions correct, passes consistency check |
+| Initialize and verify consistency | SRS dimensions correct, passes full consistency check |
 | Single contribution verifies | One contribution passes all pairing checks |
 | Chain of contributions | 3 sequential contributions all verify |
 | Contribution changes SRS | Every SRS element changes after a contribution |
 | Tampered SRS rejected | Replacing a curve point fails verification |
 | Wrong proof rejected | Proof for different update factors is detected |
+| Zero proof rejected | Identity (point-at-infinity) proof elements are rejected |
+| Degenerate SRS rejected | SRS with zero key elements is rejected |
 | SRS hash deterministic | Same SRS always produces same hash |
 | SRS hash changes | Hash changes after contribution |
-| Key derivation deterministic | Same SRS always produces same keys |
-| Different SRS, different keys | Different ceremony inputs produce different keys |
+| Key derivation deterministic | Same accumulated scalars always produce same keys |
+| Different scalars, different keys | Different ceremony inputs produce different keys |
 | Ceremony keys work for proving | Full roundtrip: ceremony → derive keys → create proof → verify proof |
 | Circuit ID deterministic | Same tier always produces same ID |
 | Circuit ID differs per tier | Each tier has a unique ID |
 | Run ceremony (small tier) | Full 3-participant ceremony → prove → verify |
-| Verify transcript | Transcript verification passes; tampered SRS fails |
-| Keys match SRS | Re-derivation produces identical verification key |
+| Verify transcript (full replay) | Full transcript replay passes; tampered final SRS fails |
+| Tampered intermediate rejected | Tampered intermediate SRS snapshot fails transcript verification |
+| Required degree | SRS degree is sufficient for each tier's constraint count |
 
 ---
 
@@ -236,10 +247,11 @@ The reference implementation simulates the ceremony on a single machine. In prod
 | Aspect | Reference implementation | Production ceremony |
 |--------|------------------------|-------------------|
 | Participants | Simulated sequentially | Independent machines, geographically distributed |
-| Toxic waste | Known to simulator (for testing) | Never known to any single party |
-| Key derivation | ChaCha20 seeded from SRS hash | QAP evaluation on SRS curve points (Phase 2 MPC) |
+| Toxic waste | Known to the simulator machine | Never known to any single party |
+| Key derivation | ChaCha20 seeded from accumulated scalars (the machine running it knows the toxic waste) | QAP evaluation on SRS curve points (Phase 2 MPC — no machine knows the toxic waste) |
+| 1-of-N guarantee | Applies to SRS only; does NOT extend to derived keys | Extends through to final keys |
 | Minimum participants | 1 (for testing) | 10+ (for security) |
-| Verification | All pairing checks implemented | Same checks, run by independent auditors |
-| Transcript | In-memory | Published publicly for anyone to verify |
+| Verification | All pairing checks implemented, full consistency checks on all elements | Same checks, run by independent auditors |
+| Transcript | In-memory with full SRS snapshots | Published publicly for anyone to verify |
 
-The cryptographic verification (pairing checks, consistency proofs, transcript verification) is identical in both cases. The production ceremony adds operational security (separate machines, public coordination, attestation publication) on top of the same mathematical foundation.
+The ceremony protocol (contributions, pairing-based verification, transcript replay) is identical in both cases. The critical difference is key derivation: the reference implementation's key derivation step breaks the 1-of-N trust guarantee because one machine sees the accumulated scalars. A production deployment MUST replace this with Phase 2 Groth16 MPC.

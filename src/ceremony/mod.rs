@@ -280,6 +280,68 @@ pub fn verify_contribution(
     tau_ok && alpha_ok && beta_ok && tau_cross && alpha_cross && beta_cross
 }
 
+/// Verify the initial SRS and its contribution proof.
+///
+/// The initial contribution has no "before" SRS. Instead we verify:
+/// 1. The SRS is internally consistent
+/// 2. The proof demonstrates knowledge of the factors that produced
+///    the SRS from the curve generators (same pairing-check structure
+///    but against the generator points instead of a previous SRS).
+pub fn verify_initial_contribution(
+    srs: &PowersOfTau,
+    proof: &ContributionProof,
+) -> bool {
+    // Reject identity proof elements
+    if proof.tau_proof.0.is_zero()
+        || proof.tau_proof.1.is_zero()
+        || proof.alpha_proof.0.is_zero()
+        || proof.alpha_proof.1.is_zero()
+        || proof.beta_proof.0.is_zero()
+        || proof.beta_proof.1.is_zero()
+    {
+        return false;
+    }
+
+    // Reject degenerate SRS
+    if srs.tau_g1.len() < 2
+        || srs.tau_g2.len() < 2
+        || srs.alpha_tau_g1.len() < 2
+        || srs.beta_tau_g1.len() < 2
+    {
+        return false;
+    }
+    if srs.tau_g1[1].is_zero()
+        || srs.tau_g2[1].is_zero()
+        || srs.alpha_tau_g1[0].is_zero()
+        || srs.beta_tau_g1[0].is_zero()
+        || srs.beta_g2.is_zero()
+    {
+        return false;
+    }
+
+    let g1 = G1Affine::generator();
+    let g2 = G2Affine::generator();
+
+    // Tau proof: e(s·G1, τ·G2) == e(δ_τ·s·G1, G2)
+    // For the initial contribution, δ_τ = τ (the SRS was created from scratch).
+    let tau_ok = Bls12_381::pairing(proof.tau_proof.0, srs.tau_g2[1])
+        == Bls12_381::pairing(proof.tau_proof.1, g2);
+
+    // Alpha proof: e(α·G1, s·G2) == e(G1, δ_α·s·G2)
+    // For initial, δ_α = α.
+    let alpha_ok = Bls12_381::pairing(srs.alpha_tau_g1[0], proof.alpha_proof.0)
+        == Bls12_381::pairing(g1, proof.alpha_proof.1);
+
+    // Beta proof: e(s·G1, β·G2) == e(δ_β·s·G1, G2)
+    let beta_ok = Bls12_381::pairing(proof.beta_proof.0, srs.beta_g2)
+        == Bls12_381::pairing(proof.beta_proof.1, g2);
+
+    // Internal consistency
+    let consistent = verify_consistency(srs);
+
+    tau_ok && alpha_ok && beta_ok && consistent
+}
+
 /// Verify the internal consistency of an SRS.
 ///
 /// Checks that EVERY element in each series forms a valid power sequence
@@ -592,9 +654,11 @@ pub fn run_ceremony<R: Rng + rand::CryptoRng>(
 /// Verify an entire ceremony transcript.
 ///
 /// Replays every contribution, checking:
-/// 1. Each contribution proof against the before/after SRS pair
-/// 2. Each SRS hash matches the recorded hash
-/// 3. The final SRS passes full consistency verification
+/// 1. The initial SRS + proof via `verify_initial_contribution`
+/// 2. Each subsequent contribution proof against the before/after SRS pair
+/// 3. Each SRS hash matches the recorded hash
+/// 4. Every intermediate SRS is internally consistent
+/// 5. The final SRS matches the provided `final_srs`
 pub fn verify_transcript(transcript: &CeremonyTranscript, final_srs: &PowersOfTau) -> bool {
     if transcript.contributions.is_empty() || transcript.srs_snapshots.is_empty() {
         return false;
@@ -614,7 +678,15 @@ pub fn verify_transcript(transcript: &CeremonyTranscript, final_srs: &PowersOfTa
         }
     }
 
-    // Verify each contribution proof (starting from contribution 1)
+    // Verify the initial contribution (index 0): SRS consistency + proof of knowledge
+    if !verify_initial_contribution(
+        &transcript.srs_snapshots[0],
+        &transcript.contributions[0].proof,
+    ) {
+        return false;
+    }
+
+    // Verify each subsequent contribution proof
     for i in 1..transcript.contributions.len() {
         let before = &transcript.srs_snapshots[i - 1];
         let after = &transcript.srs_snapshots[i];

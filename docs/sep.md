@@ -647,15 +647,13 @@ Each ceremony MUST:
 - Verify each contribution via pairing checks before accepting
 - Record a SHA-256 hash chain of SRS states as a public transcript
 - Publish all contribution hashes and attestations publicly
-- Derive the final Groth16 keys deterministically from the verified SRS
+- Derive the final Groth16 keys via Phase 2 MPC or from the accumulated ceremony scalars
 
 ##### 8.2.3 Key derivation
 
-After the ceremony completes, the Groth16 proving and verification keys are derived deterministically from the final SRS. The derivation seeds a ChaCha20 CSPRNG from the SHA-256 hash of the serialized SRS and uses this to drive the standard Groth16 key generation algorithm.
+**Production deployments** MUST derive Groth16 keys via Phase 2 of Groth16 MPC: the QAP is evaluated directly on the SRS curve points, so that no single machine ever learns the accumulated toxic waste scalars (τ, α, β, γ, δ). This preserves the ceremony's 1-of-N trust guarantee through to the final keys.
 
-This determinism ensures anyone with the final SRS can independently verify the derived keys by re-running the derivation.
-
-In a production deployment with stronger security requirements, key derivation SHOULD operate directly on the SRS curve points via QAP evaluation (Phase 2 of Groth16 MPC), avoiding any single machine knowing the toxic waste scalars.
+**The reference implementation** uses a simulation approach: the accumulated ceremony scalars are hashed (domain-separated SHA-256) into a ChaCha20 CSPRNG seed, which drives arkworks' standard Groth16 `circuit_specific_setup`. This means the machine executing key derivation sees the accumulated scalars and can recover the Groth16 toxic waste. The 1-of-N trust guarantee of the ceremony does NOT carry through to the derived keys in this simulation. The reference implementation demonstrates the ceremony protocol (contribution, pairing-based verification, transcript) but relies on a placeholder key derivation that is not production-secure.
 
 ##### 8.2.4 Circuit identifier
 

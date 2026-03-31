@@ -375,4 +375,54 @@ mod tests {
         let expected = poseidon_hash_one(&config, &sk);
         assert_eq!(leaf, expected);
     }
+
+    #[test]
+    fn test_same_group_different_members_same_public_inputs() {
+        // Different members of the same group, same epoch/salt, must produce
+        // identical public inputs (same commitment, same epoch). Only the
+        // proof bytes differ.
+        let mut rng = test_rng();
+        let setup_result = setup(5, &mut rng).expect("Setup failed");
+
+        let keys = vec![Fr::from(100u64), Fr::from(200u64)];
+        let salt = [0xAA; 32];
+        let epoch = 0u64;
+
+        let input_0 = make_prover_input(&keys, 0, epoch, salt, 5);
+        let (_, pi_0) = prove(&setup_result.proving_key, &input_0, &mut rng).unwrap();
+
+        let mut rng2 = ChaCha20Rng::seed_from_u64(99);
+        let input_1 = make_prover_input(&keys, 1, epoch, salt, 5);
+        let (_, pi_1) = prove(&setup_result.proving_key, &input_1, &mut rng2).unwrap();
+
+        assert_eq!(
+            pi_0.commitment, pi_1.commitment,
+            "Same group state must produce same commitment regardless of prover"
+        );
+        assert_eq!(
+            pi_0.epoch, pi_1.epoch,
+            "Same epoch must produce same epoch public input"
+        );
+    }
+
+    #[test]
+    fn test_max_epoch_value() {
+        // Boundary test: epoch = u64::MAX must work correctly.
+        let mut rng = test_rng();
+        let setup_result = setup(5, &mut rng).expect("Setup failed");
+
+        let input = make_prover_input(
+            &[Fr::from(42u64)],
+            0, u64::MAX, [0xAA; 32], 5,
+        );
+
+        let (proof, public_inputs) = prove(&setup_result.proving_key, &input, &mut rng)
+            .expect("Proving with max epoch failed");
+
+        let valid = verify(&setup_result.prepared_vk, &proof, &public_inputs)
+            .expect("Verification failed");
+
+        assert!(valid, "Proof with u64::MAX epoch must verify");
+        assert_eq!(public_inputs.epoch, Fr::from(u64::MAX));
+    }
 }

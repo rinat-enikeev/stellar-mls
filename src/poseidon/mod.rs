@@ -224,4 +224,45 @@ mod tests {
             assert_eq!(row.len(), width);
         }
     }
+
+    #[test]
+    fn test_poseidon_hash_one_zero_is_nonzero() {
+        // Critical for empty-slot security: Poseidon(0) must not equal 0,
+        // otherwise an attacker could forge a proof for an empty leaf.
+        let config = poseidon_config::<Fr>();
+        let zero = Fr::from(0u64);
+        let h = poseidon_hash_one(&config, &zero);
+        assert_ne!(h, Fr::from(0u64), "Poseidon(0) must not be zero (empty-slot attack)");
+    }
+
+    #[test]
+    fn test_config_deterministic() {
+        // Two calls to poseidon_config must produce identical parameters.
+        let config1 = poseidon_config::<Fr>();
+        let config2 = poseidon_config::<Fr>();
+        assert_eq!(config1.full_rounds, config2.full_rounds);
+        assert_eq!(config1.partial_rounds, config2.partial_rounds);
+        assert_eq!(config1.alpha, config2.alpha);
+        assert_eq!(config1.rate, config2.rate);
+        assert_eq!(config1.capacity, config2.capacity);
+        assert_eq!(config1.ark, config2.ark);
+        assert_eq!(config1.mds, config2.mds);
+
+        // And hashing with both configs gives the same result.
+        let a = Fr::from(42u64);
+        let h1 = poseidon_hash_one(&config1, &a);
+        let h2 = poseidon_hash_one(&config2, &a);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_hash_one_vs_hash_two_domain_separation() {
+        // H1(x) must differ from H2(x, x) — different absorption patterns
+        // must produce different outputs to prevent cross-domain collisions.
+        let config = poseidon_config::<Fr>();
+        let x = Fr::from(42u64);
+        let h1 = poseidon_hash_one(&config, &x);
+        let h2 = poseidon_hash_two(&config, &x, &x);
+        assert_ne!(h1, h2, "hash_one(x) must differ from hash_two(x, x)");
+    }
 }

@@ -581,4 +581,156 @@ mod tests {
             "Circuit must have exactly 2 public inputs (+ 1 constant)"
         );
     }
+
+    #[test]
+    fn test_circuit_rejects_tampered_merkle_path() {
+        // Valid circuit, then tamper with one sibling in the Merkle path.
+        let keys = vec![Fr::from(100u64), Fr::from(200u64)];
+        let config = poseidon_config::<Fr>();
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
+        let root = tree.root();
+        let proof = tree.prove(0);
+
+        let epoch = 0u64;
+        let salt = [0xAA; 32];
+        let commitment = compute_poseidon_commitment(&config, &root, epoch, &salt);
+
+        let mut tampered_path = proof.path.clone();
+        tampered_path[0] = Fr::from(12345u64); // corrupt first sibling
+
+        let circuit = MembershipCircuit::new(
+            commitment,
+            epoch,
+            keys[0],
+            root,
+            salt,
+            tampered_path,
+            proof.leaf_index,
+            5,
+        );
+
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        circuit.generate_constraints(cs.clone()).unwrap();
+
+        assert!(
+            !cs.is_satisfied().unwrap(),
+            "Circuit must reject a tampered Merkle path"
+        );
+    }
+
+    #[test]
+    fn test_circuit_rejects_wrong_leaf_index() {
+        // Prover uses correct key and path but claims a different tree position.
+        let keys = vec![Fr::from(100u64), Fr::from(200u64)];
+        let config = poseidon_config::<Fr>();
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
+        let root = tree.root();
+        let proof = tree.prove(0); // correct path for index 0
+
+        let epoch = 0u64;
+        let salt = [0xAA; 32];
+        let commitment = compute_poseidon_commitment(&config, &root, epoch, &salt);
+
+        let circuit = MembershipCircuit::new(
+            commitment,
+            epoch,
+            keys[0],
+            root,
+            salt,
+            proof.path,
+            1, // <- wrong index, path is for index 0
+            5,
+        );
+
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        circuit.generate_constraints(cs.clone()).unwrap();
+
+        assert!(
+            !cs.is_satisfied().unwrap(),
+            "Circuit must reject wrong leaf index with mismatched path"
+        );
+    }
+
+    #[test]
+    fn test_circuit_rejects_zero_secret_key_for_empty_slot() {
+        // Empty-slot attack: attacker tries sk=0 hoping Poseidon(0) = 0 (the empty leaf).
+        // This must fail because Poseidon(0) != 0.
+        let keys = vec![Fr::from(100u64)]; // slot 0 occupied, slots 1..31 empty (zero)
+        let config = poseidon_config::<Fr>();
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
+        let root = tree.root();
+        let proof = tree.prove(1); // path for empty slot at index 1
+
+        let epoch = 0u64;
+        let salt = [0xAA; 32];
+        let commitment = compute_poseidon_commitment(&config, &root, epoch, &salt);
+
+        // Attacker uses sk=0, hoping Poseidon(0) matches the zero leaf
+        let circuit = MembershipCircuit::new(
+            commitment,
+            epoch,
+            Fr::from(0u64), // <- attacker's "key"
+            root,
+            salt,
+            proof.path,
+            proof.leaf_index,
+            5,
+        );
+
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        circuit.generate_constraints(cs.clone()).unwrap();
+
+        assert!(
+            !cs.is_satisfied().unwrap(),
+            "Circuit must reject sk=0 for empty slot (Poseidon(0) != 0)"
+        );
+    }
+
+    #[test]
+    fn test_circuit_last_position_member() {
+        // Edge case: member at the last leaf position (all index bits = 1).
+        // Tests that conditionally_select works when all bits are set.
+        let depth = 5;
+        let num_leaves = 1 << depth; // 32
+        let keys: Vec<Fr> = (1..=num_leaves as u64).map(Fr::from).collect();
+        let circuit = build_test_circuit(&keys, num_leaves - 1, 0, [0xFF; 32], depth);
+
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        circuit.generate_constraints(cs.clone()).unwrap();
+
+        assert!(
+            cs.is_satisfied().unwrap(),
+            "Circuit must work for the last leaf (all index bits = 1)"
+        );
+    }
+
+    #[test]
+    fn test_native_poseidon_matches_circuit_poseidon() {
+        // Verify that the in-circuit Poseidon gadget produces the same
+        // output as the native Poseidon function. This is the foundational
+        // assumption for the entire circuit's correctness.
+        use crate::poseidon::{poseidon_hash_one, poseidon_hash_two};
+
+        let config = poseidon_config::<Fr>();
+        let a = Fr::from(42u64);
+        let b = Fr::from(99u64);
+
+        // Compute natively
+        let native_h1 = poseidon_hash_one(&config, &a);
+        let native_h2 = poseidon_hash_two(&config, &a, &b);
+
+        // Compute via circuit gadget and extract the assigned value
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        let a_var = FpVar::new_witness(cs.clone(), || Ok(a)).unwrap();
+        let b_var = FpVar::new_witness(cs.clone(), || Ok(b)).unwrap();
+
+        let circuit_h1 = poseidon_hash_one_gadget(cs.clone(), &config, &a_var).unwrap();
+        let circuit_h2 = poseidon_hash_two_gadget(cs.clone(), &config, &a_var, &b_var).unwrap();
+
+        assert_eq!(circuit_h1.value().unwrap(), native_h1,
+            "In-circuit Poseidon hash_one must match native");
+        assert_eq!(circuit_h2.value().unwrap(), native_h2,
+            "In-circuit Poseidon hash_two must match native");
+        assert!(cs.is_satisfied().unwrap());
+    }
 }

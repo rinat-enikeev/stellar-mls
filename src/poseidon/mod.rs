@@ -87,7 +87,10 @@ fn generate_round_constants<F: PrimeField>(count: usize) -> Vec<F> {
     use sha2::{Sha256, Digest};
 
     let mut constants = Vec::with_capacity(count);
-    let mut seed = Sha256::digest(b"SEP-XXXX-Poseidon-BLS12-381-round-constants");
+    // Domain-separated seed includes all Poseidon parameters for reproducibility.
+    // Production deployments SHOULD use canonical constants from the Poseidon
+    // reference generation script (generate_params_poseidon.sage).
+    let mut seed = Sha256::digest(b"SEP-XXXX-Poseidon-BLS12-381-w3-f8-p56-a5-round-constants");
 
     for _ in 0..count {
         // Extend seed to 64 bytes for uniform field element sampling

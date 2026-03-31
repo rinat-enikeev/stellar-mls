@@ -1,20 +1,18 @@
 //! Groth16 circuit for SEP-XXXX membership proof.
 //!
-//! Public inputs: commitment (as field elements), epoch
-//! Witness: sk, poseidon_root, salt, merkle_path, leaf_index
+//! Public inputs: commitment, epoch
+//! Witness: secret_key, poseidon_root, salt, merkle_path, leaf_index
 //!
 //! Constraints:
-//! 1. pk = sk * G1 (key ownership) — simplified as pk = sk for the circuit,
-//!    with the full scalar-mul verified via the Poseidon leaf binding
-//! 2. MerklePoseidonOpen(Poseidon(pk), path, index, root) == true
-//! 3. SHA-256(poseidon_root || epoch || salt) == commitment
+//! 1. leaf = Poseidon(secret_key) — key ownership via preimage knowledge
+//! 2. MerklePoseidonOpen(leaf, path, index, root) == poseidon_root
+//! 3. Poseidon(Poseidon(poseidon_root, epoch), salt) == commitment
 //!
-//! Note: For the initial implementation, Constraint 1 (key ownership) is
-//! simplified: the circuit takes `member_scalar` as witness and proves it
-//! is a leaf in the Merkle tree. The full BLS12-381 scalar multiplication
-//! `sk * G1 = pk` will be added when arkworks' BLS12-381 G1 gadget is
-//! integrated. The current approach is sound for the commitment+Merkle
-//! proof path and allows full end-to-end testing of the proving pipeline.
+//! Key ownership model: The prover demonstrates knowledge of `secret_key`
+//! (the BLS12-381 private key scalar). The leaf `Poseidon(secret_key)` is
+//! a one-way commitment — only the private key holder can produce the
+//! preimage. The binding between the private key and the BLS12-381 public
+//! key `pk = sk * G1` is verified off-chain during member registration.
 
 use ark_bls12_381::Fr;
 use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
@@ -30,24 +28,26 @@ use crate::poseidon::poseidon_config;
 
 /// The SEP-XXXX membership circuit.
 ///
-/// Proves: "I know a member scalar that is in the Poseidon Merkle tree
-/// whose root, combined with epoch and salt, hashes to the public commitment."
+/// Proves: "I know a secret key whose Poseidon hash is a leaf in the
+/// Poseidon Merkle tree whose root, combined with epoch and salt,
+/// hashes to the public commitment."
 #[derive(Clone)]
 pub struct MembershipCircuit<F: PrimeField + Absorb> {
     // === Public inputs ===
-    /// The on-chain commitment (represented as two field elements for
-    /// the 256-bit SHA-256 output: high 128 bits and low 128 bits).
-    pub commitment_high: Option<F>,
-    pub commitment_low: Option<F>,
+    /// The Poseidon-based commitment binding value:
+    /// `Poseidon(Poseidon(poseidon_root, epoch), salt)`
+    pub commitment: Option<F>,
     /// The epoch value.
     pub epoch: Option<u64>,
 
     // === Witness (private) ===
-    /// The member's scalar identity (x-coordinate of BLS12-381 G1 public key).
-    pub member_scalar: Option<F>,
+    /// The prover's BLS12-381 private key scalar.
+    /// Key ownership: only the holder of this scalar can produce Poseidon(sk)
+    /// which matches the leaf in the Merkle tree.
+    pub secret_key: Option<F>,
     /// The Poseidon Merkle root.
     pub poseidon_root: Option<F>,
-    /// The 32-byte salt.
+    /// The 32-byte salt (converted to field element inside the circuit).
     pub salt: Option<[u8; 32]>,
     /// Merkle proof path (sibling hashes, from leaf to root).
     pub merkle_path: Option<Vec<F>>,
@@ -63,10 +63,9 @@ pub struct MembershipCircuit<F: PrimeField + Absorb> {
 impl<F: PrimeField + Absorb> MembershipCircuit<F> {
     /// Create a new circuit with all witness values set.
     pub fn new(
-        commitment_high: F,
-        commitment_low: F,
+        commitment: F,
         epoch: u64,
-        member_scalar: F,
+        secret_key: F,
         poseidon_root: F,
         salt: [u8; 32],
         merkle_path: Vec<F>,
@@ -74,10 +73,9 @@ impl<F: PrimeField + Absorb> MembershipCircuit<F> {
         depth: usize,
     ) -> Self {
         Self {
-            commitment_high: Some(commitment_high),
-            commitment_low: Some(commitment_low),
+            commitment: Some(commitment),
             epoch: Some(epoch),
-            member_scalar: Some(member_scalar),
+            secret_key: Some(secret_key),
             poseidon_root: Some(poseidon_root),
             salt: Some(salt),
             merkle_path: Some(merkle_path),
@@ -90,10 +88,9 @@ impl<F: PrimeField + Absorb> MembershipCircuit<F> {
     /// Create an empty circuit (for setup/keygen — no witness values).
     pub fn empty(depth: usize) -> Self {
         Self {
-            commitment_high: None,
-            commitment_low: None,
+            commitment: None,
             epoch: None,
-            member_scalar: None,
+            secret_key: None,
             poseidon_root: None,
             salt: None,
             merkle_path: None,
@@ -110,15 +107,11 @@ impl ConstraintSynthesizer<Fr> for MembershipCircuit<Fr> {
         cs: ConstraintSystemRef<Fr>,
     ) -> Result<(), SynthesisError> {
         // ============================================================
-        // Allocate public inputs
+        // Allocate public inputs (2 field elements)
         // ============================================================
-        let commitment_high_var = FpVar::new_input(
+        let commitment_var = FpVar::new_input(
             cs.clone(),
-            || self.commitment_high.ok_or(SynthesisError::AssignmentMissing),
-        )?;
-        let commitment_low_var = FpVar::new_input(
-            cs.clone(),
-            || self.commitment_low.ok_or(SynthesisError::AssignmentMissing),
+            || self.commitment.ok_or(SynthesisError::AssignmentMissing),
         )?;
         let epoch_var = FpVar::new_input(
             cs.clone(),
@@ -132,16 +125,19 @@ impl ConstraintSynthesizer<Fr> for MembershipCircuit<Fr> {
         // ============================================================
         // Allocate witness values
         // ============================================================
-        let member_scalar_var = FpVar::new_witness(
+        let secret_key_var = FpVar::new_witness(
             cs.clone(),
-            || self.member_scalar.ok_or(SynthesisError::AssignmentMissing),
+            || self.secret_key.ok_or(SynthesisError::AssignmentMissing),
         )?;
         let poseidon_root_var = FpVar::new_witness(
             cs.clone(),
             || self.poseidon_root.ok_or(SynthesisError::AssignmentMissing),
         )?;
 
-        // Salt as a field element witness (converted from bytes outside the circuit)
+        // Salt as a field element witness.
+        // Note: from_le_bytes_mod_order reduces 256-bit salt modulo r (~2^255),
+        // losing ~1 bit of entropy for ~50% of random salts. This is acceptable
+        // as 255 bits exceeds the 128-bit security target.
         let salt_var = FpVar::new_witness(cs.clone(), || {
             self.salt
                 .map(|s| Fr::from_le_bytes_mod_order(&s))
@@ -172,30 +168,26 @@ impl ConstraintSynthesizer<Fr> for MembershipCircuit<Fr> {
             .collect::<Result<Vec<_>, _>>()?;
 
         // ============================================================
-        // Constraint 1: Key ownership (simplified)
+        // Constraint 1: Key ownership
         //
-        // In the full implementation, this would verify sk * G1 = pk.
-        // For now, member_scalar is the key identity used directly.
-        // The circuit proves the scalar is a Merkle leaf member.
+        // leaf = Poseidon(secret_key)
+        //
+        // The prover demonstrates knowledge of the secret key by
+        // providing its preimage. Only the private key holder can
+        // produce a value that hashes to the registered leaf.
         // ============================================================
-        // (No additional constraints needed for simplified version —
-        //  the scalar is bound to the Merkle tree in Constraint 2.)
+        let leaf_var = poseidon_hash_one_gadget(
+            cs.clone(),
+            &self.poseidon_config,
+            &secret_key_var,
+        )?;
 
         // ============================================================
         // Constraint 2: Poseidon Merkle membership
         //
-        // Verify that Poseidon(member_scalar) is a leaf in the tree
+        // Verify that the leaf (derived from secret_key) is in the tree
         // with root poseidon_root.
         // ============================================================
-
-        // Hash the member scalar to get the leaf
-        let leaf_var = poseidon_hash_one_gadget(
-            cs.clone(),
-            &self.poseidon_config,
-            &member_scalar_var,
-        )?;
-
-        // Walk up the Merkle tree
         let mut current = leaf_var;
         for i in 0..self.depth {
             let sibling = &path_vars[i];
@@ -218,28 +210,10 @@ impl ConstraintSynthesizer<Fr> for MembershipCircuit<Fr> {
         current.enforce_equal(&poseidon_root_var)?;
 
         // ============================================================
-        // Constraint 3: Commitment binding
+        // Constraint 3: Commitment binding (Poseidon-only)
         //
-        // Verify SHA-256(poseidon_root || epoch || salt) == commitment
-        //
-        // Since SHA-256 in R1CS is expensive (~25k constraints), and the
-        // commitment check can be done more efficiently by decomposing it,
-        // we use a simplified approach: the verifier checks the commitment
-        // externally, and the circuit binds the root, epoch, and salt to
-        // the public commitment via field arithmetic.
-        //
-        // Specifically, we constrain:
-        //   commitment_high == truncate_high(SHA256(root || epoch || salt))
-        //   commitment_low  == truncate_low(SHA256(root || epoch || salt))
-        //
-        // For the initial implementation, we use a Poseidon-based binding
-        // instead of in-circuit SHA-256, and the contract verifies the
-        // SHA-256 commitment externally by recomputing it from public inputs.
+        // Poseidon(Poseidon(poseidon_root, epoch), salt) == commitment
         // ============================================================
-
-        // Poseidon binding: hash(poseidon_root, epoch) and check it matches
-        // a commitment witness. The on-chain contract verifies the SHA-256
-        // commitment separately.
         let epoch_and_root_hash = poseidon_hash_two_gadget(
             cs.clone(),
             &self.poseidon_config,
@@ -247,7 +221,6 @@ impl ConstraintSynthesizer<Fr> for MembershipCircuit<Fr> {
             &epoch_var,
         )?;
 
-        // Bind the salt into the commitment via another Poseidon hash
         let full_binding = poseidon_hash_two_gadget(
             cs.clone(),
             &self.poseidon_config,
@@ -255,13 +228,8 @@ impl ConstraintSynthesizer<Fr> for MembershipCircuit<Fr> {
             &salt_var,
         )?;
 
-        // The public inputs commitment_high and commitment_low encode the
-        // expected binding value. For the Poseidon-based binding, we use
-        // a single field element comparison.
-        full_binding.enforce_equal(&commitment_high_var)?;
-
-        // commitment_low is constrained to equal epoch for additional binding
-        epoch_var.enforce_equal(&commitment_low_var)?;
+        // Bind to the public commitment input
+        full_binding.enforce_equal(&commitment_var)?;
 
         Ok(())
     }
@@ -306,15 +274,15 @@ fn poseidon_hash_two_gadget(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commitment::compute_poseidon_commitment;
     use crate::merkle::PoseidonMerkleTree;
-    use crate::poseidon::{poseidon_config, poseidon_hash_two};
+    use crate::poseidon::poseidon_config;
     use ark_bls12_381::Fr;
-    use ark_ff::PrimeField;
     use ark_relations::r1cs::ConstraintSystem;
 
-    /// Helper: build a circuit from member scalars and a chosen prover index.
+    /// Helper: build a circuit from secret keys and a chosen prover index.
     fn build_test_circuit(
-        member_scalars: &[Fr],
+        secret_keys: &[Fr],
         prover_index: usize,
         epoch: u64,
         salt: [u8; 32],
@@ -322,24 +290,18 @@ mod tests {
     ) -> MembershipCircuit<Fr> {
         let config = poseidon_config::<Fr>();
 
-        // Build Merkle tree
-        let tree = PoseidonMerkleTree::build(&config, member_scalars, depth);
+        // Build Merkle tree (hashes each secret key to make a leaf)
+        let tree = PoseidonMerkleTree::build(&config, secret_keys, depth);
         let root = tree.root();
         let proof = tree.prove(prover_index);
 
-        // Compute the Poseidon-based binding (matching circuit logic)
-        let epoch_fr = Fr::from(epoch);
-        let epoch_root_hash = poseidon_hash_two(&config, &root, &epoch_fr);
-
-        // Convert salt to field element (matching circuit logic)
-        let salt_field = salt_bytes_to_field(&salt);
-        let full_binding = poseidon_hash_two(&config, &epoch_root_hash, &salt_field);
+        // Compute the Poseidon commitment binding
+        let commitment = compute_poseidon_commitment(&config, &root, epoch, &salt);
 
         MembershipCircuit::new(
-            full_binding,        // commitment_high = Poseidon binding
-            epoch_fr,            // commitment_low = epoch
+            commitment,
             epoch,
-            member_scalars[prover_index],
+            secret_keys[prover_index],
             root,
             salt,
             proof.path,
@@ -348,15 +310,10 @@ mod tests {
         )
     }
 
-    /// Convert salt bytes to field element (matches circuit logic).
-    fn salt_bytes_to_field(salt: &[u8; 32]) -> Fr {
-        Fr::from_le_bytes_mod_order(salt)
-    }
-
     #[test]
     fn test_circuit_satisfiable_2_members() {
-        let members = vec![Fr::from(100u64), Fr::from(200u64)];
-        let circuit = build_test_circuit(&members, 0, 0, [0xAA; 32], 5);
+        let keys = vec![Fr::from(100u64), Fr::from(200u64)];
+        let circuit = build_test_circuit(&keys, 0, 0, [0xAA; 32], 5);
 
         let cs = ConstraintSystem::<Fr>::new_ref();
         circuit.generate_constraints(cs.clone()).unwrap();
@@ -373,8 +330,8 @@ mod tests {
 
     #[test]
     fn test_circuit_satisfiable_3_members() {
-        let members = vec![Fr::from(10u64), Fr::from(20u64), Fr::from(30u64)];
-        let circuit = build_test_circuit(&members, 1, 1, [0xBB; 32], 5);
+        let keys = vec![Fr::from(10u64), Fr::from(20u64), Fr::from(30u64)];
+        let circuit = build_test_circuit(&keys, 1, 1, [0xBB; 32], 5);
 
         let cs = ConstraintSystem::<Fr>::new_ref();
         circuit.generate_constraints(cs.clone()).unwrap();
@@ -387,8 +344,8 @@ mod tests {
 
     #[test]
     fn test_circuit_satisfiable_single_member() {
-        let members = vec![Fr::from(42u64)];
-        let circuit = build_test_circuit(&members, 0, 0, [0x00; 32], 5);
+        let keys = vec![Fr::from(42u64)];
+        let circuit = build_test_circuit(&keys, 0, 0, [0x00; 32], 5);
 
         let cs = ConstraintSystem::<Fr>::new_ref();
         circuit.generate_constraints(cs.clone()).unwrap();
@@ -398,8 +355,8 @@ mod tests {
 
     #[test]
     fn test_circuit_satisfiable_full_tree() {
-        let members: Vec<Fr> = (1..=32).map(|i| Fr::from(i as u64)).collect();
-        let circuit = build_test_circuit(&members, 15, 7, [0xCC; 32], 5);
+        let keys: Vec<Fr> = (1..=32).map(|i| Fr::from(i as u64)).collect();
+        let circuit = build_test_circuit(&keys, 15, 7, [0xCC; 32], 5);
 
         let cs = ConstraintSystem::<Fr>::new_ref();
         circuit.generate_constraints(cs.clone()).unwrap();
@@ -408,28 +365,25 @@ mod tests {
     }
 
     #[test]
-    fn test_circuit_rejects_wrong_member() {
-        let members = vec![Fr::from(100u64), Fr::from(200u64)];
+    fn test_circuit_rejects_wrong_secret_key() {
+        // Build tree with known keys
+        let keys = vec![Fr::from(100u64), Fr::from(200u64)];
         let config = poseidon_config::<Fr>();
-        let tree = PoseidonMerkleTree::build(&config, &members, 5);
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
         let root = tree.root();
         let proof = tree.prove(0);
 
         let epoch = 0u64;
         let salt = [0xAA; 32];
-        let epoch_fr = Fr::from(epoch);
-        let epoch_root_hash = poseidon_hash_two(&config, &root, &epoch_fr);
-        let salt_field = salt_bytes_to_field(&salt);
-        let full_binding = poseidon_hash_two(&config, &epoch_root_hash, &salt_field);
+        let commitment = compute_poseidon_commitment(&config, &root, epoch, &salt);
 
-        // Use a WRONG member scalar (not in the tree)
-        let wrong_scalar = Fr::from(999u64);
+        // Use a WRONG secret key (not in the tree)
+        let wrong_key = Fr::from(999u64);
 
         let circuit = MembershipCircuit::new(
-            full_binding,
-            epoch_fr,
+            commitment,
             epoch,
-            wrong_scalar,   // <- not a member
+            wrong_key,   // <- not a member's secret key
             root,
             salt,
             proof.path,
@@ -442,30 +396,27 @@ mod tests {
 
         assert!(
             !cs.is_satisfied().unwrap(),
-            "Circuit must reject a non-member scalar"
+            "Circuit must reject a non-member secret key"
         );
     }
 
     #[test]
     fn test_circuit_rejects_wrong_root() {
-        let members = vec![Fr::from(100u64), Fr::from(200u64)];
+        let keys = vec![Fr::from(100u64), Fr::from(200u64)];
         let config = poseidon_config::<Fr>();
-        let tree = PoseidonMerkleTree::build(&config, &members, 5);
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
         let proof = tree.prove(0);
 
         let wrong_root = Fr::from(9999u64);
         let epoch = 0u64;
         let salt = [0xAA; 32];
-        let epoch_fr = Fr::from(epoch);
-        let epoch_root_hash = poseidon_hash_two(&config, &wrong_root, &epoch_fr);
-        let salt_field = salt_bytes_to_field(&salt);
-        let full_binding = poseidon_hash_two(&config, &epoch_root_hash, &salt_field);
+        // Commitment computed with wrong root
+        let commitment = compute_poseidon_commitment(&config, &wrong_root, epoch, &salt);
 
         let circuit = MembershipCircuit::new(
-            full_binding,
-            epoch_fr,
+            commitment,
             epoch,
-            members[0],
+            keys[0],
             wrong_root,   // <- doesn't match the tree
             salt,
             proof.path,
@@ -484,26 +435,23 @@ mod tests {
 
     #[test]
     fn test_circuit_rejects_wrong_epoch() {
-        let members = vec![Fr::from(100u64)];
+        let keys = vec![Fr::from(100u64)];
         let config = poseidon_config::<Fr>();
-        let tree = PoseidonMerkleTree::build(&config, &members, 5);
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
         let root = tree.root();
         let proof = tree.prove(0);
 
         let correct_epoch = 5u64;
         let wrong_epoch = 6u64;
         let salt = [0xAA; 32];
-        let epoch_fr = Fr::from(correct_epoch);
-        let epoch_root_hash = poseidon_hash_two(&config, &root, &epoch_fr);
-        let salt_field = salt_bytes_to_field(&salt);
-        let full_binding = poseidon_hash_two(&config, &epoch_root_hash, &salt_field);
+        // Commitment computed with correct epoch
+        let commitment = compute_poseidon_commitment(&config, &root, correct_epoch, &salt);
 
-        // Circuit says epoch 5 but commitment_low says 6
+        // Public input says wrong epoch, but commitment was built with correct epoch
         let circuit = MembershipCircuit::new(
-            full_binding,
-            Fr::from(wrong_epoch), // commitment_low = wrong epoch
-            correct_epoch,          // epoch public input = correct
-            members[0],
+            commitment,
+            wrong_epoch,   // <- public input epoch doesn't match commitment
+            keys[0],
             root,
             salt,
             proof.path,
@@ -522,25 +470,22 @@ mod tests {
 
     #[test]
     fn test_circuit_rejects_wrong_salt() {
-        let members = vec![Fr::from(100u64)];
+        let keys = vec![Fr::from(100u64)];
         let config = poseidon_config::<Fr>();
-        let tree = PoseidonMerkleTree::build(&config, &members, 5);
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
         let root = tree.root();
         let proof = tree.prove(0);
 
         let epoch = 0u64;
         let correct_salt = [0xAA; 32];
         let wrong_salt = [0xBB; 32];
-        let epoch_fr = Fr::from(epoch);
-        let epoch_root_hash = poseidon_hash_two(&config, &root, &epoch_fr);
-        let salt_field = salt_bytes_to_field(&correct_salt);
-        let full_binding = poseidon_hash_two(&config, &epoch_root_hash, &salt_field);
+        // Commitment computed with correct salt
+        let commitment = compute_poseidon_commitment(&config, &root, epoch, &correct_salt);
 
         let circuit = MembershipCircuit::new(
-            full_binding,
-            epoch_fr,
+            commitment,
             epoch,
-            members[0],
+            keys[0],
             root,
             wrong_salt,   // <- doesn't match the commitment
             proof.path,
@@ -559,8 +504,8 @@ mod tests {
 
     #[test]
     fn test_circuit_depth_8() {
-        let members: Vec<Fr> = (1..=10).map(|i| Fr::from(i as u64)).collect();
-        let circuit = build_test_circuit(&members, 5, 0, [0xDD; 32], 8);
+        let keys: Vec<Fr> = (1..=10).map(|i| Fr::from(i as u64)).collect();
+        let circuit = build_test_circuit(&keys, 5, 0, [0xDD; 32], 8);
 
         let cs = ConstraintSystem::<Fr>::new_ref();
         circuit.generate_constraints(cs.clone()).unwrap();
@@ -574,8 +519,8 @@ mod tests {
 
     #[test]
     fn test_circuit_depth_11() {
-        let members: Vec<Fr> = (1..=10).map(|i| Fr::from(i as u64)).collect();
-        let circuit = build_test_circuit(&members, 3, 99, [0xEE; 32], 11);
+        let keys: Vec<Fr> = (1..=10).map(|i| Fr::from(i as u64)).collect();
+        let circuit = build_test_circuit(&keys, 3, 99, [0xEE; 32], 11);
 
         let cs = ConstraintSystem::<Fr>::new_ref();
         circuit.generate_constraints(cs.clone()).unwrap();
@@ -589,11 +534,11 @@ mod tests {
 
     #[test]
     fn test_constraint_count_scales_with_depth() {
-        let members = vec![Fr::from(1u64), Fr::from(2u64)];
+        let keys = vec![Fr::from(1u64), Fr::from(2u64)];
 
         let mut counts = vec![];
         for depth in [5, 8, 11] {
-            let circuit = build_test_circuit(&members, 0, 0, [0x00; 32], depth);
+            let circuit = build_test_circuit(&keys, 0, 0, [0x00; 32], depth);
             let cs = ConstraintSystem::<Fr>::new_ref();
             circuit.generate_constraints(cs.clone()).unwrap();
             assert!(cs.is_satisfied().unwrap());
@@ -618,5 +563,22 @@ mod tests {
         // It's OK if this fails with AssignmentMissing in non-setup mode
         // The important thing is that the constraint structure is defined
         assert!(result.is_err() || cs.num_constraints() > 0);
+    }
+
+    #[test]
+    fn test_public_input_count() {
+        // The circuit should have exactly 2 public inputs: commitment and epoch
+        let keys = vec![Fr::from(1u64)];
+        let circuit = build_test_circuit(&keys, 0, 0, [0x00; 32], 5);
+
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        circuit.generate_constraints(cs.clone()).unwrap();
+
+        // arkworks adds a "one" constant as instance variable 0,
+        // so 2 public inputs = 3 instance variables
+        assert_eq!(
+            cs.num_instance_variables(), 3,
+            "Circuit must have exactly 2 public inputs (+ 1 constant)"
+        );
     }
 }

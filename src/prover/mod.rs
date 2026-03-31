@@ -6,15 +6,14 @@
 //! 3. Proof verification (contract/anyone verifies with 3 pairings)
 
 use ark_bls12_381::{Bls12_381, Fr};
-use ark_ff::PrimeField;
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey, VerifyingKey};
 use ark_snark::SNARK;
 use ark_std::rand::Rng;
 
 use crate::circuit::MembershipCircuit;
-use crate::commitment::Salt;
+use crate::commitment::{Salt, compute_poseidon_commitment};
 use crate::merkle::PoseidonMerkleTree;
-use crate::poseidon::{poseidon_config, poseidon_hash_two};
+use crate::poseidon::poseidon_config;
 
 /// Result of the trusted setup ceremony.
 pub struct SetupResult {
@@ -25,22 +24,28 @@ pub struct SetupResult {
 
 /// Input needed to generate a membership proof.
 pub struct ProverInput {
-    /// All member scalars (sorted), needed to build the Merkle tree.
-    pub member_scalars: Vec<Fr>,
-    /// Index of the proving member in the sorted member list.
+    /// Pre-computed leaf hashes: `Poseidon(sk_i)` for each member,
+    /// sorted in canonical order (SEP-XXXX Section 2.1).
+    /// These are shared among group members during registration.
+    pub leaf_hashes: Vec<Fr>,
+    /// The prover's secret key (BLS12-381 private key scalar).
+    /// Only the prover knows this value.
+    pub secret_key: Fr,
+    /// Index of the prover's leaf in the sorted leaf_hashes list.
     pub prover_index: usize,
     /// Current epoch.
     pub epoch: u64,
-    /// Current salt (shared secret).
+    /// Current salt (shared secret among group members).
     pub salt: Salt,
     /// Tree depth (must match the setup circuit).
     pub depth: usize,
 }
 
-/// Public inputs for verification.
+/// Public inputs for verification (2 field elements).
 pub struct PublicInputs {
-    pub commitment_high: Fr,
-    pub commitment_low: Fr,
+    /// Poseidon commitment: `Poseidon(Poseidon(root, epoch), salt)`
+    pub commitment: Fr,
+    /// Epoch as a field element.
     pub epoch: Fr,
 }
 
@@ -68,22 +73,18 @@ pub fn prove<R: Rng + rand::CryptoRng>(
 ) -> Result<(Proof<Bls12_381>, PublicInputs), Box<dyn std::error::Error>> {
     let config = poseidon_config::<Fr>();
 
-    // Build Merkle tree
-    let tree = PoseidonMerkleTree::build(&config, &input.member_scalars, input.depth);
+    // Build Merkle tree from pre-computed leaf hashes
+    let tree = PoseidonMerkleTree::build_from_leaf_hashes(&config, &input.leaf_hashes, input.depth);
     let root = tree.root();
     let merkle_proof = tree.prove(input.prover_index);
 
-    // Compute the Poseidon-based binding (matching circuit logic)
-    let epoch_fr = Fr::from(input.epoch);
-    let epoch_root_hash = poseidon_hash_two(&config, &root, &epoch_fr);
-    let salt_field = Fr::from_le_bytes_mod_order(&input.salt);
-    let full_binding = poseidon_hash_two(&config, &epoch_root_hash, &salt_field);
+    // Compute the Poseidon commitment binding
+    let commitment = compute_poseidon_commitment(&config, &root, input.epoch, &input.salt);
 
     let circuit = MembershipCircuit::new(
-        full_binding,
-        epoch_fr,
+        commitment,
         input.epoch,
-        input.member_scalars[input.prover_index],
+        input.secret_key,
         root,
         input.salt,
         merkle_proof.path,
@@ -94,9 +95,8 @@ pub fn prove<R: Rng + rand::CryptoRng>(
     let proof = Groth16::<Bls12_381>::prove(pk, circuit, rng)?;
 
     let public_inputs = PublicInputs {
-        commitment_high: full_binding,
-        commitment_low: epoch_fr,
-        epoch: epoch_fr,
+        commitment,
+        epoch: Fr::from(input.epoch),
     };
 
     Ok((proof, public_inputs))
@@ -109,8 +109,7 @@ pub fn verify(
     public_inputs: &PublicInputs,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let inputs = vec![
-        public_inputs.commitment_high,
-        public_inputs.commitment_low,
+        public_inputs.commitment,
         public_inputs.epoch,
     ];
 
@@ -134,15 +133,46 @@ pub fn proof_from_bytes(bytes: &[u8]) -> Result<Proof<Bls12_381>, Box<dyn std::e
     Ok(proof)
 }
 
+/// Helper: compute leaf hashes from secret keys.
+/// Each member calls `Poseidon(sk)` on their own secret key and shares
+/// the result during group registration.
+pub fn compute_leaf_hash(secret_key: &Fr) -> Fr {
+    let config = poseidon_config::<Fr>();
+    crate::poseidon::poseidon_hash_one(&config, secret_key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ark_ff::Zero;
+    use crate::poseidon::{poseidon_config, poseidon_hash_one};
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
 
     fn test_rng() -> ChaCha20Rng {
         ChaCha20Rng::seed_from_u64(42)
+    }
+
+    /// Helper: build ProverInput from secret keys (for testing convenience).
+    fn make_prover_input(
+        secret_keys: &[Fr],
+        prover_index: usize,
+        epoch: u64,
+        salt: Salt,
+        depth: usize,
+    ) -> ProverInput {
+        let config = poseidon_config::<Fr>();
+        let leaf_hashes: Vec<Fr> = secret_keys.iter()
+            .map(|sk| poseidon_hash_one(&config, sk))
+            .collect();
+
+        ProverInput {
+            leaf_hashes,
+            secret_key: secret_keys[prover_index],
+            prover_index,
+            epoch,
+            salt,
+            depth,
+        }
     }
 
     #[test]
@@ -153,13 +183,10 @@ mod tests {
         let setup_result = setup(5, &mut rng).expect("Setup failed");
 
         // Prove
-        let input = ProverInput {
-            member_scalars: vec![Fr::from(100u64), Fr::from(200u64)],
-            prover_index: 0,
-            epoch: 0,
-            salt: [0xAA; 32],
-            depth: 5,
-        };
+        let input = make_prover_input(
+            &[Fr::from(100u64), Fr::from(200u64)],
+            0, 0, [0xAA; 32], 5,
+        );
 
         let (proof, public_inputs) = prove(&setup_result.proving_key, &input, &mut rng)
             .expect("Proving failed");
@@ -176,27 +203,15 @@ mod tests {
         let mut rng = test_rng();
         let setup_result = setup(5, &mut rng).expect("Setup failed");
 
-        let members = vec![Fr::from(100u64), Fr::from(200u64)];
+        let keys = vec![Fr::from(100u64), Fr::from(200u64)];
 
         // Member 0 proves
-        let input_0 = ProverInput {
-            member_scalars: members.clone(),
-            prover_index: 0,
-            epoch: 0,
-            salt: [0xAA; 32],
-            depth: 5,
-        };
+        let input_0 = make_prover_input(&keys, 0, 0, [0xAA; 32], 5);
         let (proof_0, pi_0) = prove(&setup_result.proving_key, &input_0, &mut rng).unwrap();
 
         // Member 1 proves
         let mut rng2 = ChaCha20Rng::seed_from_u64(99);
-        let input_1 = ProverInput {
-            member_scalars: members.clone(),
-            prover_index: 1,
-            epoch: 0,
-            salt: [0xAA; 32],
-            depth: 5,
-        };
+        let input_1 = make_prover_input(&keys, 1, 0, [0xAA; 32], 5);
         let (proof_1, pi_1) = prove(&setup_result.proving_key, &input_1, &mut rng2).unwrap();
 
         // Both should verify
@@ -214,13 +229,7 @@ mod tests {
         let mut rng = test_rng();
         let setup_result = setup(5, &mut rng).expect("Setup failed");
 
-        let input = ProverInput {
-            member_scalars: vec![Fr::from(42u64)],
-            prover_index: 0,
-            epoch: 0,
-            salt: [0x11; 32],
-            depth: 5,
-        };
+        let input = make_prover_input(&[Fr::from(42u64)], 0, 0, [0x11; 32], 5);
 
         let (proof, public_inputs) = prove(&setup_result.proving_key, &input, &mut rng).unwrap();
 
@@ -238,13 +247,7 @@ mod tests {
         let mut rng = test_rng();
         let setup_result = setup(5, &mut rng).expect("Setup failed");
 
-        let input = ProverInput {
-            member_scalars: vec![Fr::from(1u64)],
-            prover_index: 0,
-            epoch: 0,
-            salt: [0; 32],
-            depth: 5,
-        };
+        let input = make_prover_input(&[Fr::from(1u64)], 0, 0, [0; 32], 5);
 
         let (proof, _) = prove(&setup_result.proving_key, &input, &mut rng).unwrap();
         let bytes = proof_to_bytes(&proof);
@@ -259,13 +262,7 @@ mod tests {
         let mut rng = test_rng();
         let setup_result = setup(5, &mut rng).expect("Setup failed");
 
-        let input = ProverInput {
-            member_scalars: vec![Fr::from(100u64)],
-            prover_index: 0,
-            epoch: 0,
-            salt: [0xAA; 32],
-            depth: 5,
-        };
+        let input = make_prover_input(&[Fr::from(100u64)], 0, 0, [0xAA; 32], 5);
 
         let (proof, public_inputs) = prove(&setup_result.proving_key, &input, &mut rng).unwrap();
 
@@ -291,20 +288,13 @@ mod tests {
         let mut rng = test_rng();
         let setup_result = setup(5, &mut rng).expect("Setup failed");
 
-        let input = ProverInput {
-            member_scalars: vec![Fr::from(100u64)],
-            prover_index: 0,
-            epoch: 0,
-            salt: [0xAA; 32],
-            depth: 5,
-        };
+        let input = make_prover_input(&[Fr::from(100u64)], 0, 0, [0xAA; 32], 5);
 
         let (proof, _) = prove(&setup_result.proving_key, &input, &mut rng).unwrap();
 
         // Wrong public inputs
         let wrong_pi = PublicInputs {
-            commitment_high: Fr::from(9999u64),
-            commitment_low: Fr::from(9999u64),
+            commitment: Fr::from(9999u64),
             epoch: Fr::from(9999u64),
         };
 
@@ -317,32 +307,72 @@ mod tests {
         let mut rng = test_rng();
         let setup_result = setup(5, &mut rng).expect("Setup failed");
 
-        let members = vec![Fr::from(10u64), Fr::from(20u64), Fr::from(30u64)];
+        let keys = vec![Fr::from(10u64), Fr::from(20u64), Fr::from(30u64)];
 
         // Epoch 0
-        let input_0 = ProverInput {
-            member_scalars: members.clone(),
-            prover_index: 0,
-            epoch: 0,
-            salt: [0xAA; 32],
-            depth: 5,
-        };
+        let input_0 = make_prover_input(&keys, 0, 0, [0xAA; 32], 5);
         let (proof_0, pi_0) = prove(&setup_result.proving_key, &input_0, &mut rng).unwrap();
         assert!(verify(&setup_result.prepared_vk, &proof_0, &pi_0).unwrap());
 
         // Epoch 1 — same members, new salt (as per SEP requirement)
-        let input_1 = ProverInput {
-            member_scalars: members.clone(),
-            prover_index: 1, // different member proves this time
-            epoch: 1,
-            salt: [0xBB; 32], // fresh salt
-            depth: 5,
-        };
+        let input_1 = make_prover_input(&keys, 1, 1, [0xBB; 32], 5);
         let (proof_1, pi_1) = prove(&setup_result.proving_key, &input_1, &mut rng).unwrap();
         assert!(verify(&setup_result.prepared_vk, &proof_1, &pi_1).unwrap());
 
         // Epoch 0 proof should NOT verify against epoch 1 public inputs
         let valid_cross = verify(&setup_result.prepared_vk, &proof_0, &pi_1).unwrap();
         assert!(!valid_cross, "Epoch 0 proof must not verify against epoch 1 inputs");
+    }
+
+    #[test]
+    fn test_wrong_secret_key_rejected_in_proof() {
+        let mut rng = test_rng();
+        let setup_result = setup(5, &mut rng).expect("Setup failed");
+
+        let config = poseidon_config::<Fr>();
+        let real_keys = vec![Fr::from(100u64), Fr::from(200u64)];
+        let leaf_hashes: Vec<Fr> = real_keys.iter()
+            .map(|sk| poseidon_hash_one(&config, sk))
+            .collect();
+
+        // Attacker knows the leaf hashes but not the secret keys.
+        // They try to use a wrong secret key.
+        let wrong_key = Fr::from(999u64);
+        let input = ProverInput {
+            leaf_hashes: leaf_hashes.clone(),
+            secret_key: wrong_key,   // not a real member's key
+            prover_index: 0,
+            epoch: 0,
+            salt: [0xAA; 32],
+            depth: 5,
+        };
+
+        // arkworks' Groth16::prove asserts constraint satisfaction,
+        // so an invalid witness causes a panic. Catch it.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove(&setup_result.proving_key, &input, &mut ChaCha20Rng::seed_from_u64(77))
+        }));
+
+        // Either the prover panics (assertion failure) or returns an error —
+        // both confirm that an invalid secret key cannot produce a valid proof.
+        match result {
+            Ok(Ok((proof, pi))) => {
+                let valid = verify(&setup_result.prepared_vk, &proof, &pi).unwrap();
+                assert!(!valid, "Proof with wrong secret key must not verify");
+            }
+            Ok(Err(_)) | Err(_) => {
+                // Expected: proving failed due to unsatisfied constraints
+            }
+        }
+    }
+
+    #[test]
+    fn test_compute_leaf_hash_matches_tree() {
+        let config = poseidon_config::<Fr>();
+        let sk = Fr::from(42u64);
+
+        let leaf = compute_leaf_hash(&sk);
+        let expected = poseidon_hash_one(&config, &sk);
+        assert_eq!(leaf, expected);
     }
 }

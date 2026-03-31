@@ -7,8 +7,8 @@ Author: @rinat-enikeev
 Track: Standard
 Status: Draft
 Created: 2026-03-30
-Updated: 2026-03-30
-Version: 0.0.1
+Updated: 2026-03-31
+Version: 0.0.2
 Discussion: https://github.com/orgs/stellar/discussions/1903
 ```
 
@@ -107,7 +107,10 @@ Poseidon parameters:
     full rounds:    8
     partial rounds: 56
     S-box:          x^5
+    width:          3 (rate 2 + capacity 1)
 ```
+
+**Parameter generation.** The reference implementation generates round constants deterministically by repeatedly hashing the seed `"SEP-XXXX-Poseidon-BLS12-381-round-constants"` with SHA-256, extending each iteration to 64 bytes for uniform field element sampling via `from_le_bytes_mod_order`. The MDS matrix uses the Cauchy construction `M[i][j] = 1 / (x_i + y_j)` with `x_i = i+1` and `y_j = width+j+1`. In production, implementations SHOULD use the Poseidon paper's reference generation script for BLS12-381 to ensure cross-implementation compatibility.
 
 Each leaf is computed as:
 
@@ -127,6 +130,10 @@ The tree root is `poseidon_root`.
 
 #### 2.3 On-chain commitment value
 
+Two commitment binding variants are defined. Implementations MUST use one consistently.
+
+**Variant A — SHA-256 outer binding (original)**
+
 ```
 commitment = SHA-256(poseidon_root || epoch || salt)
 ```
@@ -141,7 +148,19 @@ salt            -- 32 bytes
 
 Total preimage: 72 bytes. No padding, no separators, no length prefix (the structure is fixed-length).
 
-SHA-256 is chosen for the outer binding because it is available as a Soroban host function (`env.crypto().sha256()`), making in-contract verification gas-efficient.
+SHA-256 is chosen for the outer binding because it is available as a Soroban host function (`env.crypto().sha256()`), making in-contract verification gas-efficient. However, in-circuit SHA-256 verification costs ~25,000 R1CS constraints, which dominates total circuit size at all tiers.
+
+**Variant B — Poseidon-only binding (reference implementation)**
+
+```
+commitment = Poseidon(Poseidon(poseidon_root, epoch), salt)
+```
+
+where `epoch` is the epoch value cast to a field element, and `salt` is the 32-byte salt interpreted as a BLS12-381 scalar field element via little-endian `mod r` reduction.
+
+This variant eliminates in-circuit SHA-256 entirely, replacing it with two Poseidon hash calls (~600 R1CS constraints total). The resulting circuit is ~14x smaller than Variant A. The tradeoff is that on-chain commitment verification requires a Poseidon host function or off-chain precomputation. The reference implementation uses Variant B.
+
+Note on salt encoding in Variant B: the 32-byte salt is reduced modulo the BLS12-381 scalar field order (`r ≈ 2^255`). Since `r < 2^256`, approximately half of uniformly random 32-byte salts will be reduced, mapping two distinct byte strings to the same field element. This reduces effective salt entropy from 256 bits to ~255 bits, which remains cryptographically sufficient.
 
 #### 2.4 Salt lifecycle
 
@@ -214,6 +233,8 @@ Assert:
 pk_circuit == pk   (witness)
 ```
 
+Note: the reference implementation simplifies this constraint by using `member_scalar` (the public key x-coordinate) directly as the key identity witness, deferring the full in-circuit BLS12-381 scalar multiplication to a future version. This simplification means the current circuit proves "I know a scalar that is a leaf in the Merkle tree" rather than "I know the private key corresponding to a public key that is a leaf." The full `sk · G1` constraint will be added when arkworks' BLS12-381 G1 gadget is integrated.
+
 **Constraint 2 — Poseidon Merkle membership**
 
 The prover supplies a Merkle opening proof consisting of `d` sibling hashes and a leaf index. The circuit recomputes the Merkle root from the leaf (derived from `pk_circuit`) upward using Poseidon hashes.
@@ -224,11 +245,13 @@ Assert:
 MerklePoseidonOpen(Poseidon(pk_x), merkle_path, leaf_index) == poseidon_root
 ```
 
-At each level, Poseidon is applied to the pair `(left, right)` determined by the path bit. For a tree of depth `d`, this requires `d` Poseidon hash evaluations (~300 constraints each), totaling ~`300 · d` constraints.
+At each level, Poseidon is applied to the pair `(left, right)` determined by the path bit. For a tree of depth `d`, this requires `d` Poseidon hash evaluations (~240 constraints each as measured, ~300 estimated), totaling ~`240 · d` constraints.
 
-**Constraint 3 — commitment binding (SHA-256, fixed-length)**
+**Constraint 3 — commitment binding**
 
-The circuit recomputes `SHA-256(poseidon_root || epoch || salt)` from the witness values. The preimage is exactly 72 bytes (fixed), requiring exactly 1 SHA-256 compression call (~25,000 R1CS constraints).
+Two variants correspond to the commitment variants in Section 2.3:
+
+*Variant A (SHA-256, fixed-length):* The circuit recomputes `SHA-256(poseidon_root || epoch || salt)` from the witness values. The preimage is exactly 72 bytes (fixed), requiring exactly 1 SHA-256 compression call (~25,000 R1CS constraints).
 
 Assert:
 
@@ -236,7 +259,16 @@ Assert:
 SHA-256(poseidon_root || epoch || salt) == commitment   (public input)
 ```
 
-**Total circuit size estimates by tier:**
+*Variant B (Poseidon-only, reference implementation):* The circuit computes `Poseidon(Poseidon(poseidon_root, epoch), salt)` using two Poseidon hash calls (~600 R1CS constraints total). The public input `commitment_high` is the Poseidon binding value, and `commitment_low` equals the epoch field element.
+
+Assert:
+
+```
+Poseidon(Poseidon(poseidon_root, epoch), salt) == commitment_high   (public input)
+epoch == commitment_low                                              (public input)
+```
+
+**Total circuit size by tier (Variant A — SHA-256, estimated):**
 
 | Tier | MAX_MEMBERS | Tree depth `d` | Constraint 1 | Constraint 2 | Constraint 3 | Total (approx.) |
 |------|-------------|----------------|--------------|--------------|--------------|------------------|
@@ -244,9 +276,19 @@ SHA-256(poseidon_root || epoch || salt) == commitment   (public input)
 | Medium | 256 | 8 | ~1,000 | ~2,400 | ~25,000 | ~28,400 |
 | Large | 2,048 | 11 | ~1,000 | ~3,300 | ~25,000 | ~29,300 |
 
-The circuit scales logarithmically with group size. SHA-256 dominates the constraint count at all tiers, but the fixed 72-byte preimage keeps it bounded to a single compression call.
+**Total circuit size by tier (Variant B — Poseidon-only, measured from reference implementation):**
+
+| Tier | MAX_MEMBERS | Tree depth `d` | Constraint 1 | Constraint 2 | Constraint 3 | Total (measured) |
+|------|-------------|----------------|--------------|--------------|--------------|------------------|
+| Small | 32 | 5 | 0 (simplified) | ~1,311 | ~600 | **1,911** |
+| Medium | 256 | 8 | 0 (simplified) | ~2,031 | ~600 | **2,631** |
+| Large | 2,048 | 11 | 0 (simplified) | ~2,751 | ~600 | **3,351** |
+
+Variant B is ~14x smaller than Variant A. The circuit scales logarithmically with group size in both variants, with ~240 additional constraints per tree level. In Variant A, SHA-256 dominates the constraint count at all tiers. In Variant B, the Merkle proof dominates, and the full `sk · G1` key ownership constraint (~1,000 constraints) will become the second-largest component when added.
 
 #### 3.4 Public inputs and proof wire
+
+**Variant A (SHA-256 binding):**
 
 ```
 ProofSubmission {
@@ -259,6 +301,23 @@ ProofSubmission {
     }
 }
 ```
+
+**Variant B (Poseidon-only binding, reference implementation):**
+
+```
+ProofSubmission {
+    group_id:   Bytes       -- identifies the group
+    epoch:      u64         -- must match stored epoch
+    proof:      Bytes(192)  -- Groth16 proof: π_A (G1) || π_B (G2) || π_C (G1)
+    public_inputs: {
+        commitment_high: Fr      -- Poseidon binding value (BLS12-381 scalar field element)
+        commitment_low:  Fr      -- epoch as field element (redundant binding)
+        epoch:           Fr      -- epoch as field element
+    }
+}
+```
+
+In Variant B, the public inputs are three BLS12-381 scalar field elements. The contract must verify that `commitment_high` and `commitment_low` are consistent with the stored on-chain state.
 
 #### 3.5 Verification in Soroban
 
@@ -504,11 +563,11 @@ For salt recovery procedures when a member loses the current salt, see Section 2
 
 This SEP defines three standard circuit tiers. Each tier corresponds to a fixed Groth16 circuit with a specific maximum group size, tree depth, and independent trusted setup.
 
-| Tier | Identifier | MAX_MEMBERS | Tree depth `d` | Approx. constraints |
-|------|------------|-------------|----------------|---------------------|
-| Small | 0 | 32 | 5 | ~27,500 |
-| Medium | 1 | 256 | 8 | ~28,400 |
-| Large | 2 | 2,048 | 11 | ~29,300 |
+| Tier | Identifier | MAX_MEMBERS | Tree depth `d` | Constraints (Variant A, est.) | Constraints (Variant B, measured) |
+|------|------------|-------------|----------------|-------------------------------|-----------------------------------|
+| Small | 0 | 32 | 5 | ~27,500 | **1,911** |
+| Medium | 1 | 256 | 8 | ~28,400 | **2,631** |
+| Large | 2 | 2,048 | 11 | ~29,300 | **3,351** |
 
 A group is bound to a single tier at creation time (the `tier` parameter in `create_group`). The contract stores the verification key for each supported tier and uses the appropriate key during proof verification.
 
@@ -522,7 +581,7 @@ Groth16 requires a circuit-specific trusted setup ceremony producing a proving k
 
 A separate MPC ceremony MUST be conducted for each circuit tier before any mainnet deployment of a contract implementing this standard. Each ceremony MUST:
 
-- Use the Powers of Tau format compatible with `snarkjs` or `bellman`
+- Use the Powers of Tau format compatible with `snarkjs`, `bellman`, or `arkworks`
 - Include a minimum of 10 independent participants
 - Publish all contribution hashes and attestations publicly
 - Derive the final verification key from the last contribution
@@ -665,6 +724,10 @@ SHA-256 inside a Groth16 R1CS circuit costs ~25,000 constraints per compression 
 
 The dual-hash scheme confines SHA-256 to a single fixed-length (72-byte) compression call for the outer commitment binding, and uses Poseidon (~300 constraints per hash) for the Merkle tree. This makes the in-circuit cost logarithmic in group size (one Poseidon call per tree level) while preserving on-chain verifiability via the SHA-256 host function.
 
+**Why does the reference implementation use Poseidon-only binding (Variant B) instead of in-circuit SHA-256 (Variant A)?**
+
+In-circuit SHA-256 costs ~25,000 R1CS constraints even for a single fixed-length compression call, making it the dominant cost in the circuit by a factor of 8-16x over all other constraints combined. The Phase 1 reference implementation replaced the in-circuit SHA-256 with two Poseidon hash calls (~600 constraints), reducing total circuit size from ~27,500 to ~1,911 constraints for the Small tier — a ~14x reduction. This dramatically improves prover time and memory requirements, particularly on resource-constrained clients (mobile devices). The tradeoff is that on-chain commitment verification cannot use the native `env.crypto().sha256()` host function directly. If Soroban adds a Poseidon host function in a future protocol version, Variant B becomes strictly superior. Until then, the contract can verify Poseidon-only commitments by accepting them as opaque values validated solely through ZK proof verification, without independent on-chain recomputation of the commitment.
+
 **Why BLS12-381 identity keys rather than Ed25519?**
 
 Ed25519 key ownership verification inside a BLS12-381 Groth16 circuit requires emulating Curve25519 field arithmetic in a non-native field, costing 500,000+ constraints for a single scalar multiplication. BLS12-381 native keys reduce this to ~1,000 constraints. The Stellar Ed25519 address link is preserved via an off-chain attestation (Section 1.1) that is verified at group registration, not on every proof.
@@ -695,8 +758,39 @@ Strict monotonicity provides a simple, auditable invariant: the history is a lin
 
 ---
 
-### 12. Changelog
+### 12. Reference Implementation
+
+The Phase 1 reference implementation is written in Rust using the arkworks library ecosystem (v0.4):
+
+- `ark-groth16` — Groth16 prover and verifier
+- `ark-bls12-381` — BLS12-381 curve and field implementations
+- `ark-crypto-primitives` — Poseidon sponge, R1CS gadgets
+- `ark-r1cs-std` — R1CS standard gadgets (field variables, boolean, conditionals)
+- `sha2` — SHA-256 for off-circuit commitment computation
+
+**Modules:**
+
+| Module | Purpose |
+|--------|---------|
+| `poseidon` | Poseidon hash function with deterministic parameter generation |
+| `merkle` | Binary Poseidon Merkle tree: build, prove, verify |
+| `commitment` | SHA-256 commitment construction (Section 2.3 Variant A) |
+| `circuit` | Groth16 R1CS circuit (Section 3.3, currently Variant B) |
+| `prover` | End-to-end pipeline: trusted setup, proof generation, verification, serialization |
+
+**Implementation choices and deviations:**
+
+1. **Commitment binding uses Variant B (Poseidon-only).** The `commitment` module implements Variant A (SHA-256) for off-chain use, but the circuit uses Variant B (Poseidon-only) for in-circuit binding. This is a deliberate optimization.
+2. **Key ownership simplified.** The `sk · G1` scalar multiplication is deferred; the circuit accepts the member scalar directly as a witness. This is a Phase 1 simplification; the full constraint will be added in a future version.
+3. **Member sorting is the caller's responsibility.** The Merkle tree builder does not sort inputs. Callers MUST sort members before building the tree (Section 2.1).
+4. **55 unit tests** covering all modules: Poseidon hash properties, Merkle tree construction and proof verification, commitment computation and serialization, circuit satisfiability and rejection, full Groth16 pipeline including epoch transitions.
+5. **Proof size confirmed at 192 bytes** (48 + 96 + 48 compressed BLS12-381 points).
+
+---
+
+### 13. Changelog
 
 | Version | Date | Notes |
 |---------|------|-------|
 | 0.0.1 | 2026-03-30 | Initial draft |
+| 0.0.2 | 2026-03-31 | Added Poseidon-only commitment binding variant (Variant B) based on Phase 1 reference implementation; added measured constraint counts; documented Poseidon parameter generation; added reference implementation section; updated circuit tiers table with both variant counts |

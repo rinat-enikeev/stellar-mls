@@ -1,0 +1,702 @@
+## Preamble
+
+```
+SEP: XXXX
+Title: Private Group Membership Registry with Zero-Knowledge Proof
+Author: @rinat-enikeev
+Track: Standard
+Status: Draft
+Created: 2026-03-30
+Updated: 2026-03-30
+Version: 0.0.1
+Discussion: https://github.com/orgs/stellar/discussions/1903
+```
+
+---
+
+## Simple Summary
+
+A standard for anchoring cryptographic group membership state on Stellar using a commitment scheme and a zero-knowledge membership proof, such that no observer of the ledger can determine who is in a group or who is updating its state.
+
+---
+
+## Dependencies
+
+- Stellar Protocol 22 — BLS12-381 host functions in Soroban (`bls12_381_g1_add`, `bls12_381_g2_msm`, `bls12_381_pairing`)
+- Soroban persistent storage and `env.crypto().sha256()` host function
+
+---
+
+## Motivation
+
+On-chain group registries can store membership lists in plaintext: `group_id → [address_A, address_B, address_C]`. This permanently exposes the social graph of every group to any Stellar network participant, now and retroactively.
+
+After a contract implementing this standard is deployed:
+
+- The on-chain record for a group reveals only a 32-byte commitment, an epoch counter, and a zero-knowledge proof. No member identity is stored or derivable.
+- The party submitting an update proves they are a current group member without revealing which member they are. Their Stellar signing address is structurally decoupled from their group identity.
+
+### Target use cases
+
+- Decentralized end-to-end encrypted group messaging based on MLS (RFC 9420)
+- Anonymous DAO membership registries and voting rolls
+- Private multi-party credential schemes
+- Any application requiring verifiable group membership without public roster disclosure
+
+---
+
+## Specification
+
+### 1. Definitions
+
+| Term | Meaning |
+|------|---------|
+| `group_id` | An opaque byte string identifying a group. Recommended derivation: `SHA-256(application_namespace \|\| creator_pubkey \|\| nonce)`. |
+| `members` | The set of member identity public keys for a given epoch. Each key is a BLS12-381 G1 point (48 bytes compressed). See Section 1.1. |
+| `epoch` | A `u64` counter, starting at 0, incremented by exactly 1 on every membership change. |
+| `salt` | 32 uniformly random bytes, generated fresh for each epoch by the Commit initiator. Never stored on-chain. |
+| `commitment` | `SHA-256(poseidon_root \|\| epoch_be \|\| salt)` — a 32-byte cryptographic binding to the group state. See Section 2. |
+| `poseidon_root` | The root of a binary Poseidon Merkle tree over the sorted member key set. 32 bytes (BLS12-381 scalar field element). |
+| `zk_proof` | A Groth16 proof over BLS12-381 demonstrating that the prover holds a private key belonging to a committed member, without revealing which member. |
+
+#### 1.1 Member Identity Keys
+
+Member identity keys are BLS12-381 G1 keypairs: the private key is a scalar `sk` in the BLS12-381 scalar field, and the public key is `pk = sk · G1` where `G1` is the standard generator.
+
+**Rationale.** Ed25519 key ownership verification inside a BLS12-381 Groth16 circuit requires non-native field arithmetic emulation (Curve25519 operates over a different prime field), resulting in 500,000+ R1CS constraints for a single scalar multiplication. BLS12-381-native keys reduce key ownership to a single native-field scalar-mul — roughly 1,000 constraints.
+
+**Stellar address binding.** Applications that require a link between a member's BLS12-381 identity key and their Stellar Ed25519 address MUST use an off-chain key attestation: the member signs their BLS12-381 public key with their Ed25519 private key and distributes this attestation to the group via the application's encrypted channel. The attestation is verified by other members at registration time, not inside the ZK circuit. This keeps the circuit small without sacrificing the ability to trace a BLS12-381 key back to a Stellar account when the holder consents.
+
+The attestation format is:
+
+```
+KeyAttestation {
+    bls_pubkey:     BytesN<48>    -- compressed G1 point
+    ed25519_pubkey: BytesN<32>    -- Stellar account public key
+    signature:      BytesN<64>    -- Ed25519 signature over SHA-256("SEP-XXXX:key-binding" || bls_pubkey)
+}
+```
+
+This attestation is a group-level artifact shared among members. It is never submitted on-chain.
+
+---
+
+### 2. Commitment Construction (Dual-Hash Scheme)
+
+The commitment scheme uses two hash functions for different roles:
+
+- **Poseidon** (ZK-friendly, ~300 constraints per hash): used inside the ZK circuit for the Merkle tree over members and for binding the tree root to the epoch and salt.
+- **SHA-256** (Soroban-native host function): used as an outer binding that the contract checks on-chain.
+
+This separation gives the circuit a small constraint count while preserving the ability to verify commitments on-chain using a native host function.
+
+#### 2.1 Member ordering
+
+Before building the Merkle tree, members MUST be sorted in ascending lexicographic byte order of their compressed G1 representation (48 bytes). Membership is a set — the commitment must be deterministic regardless of insertion order.
+
+#### 2.2 Poseidon Merkle tree
+
+The sorted member keys are placed as leaves of a binary Merkle tree of fixed depth `d`, where `d` is determined by the circuit tier (see Section 9). Unused leaf slots are filled with a distinguished zero value `0x00...00` (the field element zero, 32 bytes).
+
+The hash function for both leaf hashing and internal nodes is Poseidon over the BLS12-381 scalar field with the following parameters:
+
+```
+Poseidon parameters:
+    field:          BLS12-381 scalar field (r ≈ 2^255)
+    arity:          2 (binary tree)
+    full rounds:    8
+    partial rounds: 56
+    S-box:          x^5
+```
+
+Each leaf is computed as:
+
+```
+leaf[i] = Poseidon(member_key_scalar[i])
+```
+
+where `member_key_scalar` is the x-coordinate of the compressed G1 point interpreted as a field element.
+
+Internal nodes are:
+
+```
+node = Poseidon(left_child, right_child)
+```
+
+The tree root is `poseidon_root`.
+
+#### 2.3 On-chain commitment value
+
+```
+commitment = SHA-256(poseidon_root || epoch || salt)
+```
+
+where:
+
+```
+poseidon_root   -- 32 bytes, big-endian encoding of the field element
+epoch           -- u64, big-endian, 8 bytes
+salt            -- 32 bytes
+```
+
+Total preimage: 72 bytes. No padding, no separators, no length prefix (the structure is fixed-length).
+
+SHA-256 is chosen for the outer binding because it is available as a Soroban host function (`env.crypto().sha256()`), making in-contract verification gas-efficient.
+
+#### 2.4 Salt lifecycle
+
+The salt is a group secret shared exclusively among current members via the application's encrypted channel. It is never published on-chain. A fresh 32-byte random salt MUST be generated by the Commit initiator for every epoch transition, ensuring that knowledge of salt `n` grants no information about commitment `n+1` or any prior epoch.
+
+#### 2.5 Salt recovery
+
+If a member loses the salt for the current epoch, they cannot generate proofs or verify the commitment locally. The recovery procedure is:
+
+1. The member requests salt re-delivery from any other current group member via the application's encrypted channel.
+2. The responding member encrypts the salt to the requesting member's BLS12-381 public key (using ECIES over BLS12-381 G1) and delivers it.
+3. Upon receiving the salt, the recovering member MUST verify locally:
+
+```
+local_commitment = SHA-256(poseidon_root || epoch || salt)
+assert local_commitment == contract.get_state(group_id).commitment
+```
+
+If no other member is reachable, the member cannot participate until the next epoch transition, at which point a new salt is distributed. Applications SHOULD design their salt distribution to be robust against single points of failure (e.g., every member stores the current salt and can re-share it).
+
+---
+
+### 3. Zero-Knowledge Membership Proof
+
+#### 3.1 Proof statement
+
+The prover demonstrates the following statement to the contract without revealing any witness:
+
+> "I know a secret key `sk` such that `sk · G1` is a member of the Poseidon Merkle tree whose root, combined with the epoch and salt, hashes under SHA-256 to the stored commitment for `(group_id, epoch)`."
+
+Formal relation:
+
+```
+R = {
+  public:   commitment ∈ {0,1}^256,  epoch ∈ u64
+  witness:  sk, pk = sk · G1, poseidon_root, salt,
+            merkle_path[0..d-1], leaf_index
+
+  constraints:
+    (1)  pk_circuit = sk · G1                                         [key ownership]
+    (2)  MerklePoseidonOpen(pk_circuit, merkle_path, leaf_index, poseidon_root) == true  [membership]
+    (3)  SHA-256(poseidon_root || epoch || salt) == commitment         [commitment binding]
+}
+```
+
+#### 3.2 Proof system
+
+**Groth16 SNARK over BLS12-381.**
+
+Rationale:
+
+- Stellar Protocol 22 added native BLS12-381 host functions to Soroban specifically to enable ZK proof verification on-chain
+- Groth16 produces constant-size proofs (192 bytes) regardless of group size
+- Verification requires exactly 3 pairing operations, expressible directly via `bls12_381_pairing`
+- Groth16 is well-audited and widely deployed (Zcash, Ethereum ecosystem)
+
+Groth16 requires a circuit-specific trusted setup. See Section 9.
+
+#### 3.3 Circuit structure
+
+Three constraints are encoded in the circuit:
+
+**Constraint 1 — key ownership (BLS12-381 native)**
+
+Compute `pk_circuit = sk · G1` within the circuit, where `sk` is a private scalar witness and `G1` is the BLS12-381 generator. Because the circuit's native field is the BLS12-381 scalar field, this scalar multiplication requires only ~1,000 R1CS constraints with no non-native arithmetic.
+
+Assert:
+
+```
+pk_circuit == pk   (witness)
+```
+
+**Constraint 2 — Poseidon Merkle membership**
+
+The prover supplies a Merkle opening proof consisting of `d` sibling hashes and a leaf index. The circuit recomputes the Merkle root from the leaf (derived from `pk_circuit`) upward using Poseidon hashes.
+
+Assert:
+
+```
+MerklePoseidonOpen(Poseidon(pk_x), merkle_path, leaf_index) == poseidon_root
+```
+
+At each level, Poseidon is applied to the pair `(left, right)` determined by the path bit. For a tree of depth `d`, this requires `d` Poseidon hash evaluations (~300 constraints each), totaling ~`300 · d` constraints.
+
+**Constraint 3 — commitment binding (SHA-256, fixed-length)**
+
+The circuit recomputes `SHA-256(poseidon_root || epoch || salt)` from the witness values. The preimage is exactly 72 bytes (fixed), requiring exactly 1 SHA-256 compression call (~25,000 R1CS constraints).
+
+Assert:
+
+```
+SHA-256(poseidon_root || epoch || salt) == commitment   (public input)
+```
+
+**Total circuit size estimates by tier:**
+
+| Tier | MAX_MEMBERS | Tree depth `d` | Constraint 1 | Constraint 2 | Constraint 3 | Total (approx.) |
+|------|-------------|----------------|--------------|--------------|--------------|------------------|
+| Small | 32 | 5 | ~1,000 | ~1,500 | ~25,000 | ~27,500 |
+| Medium | 256 | 8 | ~1,000 | ~2,400 | ~25,000 | ~28,400 |
+| Large | 2,048 | 11 | ~1,000 | ~3,300 | ~25,000 | ~29,300 |
+
+The circuit scales logarithmically with group size. SHA-256 dominates the constraint count at all tiers, but the fixed 72-byte preimage keeps it bounded to a single compression call.
+
+#### 3.4 Public inputs and proof wire
+
+```
+ProofSubmission {
+    group_id:   Bytes       -- identifies the group
+    epoch:      u64         -- must match stored epoch
+    proof:      Bytes(192)  -- Groth16 proof: π_A (G1) || π_B (G2) || π_C (G1)
+    public_inputs: {
+        commitment: BytesN<32>   -- must match stored commitment
+        epoch:      u64          -- repeated for circuit binding
+    }
+}
+```
+
+#### 3.5 Verification in Soroban
+
+The contract verifies the Groth16 proof using the BLS12-381 host functions introduced in Protocol 22:
+
+```
+e(π_A, π_B) == e(α, β) · e(vk_γ^{public_inputs}, γ) · e(π_C, δ)
+```
+
+where `(α, β, γ, δ, vk_γ)` are the circuit's verification key, stored in the contract at deployment.
+
+The contract does NOT compute the SHA-256 of the member list during verification — that computation happens inside the ZK circuit. The contract only:
+
+1. Looks up the stored commitment for `(group_id, epoch)`
+2. Checks `public_inputs.commitment == stored.commitment`
+3. Verifies the Groth16 proof against the verification key
+
+This means the contract never learns the member list, the salt, or the identity of the prover.
+
+#### 3.6 Proof size and cost
+
+| Parameter | Value |
+|-----------|-------|
+| Proof size | 192 bytes |
+| Public inputs | 40 bytes (32 + 8) |
+| BLS12-381 pairings required | 3 |
+| Estimated Soroban instructions | ~6–10M |
+| Cost scaling with group size | None — constant |
+
+The constant verification cost is a core property. A 2,048-member group is indistinguishable from a 2-member group from the contract's perspective.
+
+---
+
+### 4. Contract Interface
+
+Implementations of this SEP MUST expose the following interface. The normative specification is the interface and its invariants; implementation language is non-normative.
+
+#### `create_group`
+
+Registers a new group with its epoch-0 commitment, the circuit verification key, and the circuit tier.
+
+Parameters:
+
+| Name | Type | Description |
+|------|------|-------------|
+| `group_id` | `Bytes` | Application-defined group identifier |
+| `commitment` | `BytesN<32>` | Commitment for epoch 0 |
+| `proof` | `Bytes` | ZK proof that the caller knows the preimage of the commitment (see Section 4.1) |
+| `public_inputs` | `PublicInputs` | `{commitment, epoch: 0}` |
+| `tier` | `u32` | Circuit tier: 0 = Small (32), 1 = Medium (256), 2 = Large (2048) |
+
+Invariants:
+- `group_id` MUST NOT already exist in storage
+- Proof MUST verify against the verification key for the specified tier
+- Emits a `GroupCreated` event
+
+##### 4.1 Semantics of the epoch-0 proof
+
+At epoch 0, no prior group state exists. The ZK proof submitted with `create_group` proves the following: the caller knows a secret key `sk` and a salt `s` such that `sk · G1` is a leaf in the Poseidon Merkle tree whose root, combined with epoch 0 and salt `s`, hashes to the submitted commitment. This is the same circuit and statement used for all subsequent epochs — the creator is proving they are a member of the set they are committing, not that the set existed before.
+
+This means the creator cannot register a group containing only other people's keys without also including their own. Any party who knows the salt and a valid member key can create the group; the contract does not privilege the creator in any way after creation.
+
+#### `update_commitment`
+
+Transitions a group to a new epoch with a new commitment.
+
+Parameters:
+
+| Name | Type | Description |
+|------|------|-------------|
+| `group_id` | `Bytes` | Identifies the group |
+| `new_commitment` | `BytesN<32>` | Commitment for the new epoch |
+| `new_epoch` | `u64` | MUST equal `stored_epoch + 1` |
+| `proof` | `Bytes` | ZK proof that the caller is a member of the **current** epoch's committed set |
+| `public_inputs` | `PublicInputs` | `{commitment: current_commitment, epoch: current_epoch}` |
+
+Invariants:
+- `group_id` MUST exist
+- `new_epoch == stored_epoch + 1` — strict monotonicity enforced
+- Proof is verified against the **current** commitment, not the new one. This proves the updater is a legitimate member before the transition.
+- Emits a `CommitmentUpdated` event
+
+#### `verify_membership`
+
+A read-only call that verifies a ZK proof of membership against the current state.
+
+Parameters:
+
+| Name | Type | Description |
+|------|------|-------------|
+| `group_id` | `Bytes` | Identifies the group |
+| `proof` | `Bytes` | ZK proof |
+| `public_inputs` | `PublicInputs` | `{commitment, epoch}` |
+
+Returns: `bool`
+
+This function is a pure verification — no state change, no XLM cost when called via `simulateTransaction`.
+
+#### `deactivate_group`
+
+Marks a group as inactive, preventing further epoch transitions and allowing storage to be reclaimed.
+
+Parameters:
+
+| Name | Type | Description |
+|------|------|-------------|
+| `group_id` | `Bytes` | Identifies the group |
+| `proof` | `Bytes` | ZK proof that the caller is a member of the current epoch's committed set |
+| `public_inputs` | `PublicInputs` | `{commitment: current_commitment, epoch: current_epoch}` |
+
+Invariants:
+- `group_id` MUST exist and MUST NOT already be deactivated
+- Proof MUST verify against the current commitment
+- After deactivation, `update_commitment` calls for this `group_id` MUST be rejected
+- `verify_membership` and `get_state` remain functional (the last committed state is preserved)
+- Emits a `GroupDeactivated` event
+- Persistent storage entries for epoch history MAY be reclaimed by the contract after deactivation
+
+#### `get_state`
+
+Returns the current `CommitmentEntry` for a group.
+
+```
+CommitmentEntry {
+    commitment:  BytesN<32>
+    epoch:       u64
+    timestamp:   u64        -- ledger timestamp of last update
+    tier:        u32        -- circuit tier
+    active:      bool       -- false if deactivated
+}
+```
+
+Note: no `committer` address is stored. The ZK proof decouples the transaction signer from group identity.
+
+#### `get_history`
+
+Returns the most recent `N` `CommitmentEntry` records for a group, ordered by epoch, where `N` is capped by the `history_window` parameter.
+
+Parameters:
+
+| Name | Type | Description |
+|------|------|-------------|
+| `group_id` | `Bytes` | Identifies the group |
+| `max_entries` | `u32` | Maximum number of entries to return, capped at `history_window` |
+
+The contract SHOULD maintain a rolling window of the last `history_window` entries (default: 64). Older entries are pruned from persistent storage on each `update_commitment` call. Applications that need full history MUST reconstruct it from `CommitmentUpdated` events emitted by the contract.
+
+**Rationale.** An unbounded append-only history in contract storage accumulates rent indefinitely and exposes the complete temporal fingerprint of a group's activity. A rolling window bounds storage cost while preserving enough state for recent dispute resolution. Events provide the complete audit trail for applications that need it.
+
+---
+
+### 5. Transaction Submission and Fee Decoupling
+
+The ZK proof ensures that the submitter is a valid group member without revealing which member. However, if the member submits the transaction from their own Stellar account, the fee payer address in the transaction envelope re-links a Stellar identity to group activity — partially defeating the purpose of the ZK proof.
+
+Implementations MUST support and SHOULD encourage one of the following fee decoupling strategies:
+
+#### 5.1 Relayer pattern (RECOMMENDED)
+
+A relayer is a public service that accepts pre-signed Soroban invocations and wraps them in a transaction envelope using the relayer's own Stellar account as the fee source.
+
+The relayer workflow:
+
+1. The group member constructs a signed Soroban `InvokeHostFunction` operation containing the `update_commitment` (or `create_group`) call with the ZK proof.
+2. The member submits the signed operation to the relayer via an anonymous transport (e.g., Tor, a public HTTPS endpoint with no authentication).
+3. The relayer wraps the operation in a transaction, sets itself as `source_account`, signs the transaction envelope, and submits to the Stellar network.
+4. The relayer pays the transaction fee. Fee reimbursement, if any, happens out-of-band.
+
+The relayer does not need to be trusted with any secret material. It sees the proof (which reveals nothing about the prover) and the group_id (which is opaque). It cannot determine which member is submitting the update.
+
+A reference relayer specification is out of scope for this SEP but is expected as a companion document.
+
+#### 5.2 Shared fee account
+
+The group maintains a Stellar account funded by members via anonymous or batched deposits. All `update_commitment` transactions are submitted from this shared account. Members share the signing key for this account via the encrypted channel.
+
+This approach is simpler but has weaker privacy properties: the shared account is publicly associated with the group_id, and funding patterns may leak information.
+
+#### 5.3 Fee sponsorship via Soroban authorization
+
+If future Soroban protocol versions introduce native fee sponsorship (where an invoker and fee payer can be distinct accounts in a single transaction), implementations SHOULD adopt that mechanism. This SEP will be updated to reference the relevant protocol version when available.
+
+---
+
+### 6. Events
+
+Implementations MUST emit the following contract events for indexers.
+
+#### `GroupCreated`
+
+```
+topics: ["GroupCreated", group_id]
+data:   { commitment: BytesN<32>, epoch: 0, tier: u32, timestamp: u64 }
+```
+
+#### `CommitmentUpdated`
+
+```
+topics: ["CommitmentUpdated", group_id]
+data:   { commitment: BytesN<32>, epoch: u64, timestamp: u64 }
+```
+
+#### `GroupDeactivated`
+
+```
+topics: ["GroupDeactivated", group_id]
+data:   { final_epoch: u64, timestamp: u64 }
+```
+
+No member identity appears in any event data.
+
+---
+
+### 7. Salt Distribution Protocol
+
+The salt for each epoch must reach all current group members without appearing on-chain. This SEP is intentionally agnostic about the transport layer. Two compliant approaches are described:
+
+**Approach A — Encrypted group messaging layer (RECOMMENDED)**
+
+The salt is embedded as a custom extension in the group's application-layer key agreement protocol (e.g., MLS RFC 9420 `GroupContext` extension type `0xFF01`). The extension is authenticated by the protocol's existing Commit signature, travels through the encrypted channel, and is decrypted only by current members.
+
+**Approach B — Direct encrypted delivery**
+
+The Commit initiator encrypts `salt` to each member's BLS12-381 public key (using ECIES over BLS12-381 G1) and delivers the ciphertext via any out-of-band channel. Members decrypt and store the salt locally.
+
+In both cases, the receiving member MUST verify locally:
+
+```
+poseidon_root = MerklePoseidonTree(sorted_members).root
+local_commitment = SHA-256(poseidon_root || epoch || salt)
+assert local_commitment == contract.get_state(group_id).commitment
+```
+
+If the assertion fails, the member MUST NOT accept the epoch transition and SHOULD alert the user.
+
+For salt recovery procedures when a member loses the current salt, see Section 2.5.
+
+---
+
+### 8. Circuit Tiers and Trusted Setup
+
+#### 8.1 Standard circuit tiers
+
+This SEP defines three standard circuit tiers. Each tier corresponds to a fixed Groth16 circuit with a specific maximum group size, tree depth, and independent trusted setup.
+
+| Tier | Identifier | MAX_MEMBERS | Tree depth `d` | Approx. constraints |
+|------|------------|-------------|----------------|---------------------|
+| Small | 0 | 32 | 5 | ~27,500 |
+| Medium | 1 | 256 | 8 | ~28,400 |
+| Large | 2 | 2,048 | 11 | ~29,300 |
+
+A group is bound to a single tier at creation time (the `tier` parameter in `create_group`). The contract stores the verification key for each supported tier and uses the appropriate key during proof verification.
+
+Applications SHOULD choose the smallest tier that accommodates their expected group size. Unused leaf slots in the Merkle tree are filled with zero-valued leaves and do not affect proof validity or privacy.
+
+If a group outgrows its tier, the application MUST create a new group at a higher tier and migrate members. The old group SHOULD be deactivated.
+
+#### 8.2 Trusted setup ceremony
+
+Groth16 requires a circuit-specific trusted setup ceremony producing a proving key `pk` and verification key `vk`. The security guarantee is: the setup is sound if at least one participant honestly discards their toxic waste.
+
+A separate MPC ceremony MUST be conducted for each circuit tier before any mainnet deployment of a contract implementing this standard. Each ceremony MUST:
+
+- Use the Powers of Tau format compatible with `snarkjs` or `bellman`
+- Include a minimum of 10 independent participants
+- Publish all contribution hashes and attestations publicly
+- Derive the final verification key from the last contribution
+
+Each circuit is uniquely identified by:
+
+```
+circuit_id = SHA-256("SEP-XXXX" || tier || tree_depth || poseidon_params_hash)
+```
+
+The verification keys for all supported tiers are stored in the Soroban contract at deployment time and are immutable. A contract upgrade that changes any verification key constitutes a new deployment and requires a new ceremony.
+
+The proving keys are distributed to client applications. They are public — possession of a proving key does not endanger security.
+
+---
+
+### 9. Security Analysis
+
+#### 9.1 What an on-chain observer learns
+
+From the ledger, an observer can determine:
+
+- That a group identified by `group_id` exists
+- How many times the group's membership changed (epoch count)
+- The timestamp of each change (within the rolling history window)
+- The circuit tier, which reveals an upper bound on group size (32, 256, or 2,048)
+- A 192-byte proof blob and 32-byte commitment per epoch — neither reveals membership or prover identity
+
+An observer cannot determine:
+
+- How many members are in the group (only the tier upper bound)
+- The identity of any member
+- Which member submitted any given update
+- Whether membership grew or shrank in a given epoch
+- The identity of the group creator (if `group_id` is derived as specified in Section 1)
+
+#### 9.2 Commitment hiding
+
+The commitment is `SHA-256(poseidon_root || epoch || salt)`. Given a fresh 32-byte random salt and SHA-256's preimage resistance, an observer cannot recover the Poseidon root (or the underlying member set) without `2^256` operations. The salt prevents offline dictionary attacks even when the universe of possible members is small.
+
+The Poseidon Merkle tree adds a second layer of hiding: even if an attacker somehow obtained the Poseidon root, recovering the individual leaves requires breaking Poseidon's preimage resistance.
+
+#### 9.3 ZK soundness
+
+Groth16 is computationally sound under the knowledge-of-exponent assumption over BLS12-381. A party without a valid witness (i.e., a non-member) cannot produce an accepting proof except with negligible probability.
+
+#### 9.4 ZK zero-knowledge
+
+Groth16 is zero-knowledge: the proof reveals nothing about the witness beyond the validity of the statement. In particular, the prover's leaf index in the Merkle tree and their public key `pk` are not recoverable from the proof or the public inputs.
+
+#### 9.5 Epoch monotonicity
+
+The contract enforces `new_epoch == stored_epoch + 1`. This prevents replay attacks (resubmitting an old proof for a past epoch) and fork attacks (two conflicting epoch-N commitments).
+
+#### 9.6 Proof binds to current state
+
+The ZK proof in `update_commitment` is verified against the **current** stored commitment, not the new one. This means the updater must prove membership in the group as it existed before the transition — they cannot unilaterally forge a new membership set without holding a valid current member key.
+
+#### 9.7 Fee payer correlation
+
+If the transaction fee payer is the same Stellar account as a group member, an observer can correlate that address with group activity over time, partially defeating the ZK proof's privacy guarantee. Section 5 defines normative mitigations. The relayer pattern (Section 5.1) eliminates this correlation entirely. Implementations that do not implement fee decoupling MUST document this as a known privacy limitation.
+
+#### 9.8 Tier upper bound leakage
+
+The circuit tier reveals an upper bound on group size (e.g., a tier-0 group has at most 32 members). Applications for which this is sensitive SHOULD use a higher tier than strictly necessary.
+
+#### 9.9 Residual leakage summary
+
+| Observable | Severity | Mitigation |
+|------------|----------|------------|
+| `group_id` existence | Low | Derive `group_id` as a hash (Section 1) |
+| Epoch frequency and timing | Low | Reveals activity patterns, not identity |
+| Transaction fee payer | **Medium** if unmitigated | Relayer pattern (Section 5.1) — normative |
+| Circuit tier (group size upper bound) | Low | Use a higher tier than necessary |
+| Proof size is constant | Positive | Group size is not inferrable |
+| History window length | Low | Rolling window bounds exposure (Section 4) |
+
+---
+
+### 10. Test Vectors
+
+Implementations MUST produce the following commitment values from the given inputs. These vectors allow independent validation of the Poseidon Merkle tree construction, the dual-hash commitment, and the canonical serialization.
+
+Note: Poseidon hash outputs below use the BLS12-381 scalar field parameters specified in Section 2.2. All byte strings are hex-encoded.
+
+#### Vector 1 — epoch 0, 2 members, tier Small
+
+```
+members (compressed G1, sorted):
+    member_0 = 0x010101...01  (48 bytes, all 0x01)
+    member_1 = 0x020202...02  (48 bytes, all 0x02)
+
+Poseidon Merkle tree (depth 5, 32 leaves):
+    leaf[0] = Poseidon(member_0_x)
+    leaf[1] = Poseidon(member_1_x)
+    leaf[2..31] = 0x00...00  (zero leaves)
+    poseidon_root = [to be filled by reference implementation]
+
+salt = 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+epoch = 0x0000000000000000
+
+commitment_preimage (72 bytes):
+    poseidon_root (32 bytes) || epoch (8 bytes) || salt (32 bytes)
+
+commitment = SHA-256(commitment_preimage)
+           = [to be filled by reference implementation]
+```
+
+#### Vector 2 — epoch 1, 3 members, tier Small
+
+```
+members (compressed G1, sorted):
+    member_0 = 0x010101...01  (48 bytes)
+    member_1 = 0x020202...02  (48 bytes)
+    member_2 = 0x030303...03  (48 bytes)
+
+Poseidon Merkle tree (depth 5, 32 leaves):
+    leaf[0..2] = Poseidon(member_i_x)
+    leaf[3..31] = 0x00...00
+    poseidon_root = [to be filled by reference implementation]
+
+salt = 0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+epoch = 0x0000000000000001
+
+commitment = SHA-256(poseidon_root || epoch || salt)
+           = [to be filled by reference implementation]
+```
+
+#### Vector 3 — sort order enforcement
+
+Identical inputs to Vector 2 but with `member_0` and `member_2` swapped in the input (wrong order). After sorting, the Poseidon Merkle tree and commitment MUST be identical to Vector 2. Any implementation that produces a different commitment has a sorting bug.
+
+---
+
+### 11. Rationale
+
+**Why a dual-hash scheme (Poseidon + SHA-256) rather than SHA-256 throughout?**
+
+SHA-256 inside a Groth16 R1CS circuit costs ~25,000 constraints per compression call. In the v0.1 draft, the circuit hashed the entire canonical member list under SHA-256, making circuit size grow linearly with group size — a 100-member group required multiple compression calls totaling hundreds of thousands of constraints just for the hash.
+
+The dual-hash scheme confines SHA-256 to a single fixed-length (72-byte) compression call for the outer commitment binding, and uses Poseidon (~300 constraints per hash) for the Merkle tree. This makes the in-circuit cost logarithmic in group size (one Poseidon call per tree level) while preserving on-chain verifiability via the SHA-256 host function.
+
+**Why BLS12-381 identity keys rather than Ed25519?**
+
+Ed25519 key ownership verification inside a BLS12-381 Groth16 circuit requires emulating Curve25519 field arithmetic in a non-native field, costing 500,000+ constraints for a single scalar multiplication. BLS12-381 native keys reduce this to ~1,000 constraints. The Stellar Ed25519 address link is preserved via an off-chain attestation (Section 1.1) that is verified at group registration, not on every proof.
+
+**Why a Poseidon Merkle tree rather than hashing the flat member array?**
+
+The v0.1 draft included both a flat-array hash (for commitment binding) and a Merkle tree (for membership proof) — a redundancy, since the flat hash already required the full member array as witness. By making the Poseidon Merkle root the canonical representation of the member set, the circuit only needs a logarithmic-depth Merkle opening proof. The prover supplies only their leaf and `d` sibling hashes, not the full member list. This eliminates the redundancy and makes proving time sublinear in group size.
+
+**Why Groth16 rather than PLONK or STARKs?**
+
+Protocol 22 provides BLS12-381 pairing operations, which directly accelerate Groth16 verification. PLONK also uses pairings but requires polynomial commitment verification not yet available as host functions. STARKs are pairing-free but produce larger proofs and have no dedicated host function acceleration. Groth16 is the best fit for the current Soroban host environment.
+
+**Why define standard circuit tiers?**
+
+Groth16 circuits are fixed at setup time. Without standard tiers, every application would define its own MAX_MEMBERS and conduct its own trusted setup, fragmenting the ecosystem. Standard tiers allow shared trusted setup ceremonies, shared proving keys, and interoperable tooling.
+
+**Why is there no `committer` field in `CommitmentEntry`?**
+
+Storing the committer address would partially defeat the purpose of the ZK proof — an observer could still correlate Stellar addresses with group activity over time. The ZK proof is sufficient authorization. Fee decoupling (Section 5) ensures the fee payer is not linkable to the group member.
+
+**Why a rolling history window rather than unbounded append-only history?**
+
+Unbounded on-chain history accumulates Soroban storage rent indefinitely and exposes the complete temporal fingerprint of a group. A rolling window bounds both cost and leakage. The complete audit trail remains available via contract events, which are stored by Horizon indexers and do not incur persistent contract storage rent.
+
+**Why enforce strict epoch monotonicity rather than allowing out-of-order updates?**
+
+Strict monotonicity provides a simple, auditable invariant: the history is a linear sequence. It prevents replay, fork, and interleaving attacks without requiring the contract to maintain a nonce map per member. Applications requiring concurrent or parallel group state machines should use separate `group_id` values.
+
+---
+
+### 12. Changelog
+
+| Version | Date | Notes |
+|---------|------|-------|
+| 0.0.1 | 2026-03-30 | Initial draft |

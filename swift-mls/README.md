@@ -29,5 +29,6 @@ swift test
 - `SEPContractClient` is intentionally transport-agnostic and uses JSON over `URLSession` without introducing Soroban/XDR dependencies.
 - The contract layer models the SEP contract methods directly, while leaving the transport pluggable so you can back it with Soroban RPC, a relayer, or an internal gateway.
 - Merkle roots and proofs now take member records `{ compressed G1 public key, Poseidon(sk) leaf hash }`, allowing the Rust core to sort members canonically and reject duplicate public keys internally.
-- `SEPInvitationSender` implements the transport path for relay invitations, but Nostr event signing and recipient-targeted bootstrap encryption are intentionally injected via protocols. The repo does not include a secp256k1 implementation, so the SDK does not fake Nostr signatures or public-key encryption.
-- `RustBackedNostrSigner` now provides a concrete Rust/C-backed secp256k1 Schnorr signer for Nostr event ids. Invitation payload encryption is still injected separately via `SEPInvitationCryptoProvider`.
+- `SEPInvitationSender` assembles and broadcasts Nostr invitation events to relay(s). Event signing (`SEPNostrEventSigner`) and recipient-targeted encryption (`SEPInvitationCryptoProvider`) are injected via protocols for flexibility.
+- `RustBackedNostrSigner` provides a concrete secp256k1 Schnorr signer (via the Rust `k256` crate) for Nostr event ids. Invitation payload encryption is injected separately via `SEPInvitationCryptoProvider`.
+- `URLSessionSEPNostrRelayTransport` is the default relay transport, using ephemeral WebSocket connections. It can be replaced with a custom `SEPNostrRelayTransport` implementation.

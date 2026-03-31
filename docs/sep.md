@@ -8,7 +8,7 @@ Track: Standard
 Status: Draft
 Created: 2026-03-30
 Updated: 2026-03-31
-Version: 0.0.2
+Version: 0.0.3
 Discussion: https://github.com/orgs/stellar/discussions/1903
 ```
 
@@ -110,15 +110,15 @@ Poseidon parameters:
     width:          3 (rate 2 + capacity 1)
 ```
 
-**Parameter generation.** The reference implementation generates round constants deterministically by repeatedly hashing the seed `"SEP-XXXX-Poseidon-BLS12-381-round-constants"` with SHA-256, extending each iteration to 64 bytes for uniform field element sampling via `from_le_bytes_mod_order`. The MDS matrix uses the Cauchy construction `M[i][j] = 1 / (x_i + y_j)` with `x_i = i+1` and `y_j = width+j+1`. In production, implementations SHOULD use the Poseidon paper's reference generation script for BLS12-381 to ensure cross-implementation compatibility.
+**Parameter generation.** The reference implementation generates round constants deterministically by repeatedly hashing the seed `"SEP-XXXX-Poseidon-BLS12-381-w3-f8-p56-a5-round-constants"` with SHA-256, extending each iteration to 64 bytes for uniform field element sampling via `from_le_bytes_mod_order`. The seed includes all Poseidon parameters (width 3, full rounds 8, partial rounds 56, alpha 5) for domain separation. The MDS matrix uses the Cauchy construction `M[i][j] = 1 / (x_i + y_j)` with `x_i = i+1` and `y_j = width+j+1`. In production, implementations SHOULD use the Poseidon paper's reference generation script for BLS12-381 to ensure cross-implementation compatibility.
 
 Each leaf is computed as:
 
 ```
-leaf[i] = Poseidon(member_key_scalar[i])
+leaf[i] = Poseidon(sk[i])
 ```
 
-where `member_key_scalar` is the x-coordinate of the compressed G1 point interpreted as a field element.
+where `sk[i]` is the member's BLS12-381 private key scalar. Members compute `Poseidon(sk)` locally and share only the resulting leaf hash during group registration — the secret key itself is never transmitted.
 
 Internal nodes are:
 
@@ -172,10 +172,14 @@ If a member loses the salt for the current epoch, they cannot generate proofs or
 
 1. The member requests salt re-delivery from any other current group member via the application's encrypted channel.
 2. The responding member encrypts the salt to the requesting member's BLS12-381 public key (using ECIES over BLS12-381 G1) and delivers it.
-3. Upon receiving the salt, the recovering member MUST verify locally:
+3. Upon receiving the salt, the recovering member MUST verify locally using the commitment variant in use:
 
 ```
+-- Variant A:
 local_commitment = SHA-256(poseidon_root || epoch || salt)
+-- Variant B:
+local_commitment = Poseidon(Poseidon(poseidon_root, epoch), salt)
+
 assert local_commitment == contract.get_state(group_id).commitment
 ```
 
@@ -189,20 +193,37 @@ If no other member is reachable, the member cannot participate until the next ep
 
 The prover demonstrates the following statement to the contract without revealing any witness:
 
-> "I know a secret key `sk` such that `sk · G1` is a member of the Poseidon Merkle tree whose root, combined with the epoch and salt, hashes under SHA-256 to the stored commitment for `(group_id, epoch)`."
+> "I know a secret key `sk` such that `Poseidon(sk)` is a leaf in the Poseidon Merkle tree whose root, combined with the epoch and salt, produces the stored commitment for `(group_id, epoch)`."
 
 Formal relation:
+
+**Variant A (SHA-256 outer binding):**
 
 ```
 R = {
   public:   commitment ∈ {0,1}^256,  epoch ∈ u64
-  witness:  sk, pk = sk · G1, poseidon_root, salt,
+  witness:  sk, poseidon_root, salt,
             merkle_path[0..d-1], leaf_index
 
   constraints:
-    (1)  pk_circuit = sk · G1                                         [key ownership]
-    (2)  MerklePoseidonOpen(pk_circuit, merkle_path, leaf_index, poseidon_root) == true  [membership]
+    (1)  leaf = Poseidon(sk)                                          [key ownership]
+    (2)  MerklePoseidonOpen(leaf, merkle_path, leaf_index, poseidon_root) == true  [membership]
     (3)  SHA-256(poseidon_root || epoch || salt) == commitment         [commitment binding]
+}
+```
+
+**Variant B (Poseidon-only binding, reference implementation):**
+
+```
+R = {
+  public:   commitment ∈ Fr,  epoch ∈ Fr
+  witness:  sk, poseidon_root, salt,
+            merkle_path[0..d-1], leaf_index
+
+  constraints:
+    (1)  leaf = Poseidon(sk)                                          [key ownership]
+    (2)  MerklePoseidonOpen(leaf, merkle_path, leaf_index, poseidon_root) == true  [membership]
+    (3)  Poseidon(Poseidon(poseidon_root, epoch), salt) == commitment  [commitment binding]
 }
 ```
 
@@ -223,26 +244,26 @@ Groth16 requires a circuit-specific trusted setup. See Section 9.
 
 Three constraints are encoded in the circuit:
 
-**Constraint 1 — key ownership (BLS12-381 native)**
+**Constraint 1 — key ownership (Poseidon preimage)**
 
-Compute `pk_circuit = sk · G1` within the circuit, where `sk` is a private scalar witness and `G1` is the BLS12-381 generator. Because the circuit's native field is the BLS12-381 scalar field, this scalar multiplication requires only ~1,000 R1CS constraints with no non-native arithmetic.
+The circuit computes `leaf = Poseidon(sk)` where `sk` is the prover's private key scalar (witness). This proves knowledge of the preimage: only someone who knows `sk` can produce a leaf hash that matches. Because Poseidon is a native-field hash, this requires ~240 R1CS constraints.
 
 Assert:
 
 ```
-pk_circuit == pk   (witness)
+Poseidon(sk) == leaf   (witness, used as input to Constraint 2)
 ```
 
-Note: the reference implementation simplifies this constraint by using `member_scalar` (the public key x-coordinate) directly as the key identity witness, deferring the full in-circuit BLS12-381 scalar multiplication to a future version. This simplification means the current circuit proves "I know a scalar that is a leaf in the Merkle tree" rather than "I know the private key corresponding to a public key that is a leaf." The full `sk · G1` constraint will be added when arkworks' BLS12-381 G1 gadget is integrated.
+**Rationale.** The original design specified `pk = sk · G1` (in-circuit BLS12-381 scalar multiplication, ~1,000 constraints) as the key ownership proof. The reference implementation uses Poseidon preimage knowledge instead: the leaf is `Poseidon(sk)` rather than a function of the public key. This approach proves "I know the secret key whose hash is a leaf in the Merkle tree" — which is the same security guarantee (knowledge of the secret key), achieved with fewer constraints and no dependency on in-circuit elliptic curve gadgets. The public key `pk = sk · G1` remains the member's external identity; the Poseidon preimage is an internal circuit mechanism only.
 
 **Constraint 2 — Poseidon Merkle membership**
 
-The prover supplies a Merkle opening proof consisting of `d` sibling hashes and a leaf index. The circuit recomputes the Merkle root from the leaf (derived from `pk_circuit`) upward using Poseidon hashes.
+The prover supplies a Merkle opening proof consisting of `d` sibling hashes and a leaf index. The circuit recomputes the Merkle root from the leaf (computed in Constraint 1 as `Poseidon(sk)`) upward using Poseidon hashes.
 
 Assert:
 
 ```
-MerklePoseidonOpen(Poseidon(pk_x), merkle_path, leaf_index) == poseidon_root
+MerklePoseidonOpen(Poseidon(sk), merkle_path, leaf_index) == poseidon_root
 ```
 
 At each level, Poseidon is applied to the pair `(left, right)` determined by the path bit. For a tree of depth `d`, this requires `d` Poseidon hash evaluations (~240 constraints each as measured, ~300 estimated), totaling ~`240 · d` constraints.
@@ -259,32 +280,32 @@ Assert:
 SHA-256(poseidon_root || epoch || salt) == commitment   (public input)
 ```
 
-*Variant B (Poseidon-only, reference implementation):* The circuit computes `Poseidon(Poseidon(poseidon_root, epoch), salt)` using two Poseidon hash calls (~600 R1CS constraints total). The public input `commitment_high` is the Poseidon binding value, and `commitment_low` equals the epoch field element.
+*Variant B (Poseidon-only, reference implementation):* The circuit computes `Poseidon(Poseidon(poseidon_root, epoch), salt)` using two Poseidon hash calls (~600 R1CS constraints total). The two public inputs are the Poseidon commitment value and the epoch.
 
 Assert:
 
 ```
-Poseidon(Poseidon(poseidon_root, epoch), salt) == commitment_high   (public input)
-epoch == commitment_low                                              (public input)
+Poseidon(Poseidon(poseidon_root, epoch), salt) == commitment   (public input)
+epoch_witness == epoch                                          (public input)
 ```
 
 **Total circuit size by tier (Variant A — SHA-256, estimated):**
 
 | Tier | MAX_MEMBERS | Tree depth `d` | Constraint 1 | Constraint 2 | Constraint 3 | Total (approx.) |
 |------|-------------|----------------|--------------|--------------|--------------|------------------|
-| Small | 32 | 5 | ~1,000 | ~1,500 | ~25,000 | ~27,500 |
-| Medium | 256 | 8 | ~1,000 | ~2,400 | ~25,000 | ~28,400 |
-| Large | 2,048 | 11 | ~1,000 | ~3,300 | ~25,000 | ~29,300 |
+| Small | 32 | 5 | ~240 | ~1,500 | ~25,000 | ~26,740 |
+| Medium | 256 | 8 | ~240 | ~2,400 | ~25,000 | ~27,640 |
+| Large | 2,048 | 11 | ~240 | ~3,300 | ~25,000 | ~28,540 |
 
 **Total circuit size by tier (Variant B — Poseidon-only, measured from reference implementation):**
 
 | Tier | MAX_MEMBERS | Tree depth `d` | Constraint 1 | Constraint 2 | Constraint 3 | Total (measured) |
 |------|-------------|----------------|--------------|--------------|--------------|------------------|
-| Small | 32 | 5 | 0 (simplified) | ~1,311 | ~600 | **1,911** |
-| Medium | 256 | 8 | 0 (simplified) | ~2,031 | ~600 | **2,631** |
-| Large | 2,048 | 11 | 0 (simplified) | ~2,751 | ~600 | **3,351** |
+| Small | 32 | 5 | ~240 | ~1,070 | ~600 | **1,910** |
+| Medium | 256 | 8 | ~240 | ~1,790 | ~600 | **2,630** |
+| Large | 2,048 | 11 | ~240 | ~2,510 | ~600 | **3,350** |
 
-Variant B is ~14x smaller than Variant A. The circuit scales logarithmically with group size in both variants, with ~240 additional constraints per tree level. In Variant A, SHA-256 dominates the constraint count at all tiers. In Variant B, the Merkle proof dominates, and the full `sk · G1` key ownership constraint (~1,000 constraints) will become the second-largest component when added.
+Variant B is ~14x smaller than Variant A. The circuit scales logarithmically with group size in both variants, with ~240 additional constraints per tree level. In Variant A, SHA-256 dominates the constraint count at all tiers. In Variant B, the Merkle proof dominates, followed by the commitment binding and key ownership constraints.
 
 #### 3.4 Public inputs and proof wire
 
@@ -310,14 +331,13 @@ ProofSubmission {
     epoch:      u64         -- must match stored epoch
     proof:      Bytes(192)  -- Groth16 proof: π_A (G1) || π_B (G2) || π_C (G1)
     public_inputs: {
-        commitment_high: Fr      -- Poseidon binding value (BLS12-381 scalar field element)
-        commitment_low:  Fr      -- epoch as field element (redundant binding)
-        epoch:           Fr      -- epoch as field element
+        commitment: Fr           -- Poseidon binding value (BLS12-381 scalar field element)
+        epoch:      Fr           -- epoch as field element
     }
 }
 ```
 
-In Variant B, the public inputs are three BLS12-381 scalar field elements. The contract must verify that `commitment_high` and `commitment_low` are consistent with the stored on-chain state.
+In Variant B, the public inputs are two BLS12-381 scalar field elements. The contract must verify that `commitment` is consistent with the stored on-chain state.
 
 #### 3.5 Verification in Soroban
 
@@ -339,13 +359,13 @@ This means the contract never learns the member list, the salt, or the identity 
 
 #### 3.6 Proof size and cost
 
-| Parameter | Value |
-|-----------|-------|
-| Proof size | 192 bytes |
-| Public inputs | 40 bytes (32 + 8) |
-| BLS12-381 pairings required | 3 |
-| Estimated Soroban instructions | ~6–10M |
-| Cost scaling with group size | None — constant |
+| Parameter | Variant A | Variant B |
+|-----------|-----------|-----------|
+| Proof size | 192 bytes | 192 bytes |
+| Public inputs | 40 bytes (32-byte commitment + 8-byte epoch) | 64 bytes (2 × 32-byte field elements) |
+| BLS12-381 pairings required | 3 | 3 |
+| Estimated Soroban instructions | ~6–10M | ~6–10M |
+| Cost scaling with group size | None — constant | None — constant |
 
 The constant verification cost is a core property. A 2,048-member group is indistinguishable from a 2-member group from the contract's perspective.
 
@@ -376,7 +396,7 @@ Invariants:
 
 ##### 4.1 Semantics of the epoch-0 proof
 
-At epoch 0, no prior group state exists. The ZK proof submitted with `create_group` proves the following: the caller knows a secret key `sk` and a salt `s` such that `sk · G1` is a leaf in the Poseidon Merkle tree whose root, combined with epoch 0 and salt `s`, hashes to the submitted commitment. This is the same circuit and statement used for all subsequent epochs — the creator is proving they are a member of the set they are committing, not that the set existed before.
+At epoch 0, no prior group state exists. The ZK proof submitted with `create_group` proves the following: the caller knows a secret key `sk` and a salt `s` such that `Poseidon(sk)` is a leaf in the Poseidon Merkle tree whose root, combined with epoch 0 and salt `s`, produces the submitted commitment. This is the same circuit and statement used for all subsequent epochs — the creator is proving they are a member of the set they are committing, not that the set existed before.
 
 This means the creator cannot register a group containing only other people's keys without also including their own. Any party who knows the salt and a valid member key can create the group; the contract does not privilege the creator in any way after creation.
 
@@ -543,11 +563,19 @@ The salt is embedded as a custom extension in the group's application-layer key 
 
 The Commit initiator encrypts `salt` to each member's BLS12-381 public key (using ECIES over BLS12-381 G1) and delivers the ciphertext via any out-of-band channel. Members decrypt and store the salt locally.
 
-In both cases, the receiving member MUST verify locally:
+In both cases, the receiving member MUST verify locally using the commitment variant in use:
 
+*Variant A:*
 ```
 poseidon_root = MerklePoseidonTree(sorted_members).root
 local_commitment = SHA-256(poseidon_root || epoch || salt)
+assert local_commitment == contract.get_state(group_id).commitment
+```
+
+*Variant B:*
+```
+poseidon_root = MerklePoseidonTree(sorted_members).root
+local_commitment = Poseidon(Poseidon(poseidon_root, epoch), salt)
 assert local_commitment == contract.get_state(group_id).commitment
 ```
 
@@ -565,9 +593,9 @@ This SEP defines three standard circuit tiers. Each tier corresponds to a fixed 
 
 | Tier | Identifier | MAX_MEMBERS | Tree depth `d` | Constraints (Variant A, est.) | Constraints (Variant B, measured) |
 |------|------------|-------------|----------------|-------------------------------|-----------------------------------|
-| Small | 0 | 32 | 5 | ~27,500 | **1,911** |
-| Medium | 1 | 256 | 8 | ~28,400 | **2,631** |
-| Large | 2 | 2,048 | 11 | ~29,300 | **3,351** |
+| Small | 0 | 32 | 5 | ~27,500 | **1,910** |
+| Medium | 1 | 256 | 8 | ~28,400 | **2,630** |
+| Large | 2 | 2,048 | 11 | ~29,300 | **3,350** |
 
 A group is bound to a single tier at creation time (the `tier` parameter in `create_group`). The contract stores the verification key for each supported tier and uses the appropriate key during proof verification.
 
@@ -620,9 +648,11 @@ An observer cannot determine:
 
 #### 9.2 Commitment hiding
 
-The commitment is `SHA-256(poseidon_root || epoch || salt)`. Given a fresh 32-byte random salt and SHA-256's preimage resistance, an observer cannot recover the Poseidon root (or the underlying member set) without `2^256` operations. The salt prevents offline dictionary attacks even when the universe of possible members is small.
+**Variant A:** The commitment is `SHA-256(poseidon_root || epoch || salt)`. Given a fresh 32-byte random salt and SHA-256's preimage resistance, an observer cannot recover the Poseidon root (or the underlying member set) without `2^256` operations.
 
-The Poseidon Merkle tree adds a second layer of hiding: even if an attacker somehow obtained the Poseidon root, recovering the individual leaves requires breaking Poseidon's preimage resistance.
+**Variant B:** The commitment is `Poseidon(Poseidon(poseidon_root, epoch), salt)`. The hiding property relies on Poseidon's preimage resistance over the BLS12-381 scalar field. The salt provides ~255 bits of effective entropy (32 bytes reduced mod `r`), which is cryptographically sufficient.
+
+In both variants, the salt prevents offline dictionary attacks even when the universe of possible members is small. The Poseidon Merkle tree adds a second layer of hiding: even if an attacker somehow obtained the Poseidon root, recovering the individual leaves requires breaking Poseidon's preimage resistance.
 
 #### 9.3 ZK soundness
 
@@ -730,7 +760,7 @@ In-circuit SHA-256 costs ~25,000 R1CS constraints even for a single fixed-length
 
 **Why BLS12-381 identity keys rather than Ed25519?**
 
-Ed25519 key ownership verification inside a BLS12-381 Groth16 circuit requires emulating Curve25519 field arithmetic in a non-native field, costing 500,000+ constraints for a single scalar multiplication. BLS12-381 native keys reduce this to ~1,000 constraints. The Stellar Ed25519 address link is preserved via an off-chain attestation (Section 1.1) that is verified at group registration, not on every proof.
+Ed25519 key ownership verification inside a BLS12-381 Groth16 circuit requires emulating Curve25519 field arithmetic in a non-native field, costing 500,000+ constraints for a single scalar multiplication. BLS12-381 native keys allow key ownership to be proven via `Poseidon(sk)` preimage knowledge (~240 constraints) since the private key scalar is a native BLS12-381 field element. The Stellar Ed25519 address link is preserved via an off-chain attestation (Section 1.1) that is verified at group registration, not on every proof.
 
 **Why a Poseidon Merkle tree rather than hashing the flat member array?**
 
@@ -773,18 +803,20 @@ The Phase 1 reference implementation is written in Rust using the arkworks libra
 | Module | Purpose |
 |--------|---------|
 | `poseidon` | Poseidon hash function with deterministic parameter generation |
-| `merkle` | Binary Poseidon Merkle tree: build, prove, verify |
-| `commitment` | SHA-256 commitment construction (Section 2.3 Variant A) |
-| `circuit` | Groth16 R1CS circuit (Section 3.3, currently Variant B) |
+| `merkle` | Binary Poseidon Merkle tree: build from scalars or pre-computed leaf hashes, prove, verify |
+| `commitment` | Dual commitment construction: SHA-256 (Variant A) and Poseidon-only (Variant B) |
+| `circuit` | Groth16 R1CS circuit (Section 3.3, Variant B with Poseidon preimage key ownership) |
 | `prover` | End-to-end pipeline: trusted setup, proof generation, verification, serialization |
 
-**Implementation choices and deviations:**
+**Implementation choices:**
 
-1. **Commitment binding uses Variant B (Poseidon-only).** The `commitment` module implements Variant A (SHA-256) for off-chain use, but the circuit uses Variant B (Poseidon-only) for in-circuit binding. This is a deliberate optimization.
-2. **Key ownership simplified.** The `sk · G1` scalar multiplication is deferred; the circuit accepts the member scalar directly as a witness. This is a Phase 1 simplification; the full constraint will be added in a future version.
-3. **Member sorting is the caller's responsibility.** The Merkle tree builder does not sort inputs. Callers MUST sort members before building the tree (Section 2.1).
-4. **55 unit tests** covering all modules: Poseidon hash properties, Merkle tree construction and proof verification, commitment computation and serialization, circuit satisfiability and rejection, full Groth16 pipeline including epoch transitions.
-5. **Proof size confirmed at 192 bytes** (48 + 96 + 48 compressed BLS12-381 points).
+1. **Commitment binding uses Variant B (Poseidon-only).** The `commitment` module implements both Variant A (SHA-256) and Variant B (Poseidon-only). The circuit uses Variant B for in-circuit binding. This is a deliberate optimization that reduces circuit size by ~14x compared to in-circuit SHA-256.
+2. **Key ownership via Poseidon preimage.** The circuit proves `Poseidon(sk) == leaf`, establishing knowledge of the secret key whose hash is a Merkle tree leaf. This replaces the originally specified `sk · G1` in-circuit scalar multiplication, achieving the same security guarantee (knowledge of `sk`) with fewer constraints (~240 vs ~1,000) and no dependency on elliptic curve gadgets.
+3. **Two public inputs.** The circuit exposes 2 public inputs (`commitment`, `epoch`) as BLS12-381 field elements. The earlier 3-input design (`commitment_high`, `commitment_low`, `epoch`) was simplified by removing the redundant `commitment_low == epoch` binding.
+4. **Member sorting is the caller's responsibility.** The Merkle tree builder does not sort inputs. Callers MUST sort members before building the tree (Section 2.1).
+5. **Pre-computed leaf hashes.** The `merkle` module supports building trees from pre-computed `Poseidon(sk)` leaf hashes (via `build_from_leaf_hashes`), enabling the production workflow where members share leaf hashes during registration without revealing secret keys.
+6. **67 unit tests** covering all modules: Poseidon hash properties, Merkle tree construction and proof verification, commitment computation and serialization, circuit satisfiability and rejection, full Groth16 pipeline including epoch transitions, wrong-key rejection, and proof serialization roundtrips.
+7. **Proof size confirmed at 192 bytes** (48 + 96 + 48 compressed BLS12-381 points).
 
 ---
 
@@ -794,3 +826,4 @@ The Phase 1 reference implementation is written in Rust using the arkworks libra
 |---------|------|-------|
 | 0.0.1 | 2026-03-30 | Initial draft |
 | 0.0.2 | 2026-03-31 | Added Poseidon-only commitment binding variant (Variant B) based on Phase 1 reference implementation; added measured constraint counts; documented Poseidon parameter generation; added reference implementation section; updated circuit tiers table with both variant counts |
+| 0.0.3 | 2026-03-31 | Key ownership changed from `sk · G1` to `Poseidon(sk)` preimage proof; reduced public inputs from 3 to 2 (`commitment`, `epoch`); updated Poseidon seed to include all parameters; updated formal relations for both variants; updated constraint tables with measured values; documented salt verification for both variants; updated reference implementation section to reflect 67 tests and current API |

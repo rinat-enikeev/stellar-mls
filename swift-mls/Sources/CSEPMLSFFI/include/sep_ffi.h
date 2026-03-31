@@ -20,7 +20,16 @@ bool sep_compute_leaf_hash(
     char **out_error
 );
 
+bool sep_compute_public_key(
+    const uint8_t *secret_key_ptr,
+    size_t secret_key_len,
+    sep_byte_buffer_t *out_public_key,
+    char **out_error
+);
+
 bool sep_compute_merkle_root(
+    const uint8_t *member_public_keys_ptr,
+    size_t member_public_keys_len,
     const uint8_t *leaf_hashes_ptr,
     size_t leaf_hashes_len,
     size_t depth,
@@ -58,11 +67,12 @@ bool sep_generate_testing_proving_key(
 bool sep_generate_membership_proof(
     const uint8_t *proving_key_ptr,
     size_t proving_key_len,
+    const uint8_t *member_public_keys_ptr,
+    size_t member_public_keys_len,
     const uint8_t *leaf_hashes_ptr,
     size_t leaf_hashes_len,
     const uint8_t *secret_key_ptr,
     size_t secret_key_len,
-    size_t prover_index,
     uint64_t epoch,
     const uint8_t *salt_ptr,
     size_t salt_len,

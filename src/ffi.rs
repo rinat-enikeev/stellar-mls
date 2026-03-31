@@ -14,7 +14,9 @@ use crate::commitment::{
     bytes_be_to_field, compute_commitment, compute_poseidon_commitment, field_to_bytes_be, Salt,
     SALT_LEN,
 };
-use crate::merkle::PoseidonMerkleTree;
+use crate::merkle::{
+    CanonicalMember, PoseidonMerkleTree, COMPRESSED_G1_PUBLIC_KEY_LEN, compressed_public_key_bytes,
+};
 use crate::poseidon::poseidon_config;
 use crate::prover::{self, ProverInput};
 
@@ -121,6 +123,48 @@ fn read_field_vector(bytes: &[u8]) -> Result<Vec<Fr>, String> {
         .collect::<Result<Vec<_>, _>>()
 }
 
+fn read_public_key_vector(
+    bytes: &[u8],
+) -> Result<Vec<[u8; COMPRESSED_G1_PUBLIC_KEY_LEN]>, String> {
+    if bytes.len() % COMPRESSED_G1_PUBLIC_KEY_LEN != 0 {
+        return Err(format!(
+            "public key byte buffer length must be a multiple of {}",
+            COMPRESSED_G1_PUBLIC_KEY_LEN
+        ));
+    }
+
+    bytes
+        .chunks_exact(COMPRESSED_G1_PUBLIC_KEY_LEN)
+        .map(|chunk| {
+            chunk
+                .try_into()
+                .map_err(|_| "failed to convert public key bytes".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()
+}
+
+fn build_members(
+    public_keys: Vec<[u8; COMPRESSED_G1_PUBLIC_KEY_LEN]>,
+    leaf_hashes: Vec<Fr>,
+) -> Result<Vec<CanonicalMember<Fr>>, String> {
+    if public_keys.len() != leaf_hashes.len() {
+        return Err(format!(
+            "member public key count ({}) does not match leaf hash count ({})",
+            public_keys.len(),
+            leaf_hashes.len()
+        ));
+    }
+
+    Ok(public_keys
+        .into_iter()
+        .zip(leaf_hashes)
+        .map(|(public_key_bytes, leaf_hash)| CanonicalMember {
+            public_key_bytes,
+            leaf_hash,
+        })
+        .collect())
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn sep_byte_buffer_free(buffer: SepByteBuffer) {
     if !buffer.ptr.is_null() {
@@ -155,7 +199,24 @@ pub extern "C" fn sep_compute_leaf_hash(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn sep_compute_public_key(
+    secret_key_ptr: *const u8,
+    secret_key_len: usize,
+    out_public_key: *mut SepByteBuffer,
+    out_error: *mut *mut c_char,
+) -> bool {
+    run_ffi(out_error, || {
+        let secret_key_bytes = read_bytes(secret_key_ptr, secret_key_len, "secret key")?;
+        let secret_key = read_fr(secret_key_bytes)?;
+        let public_key = compressed_public_key_bytes(&secret_key);
+        write_buffer(out_public_key, public_key.to_vec())
+    })
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn sep_compute_merkle_root(
+    member_public_keys_ptr: *const u8,
+    member_public_keys_len: usize,
     leaf_hashes_ptr: *const u8,
     leaf_hashes_len: usize,
     depth: usize,
@@ -163,10 +224,18 @@ pub extern "C" fn sep_compute_merkle_root(
     out_error: *mut *mut c_char,
 ) -> bool {
     run_ffi(out_error, || {
+        let public_key_bytes = read_bytes(
+            member_public_keys_ptr,
+            member_public_keys_len,
+            "member public keys",
+        )?;
         let leaf_hash_bytes = read_bytes(leaf_hashes_ptr, leaf_hashes_len, "leaf hashes")?;
+        let public_keys = read_public_key_vector(public_key_bytes)?;
         let leaf_hashes = read_field_vector(leaf_hash_bytes)?;
+        let members = build_members(public_keys, leaf_hashes)?;
         let config = poseidon_config::<Fr>();
-        let tree = PoseidonMerkleTree::build_from_leaf_hashes(&config, &leaf_hashes, depth);
+        let tree = PoseidonMerkleTree::build_from_members(&config, &members, depth)
+            .map_err(|e| e.to_string())?;
         write_buffer(out_root, field_to_bytes_be(&tree.root()).to_vec())
     })
 }
@@ -235,11 +304,12 @@ pub extern "C" fn sep_generate_testing_proving_key(
 pub extern "C" fn sep_generate_membership_proof(
     proving_key_ptr: *const u8,
     proving_key_len: usize,
+    member_public_keys_ptr: *const u8,
+    member_public_keys_len: usize,
     leaf_hashes_ptr: *const u8,
     leaf_hashes_len: usize,
     secret_key_ptr: *const u8,
     secret_key_len: usize,
-    prover_index: usize,
     epoch: u64,
     salt_ptr: *const u8,
     salt_len: usize,
@@ -250,26 +320,26 @@ pub extern "C" fn sep_generate_membership_proof(
 ) -> bool {
     run_ffi(out_error, || {
         let proving_key_bytes = read_bytes(proving_key_ptr, proving_key_len, "proving key")?;
+        let public_key_bytes = read_bytes(
+            member_public_keys_ptr,
+            member_public_keys_len,
+            "member public keys",
+        )?;
         let leaf_hash_bytes = read_bytes(leaf_hashes_ptr, leaf_hashes_len, "leaf hashes")?;
         let secret_key_bytes = read_bytes(secret_key_ptr, secret_key_len, "secret key")?;
         let salt_bytes = read_bytes(salt_ptr, salt_len, "salt")?;
 
         let proving_key = ProvingKey::<Bls12_381>::deserialize_compressed(proving_key_bytes)
             .map_err(|e| e.to_string())?;
+        let public_keys = read_public_key_vector(public_key_bytes)?;
         let leaf_hashes = read_field_vector(leaf_hash_bytes)?;
-        if prover_index >= leaf_hashes.len() {
-            return Err(format!(
-                "prover index {prover_index} out of bounds for {} leaf hashes",
-                leaf_hashes.len()
-            ));
-        }
+        let members = build_members(public_keys, leaf_hashes)?;
         let secret_key = read_fr(secret_key_bytes)?;
         let salt = read_salt(salt_bytes)?;
 
         let input = ProverInput {
-            leaf_hashes,
+            members,
             secret_key,
-            prover_index,
             epoch,
             salt,
             depth,

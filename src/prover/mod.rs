@@ -12,7 +12,7 @@ use ark_std::rand::Rng;
 
 use crate::circuit::MembershipCircuit;
 use crate::commitment::{Salt, compute_poseidon_commitment};
-use crate::merkle::PoseidonMerkleTree;
+use crate::merkle::{CanonicalMember, PoseidonMerkleTree, canonicalize_members, compressed_public_key_bytes};
 use crate::poseidon::poseidon_config;
 
 /// Result of the trusted setup ceremony.
@@ -24,15 +24,16 @@ pub struct SetupResult {
 
 /// Input needed to generate a membership proof.
 pub struct ProverInput {
-    /// Pre-computed leaf hashes: `Poseidon(sk_i)` for each member,
-    /// sorted in canonical order (SEP-XXXX Section 2.1).
-    /// These are shared among group members during registration.
-    pub leaf_hashes: Vec<Fr>,
+    /// Member records. Each member contributes:
+    /// - `public_key_bytes`: compressed G1 bytes used for canonical sorting
+    /// - `leaf_hash`: `Poseidon(sk_i)`
+    ///
+    /// The prover canonicalizes this roster internally, making commitment
+    /// construction deterministic regardless of input ordering.
+    pub members: Vec<CanonicalMember<Fr>>,
     /// The prover's secret key (BLS12-381 private key scalar).
     /// Only the prover knows this value.
     pub secret_key: Fr,
-    /// Index of the prover's leaf in the sorted leaf_hashes list.
-    pub prover_index: usize,
     /// Current epoch.
     pub epoch: u64,
     /// Current salt (shared secret among group members).
@@ -72,11 +73,22 @@ pub fn prove<R: Rng + rand::CryptoRng>(
     rng: &mut R,
 ) -> Result<(Proof<Bls12_381>, PublicInputs), Box<dyn std::error::Error>> {
     let config = poseidon_config::<Fr>();
+    let ordered_members = canonicalize_members(&input.members)?;
+    let prover_public_key_bytes = compressed_public_key_bytes(&input.secret_key);
+    let prover_leaf_hash = compute_leaf_hash(&input.secret_key);
+    let prover_index = ordered_members
+        .iter()
+        .position(|member| member.public_key_bytes == prover_public_key_bytes)
+        .ok_or("prover public key is not present in the member roster")?;
 
-    // Build Merkle tree from pre-computed leaf hashes
-    let tree = PoseidonMerkleTree::build_from_leaf_hashes(&config, &input.leaf_hashes, input.depth);
+    if ordered_members[prover_index].leaf_hash != prover_leaf_hash {
+        return Err("member roster leaf hash does not match prover secret key".into());
+    }
+
+    // Build Merkle tree from canonicalized member records.
+    let tree = PoseidonMerkleTree::build_from_members(&config, &ordered_members, input.depth)?;
     let root = tree.root();
-    let merkle_proof = tree.prove(input.prover_index);
+    let merkle_proof = tree.prove(prover_index);
 
     // Compute the Poseidon commitment binding
     let commitment = compute_poseidon_commitment(&config, &root, input.epoch, &input.salt);
@@ -161,14 +173,16 @@ mod tests {
         depth: usize,
     ) -> ProverInput {
         let config = poseidon_config::<Fr>();
-        let leaf_hashes: Vec<Fr> = secret_keys.iter()
-            .map(|sk| poseidon_hash_one(&config, sk))
+        let members: Vec<CanonicalMember<Fr>> = secret_keys.iter()
+            .map(|sk| CanonicalMember {
+                public_key_bytes: compressed_public_key_bytes(sk),
+                leaf_hash: poseidon_hash_one(&config, sk),
+            })
             .collect();
 
         ProverInput {
-            leaf_hashes,
+            members,
             secret_key: secret_keys[prover_index],
-            prover_index,
             epoch,
             salt,
             depth,
@@ -331,17 +345,19 @@ mod tests {
 
         let config = poseidon_config::<Fr>();
         let real_keys = vec![Fr::from(100u64), Fr::from(200u64)];
-        let leaf_hashes: Vec<Fr> = real_keys.iter()
-            .map(|sk| poseidon_hash_one(&config, sk))
+        let members: Vec<CanonicalMember<Fr>> = real_keys.iter()
+            .map(|sk| CanonicalMember {
+                public_key_bytes: compressed_public_key_bytes(sk),
+                leaf_hash: poseidon_hash_one(&config, sk),
+            })
             .collect();
 
         // Attacker knows the leaf hashes but not the secret keys.
         // They try to use a wrong secret key.
         let wrong_key = Fr::from(999u64);
         let input = ProverInput {
-            leaf_hashes: leaf_hashes.clone(),
+            members: members.clone(),
             secret_key: wrong_key,   // not a real member's key
-            prover_index: 0,
             epoch: 0,
             salt: [0xAA; 32],
             depth: 5,

@@ -275,7 +275,7 @@ fn poseidon_hash_two_gadget(
 mod tests {
     use super::*;
     use crate::commitment::compute_poseidon_commitment;
-    use crate::merkle::PoseidonMerkleTree;
+    use crate::merkle::{PoseidonMerkleTree, compressed_public_key_bytes};
     use crate::poseidon::poseidon_config;
     use ark_bls12_381::Fr;
     use ark_relations::r1cs::ConstraintSystem;
@@ -289,11 +289,14 @@ mod tests {
         depth: usize,
     ) -> MembershipCircuit<Fr> {
         let config = poseidon_config::<Fr>();
+        let target_key = secret_keys[prover_index];
 
-        // Build Merkle tree (hashes each secret key to make a leaf)
-        let tree = PoseidonMerkleTree::build(&config, secret_keys, depth);
+        // Build canonical tree and locate the selected prover's canonical index.
+        let tree = PoseidonMerkleTree::build(&config, secret_keys, depth).unwrap();
+        let canonical_index = canonical_index_for_key(secret_keys, &target_key);
+
         let root = tree.root();
-        let proof = tree.prove(prover_index);
+        let proof = tree.prove(canonical_index);
 
         // Compute the Poseidon commitment binding
         let commitment = compute_poseidon_commitment(&config, &root, epoch, &salt);
@@ -301,13 +304,24 @@ mod tests {
         MembershipCircuit::new(
             commitment,
             epoch,
-            secret_keys[prover_index],
+            target_key,
             root,
             salt,
             proof.path,
             proof.leaf_index,
             depth,
         )
+    }
+
+    fn canonical_index_for_key(secret_keys: &[Fr], target_key: &Fr) -> usize {
+        let target_public_key = compressed_public_key_bytes(target_key);
+        let mut ordered_public_keys: Vec<[u8; 48]> =
+            secret_keys.iter().map(compressed_public_key_bytes).collect();
+        ordered_public_keys.sort();
+        ordered_public_keys
+            .iter()
+            .position(|public_key| *public_key == target_public_key)
+            .expect("selected prover must exist in canonicalized roster")
     }
 
     #[test]
@@ -369,9 +383,10 @@ mod tests {
         // Build tree with known keys
         let keys = vec![Fr::from(100u64), Fr::from(200u64)];
         let config = poseidon_config::<Fr>();
-        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5).unwrap();
+        let canonical_index = canonical_index_for_key(&keys, &keys[0]);
         let root = tree.root();
-        let proof = tree.prove(0);
+        let proof = tree.prove(canonical_index);
 
         let epoch = 0u64;
         let salt = [0xAA; 32];
@@ -404,8 +419,9 @@ mod tests {
     fn test_circuit_rejects_wrong_root() {
         let keys = vec![Fr::from(100u64), Fr::from(200u64)];
         let config = poseidon_config::<Fr>();
-        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
-        let proof = tree.prove(0);
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5).unwrap();
+        let canonical_index = canonical_index_for_key(&keys, &keys[0]);
+        let proof = tree.prove(canonical_index);
 
         let wrong_root = Fr::from(9999u64);
         let epoch = 0u64;
@@ -437,7 +453,7 @@ mod tests {
     fn test_circuit_rejects_wrong_epoch() {
         let keys = vec![Fr::from(100u64)];
         let config = poseidon_config::<Fr>();
-        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5).unwrap();
         let root = tree.root();
         let proof = tree.prove(0);
 
@@ -472,7 +488,7 @@ mod tests {
     fn test_circuit_rejects_wrong_salt() {
         let keys = vec![Fr::from(100u64)];
         let config = poseidon_config::<Fr>();
-        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5).unwrap();
         let root = tree.root();
         let proof = tree.prove(0);
 
@@ -587,9 +603,10 @@ mod tests {
         // Valid circuit, then tamper with one sibling in the Merkle path.
         let keys = vec![Fr::from(100u64), Fr::from(200u64)];
         let config = poseidon_config::<Fr>();
-        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5).unwrap();
+        let canonical_index = canonical_index_for_key(&keys, &keys[0]);
         let root = tree.root();
-        let proof = tree.prove(0);
+        let proof = tree.prove(canonical_index);
 
         let epoch = 0u64;
         let salt = [0xAA; 32];
@@ -623,9 +640,10 @@ mod tests {
         // Prover uses correct key and path but claims a different tree position.
         let keys = vec![Fr::from(100u64), Fr::from(200u64)];
         let config = poseidon_config::<Fr>();
-        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5).unwrap();
+        let canonical_index = canonical_index_for_key(&keys, &keys[0]);
         let root = tree.root();
-        let proof = tree.prove(0); // correct path for index 0
+        let proof = tree.prove(canonical_index);
 
         let epoch = 0u64;
         let salt = [0xAA; 32];
@@ -638,7 +656,7 @@ mod tests {
             root,
             salt,
             proof.path,
-            1, // <- wrong index, path is for index 0
+            if canonical_index == 0 { 1 } else { 0 },
             5,
         );
 
@@ -657,7 +675,7 @@ mod tests {
         // This must fail because Poseidon(0) != 0.
         let keys = vec![Fr::from(100u64)]; // slot 0 occupied, slots 1..31 empty (zero)
         let config = poseidon_config::<Fr>();
-        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5).unwrap();
         let root = tree.root();
         let proof = tree.prove(1); // path for empty slot at index 1
 
@@ -693,7 +711,25 @@ mod tests {
         let depth = 5;
         let num_leaves = 1 << depth; // 32
         let keys: Vec<Fr> = (1..=num_leaves as u64).map(Fr::from).collect();
-        let circuit = build_test_circuit(&keys, num_leaves - 1, 0, [0xFF; 32], depth);
+        let config = poseidon_config::<Fr>();
+        let tree = PoseidonMerkleTree::build(&config, &keys, depth).unwrap();
+        let mut ordered_keys = keys.clone();
+        ordered_keys.sort_by_key(compressed_public_key_bytes);
+        let last_key = *ordered_keys.last().expect("full tree must contain members");
+        let proof = tree.prove(num_leaves - 1);
+        let root = tree.root();
+        let commitment = compute_poseidon_commitment(&config, &root, 0, &[0xFF; 32]);
+
+        let circuit = MembershipCircuit::new(
+            commitment,
+            0,
+            last_key,
+            root,
+            [0xFF; 32],
+            proof.path,
+            proof.leaf_index,
+            depth,
+        );
 
         let cs = ConstraintSystem::<Fr>::new_ref();
         circuit.generate_constraints(cs.clone()).unwrap();

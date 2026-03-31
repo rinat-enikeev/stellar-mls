@@ -15,17 +15,34 @@ enum RustBridge {
         }
     }
 
-    static func computeMerkleRoot(leafHashes: [Data], depth: Int) throws -> Data {
-        let bytes = try flattenFieldElements(leafHashes)
-        return try withSingleOutputBuffer { buffer, errorPointer in
-            bytes.withUnsafeBytes { rawBytes in
-                sep_compute_merkle_root(
+    static func computePublicKey(secretKey: Data) throws -> Data {
+        try withSingleOutputBuffer { buffer, errorPointer in
+            secretKey.withUnsafeBytes { rawBytes in
+                sep_compute_public_key(
                     rawBytes.bindMemory(to: UInt8.self).baseAddress,
-                    bytes.count,
-                    depth,
+                    secretKey.count,
                     buffer,
                     errorPointer
                 )
+            }
+        }
+    }
+
+    static func computeMerkleRoot(members: [SEPGroupMemberLeaf], depth: Int) throws -> Data {
+        let flattenedMembers = try flattenMembers(members)
+        return try withSingleOutputBuffer { buffer, errorPointer in
+            flattenedMembers.publicKeys.withUnsafeBytes { publicKeyBytes in
+                flattenedMembers.leafHashes.withUnsafeBytes { leafHashBytes in
+                    sep_compute_merkle_root(
+                        publicKeyBytes.bindMemory(to: UInt8.self).baseAddress,
+                        flattenedMembers.publicKeys.count,
+                        leafHashBytes.bindMemory(to: UInt8.self).baseAddress,
+                        flattenedMembers.leafHashes.count,
+                        depth,
+                        buffer,
+                        errorPointer
+                    )
+                }
             }
         }
     }
@@ -80,18 +97,13 @@ enum RustBridge {
 
     static func generateMembershipProof(
         provingKey: Data,
-        leafHashes: [Data],
+        members: [SEPGroupMemberLeaf],
         secretKey: Data,
-        proverIndex: Int,
         epoch: UInt64,
         salt: Data,
         depth: Int
     ) throws -> SEPMembershipProofBundle {
-        if proverIndex < 0 {
-            throw SEPError.invalidProverIndex(proverIndex)
-        }
-
-        let leafHashBytes = try flattenFieldElements(leafHashes)
+        let flattenedMembers = try flattenMembers(members)
         try validateFieldElement(secretKey)
         try validateSalt(salt)
 
@@ -100,25 +112,28 @@ enum RustBridge {
         var rawError: UnsafeMutablePointer<CChar>?
 
         let success = provingKey.withUnsafeBytes { provingKeyBytes in
-            leafHashBytes.withUnsafeBytes { leafBytes in
-                secretKey.withUnsafeBytes { secretKeyBytes in
-                    salt.withUnsafeBytes { saltBytes in
-                        sep_generate_membership_proof(
-                            provingKeyBytes.bindMemory(to: UInt8.self).baseAddress,
-                            provingKey.count,
-                            leafBytes.bindMemory(to: UInt8.self).baseAddress,
-                            leafHashBytes.count,
-                            secretKeyBytes.bindMemory(to: UInt8.self).baseAddress,
-                            secretKey.count,
-                            numericCast(proverIndex),
-                            epoch,
-                            saltBytes.bindMemory(to: UInt8.self).baseAddress,
-                            salt.count,
-                            depth,
-                            &proofBuffer,
-                            &commitmentBuffer,
-                            &rawError
-                        )
+            flattenedMembers.publicKeys.withUnsafeBytes { publicKeyBytes in
+                flattenedMembers.leafHashes.withUnsafeBytes { leafBytes in
+                    secretKey.withUnsafeBytes { secretKeyBytes in
+                        salt.withUnsafeBytes { saltBytes in
+                            sep_generate_membership_proof(
+                                provingKeyBytes.bindMemory(to: UInt8.self).baseAddress,
+                                provingKey.count,
+                                publicKeyBytes.bindMemory(to: UInt8.self).baseAddress,
+                                flattenedMembers.publicKeys.count,
+                                leafBytes.bindMemory(to: UInt8.self).baseAddress,
+                                flattenedMembers.leafHashes.count,
+                                secretKeyBytes.bindMemory(to: UInt8.self).baseAddress,
+                                secretKey.count,
+                                epoch,
+                                saltBytes.bindMemory(to: UInt8.self).baseAddress,
+                                salt.count,
+                                depth,
+                                &proofBuffer,
+                                &commitmentBuffer,
+                                &rawError
+                            )
+                        }
                     }
                 }
             }
@@ -191,14 +206,21 @@ enum RustBridge {
         }
     }
 
-    private static func flattenFieldElements(_ elements: [Data]) throws -> Data {
-        var flattened = Data(capacity: elements.count * 32)
-        for (index, element) in elements.enumerated() {
-            if element.count != 32 {
-                throw SEPError.invalidLeafHashLength(index: index, actual: element.count)
+    private static func flattenMembers(_ members: [SEPGroupMemberLeaf]) throws -> (publicKeys: Data, leafHashes: Data) {
+        var flattenedPublicKeys = Data(capacity: members.count * 48)
+        var flattenedLeafHashes = Data(capacity: members.count * 32)
+
+        for (index, member) in members.enumerated() {
+            if member.publicKeyCompressed.count != 48 {
+                throw SEPError.invalidPublicKeyLength(index: index, actual: member.publicKeyCompressed.count)
             }
-            flattened.append(element)
+            if member.leafHash.count != 32 {
+                throw SEPError.invalidLeafHashLength(index: index, actual: member.leafHash.count)
+            }
+            flattenedPublicKeys.append(member.publicKeyCompressed)
+            flattenedLeafHashes.append(member.leafHash)
         }
-        return flattened
+
+        return (publicKeys: flattenedPublicKeys, leafHashes: flattenedLeafHashes)
     }
 }

@@ -121,7 +121,7 @@ This equation holds for consecutive powers because both sides equal `e(G1, G2)^{
 
 **In a production ceremony**, the Groth16 keys are derived via Phase 2 of Groth16 MPC: the QAP is evaluated directly on the SRS curve points, so no single machine ever learns the accumulated scalars. This preserves the 1-of-N trust guarantee from the ceremony all the way through to the final keys.
 
-**In the reference implementation**, the simulation tracks the accumulated ceremony scalars (τ, α, β) and hashes them (domain-separated SHA-256) into a ChaCha20 seed for arkworks' standard key generation. This means the machine running `derive_keys` knows the full toxic waste. The ceremony's 1-of-N trust guarantee does NOT carry through to the derived keys — it is a simulation of the ceremony protocol, not a production-secure setup. See the "Reference implementation vs production" section below for details.
+**In the reference implementation**, the public API stops at the verifiable Phase 1 output: final SRS, transcript, and circuit identifier. There is still a test-only helper that derives simulated Groth16 keys from accumulated ceremony scalars, but it is intentionally kept out of the public ceremony result because it does not preserve the 1-of-N trust guarantee. See the "Reference implementation vs production" section below for details.
 
 ### Step 6: Transcript publication
 
@@ -208,10 +208,10 @@ The `ceremony` module implements the full pipeline:
 | `verify_initial_contribution()` | Verify the first SRS + proof against the curve generators |
 | `verify_consistency()` | Check ALL SRS elements for internal consistency (full O(n) pairing check) |
 | `hash_srs()` | SHA-256 of all SRS curve points (with length prefixes) |
-| `derive_keys()` | Groth16 key generation from accumulated ceremony scalars (simulation only) |
+| `run_ceremony()` | Orchestrate Phase 1: initialize → contribute × N → verify transcript-ready output |
+| `derive_insecure_test_keys()` | Test-only Groth16 key generation from accumulated ceremony scalars (simulation only) |
 | `compute_circuit_id()` | Compute unique circuit identifier for a tier |
 | `required_degree()` | Compute SRS degree from circuit constraint count |
-| `run_ceremony()` | Orchestrate: initialize → contribute × N → verify → derive keys |
 | `verify_transcript()` | Full replay: verify initial contribution, all subsequent proofs, hash chain, and final consistency |
 
 ### Test coverage (19 tests)

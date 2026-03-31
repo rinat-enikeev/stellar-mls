@@ -48,6 +48,16 @@ public struct SEPMembershipProofBundle: Codable, Equatable, Sendable {
     }
 }
 
+public struct SEPGroupMemberLeaf: Codable, Equatable, Sendable {
+    public let publicKeyCompressed: Data
+    public let leafHash: Data
+
+    public init(publicKeyCompressed: Data, leafHash: Data) {
+        self.publicKeyCompressed = publicKeyCompressed
+        self.leafHash = leafHash
+    }
+}
+
 public struct SEPCommitmentEntry: Codable, Equatable, Sendable {
     public let commitment: Data
     public let epoch: UInt64

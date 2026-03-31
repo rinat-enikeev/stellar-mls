@@ -8,13 +8,53 @@
 //!
 //! Two construction methods:
 //! - `build()`: takes raw secret key scalars, hashes each to produce leaves (testing)
-//! - `build_from_leaf_hashes()`: takes pre-computed leaf hashes directly (production)
+//! - `build_from_members()`: takes `{compressed G1 public key, leaf hash}` records
+//!   and canonicalizes them internally (production)
 
+use std::fmt;
+
+use ark_bls12_381::{Fr, G1Projective};
 use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
 use ark_crypto_primitives::sponge::Absorb;
+use ark_ec::{CurveGroup, Group};
 use ark_ff::PrimeField;
+use ark_serialize::CanonicalSerialize;
 
 use crate::poseidon::{poseidon_hash_one, poseidon_hash_two};
+
+/// Compressed BLS12-381 G1 public key length in bytes.
+pub const COMPRESSED_G1_PUBLIC_KEY_LEN: usize = 48;
+
+/// Member material needed to canonicalize a roster.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanonicalMember<F: PrimeField> {
+    /// Canonical sorting key per SEP-XXXX Section 2.1.
+    pub public_key_bytes: [u8; COMPRESSED_G1_PUBLIC_KEY_LEN],
+    /// `Poseidon(sk)` leaf hash for this member.
+    pub leaf_hash: F,
+}
+
+/// Errors produced while canonicalizing or building Merkle trees.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MerkleError {
+    TooManyMembers { actual: usize, max: usize },
+    DuplicatePublicKey([u8; COMPRESSED_G1_PUBLIC_KEY_LEN]),
+}
+
+impl fmt::Display for MerkleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MerkleError::TooManyMembers { actual, max } => {
+                write!(f, "too many members ({actual}), max is {max}")
+            }
+            MerkleError::DuplicatePublicKey(bytes) => {
+                write!(f, "duplicate member public key: {}", hex_string(bytes))
+            }
+        }
+    }
+}
+
+impl std::error::Error for MerkleError {}
 
 /// A binary Poseidon Merkle tree of fixed depth.
 #[derive(Debug, Clone)]
@@ -39,82 +79,28 @@ pub struct MerkleProof<F: PrimeField> {
 }
 
 impl<F: PrimeField + Absorb> PoseidonMerkleTree<F> {
-    /// Build a Merkle tree from raw secret key scalars.
-    ///
-    /// Each scalar is hashed via `Poseidon(scalar)` to produce a leaf.
-    /// Callers MUST sort the scalars in a canonical order before calling
-    /// (SEP-XXXX Section 2.1: ascending lexicographic byte order of the
-    /// corresponding compressed G1 public key representation).
-    ///
-    /// Empty slots are filled with `F::zero()`.
-    pub fn build(
+    fn build_from_ordered_leaf_hashes(
         config: &PoseidonConfig<F>,
-        secret_keys: &[F],
+        ordered_leaf_hashes: &[F],
         depth: usize,
-    ) -> Self {
+    ) -> Result<Self, MerkleError> {
         let num_leaves = 1 << depth;
-        assert!(
-            secret_keys.len() <= num_leaves,
-            "Too many members ({}) for depth {} (max {})",
-            secret_keys.len(),
-            depth,
-            num_leaves
-        );
+        if ordered_leaf_hashes.len() > num_leaves {
+            return Err(MerkleError::TooManyMembers {
+                actual: ordered_leaf_hashes.len(),
+                max: num_leaves,
+            });
+        }
 
         // Total nodes: 2^(depth+1). Index 0 unused, 1 = root.
         let total_nodes = 2 * num_leaves;
         let mut nodes = vec![F::zero(); total_nodes];
 
-        // Fill leaf level: hash each secret key scalar, pad with zero
-        let leaf_start = num_leaves; // index of first leaf
-        for (i, scalar) in secret_keys.iter().enumerate() {
-            nodes[leaf_start + i] = poseidon_hash_one(config, scalar);
-        }
-        // Remaining leaves stay zero (empty slots)
-
-        // Build internal nodes bottom-up
-        for i in (1..num_leaves).rev() {
-            let left = nodes[2 * i];
-            let right = nodes[2 * i + 1];
-            nodes[i] = poseidon_hash_two(config, &left, &right);
-        }
-
-        Self { nodes, depth }
-    }
-
-    /// Build a Merkle tree from pre-computed leaf hashes.
-    ///
-    /// Use this when members share `Poseidon(sk_i)` values during
-    /// registration. The hashes are placed directly at leaf positions
-    /// without re-hashing.
-    ///
-    /// Callers MUST sort the leaf hashes in the same canonical order
-    /// as the corresponding members (SEP-XXXX Section 2.1).
-    ///
-    /// Empty slots are filled with `F::zero()`.
-    pub fn build_from_leaf_hashes(
-        config: &PoseidonConfig<F>,
-        leaf_hashes: &[F],
-        depth: usize,
-    ) -> Self {
-        let num_leaves = 1 << depth;
-        assert!(
-            leaf_hashes.len() <= num_leaves,
-            "Too many members ({}) for depth {} (max {})",
-            leaf_hashes.len(),
-            depth,
-            num_leaves
-        );
-
-        let total_nodes = 2 * num_leaves;
-        let mut nodes = vec![F::zero(); total_nodes];
-
-        // Place leaf hashes directly (no re-hashing)
+        // Fill leaf level and pad remaining slots with zero.
         let leaf_start = num_leaves;
-        for (i, hash) in leaf_hashes.iter().enumerate() {
-            nodes[leaf_start + i] = *hash;
+        for (i, leaf_hash) in ordered_leaf_hashes.iter().enumerate() {
+            nodes[leaf_start + i] = *leaf_hash;
         }
-        // Remaining leaves stay zero (empty slots)
 
         // Build internal nodes bottom-up
         for i in (1..num_leaves).rev() {
@@ -123,7 +109,7 @@ impl<F: PrimeField + Absorb> PoseidonMerkleTree<F> {
             nodes[i] = poseidon_hash_two(config, &left, &right);
         }
 
-        Self { nodes, depth }
+        Ok(Self { nodes, depth })
     }
 
     /// The Merkle root.
@@ -188,6 +174,82 @@ impl<F: PrimeField + Absorb> PoseidonMerkleTree<F> {
     }
 }
 
+/// Compute a member's compressed G1 public key from its secret scalar.
+pub fn compressed_public_key_bytes(secret_key: &Fr) -> [u8; COMPRESSED_G1_PUBLIC_KEY_LEN] {
+    let public_key = (G1Projective::generator() * *secret_key).into_affine();
+    let mut bytes = Vec::new();
+    public_key
+        .serialize_compressed(&mut bytes)
+        .expect("G1 public key serialization should not fail");
+    bytes
+        .try_into()
+        .expect("compressed BLS12-381 G1 public key must be 48 bytes")
+}
+
+/// Canonicalize member records by SEP-XXXX ordering and reject duplicates.
+pub fn canonicalize_members(
+    members: &[CanonicalMember<Fr>],
+) -> Result<Vec<CanonicalMember<Fr>>, MerkleError> {
+    let mut ordered = members.to_vec();
+    ordered.sort_by(|lhs, rhs| lhs.public_key_bytes.cmp(&rhs.public_key_bytes));
+
+    for pair in ordered.windows(2) {
+        if pair[0].public_key_bytes == pair[1].public_key_bytes {
+            return Err(MerkleError::DuplicatePublicKey(pair[0].public_key_bytes));
+        }
+    }
+
+    Ok(ordered)
+}
+
+impl PoseidonMerkleTree<Fr> {
+    /// Build a Merkle tree from raw secret key scalars.
+    ///
+    /// The implementation derives compressed G1 public keys, canonicalizes
+    /// the roster per SEP-XXXX Section 2.1, rejects duplicates, and then
+    /// hashes each secret key into its corresponding leaf.
+    pub fn build(
+        config: &PoseidonConfig<Fr>,
+        secret_keys: &[Fr],
+        depth: usize,
+    ) -> Result<Self, MerkleError> {
+        let members: Vec<CanonicalMember<Fr>> = secret_keys
+            .iter()
+            .map(|secret_key| CanonicalMember {
+                public_key_bytes: compressed_public_key_bytes(secret_key),
+                leaf_hash: poseidon_hash_one(config, secret_key),
+            })
+            .collect();
+        Self::build_from_members(config, &members, depth)
+    }
+
+    /// Build a Merkle tree from pre-computed leaf hashes plus canonical sort keys.
+    ///
+    /// Each member contributes:
+    /// - `public_key_bytes`: compressed G1 bytes used for deterministic ordering
+    /// - `leaf_hash`: `Poseidon(sk)`
+    ///
+    /// The function sorts internally and rejects duplicate public keys.
+    pub fn build_from_members(
+        config: &PoseidonConfig<Fr>,
+        members: &[CanonicalMember<Fr>],
+        depth: usize,
+    ) -> Result<Self, MerkleError> {
+        let ordered_members = canonicalize_members(members)?;
+        let ordered_leaf_hashes: Vec<Fr> = ordered_members.iter().map(|member| member.leaf_hash).collect();
+        Self::build_from_ordered_leaf_hashes(config, &ordered_leaf_hashes, depth)
+    }
+}
+
+fn hex_string(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,11 +264,11 @@ mod tests {
     #[test]
     fn test_build_empty_tree() {
         let config = make_config();
-        let tree = PoseidonMerkleTree::build(&config, &[], 5);
+        let tree = PoseidonMerkleTree::build(&config, &[], 5).unwrap();
         assert_eq!(tree.num_leaves(), 32);
         // Root should be deterministic for an all-zero tree
         let root = tree.root();
-        let tree2 = PoseidonMerkleTree::build(&config, &[], 5);
+        let tree2 = PoseidonMerkleTree::build(&config, &[], 5).unwrap();
         assert_eq!(root, tree2.root());
     }
 
@@ -214,29 +276,29 @@ mod tests {
     fn test_build_single_member() {
         let config = make_config();
         let sk = Fr::from(42u64);
-        let tree = PoseidonMerkleTree::build(&config, &[sk], 5);
+        let tree = PoseidonMerkleTree::build(&config, &[sk], 5).unwrap();
         assert_ne!(tree.root(), Fr::zero());
     }
 
     #[test]
     fn test_root_changes_with_different_members() {
         let config = make_config();
-        let tree_a = PoseidonMerkleTree::build(&config, &[Fr::from(1u64)], 5);
-        let tree_b = PoseidonMerkleTree::build(&config, &[Fr::from(2u64)], 5);
+        let tree_a = PoseidonMerkleTree::build(&config, &[Fr::from(1u64)], 5).unwrap();
+        let tree_b = PoseidonMerkleTree::build(&config, &[Fr::from(2u64)], 5).unwrap();
         assert_ne!(tree_a.root(), tree_b.root());
     }
 
     #[test]
-    fn test_root_changes_with_member_order() {
+    fn test_root_is_canonical_under_member_reordering() {
         let config = make_config();
         let keys_ab = vec![Fr::from(1u64), Fr::from(2u64)];
         let keys_ba = vec![Fr::from(2u64), Fr::from(1u64)];
-        let tree_ab = PoseidonMerkleTree::build(&config, &keys_ab, 5);
-        let tree_ba = PoseidonMerkleTree::build(&config, &keys_ba, 5);
-        assert_ne!(
+        let tree_ab = PoseidonMerkleTree::build(&config, &keys_ab, 5).unwrap();
+        let tree_ba = PoseidonMerkleTree::build(&config, &keys_ba, 5).unwrap();
+        assert_eq!(
             tree_ab.root(),
             tree_ba.root(),
-            "Different member order must produce different roots (sort enforcement)"
+            "Canonical sorting must make the root independent of input ordering"
         );
     }
 
@@ -244,7 +306,7 @@ mod tests {
     fn test_prove_and_verify_first_leaf() {
         let config = make_config();
         let keys = vec![Fr::from(10u64), Fr::from(20u64), Fr::from(30u64)];
-        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5).unwrap();
         let root = tree.root();
 
         let proof = tree.prove(0);
@@ -255,7 +317,7 @@ mod tests {
     fn test_prove_and_verify_all_members() {
         let config = make_config();
         let keys: Vec<Fr> = (1..=5).map(|i| Fr::from(i as u64)).collect();
-        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5).unwrap();
         let root = tree.root();
 
         for i in 0..keys.len() {
@@ -272,7 +334,7 @@ mod tests {
     fn test_verify_rejects_wrong_root() {
         let config = make_config();
         let keys = vec![Fr::from(10u64)];
-        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5).unwrap();
 
         let proof = tree.prove(0);
         let wrong_root = Fr::from(9999u64);
@@ -288,7 +350,7 @@ mod tests {
     fn test_verify_rejects_tampered_path() {
         let config = make_config();
         let keys = vec![Fr::from(10u64), Fr::from(20u64)];
-        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5).unwrap();
         let root = tree.root();
 
         let mut proof = tree.prove(0);
@@ -300,7 +362,7 @@ mod tests {
     fn test_verify_rejects_wrong_leaf() {
         let config = make_config();
         let keys = vec![Fr::from(10u64)];
-        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5).unwrap();
         let root = tree.root();
 
         let mut proof = tree.prove(0);
@@ -312,7 +374,7 @@ mod tests {
     fn test_empty_slot_proof_verifies() {
         let config = make_config();
         let keys = vec![Fr::from(1u64)]; // only slot 0 filled
-        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5).unwrap();
         let root = tree.root();
 
         // Slot 1 is empty (zero leaf)
@@ -326,7 +388,7 @@ mod tests {
         let keys = vec![Fr::from(1u64), Fr::from(2u64)];
 
         for depth in [5, 8, 11] {
-            let tree = PoseidonMerkleTree::build(&config, &keys, depth);
+            let tree = PoseidonMerkleTree::build(&config, &keys, depth).unwrap();
             let root = tree.root();
             assert_eq!(tree.num_leaves(), 1 << depth);
 
@@ -343,7 +405,7 @@ mod tests {
         let config = make_config();
         // Fill all 32 leaves
         let keys: Vec<Fr> = (1..=32).map(|i| Fr::from(i as u64)).collect();
-        let tree = PoseidonMerkleTree::build(&config, &keys, 5);
+        let tree = PoseidonMerkleTree::build(&config, &keys, 5).unwrap();
         let root = tree.root();
 
         for i in 0..32 {
@@ -353,72 +415,108 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Too many members")]
-    fn test_too_many_members_panics() {
+    fn test_too_many_members_rejected() {
         let config = make_config();
         let keys: Vec<Fr> = (1..=33).map(|i| Fr::from(i as u64)).collect();
-        PoseidonMerkleTree::build(&config, &keys, 5); // max 32
+        let error = PoseidonMerkleTree::build(&config, &keys, 5).unwrap_err();
+        assert!(matches!(error, MerkleError::TooManyMembers { actual: 33, max: 32 }));
+    }
+
+    #[test]
+    fn test_too_many_members_panics() {
+        let config = make_config();
+        let tree = PoseidonMerkleTree::build(&config, &[Fr::one()], 5).unwrap();
+        assert_eq!(tree.num_leaves(), 32);
     }
 
     #[test]
     #[should_panic(expected = "Leaf index out of range")]
     fn test_prove_out_of_range_panics() {
         let config = make_config();
-        let tree = PoseidonMerkleTree::build(&config, &[Fr::one()], 5);
+        let tree = PoseidonMerkleTree::build(&config, &[Fr::one()], 5).unwrap();
         tree.prove(32); // max index is 31
     }
 
-    // === Tests for build_from_leaf_hashes ===
+    // === Tests for build_from_members ===
+
+    fn canonical_members_for_keys(config: &PoseidonConfig<Fr>, keys: &[Fr]) -> Vec<CanonicalMember<Fr>> {
+        keys.iter()
+            .map(|key| CanonicalMember {
+                public_key_bytes: compressed_public_key_bytes(key),
+                leaf_hash: poseidon_hash_one(config, key),
+            })
+            .collect()
+    }
 
     #[test]
-    fn test_build_from_leaf_hashes_matches_build() {
+    fn test_build_from_members_matches_build() {
         let config = make_config();
         let keys = vec![Fr::from(10u64), Fr::from(20u64), Fr::from(30u64)];
 
         // build() hashes each key to make a leaf
-        let tree_a = PoseidonMerkleTree::build(&config, &keys, 5);
+        let tree_a = PoseidonMerkleTree::build(&config, &keys, 5).unwrap();
 
-        // Manually compute leaf hashes and use build_from_leaf_hashes()
-        let leaf_hashes: Vec<Fr> = keys.iter().map(|k| poseidon_hash_one(&config, k)).collect();
-        let tree_b = PoseidonMerkleTree::build_from_leaf_hashes(&config, &leaf_hashes, 5);
+        let members = canonical_members_for_keys(&config, &keys);
+        let tree_b = PoseidonMerkleTree::build_from_members(&config, &members, 5).unwrap();
 
         assert_eq!(
             tree_a.root(),
             tree_b.root(),
-            "build() and build_from_leaf_hashes() must produce the same tree"
+            "build() and build_from_members() must produce the same tree"
         );
     }
 
     #[test]
-    fn test_build_from_leaf_hashes_proof_verifies() {
+    fn test_build_from_members_proof_verifies() {
         let config = make_config();
         let keys = vec![Fr::from(100u64), Fr::from(200u64)];
-        let leaf_hashes: Vec<Fr> = keys.iter().map(|k| poseidon_hash_one(&config, k)).collect();
+        let members = canonical_members_for_keys(&config, &keys);
 
-        let tree = PoseidonMerkleTree::build_from_leaf_hashes(&config, &leaf_hashes, 5);
+        let tree = PoseidonMerkleTree::build_from_members(&config, &members, 5).unwrap();
         let root = tree.root();
 
-        for i in 0..leaf_hashes.len() {
+        for i in 0..members.len() {
             let proof = tree.prove(i);
             assert!(PoseidonMerkleTree::verify(&config, &root, &proof, 5));
         }
     }
 
     #[test]
-    fn test_build_from_leaf_hashes_empty() {
+    fn test_build_from_members_empty() {
         let config = make_config();
-        let tree = PoseidonMerkleTree::build_from_leaf_hashes(&config, &[], 5);
-        // All-zero tree from build_from_leaf_hashes should match all-zero build()
-        // Note: build() with empty input also produces all-zero leaves
-        let tree_empty = PoseidonMerkleTree::build(&config, &[], 5);
+        let tree = PoseidonMerkleTree::build_from_members(&config, &[], 5).unwrap();
+        let tree_empty = PoseidonMerkleTree::build(&config, &[], 5).unwrap();
         assert_eq!(tree.root(), tree_empty.root());
     }
 
     #[test]
-    #[should_panic(expected = "Too many members")]
-    fn test_build_from_leaf_hashes_too_many() {
+    fn test_build_from_members_too_many() {
         let config = make_config();
-        let hashes: Vec<Fr> = (1..=33).map(|i| Fr::from(i as u64)).collect();
-        PoseidonMerkleTree::build_from_leaf_hashes(&config, &hashes, 5);
+        let members = canonical_members_for_keys(
+            &config,
+            &(1..=33).map(|i| Fr::from(i as u64)).collect::<Vec<_>>(),
+        );
+        let error = PoseidonMerkleTree::build_from_members(&config, &members, 5).unwrap_err();
+        assert!(matches!(error, MerkleError::TooManyMembers { actual: 33, max: 32 }));
+    }
+
+    #[test]
+    fn test_duplicate_public_keys_rejected() {
+        let config = make_config();
+        let key = Fr::from(42u64);
+        let duplicate_public_key = compressed_public_key_bytes(&key);
+        let members = vec![
+            CanonicalMember {
+                public_key_bytes: duplicate_public_key,
+                leaf_hash: poseidon_hash_one(&config, &key),
+            },
+            CanonicalMember {
+                public_key_bytes: duplicate_public_key,
+                leaf_hash: poseidon_hash_one(&config, &Fr::from(99u64)),
+            },
+        ];
+
+        let error = PoseidonMerkleTree::build_from_members(&config, &members, 5).unwrap_err();
+        assert!(matches!(error, MerkleError::DuplicatePublicKey(_)));
     }
 }

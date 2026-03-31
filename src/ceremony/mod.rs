@@ -6,8 +6,8 @@
 //!    Each participant adds their own randomness; security holds if at least
 //!    one participant honestly destroys their secret contribution.
 //!
-//! 2. **Key derivation:** Converts the accumulated ceremony parameters into
-//!    Groth16 proving and verification keys for a specific circuit tier.
+//! 2. **Phase 1 output:** Produces a verifiable Powers of Tau transcript
+//!    for a specific circuit tier.
 //!
 //! 3. **Verification:** Every contribution is verified via BLS12-381 pairing
 //!    checks, ensuring no participant corrupted the SRS.
@@ -17,33 +17,20 @@
 //!
 //! # Key derivation security
 //!
-//! In this reference implementation, `derive_keys` takes the accumulated
-//! ceremony scalars (τ, α, β) and hashes them into a ChaCha20 seed for
-//! arkworks' standard `circuit_specific_setup`. The seed is **not public**:
-//! it depends on the accumulated toxic waste, which no single ceremony
-//! participant knows (1-of-N trust).
-//!
-//! However, the machine executing `derive_keys` sees the accumulated
-//! scalars and can recover the Groth16 toxic waste. In a production
-//! deployment, key derivation MUST use Phase 2 of Groth16 MPC — the QAP
-//! is evaluated directly on SRS curve points so that no single machine
-//! learns the scalars. This module demonstrates the ceremony protocol;
-//! production deployments need a proper Phase 2 implementation.
+//! This module intentionally stops at the public output of Phase 1.
+//! Production deployments MUST perform Groth16 Phase 2 MPC separately,
+//! evaluating the QAP directly on the SRS curve points so that no single
+//! coordinator ever reconstructs the toxic waste.
 
 use ark_bls12_381::{Bls12_381, Fr, G1Affine, G1Projective, G2Affine, G2Projective};
 use ark_ec::pairing::Pairing;
 use ark_ec::{AffineRepr, CurveGroup, Group};
 use ark_ff::{One, PrimeField, UniformRand};
-use ark_groth16::{Groth16, PreparedVerifyingKey, ProvingKey, VerifyingKey};
 use ark_serialize::CanonicalSerialize;
-use ark_snark::SNARK;
 use ark_std::rand::Rng;
-use rand::SeedableRng;
 use sha2::{Digest, Sha256};
 
-use crate::circuit::MembershipCircuit;
 use crate::poseidon;
-use crate::prover::SetupResult;
 use crate::Tier;
 
 // ================================================================
@@ -102,18 +89,12 @@ pub struct CeremonyTranscript {
     pub srs_snapshots: Vec<PowersOfTau>,
 }
 
-/// The complete output of a ceremony for one circuit tier.
+/// The complete public output of a Phase 1 ceremony for one circuit tier.
 pub struct CeremonyResult {
     /// The final SRS (for public verification).
     pub srs: PowersOfTau,
     /// The ceremony transcript (for auditing).
     pub transcript: CeremonyTranscript,
-    /// The Groth16 proving key.
-    pub proving_key: ProvingKey<Bls12_381>,
-    /// The Groth16 verification key.
-    pub verifying_key: VerifyingKey<Bls12_381>,
-    /// The prepared verification key (for efficient verification).
-    pub prepared_vk: PreparedVerifyingKey<Bls12_381>,
     /// The circuit identifier.
     pub circuit_id: [u8; 32],
 }
@@ -472,18 +453,25 @@ pub fn hash_srs(srs: &PowersOfTau) -> [u8; 32] {
 /// scalars and can recover the Groth16 toxic waste. In production, key
 /// derivation MUST use Phase 2 of Groth16 MPC (QAP evaluation on SRS
 /// curve points) so that no single machine learns the scalars.
-pub fn derive_keys(
+///
+/// This helper is intentionally private to keep the public API from
+/// presenting simulation-only key material as ceremony output.
+#[cfg(test)]
+fn derive_insecure_test_keys(
     depth: usize,
     acc_tau: Fr,
     acc_alpha: Fr,
     acc_beta: Fr,
-) -> Result<SetupResult, Box<dyn std::error::Error>> {
-    let circuit = MembershipCircuit::<Fr>::empty(depth);
+) -> Result<crate::prover::SetupResult, Box<dyn std::error::Error>> {
+    use ark_snark::SNARK;
+    use rand::SeedableRng;
+
+    let circuit = crate::circuit::MembershipCircuit::<Fr>::empty(depth);
     let seed = hash_ceremony_scalars(&acc_tau, &acc_alpha, &acc_beta);
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
-    let (pk, vk) = Groth16::<Bls12_381>::circuit_specific_setup(circuit, &mut rng)?;
-    let pvk = Groth16::<Bls12_381>::process_vk(&vk)?;
-    Ok(SetupResult {
+    let (pk, vk) = ark_groth16::Groth16::<Bls12_381>::circuit_specific_setup(circuit, &mut rng)?;
+    let pvk = ark_groth16::Groth16::<Bls12_381>::process_vk(&vk)?;
+    Ok(crate::prover::SetupResult {
         proving_key: pk,
         verifying_key: vk,
         prepared_vk: pvk,
@@ -492,6 +480,7 @@ pub fn derive_keys(
 
 /// Hash accumulated ceremony scalars into a 32-byte seed.
 /// Domain-separated to prevent cross-protocol attacks.
+#[cfg(test)]
 fn hash_ceremony_scalars(tau: &Fr, alpha: &Fr, beta: &Fr) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(b"SEP-XXXX-ceremony-key-derivation-v1");
@@ -533,6 +522,14 @@ pub fn compute_circuit_id(tier: &Tier) -> [u8; 32] {
             for c in round {
                 let mut buf = Vec::new();
                 c.serialize_compressed(&mut buf).unwrap();
+                hasher.update(&buf);
+            }
+        }
+        // Include the MDS matrix as part of the circuit binding as well.
+        for row in &config.mds {
+            for entry in row {
+                let mut buf = Vec::new();
+                entry.serialize_compressed(&mut buf).unwrap();
                 hasher.update(&buf);
             }
         }
@@ -581,8 +578,7 @@ pub fn required_degree(tier: &Tier) -> usize {
 
 /// Run a complete ceremony for one circuit tier.
 ///
-/// Simulates `num_participants` sequential contributions, verifies each,
-/// and derives the final Groth16 keys.
+/// Simulates `num_participants` sequential contributions and verifies each.
 ///
 /// Minimum 10 participants for production; fewer allowed for testing.
 pub fn run_ceremony<R: Rng + rand::CryptoRng>(
@@ -595,8 +591,7 @@ pub fn run_ceremony<R: Rng + rand::CryptoRng>(
     let degree = required_degree(tier);
 
     // Phase 1: Powers of Tau
-    let (srs, init_proof, mut acc_tau, mut acc_alpha, mut acc_beta) =
-        initialize(degree, rng);
+    let (srs, init_proof, _tau, _alpha, _beta) = initialize(degree, rng);
 
     let mut transcript = CeremonyTranscript {
         contributions: Vec::with_capacity(num_participants),
@@ -615,7 +610,7 @@ pub fn run_ceremony<R: Rng + rand::CryptoRng>(
 
     // Subsequent contributions
     for i in 1..num_participants {
-        let (new_srs, proof, dt, da, db) = contribute(&current_srs, rng);
+        let (new_srs, proof, _dt, _da, _db) = contribute(&current_srs, rng);
 
         // Verify this contribution
         assert!(
@@ -623,11 +618,6 @@ pub fn run_ceremony<R: Rng + rand::CryptoRng>(
             "Contribution {} failed verification",
             i
         );
-
-        // Accumulate scalars (simulation only — in production no one knows these)
-        acc_tau *= dt;
-        acc_alpha *= da;
-        acc_beta *= db;
 
         current_srs = new_srs;
         transcript.contributions.push(ContributionRecord {
@@ -644,17 +634,11 @@ pub fn run_ceremony<R: Rng + rand::CryptoRng>(
         "Final SRS failed consistency check"
     );
 
-    // Phase 2: Key derivation from accumulated ceremony scalars
-    let setup = derive_keys(tier.depth(), acc_tau, acc_alpha, acc_beta)?;
-
     let circuit_id = compute_circuit_id(tier);
 
     Ok(CeremonyResult {
         srs: current_srs,
         transcript,
-        proving_key: setup.proving_key,
-        verifying_key: setup.verifying_key,
-        prepared_vk: setup.prepared_vk,
         circuit_id,
     })
 }
@@ -675,13 +659,22 @@ pub fn verify_transcript(transcript: &CeremonyTranscript, final_srs: &PowersOfTa
         return false;
     }
 
-    // Verify each SRS hash matches the recorded hash
-    for (record, snapshot) in transcript
+    // Verify each contribution record index, snapshot hash, and intermediate
+    // SRS consistency. This makes transcript replay a full validation of the
+    // public phase-1 output, not just a spot-check of the final snapshot.
+    for (expected_index, (record, snapshot)) in transcript
         .contributions
         .iter()
         .zip(transcript.srs_snapshots.iter())
+        .enumerate()
     {
+        if record.index != expected_index {
+            return false;
+        }
         if record.srs_hash != hash_srs(snapshot) {
+            return false;
+        }
+        if !verify_consistency(snapshot) {
             return false;
         }
     }
@@ -710,8 +703,8 @@ pub fn verify_transcript(transcript: &CeremonyTranscript, final_srs: &PowersOfTa
         return false;
     }
 
-    // Verify final SRS internal consistency (full check)
-    verify_consistency(final_srs)
+    // Final SRS consistency was already checked above for the last snapshot.
+    true
 }
 
 // ================================================================
@@ -829,6 +822,7 @@ fn make_contribution_proof<R: Rng + rand::CryptoRng>(
 
 #[cfg(test)]
 mod tests {
+    use crate::merkle::{CanonicalMember, compressed_public_key_bytes};
     use super::*;
     use crate::poseidon::poseidon_config;
     use crate::prover;
@@ -1016,8 +1010,8 @@ mod tests {
         let alpha = Fr::rand(&mut rng);
         let beta = Fr::rand(&mut rng);
 
-        let setup1 = derive_keys(5, tau, alpha, beta).expect("Key derivation 1 failed");
-        let setup2 = derive_keys(5, tau, alpha, beta).expect("Key derivation 2 failed");
+        let setup1 = derive_insecure_test_keys(5, tau, alpha, beta).expect("Key derivation 1 failed");
+        let setup2 = derive_insecure_test_keys(5, tau, alpha, beta).expect("Key derivation 2 failed");
 
         assert_eq!(
             setup1.verifying_key, setup2.verifying_key,
@@ -1035,8 +1029,8 @@ mod tests {
         let alpha2 = Fr::rand(&mut rng);
         let beta2 = Fr::rand(&mut rng);
 
-        let setup1 = derive_keys(5, tau1, alpha1, beta1).expect("Key derivation 1 failed");
-        let setup2 = derive_keys(5, tau2, alpha2, beta2).expect("Key derivation 2 failed");
+        let setup1 = derive_insecure_test_keys(5, tau1, alpha1, beta1).expect("Key derivation 1 failed");
+        let setup2 = derive_insecure_test_keys(5, tau2, alpha2, beta2).expect("Key derivation 2 failed");
 
         assert_ne!(
             setup1.verifying_key, setup2.verifying_key,
@@ -1061,21 +1055,23 @@ mod tests {
             srs = new_srs;
         }
 
-        let setup = derive_keys(5, acc_tau, acc_alpha, acc_beta)
+        let setup = derive_insecure_test_keys(5, acc_tau, acc_alpha, acc_beta)
             .expect("Key derivation failed");
 
         // Use the ceremony-derived keys for a real proof
         let config = poseidon_config::<Fr>();
         let keys = vec![Fr::from(100u64), Fr::from(200u64)];
-        let leaf_hashes: Vec<Fr> = keys
+        let members: Vec<CanonicalMember<Fr>> = keys
             .iter()
-            .map(|sk| crate::poseidon::poseidon_hash_one(&config, sk))
+            .map(|sk| CanonicalMember {
+                public_key_bytes: compressed_public_key_bytes(sk),
+                leaf_hash: crate::poseidon::poseidon_hash_one(&config, sk),
+            })
             .collect();
 
         let input = prover::ProverInput {
-            leaf_hashes,
+            members,
             secret_key: keys[0],
-            prover_index: 0,
             epoch: 0,
             salt: [0xAA; 32],
             depth: 5,
@@ -1121,29 +1117,6 @@ mod tests {
         assert_eq!(result.transcript.srs_snapshots.len(), 3);
         assert!(verify_consistency(&result.srs));
         assert!(verify_transcript(&result.transcript, &result.srs));
-
-        // Verify the keys work
-        let config = poseidon_config::<Fr>();
-        let keys = vec![Fr::from(42u64)];
-        let leaf_hashes: Vec<Fr> = keys
-            .iter()
-            .map(|sk| crate::poseidon::poseidon_hash_one(&config, sk))
-            .collect();
-
-        let input = prover::ProverInput {
-            leaf_hashes,
-            secret_key: keys[0],
-            prover_index: 0,
-            epoch: 0,
-            salt: [0xBB; 32],
-            depth: 5,
-        };
-
-        let (proof, pi) =
-            prover::prove(&result.proving_key, &input, &mut rng).expect("Proving failed");
-        let valid =
-            prover::verify(&result.prepared_vk, &proof, &pi).expect("Verification failed");
-        assert!(valid, "Proof must verify with ceremony-derived keys");
     }
 
     #[test]

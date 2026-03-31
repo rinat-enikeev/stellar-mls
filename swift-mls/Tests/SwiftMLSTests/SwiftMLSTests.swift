@@ -9,14 +9,18 @@ struct SwiftMLSTests {
         let provingKey = try SEPProofGenerator.generateTestingProvingKey(tier: tier, seed: 7)
 
         let secretKeys = [fieldBytes(100), fieldBytes(200)]
-        let leafHashes = try secretKeys.map { try SEPCommitmentBuilder.computeLeafHash(secretKey: $0) }
+        let members = try secretKeys.map { secretKey in
+            SEPGroupMemberLeaf(
+                publicKeyCompressed: try SEPCommitmentBuilder.computePublicKey(secretKey: secretKey),
+                leafHash: try SEPCommitmentBuilder.computeLeafHash(secretKey: secretKey)
+            )
+        }
         let salt = Data(repeating: 0xAA, count: 32)
 
         let proofBundle = try SEPProofGenerator.generateMembershipProof(
             provingKey: provingKey,
-            leafHashes: leafHashes,
+            members: members,
             secretKey: secretKeys[0],
-            proverIndex: 0,
             epoch: 0,
             salt: salt,
             tier: tier
@@ -30,10 +34,13 @@ struct SwiftMLSTests {
     @Test
     func commitmentConstruction() throws {
         let tier: SEPTier = .small
-        let leafHashes = try [fieldBytes(1), fieldBytes(2)].map {
-            try SEPCommitmentBuilder.computeLeafHash(secretKey: $0)
+        let members = try [fieldBytes(2), fieldBytes(1)].map { secretKey in
+            SEPGroupMemberLeaf(
+                publicKeyCompressed: try SEPCommitmentBuilder.computePublicKey(secretKey: secretKey),
+                leafHash: try SEPCommitmentBuilder.computeLeafHash(secretKey: secretKey)
+            )
         }
-        let root = try SEPCommitmentBuilder.computeMerkleRoot(leafHashes: leafHashes, tier: tier)
+        let root = try SEPCommitmentBuilder.computeMerkleRoot(members: members, tier: tier)
         let salt = Data(repeating: 0x11, count: 32)
 
         let shaCommitment = try SEPCommitmentBuilder.computeSHA256Commitment(

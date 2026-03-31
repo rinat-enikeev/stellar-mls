@@ -14,8 +14,12 @@ public enum SEPCommitmentBuilder {
         try RustBridge.computeLeafHash(secretKey: secretKey)
     }
 
-    public static func computeMerkleRoot(leafHashes: [Data], tier: SEPTier) throws -> Data {
-        try RustBridge.computeMerkleRoot(leafHashes: leafHashes, depth: tier.depth)
+    public static func computePublicKey(secretKey: Data) throws -> Data {
+        try RustBridge.computePublicKey(secretKey: secretKey)
+    }
+
+    public static func computeMerkleRoot(members: [SEPGroupMemberLeaf], tier: SEPTier) throws -> Data {
+        try RustBridge.computeMerkleRoot(members: members, depth: tier.depth)
     }
 
     public static func computeSHA256Commitment(poseidonRoot: Data, epoch: UInt64, salt: Data) throws -> Data {

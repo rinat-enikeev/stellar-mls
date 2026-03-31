@@ -7,18 +7,16 @@ public enum SEPProofGenerator {
 
     public static func generateMembershipProof(
         provingKey: Data,
-        leafHashes: [Data],
+        members: [SEPGroupMemberLeaf],
         secretKey: Data,
-        proverIndex: Int,
         epoch: UInt64,
         salt: Data,
         tier: SEPTier
     ) throws -> SEPMembershipProofBundle {
         try RustBridge.generateMembershipProof(
             provingKey: provingKey,
-            leafHashes: leafHashes,
+            members: members,
             secretKey: secretKey,
-            proverIndex: proverIndex,
             epoch: epoch,
             salt: salt,
             depth: tier.depth

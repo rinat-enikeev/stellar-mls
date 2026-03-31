@@ -1,0 +1,224 @@
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use ark_bls12_381::{Bls12_381, Fr, G1Affine, G2Affine};
+use ark_groth16::{Proof, VerifyingKey};
+use ark_serialize::CanonicalSerialize;
+use rand::SeedableRng;
+use rand_chacha::ChaCha20Rng;
+use sha2::{Digest, Sha256};
+
+use sep_xxxx_circuits::commitment::field_to_bytes_be;
+use sep_xxxx_circuits::merkle::{CanonicalMember, compressed_public_key_bytes};
+use sep_xxxx_circuits::prover::{self, ProverInput, SetupResult, compute_leaf_hash};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let out_dir = parse_out_dir(env::args().skip(1))?;
+    fs::create_dir_all(&out_dir)?;
+
+    let small_setup = deterministic_setup(5, 1001)?;
+    let medium_setup = deterministic_setup(8, 1002)?;
+    let large_setup = deterministic_setup(11, 1003)?;
+
+    let member_secret_keys = vec![Fr::from(100u64), Fr::from(200u64)];
+    let members = member_secret_keys
+        .iter()
+        .map(|secret_key| CanonicalMember {
+            public_key_bytes: compressed_public_key_bytes(secret_key),
+            leaf_hash: compute_leaf_hash(secret_key),
+        })
+        .collect::<Vec<_>>();
+
+    let group_id = Sha256::digest(b"sep-xxxx-testnet-integration-group");
+    let salt_epoch_0 = [0x11; 32];
+    let salt_epoch_1 = [0x22; 32];
+
+    let mut prove_rng = ChaCha20Rng::seed_from_u64(2026);
+    let input_epoch_0 = ProverInput {
+        members: members.clone(),
+        secret_key: member_secret_keys[0],
+        epoch: 0,
+        salt: salt_epoch_0,
+        depth: 5,
+    };
+    let (proof_epoch_0, public_inputs_epoch_0) =
+        prover::prove(&small_setup.proving_key, &input_epoch_0, &mut prove_rng)?;
+
+    let input_epoch_1 = ProverInput {
+        members,
+        secret_key: member_secret_keys[0],
+        epoch: 1,
+        salt: salt_epoch_1,
+        depth: 5,
+    };
+    let (proof_epoch_1, public_inputs_epoch_1) =
+        prover::prove(&small_setup.proving_key, &input_epoch_1, &mut prove_rng)?;
+
+    write_string(
+        &out_dir.join("group-id.hex"),
+        &format!("{}\n", hex_encode(group_id.as_slice())),
+    )?;
+    write_string(
+        &out_dir.join("tier.txt"),
+        "0\n",
+    )?;
+    write_string(
+        &out_dir.join("commitment-epoch-0.hex"),
+        &format!("{}\n", hex_encode(&field_to_bytes_be(&public_inputs_epoch_0.commitment))),
+    )?;
+    write_string(
+        &out_dir.join("commitment-epoch-1.hex"),
+        &format!("{}\n", hex_encode(&field_to_bytes_be(&public_inputs_epoch_1.commitment))),
+    )?;
+
+    write_string(
+        &out_dir.join("vk-small.json"),
+        &verification_key_json(&small_setup.verifying_key),
+    )?;
+    write_string(
+        &out_dir.join("vk-medium.json"),
+        &verification_key_json(&medium_setup.verifying_key),
+    )?;
+    write_string(
+        &out_dir.join("vk-large.json"),
+        &verification_key_json(&large_setup.verifying_key),
+    )?;
+    write_string(
+        &out_dir.join("proof-epoch-0.json"),
+        &proof_json(&proof_epoch_0),
+    )?;
+    write_string(
+        &out_dir.join("proof-epoch-1.json"),
+        &proof_json(&proof_epoch_1),
+    )?;
+
+    let summary = format!(
+        concat!(
+            "{{\n",
+            "  \"group_id\": \"{}\",\n",
+            "  \"tier\": 0,\n",
+            "  \"initial_commitment\": \"{}\",\n",
+            "  \"next_commitment\": \"{}\",\n",
+            "  \"files\": {{\n",
+            "    \"vk_small\": \"vk-small.json\",\n",
+            "    \"vk_medium\": \"vk-medium.json\",\n",
+            "    \"vk_large\": \"vk-large.json\",\n",
+            "    \"proof_epoch_0\": \"proof-epoch-0.json\",\n",
+            "    \"proof_epoch_1\": \"proof-epoch-1.json\"\n",
+            "  }}\n",
+            "}}\n"
+        ),
+        hex_encode(group_id.as_slice()),
+        hex_encode(&field_to_bytes_be(&public_inputs_epoch_0.commitment)),
+        hex_encode(&field_to_bytes_be(&public_inputs_epoch_1.commitment)),
+    );
+    write_string(&out_dir.join("summary.json"), &summary)?;
+
+    Ok(())
+}
+
+fn parse_out_dir(
+    mut args: impl Iterator<Item = String>,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let mut out_dir: Option<PathBuf> = None;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--out-dir" => {
+                let value = args.next().ok_or("--out-dir requires a value")?;
+                out_dir = Some(PathBuf::from(value));
+            }
+            _ => return Err(format!("unknown argument: {arg}").into()),
+        }
+    }
+
+    out_dir.ok_or_else(|| "--out-dir is required".into())
+}
+
+fn deterministic_setup(
+    depth: usize,
+    seed: u64,
+) -> Result<SetupResult, Box<dyn std::error::Error>> {
+    let mut rng = ChaCha20Rng::seed_from_u64(seed);
+    prover::setup(depth, &mut rng)
+}
+
+fn verification_key_json(vk: &VerifyingKey<Bls12_381>) -> String {
+    let ic = vk
+        .gamma_abc_g1
+        .iter()
+        .map(|point| format!("\"{}\"", hex_encode(&serialize_g1(point))))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    format!(
+        concat!(
+            "{{",
+            "\"alpha_g1\":\"{}\",",
+            "\"beta_g2\":\"{}\",",
+            "\"gamma_g2\":\"{}\",",
+            "\"delta_g2\":\"{}\",",
+            "\"ic\":[{}]",
+            "}}\n"
+        ),
+        hex_encode(&serialize_g1(&vk.alpha_g1)),
+        hex_encode(&serialize_g2(&vk.beta_g2)),
+        hex_encode(&serialize_g2(&vk.gamma_g2)),
+        hex_encode(&serialize_g2(&vk.delta_g2)),
+        ic,
+    )
+}
+
+fn proof_json(proof: &Proof<Bls12_381>) -> String {
+    format!(
+        concat!(
+            "{{",
+            "\"a\":\"{}\",",
+            "\"b\":\"{}\",",
+            "\"c\":\"{}\"",
+            "}}\n"
+        ),
+        hex_encode(&serialize_g1(&proof.a)),
+        hex_encode(&serialize_g2(&proof.b)),
+        hex_encode(&serialize_g1(&proof.c)),
+    )
+}
+
+fn serialize_g1(point: &G1Affine) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    point
+        .serialize_uncompressed(&mut bytes)
+        .expect("G1 serialization should succeed");
+    bytes
+}
+
+fn serialize_g2(point: &G2Affine) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    point
+        .serialize_uncompressed(&mut bytes)
+        .expect("G2 serialization should succeed");
+    bytes
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(nibble_to_hex(byte >> 4));
+        out.push(nibble_to_hex(byte & 0x0f));
+    }
+    out
+}
+
+fn nibble_to_hex(nibble: u8) -> char {
+    match nibble {
+        0..=9 => (b'0' + nibble) as char,
+        10..=15 => (b'a' + (nibble - 10)) as char,
+        _ => unreachable!("nibble out of range"),
+    }
+}
+
+fn write_string(path: &Path, contents: &str) -> Result<(), Box<dyn std::error::Error>> {
+    fs::write(path, contents)?;
+    Ok(())
+}

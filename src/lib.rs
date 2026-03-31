@@ -7,9 +7,9 @@
 //!
 //! The circuit proves three things without revealing any witness data:
 //!
-//! 1. **Key ownership**: The prover knows a BLS12-381 scalar `sk` such that `sk · G1 = pk`
-//! 2. **Merkle membership**: `pk` is a leaf in a Poseidon Merkle tree with root `poseidon_root`
-//! 3. **Commitment binding**: `SHA-256(poseidon_root || epoch || salt) == commitment`
+//! 1. **Key ownership**: `leaf = Poseidon(sk)` — prover knows the secret key preimage
+//! 2. **Merkle membership**: `leaf` is in a Poseidon Merkle tree with root `poseidon_root`
+//! 3. **Commitment binding**: `Poseidon(Poseidon(poseidon_root, epoch), salt) == commitment`
 //!
 //! ## Circuit Tiers
 //!

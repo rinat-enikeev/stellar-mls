@@ -37,6 +37,22 @@ bool sep_compute_merkle_root(
     char **out_error
 );
 
+bool sep_nostr_derive_public_key(
+    const uint8_t *secret_key_ptr,
+    size_t secret_key_len,
+    sep_byte_buffer_t *out_public_key,
+    char **out_error
+);
+
+bool sep_nostr_sign_event_id(
+    const uint8_t *secret_key_ptr,
+    size_t secret_key_len,
+    const uint8_t *event_id_ptr,
+    size_t event_id_len,
+    sep_byte_buffer_t *out_signature,
+    char **out_error
+);
+
 bool sep_compute_sha256_commitment(
     const uint8_t *poseidon_root_ptr,
     size_t poseidon_root_len,

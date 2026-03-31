@@ -6,6 +6,7 @@ use std::slice;
 use ark_bls12_381::{Bls12_381, Fr};
 use ark_groth16::ProvingKey;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use k256::schnorr::{signature::Signer, Signature, SigningKey};
 use rand::rngs::OsRng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
@@ -103,6 +104,13 @@ fn read_fr(bytes: &[u8]) -> Result<Fr, String> {
         .try_into()
         .map_err(|_| "failed to convert field element bytes".to_string())?;
     Ok(bytes_be_to_field::<Fr>(&array))
+}
+
+fn read_array_32(bytes: &[u8], label: &str) -> Result<[u8; 32], String> {
+    require_len(label, bytes.len(), 32)?;
+    bytes
+        .try_into()
+        .map_err(|_| format!("failed to convert {label} bytes"))
 }
 
 fn read_salt(bytes: &[u8]) -> Result<Salt, String> {
@@ -237,6 +245,43 @@ pub extern "C" fn sep_compute_merkle_root(
         let tree = PoseidonMerkleTree::build_from_members(&config, &members, depth)
             .map_err(|e| e.to_string())?;
         write_buffer(out_root, field_to_bytes_be(&tree.root()).to_vec())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sep_nostr_derive_public_key(
+    secret_key_ptr: *const u8,
+    secret_key_len: usize,
+    out_public_key: *mut SepByteBuffer,
+    out_error: *mut *mut c_char,
+) -> bool {
+    run_ffi(out_error, || {
+        let secret_key_bytes = read_bytes(secret_key_ptr, secret_key_len, "Nostr secret key")?;
+        let secret_key_bytes = read_array_32(secret_key_bytes, "Nostr secret key")?;
+        let signing_key = SigningKey::from_bytes(&secret_key_bytes).map_err(|e| e.to_string())?;
+        let public_key = signing_key.verifying_key().to_bytes();
+        write_buffer(out_public_key, public_key.to_vec())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sep_nostr_sign_event_id(
+    secret_key_ptr: *const u8,
+    secret_key_len: usize,
+    event_id_ptr: *const u8,
+    event_id_len: usize,
+    out_signature: *mut SepByteBuffer,
+    out_error: *mut *mut c_char,
+) -> bool {
+    run_ffi(out_error, || {
+        let secret_key_bytes = read_bytes(secret_key_ptr, secret_key_len, "Nostr secret key")?;
+        let secret_key_bytes = read_array_32(secret_key_bytes, "Nostr secret key")?;
+        let event_id_bytes = read_bytes(event_id_ptr, event_id_len, "Nostr event id")?;
+        let event_id_bytes = read_array_32(event_id_bytes, "Nostr event id")?;
+
+        let signing_key = SigningKey::from_bytes(&secret_key_bytes).map_err(|e| e.to_string())?;
+        let signature: Signature = signing_key.sign(&event_id_bytes);
+        write_buffer(out_signature, signature.to_bytes().to_vec())
     })
 }
 

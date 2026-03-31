@@ -79,6 +79,121 @@ struct SwiftMLSTests {
         #expect(lastInvocation?.function == "verify_membership")
     }
 
+    @Test
+    func invitationSenderBuildsAndPublishesNostrEvent() async throws {
+        let recipientPublicKey = Data(repeating: 0x55, count: 32)
+        let relayA = URL(string: "wss://relay-a.example")!
+        let relayB = URL(string: "wss://relay-b.example")!
+        let bootstrap = SEPInvitationBootstrap(
+            groupID: Data([0x01, 0x02, 0x03]),
+            epoch: 12,
+            stellarContractID: "contract-xyz",
+            relayHints: [relayA, relayB],
+            welcomePayload: Data([0x0A, 0x0B]),
+            sepBootstrapMaterial: Data([0xAA, 0xBB, 0xCC])
+        )
+
+        let crypto = MockInvitationCrypto(
+            hiddenInboxTag: "opaque-inbox-tag",
+            sealedEnvelope: SEPSealedInvitationEnvelope(
+                version: 1,
+                scheme: "mock-box-v1",
+                ephemeralPublicKey: Data([0x10, 0x11]),
+                nonce: Data([0x22, 0x23]),
+                ciphertext: Data([0x30, 0x31, 0x32]),
+                authenticationTag: Data([0x40, 0x41])
+            )
+        )
+        let signer = MockNostrSigner(
+            signerPublicKey: Data(repeating: 0x11, count: 32),
+            signature: Data(repeating: 0x22, count: 64)
+        )
+        let relayTransport = MockNostrRelayTransport()
+
+        let result = try await SEPInvitationSender.sendInvitation(
+            bootstrap: bootstrap,
+            recipientPublicKey: recipientPublicKey,
+            relayURLs: [relayB, relayA],
+            cryptoProvider: crypto,
+            signer: signer,
+            relayTransport: relayTransport,
+            options: SEPInvitationSendOptions(
+                kind: 24_113,
+                createdAt: 1_717_171_717,
+                additionalTags: [["client", "swift-mls-test"]]
+            )
+        )
+
+        #expect(result.relayResults.count == 2)
+        #expect(result.relayResults.allSatisfy { $0.accepted })
+        #expect(result.event.pubkey == String(repeating: "11", count: 32))
+        #expect(result.event.sig == String(repeating: "22", count: 64))
+        #expect(result.event.id.count == 64)
+        #expect(result.event.tags == [
+            ["sep_inbox", "opaque-inbox-tag"],
+            ["sep_version", "1"],
+            ["client", "swift-mls-test"],
+        ])
+
+        let published = await relayTransport.published
+        #expect(published.count == 2)
+        #expect(published.map(\.relayURL).sorted { $0.absoluteString < $1.absoluteString } == [relayA, relayB])
+        #expect(published.allSatisfy { $0.event == result.event })
+
+        let envelopeData = Data(base64Encoded: result.event.content)
+        let decodedEnvelope = try JSONDecoder().decode(SEPSealedInvitationEnvelope.self, from: try #require(envelopeData))
+        #expect(decodedEnvelope.scheme == "mock-box-v1")
+        #expect(decodedEnvelope.ciphertext == Data([0x30, 0x31, 0x32]))
+    }
+
+    @Test
+    func invitationSenderRejectsEmptyRelayList() async throws {
+        let bootstrap = SEPInvitationBootstrap(
+            groupID: Data([0xFF]),
+            epoch: 0,
+            stellarContractID: "contract-empty",
+            relayHints: [],
+            welcomePayload: Data(),
+            sepBootstrapMaterial: Data()
+        )
+
+        await #expect(throws: SEPError.emptyRelayList) {
+            try await SEPInvitationSender.sendInvitation(
+                bootstrap: bootstrap,
+                recipientPublicKey: Data(repeating: 0x55, count: 32),
+                relayURLs: [],
+                cryptoProvider: MockInvitationCrypto(
+                    hiddenInboxTag: "tag",
+                    sealedEnvelope: SEPSealedInvitationEnvelope(version: 1, scheme: "mock", ciphertext: Data([0x01]))
+                ),
+                signer: MockNostrSigner(
+                    signerPublicKey: Data(repeating: 0x11, count: 32),
+                    signature: Data(repeating: 0x22, count: 64)
+                )
+            )
+        }
+    }
+
+    @Test
+    func rustBackedNostrSignerProducesValidSizedOutputs() throws {
+        let signer = try RustBackedNostrSigner(secretKey: fieldBytes(7))
+        let publicKey = try signer.publicKey()
+
+        #expect(publicKey.count == 32)
+
+        let eventID = try SEPInvitationSender.eventID(
+            pubkeyHex: String(repeating: "11", count: 32),
+            createdAt: 1_700_000_000,
+            kind: 24_113,
+            tags: [["sep_inbox", "opaque"]],
+            content: "AQID"
+        )
+        let signature = try signer.signEventID(eventID)
+
+        #expect(eventID.count == 32)
+        #expect(signature.count == 64)
+    }
+
     private func fieldBytes(_ value: UInt64) -> Data {
         var bytes = Data(repeating: 0, count: 32)
         var bigEndian = value.bigEndian
@@ -133,4 +248,39 @@ private actor MockTransport: SEPContractTransport {
 private struct CapturedInvocation: Sendable, Equatable {
     let contractID: String
     let function: String
+}
+
+private struct MockInvitationCrypto: SEPInvitationCryptoProvider {
+    let hiddenInboxTag: String
+    let sealedEnvelope: SEPSealedInvitationEnvelope
+
+    func hiddenInboxTag(recipientPublicKey: Data) throws -> String {
+        hiddenInboxTag
+    }
+
+    func sealInvitation(_ plaintext: Data, recipientPublicKey: Data) throws -> SEPSealedInvitationEnvelope {
+        sealedEnvelope
+    }
+}
+
+private struct MockNostrSigner: SEPNostrEventSigner {
+    let signerPublicKey: Data
+    let signature: Data
+
+    func publicKey() throws -> Data {
+        signerPublicKey
+    }
+
+    func signEventID(_ eventID: Data) throws -> Data {
+        signature
+    }
+}
+
+private actor MockNostrRelayTransport: SEPNostrRelayTransport {
+    private(set) var published: [(relayURL: URL, event: SEPNostrEvent)] = []
+
+    func publish(event: SEPNostrEvent, to relayURL: URL) async throws -> SEPNostrRelaySendResult {
+        published.append((relayURL, event))
+        return SEPNostrRelaySendResult(relayURL: relayURL, accepted: true, message: "ok")
+    }
 }

@@ -2,6 +2,36 @@ import CSEPMLSFFI
 import Foundation
 
 enum RustBridge {
+    static func deriveNostrPublicKey(secretKey: Data) throws -> Data {
+        try withSingleOutputBuffer { buffer, errorPointer in
+            secretKey.withUnsafeBytes { rawBytes in
+                sep_nostr_derive_public_key(
+                    rawBytes.bindMemory(to: UInt8.self).baseAddress,
+                    secretKey.count,
+                    buffer,
+                    errorPointer
+                )
+            }
+        }
+    }
+
+    static func signNostrEventID(secretKey: Data, eventID: Data) throws -> Data {
+        try withSingleOutputBuffer { buffer, errorPointer in
+            secretKey.withUnsafeBytes { secretKeyBytes in
+                eventID.withUnsafeBytes { eventIDBytes in
+                    sep_nostr_sign_event_id(
+                        secretKeyBytes.bindMemory(to: UInt8.self).baseAddress,
+                        secretKey.count,
+                        eventIDBytes.bindMemory(to: UInt8.self).baseAddress,
+                        eventID.count,
+                        buffer,
+                        errorPointer
+                    )
+                }
+            }
+        }
+    }
+
     static func computeLeafHash(secretKey: Data) throws -> Data {
         try withSingleOutputBuffer { buffer, errorPointer in
             secretKey.withUnsafeBytes { rawBytes in

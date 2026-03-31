@@ -62,6 +62,10 @@ pub enum Error {
     InvalidTier = 8,
     /// Verification key IC vector must have exactly 3 elements.
     InvalidVkLength = 9,
+    /// Caller-supplied public inputs do not match on-chain state.
+    PublicInputsMismatch = 10,
+    /// Caller-supplied epoch is not exactly stored_epoch + 1.
+    InvalidEpoch = 11,
 }
 
 // ================================================================
@@ -116,6 +120,19 @@ pub struct CommitmentEntry {
     pub tier: u32,
     /// Whether the group accepts further updates.
     pub active: bool,
+}
+
+/// Public inputs for Groth16 proof verification.
+///
+/// Callers MUST supply these explicitly; the contract verifies they
+/// match the on-chain state before using them in the pairing check.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublicInputs {
+    /// The commitment being proved against.
+    pub commitment: BytesN<32>,
+    /// The epoch being proved against.
+    pub epoch: u64,
 }
 
 /// Groth16 verification key stored as raw bytes (contract-storage friendly).
@@ -229,19 +246,24 @@ impl SepXxxxContract {
     /// Create a new private membership group.
     ///
     /// The proof must verify against `(commitment, epoch=0)` using the
-    /// verification key for `tier`. This proves the caller is a member
-    /// of the set being committed.
+    /// verification key for `tier`. The caller-supplied `public_inputs`
+    /// must match: `public_inputs.commitment == commitment` and
+    /// `public_inputs.epoch == 0`.
     pub fn create_group(
         env: Env,
         group_id: BytesN<32>,
         commitment: BytesN<32>,
         tier: u32,
         proof: Groth16Proof,
+        public_inputs: PublicInputs,
     ) -> Result<(), Error> {
         Self::require_initialized(&env)?;
 
         if tier > 2 {
             return Err(Error::InvalidTier);
+        }
+        if public_inputs.commitment != commitment || public_inputs.epoch != 0 {
+            return Err(Error::PublicInputsMismatch);
         }
         if env
             .storage()
@@ -288,14 +310,16 @@ impl SepXxxxContract {
 
     /// Update a group's commitment (epoch transition).
     ///
-    /// The proof is verified against the **current** commitment and epoch,
-    /// proving the updater is a member *before* the transition. On success
-    /// the group advances to `epoch + 1` with the new commitment.
+    /// `new_epoch` MUST equal `stored_epoch + 1`. The proof is verified
+    /// against the **current** commitment and epoch (via `public_inputs`),
+    /// proving the updater is a member *before* the transition.
     pub fn update_commitment(
         env: Env,
         group_id: BytesN<32>,
         new_commitment: BytesN<32>,
+        new_epoch: u64,
         proof: Groth16Proof,
+        public_inputs: PublicInputs,
     ) -> Result<(), Error> {
         Self::require_initialized(&env)?;
 
@@ -308,13 +332,20 @@ impl SepXxxxContract {
         if !current.active {
             return Err(Error::GroupInactive);
         }
+        if new_epoch != current.epoch + 1 {
+            return Err(Error::InvalidEpoch);
+        }
+        if public_inputs.commitment != current.commitment
+            || public_inputs.epoch != current.epoch
+        {
+            return Err(Error::PublicInputsMismatch);
+        }
 
         let vk = Self::load_vk(&env, current.tier)?;
         if !verify_groth16_proof(&env, &vk, &proof, &current.commitment, current.epoch) {
             return Err(Error::InvalidProof);
         }
 
-        let new_epoch = current.epoch + 1;
         let timestamp = env.ledger().timestamp();
 
         Self::archive_entry(&env, &group_id, &current);
@@ -344,11 +375,13 @@ impl SepXxxxContract {
 
     /// Verify a membership proof against the current group state.
     ///
-    /// Read-only — does not modify contract state.
+    /// Read-only — does not modify contract state. The caller-supplied
+    /// `public_inputs` must match the current on-chain state.
     pub fn verify_membership(
         env: Env,
         group_id: BytesN<32>,
         proof: Groth16Proof,
+        public_inputs: PublicInputs,
     ) -> Result<bool, Error> {
         Self::require_initialized(&env)?;
 
@@ -357,6 +390,12 @@ impl SepXxxxContract {
             .persistent()
             .get(&DataKey::Group(group_id.clone()))
             .ok_or(Error::GroupNotFound)?;
+
+        if public_inputs.commitment != state.commitment
+            || public_inputs.epoch != state.epoch
+        {
+            return Err(Error::PublicInputsMismatch);
+        }
 
         let vk = Self::load_vk(&env, state.tier)?;
         Ok(verify_groth16_proof(
@@ -376,6 +415,7 @@ impl SepXxxxContract {
         env: Env,
         group_id: BytesN<32>,
         proof: Groth16Proof,
+        public_inputs: PublicInputs,
     ) -> Result<(), Error> {
         Self::require_initialized(&env)?;
 
@@ -387,6 +427,11 @@ impl SepXxxxContract {
 
         if !current.active {
             return Err(Error::GroupInactive);
+        }
+        if public_inputs.commitment != current.commitment
+            || public_inputs.epoch != current.epoch
+        {
+            return Err(Error::PublicInputsMismatch);
         }
 
         let vk = Self::load_vk(&env, current.tier)?;
@@ -425,10 +470,15 @@ impl SepXxxxContract {
             .ok_or(Error::GroupNotFound)
     }
 
-    /// Get the history of a group (most recent entries, up to 64).
+    /// Get the history of a group (most recent entries, up to `max_entries`
+    /// capped by the contract's history window of 64).
     ///
     /// Full history is always available via contract events.
-    pub fn get_history(env: Env, group_id: BytesN<32>) -> Result<Vec<CommitmentEntry>, Error> {
+    pub fn get_history(
+        env: Env,
+        group_id: BytesN<32>,
+        max_entries: u32,
+    ) -> Result<Vec<CommitmentEntry>, Error> {
         if !env
             .storage()
             .persistent()
@@ -436,11 +486,26 @@ impl SepXxxxContract {
         {
             return Err(Error::GroupNotFound);
         }
-        Ok(env
+        let history: Vec<CommitmentEntry> = env
             .storage()
             .persistent()
             .get(&DataKey::History(group_id))
-            .unwrap_or(Vec::new(&env)))
+            .unwrap_or(Vec::new(&env));
+
+        let cap = if max_entries < history.len() {
+            max_entries
+        } else {
+            history.len()
+        };
+        if cap == history.len() {
+            return Ok(history);
+        }
+        let start = history.len() - cap;
+        let mut result = Vec::new(&env);
+        for i in start..history.len() {
+            result.push_back(history.get(i).unwrap());
+        }
+        Ok(result)
     }
 
     // ---- Internal helpers ----
@@ -501,18 +566,6 @@ impl SepXxxxContract {
 // ================================================================
 
 /// Verify a Groth16 proof using BLS12-381 host functions.
-///
-/// The standard Groth16 equation:
-///   e(π_A, π_B) = e(α, β) · e(vk_x, γ) · e(π_C, δ)
-///
-/// is rewritten as a pairing check (product == 1_GT):
-///   e(-π_A, π_B) · e(α, β) · e(vk_x, γ) · e(π_C, δ) = 1_GT
-///
-/// Steps:
-///   1. Convert BytesN storage values to BLS12-381 SDK types
-///   2. Compute vk_x = IC[0] + commitment·IC[1] + epoch·IC[2]
-///   3. Negate π_A using the Neg trait (flips y-coordinate)
-///   4. Run pairing_check with 4 pairs
 fn verify_groth16_proof(
     env: &Env,
     vk: &VerificationKeyData,
@@ -522,7 +575,6 @@ fn verify_groth16_proof(
 ) -> bool {
     let bls = env.crypto().bls12_381();
 
-    // --- Convert storage bytes to BLS types ---
     let proof_a = G1Affine::from_bytes(proof.a.clone());
     let proof_b = G2Affine::from_bytes(proof.b.clone());
     let proof_c = G1Affine::from_bytes(proof.c.clone());
@@ -536,30 +588,23 @@ fn verify_groth16_proof(
     let ic1 = G1Affine::from_bytes(vk.ic.get(1).unwrap());
     let ic2 = G1Affine::from_bytes(vk.ic.get(2).unwrap());
 
-    // --- Public inputs as Fr scalars ---
-    // Commitment: 32-byte big-endian field element
     let commitment_fr = Fr::from_bytes(commitment.clone());
-    // Epoch: u64 → U256 → Fr
     let epoch_bytes = Bytes::from_array(env, &u64_to_u256_be(epoch));
     let epoch_fr = Fr::from_u256(U256::from_be_bytes(env, &epoch_bytes));
 
-    // --- Compute vk_x = IC[0] + commitment·IC[1] + epoch·IC[2] ---
     let msm_points: Vec<G1Affine> = vec![env, ic1, ic2];
     let msm_scalars: Vec<Fr> = vec![env, commitment_fr, epoch_fr];
     let msm_result = bls.g1_msm(msm_points, msm_scalars);
     let vk_x = bls.g1_add(&ic0, &msm_result);
 
-    // --- Negate π_A (flips y-coordinate via Neg trait) ---
     let neg_a = -proof_a;
 
-    // --- Pairing check: e(-A, B) · e(α, β) · e(vk_x, γ) · e(C, δ) == 1_GT ---
     let g1s: Vec<G1Affine> = vec![env, neg_a, alpha, vk_x, proof_c];
     let g2s: Vec<G2Affine> = vec![env, proof_b, beta, gamma, delta];
 
     bls.pairing_check(g1s, g2s)
 }
 
-/// Convert a u64 to a 32-byte big-endian array (zero-padded for U256).
 fn u64_to_u256_be(val: u64) -> [u8; 32] {
     let mut bytes = [0u8; 32];
     bytes[24..32].copy_from_slice(&val.to_be_bytes());
@@ -584,8 +629,6 @@ mod test {
         (env, client, admin)
     }
 
-    /// Create a mock VK with zero-byte arrays. Not valid for BLS ops —
-    /// only for testing contract logic paths that don't call the verifier.
     fn mock_vk(env: &Env) -> VerificationKeyData {
         let g1 = BytesN::from_array(env, &[0u8; 96]);
         let g2 = BytesN::from_array(env, &[0u8; 192]);
@@ -595,6 +638,14 @@ mod test {
             gamma_g2: g2.clone(),
             delta_g2: g2,
             ic: vec![env, g1.clone(), g1.clone(), g1],
+        }
+    }
+
+    fn mock_proof(env: &Env) -> Groth16Proof {
+        Groth16Proof {
+            a: BytesN::from_array(env, &[0u8; 96]),
+            b: BytesN::from_array(env, &[0u8; 192]),
+            c: BytesN::from_array(env, &[0u8; 96]),
         }
     }
 
@@ -626,7 +677,7 @@ mod test {
             beta_g2: g2.clone(),
             gamma_g2: g2.clone(),
             delta_g2: g2,
-            ic: vec![&env, g1.clone(), g1], // only 2 IC points
+            ic: vec![&env, g1.clone(), g1],
         };
         let good_vk = mock_vk(&env);
 
@@ -653,13 +704,12 @@ mod test {
 
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
-        let proof = Groth16Proof {
-            a: BytesN::from_array(&env, &[0u8; 96]),
-            b: BytesN::from_array(&env, &[0u8; 192]),
-            c: BytesN::from_array(&env, &[0u8; 96]),
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
         };
 
-        client.create_group(&group_id, &commitment, &3u32, &proof);
+        client.create_group(&group_id, &commitment, &3u32, &mock_proof(&env), &pi);
     }
 
     #[test]
@@ -668,16 +718,50 @@ mod test {
         let (env, client, _admin) = setup_env();
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
-        let proof = Groth16Proof {
-            a: BytesN::from_array(&env, &[0u8; 96]),
-            b: BytesN::from_array(&env, &[0u8; 192]),
-            c: BytesN::from_array(&env, &[0u8; 96]),
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
         };
 
-        client.create_group(&group_id, &commitment, &0u32, &proof);
+        client.create_group(&group_id, &commitment, &0u32, &mock_proof(&env), &pi);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #10)")]
+    fn test_public_inputs_mismatch_on_create() {
+        let (env, client, admin) = setup_env();
+        let vk = mock_vk(&env);
+        client.initialize(&admin, &vk, &vk, &vk);
+
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        let commitment = BytesN::from_array(&env, &[2u8; 32]);
+        let wrong_pi = PublicInputs {
+            commitment: BytesN::from_array(&env, &[9u8; 32]),
+            epoch: 0,
+        };
+
+        client.create_group(&group_id, &commitment, &0u32, &mock_proof(&env), &wrong_pi);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #10)")]
+    fn test_public_inputs_wrong_epoch_on_create() {
+        let (env, client, admin) = setup_env();
+        let vk = mock_vk(&env);
+        client.initialize(&admin, &vk, &vk, &vk);
+
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        let commitment = BytesN::from_array(&env, &[2u8; 32]);
+        let wrong_pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 5,
+        };
+
+        client.create_group(&group_id, &commitment, &0u32, &mock_proof(&env), &wrong_pi);
     }
 
     // NOTE: Tests exercising actual Groth16 verification require valid
     // test vectors (VK, proof, public inputs) generated by the circuits
-    // crate. Those belong in integration tests.
+    // crate. End-to-end verification is covered by the testnet deployment
+    // script (scripts/deploy_sep_xxxx_testnet.sh).
 }

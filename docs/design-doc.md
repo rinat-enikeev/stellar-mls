@@ -98,22 +98,22 @@ The SEP introduces a contract that stores, for each group, only three values: a 
 
 ### Phase 3 — Soroban contract
 
-- Implement the contract interface (create, update, verify, deactivate, get_state, get_history)
-- Integrate Groth16 verification via Protocol 22 BLS12-381 host functions
-- Deploy to Stellar testnet and publish the contract address
-- Gas profiling and optimization
+- ✅ Implement the contract interface (create, update, verify, deactivate, get_state, get_history)
+- ✅ Integrate Groth16 verification via Protocol 22 BLS12-381 host functions
+- 🔧 Deploy to Stellar testnet and publish the contract address — *testnet deployment script ready, not yet executed*
+- ⏳ Gas profiling and optimization
 
 ### Phase 4 — Client SDK and relayer
 
-- Provide a TypeScript/Rust SDK for proof generation, commitment construction, and contract interaction
-- Implement a reference relayer service with a public submission endpoint
-- Integrate with at least one MLS (RFC 9420) library to demonstrate the primary use case: anchoring MLS Commit state transitions on Stellar without exposing the group roster
+- ✅ Provide a Swift SDK for proof generation, commitment construction, and contract interaction — *shipped as SwiftMLS; TypeScript SDK not planned*
+- ✅ Implement Nostr relay transport for invitation delivery — *replaces the centralized relayer originally envisioned; see `docs/relay-design-doc.md`*
+- ⏳ Integrate with at least one MLS (RFC 9420) library to demonstrate the primary use case: anchoring MLS Commit state transitions on Stellar without exposing the group roster
 
 ### Phase 5 — Mainnet deployment and ecosystem adoption
 
-- Deploy the contract and verification keys to Stellar mainnet
-- Publish developer documentation and integration guides
-- Coordinate with wallet and application developers for adoption
+- ⏳ Deploy the contract and verification keys to Stellar mainnet
+- ⏳ Publish developer documentation and integration guides
+- ⏳ Coordinate with wallet and application developers for adoption
 
 ---
 

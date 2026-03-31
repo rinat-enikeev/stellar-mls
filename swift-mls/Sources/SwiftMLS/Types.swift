@@ -38,6 +38,21 @@ public struct SEPPublicInputs: Codable, Equatable, Sendable {
     }
 }
 
+public struct SEPContractProofComponents: Codable, Equatable, Sendable {
+    /// G1 uncompressed, 96 bytes
+    public let proofA: Data
+    /// G2 uncompressed, 192 bytes
+    public let proofB: Data
+    /// G1 uncompressed, 96 bytes
+    public let proofC: Data
+
+    public init(proofA: Data, proofB: Data, proofC: Data) {
+        self.proofA = proofA
+        self.proofB = proofB
+        self.proofC = proofC
+    }
+}
+
 public struct SEPMembershipProofBundle: Codable, Equatable, Sendable {
     public let proof: Data
     public let publicInputs: SEPPublicInputs

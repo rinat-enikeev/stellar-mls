@@ -647,7 +647,7 @@ Each ceremony MUST:
 - Verify each contribution via pairing checks before accepting
 - Record a SHA-256 hash chain of SRS states as a public transcript
 - Publish all contribution hashes and attestations publicly
-- Derive the final Groth16 keys via Phase 2 MPC or from the accumulated ceremony scalars
+- Derive the final Groth16 keys via Phase 2 of Groth16 MPC (see Section 8.2.3)
 
 ##### 8.2.3 Key derivation
 

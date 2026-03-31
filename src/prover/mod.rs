@@ -145,6 +145,21 @@ pub fn proof_from_bytes(bytes: &[u8]) -> Result<Proof<Bls12_381>, Box<dyn std::e
     Ok(proof)
 }
 
+/// Decompress a Groth16 proof into uncompressed curve-point components
+/// matching the Soroban contract's expected format:
+///   π_A (G1, 96 bytes) || π_B (G2, 192 bytes) || π_C (G1, 96 bytes)
+/// Total: 384 bytes.
+pub fn proof_to_uncompressed_components(proof: &Proof<Bls12_381>) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    use ark_serialize::CanonicalSerialize;
+    let mut a = Vec::new();
+    proof.a.serialize_uncompressed(&mut a).expect("G1 serialization should not fail");
+    let mut b = Vec::new();
+    proof.b.serialize_uncompressed(&mut b).expect("G2 serialization should not fail");
+    let mut c = Vec::new();
+    proof.c.serialize_uncompressed(&mut c).expect("G1 serialization should not fail");
+    (a, b, c)
+}
+
 /// Helper: compute leaf hashes from secret keys.
 /// Each member calls `Poseidon(sk)` on their own secret key and shares
 /// the result during group registration.
@@ -419,6 +434,52 @@ mod tests {
             pi_0.epoch, pi_1.epoch,
             "Same epoch must produce same epoch public input"
         );
+    }
+
+    #[test]
+    fn test_proof_uncompressed_components_sizes() {
+        let mut rng = test_rng();
+        let setup_result = setup(5, &mut rng).expect("Setup failed");
+
+        let input = make_prover_input(&[Fr::from(42u64)], 0, 0, [0x11; 32], 5);
+        let (proof, _) = prove(&setup_result.proving_key, &input, &mut rng).unwrap();
+
+        // Compressed: 48 + 96 + 48 = 192
+        let compressed = proof_to_bytes(&proof);
+        assert_eq!(compressed.len(), 192);
+
+        // Uncompressed components: G1(96) + G2(192) + G1(96) = 384
+        let (a, b, c) = proof_to_uncompressed_components(&proof);
+        assert_eq!(a.len(), 96, "proof_a (G1 uncompressed) must be 96 bytes");
+        assert_eq!(b.len(), 192, "proof_b (G2 uncompressed) must be 192 bytes");
+        assert_eq!(c.len(), 96, "proof_c (G1 uncompressed) must be 96 bytes");
+    }
+
+    #[test]
+    fn test_proof_compressed_to_uncompressed_roundtrip() {
+        use ark_serialize::CanonicalDeserialize;
+        use ark_bls12_381::{G1Affine, G2Affine};
+
+        let mut rng = test_rng();
+        let setup_result = setup(5, &mut rng).expect("Setup failed");
+
+        let input = make_prover_input(&[Fr::from(42u64)], 0, 0, [0x11; 32], 5);
+        let (proof, public_inputs) = prove(&setup_result.proving_key, &input, &mut rng).unwrap();
+
+        // Decompress → re-parse each component as a valid curve point
+        let (a_bytes, b_bytes, c_bytes) = proof_to_uncompressed_components(&proof);
+
+        let a = G1Affine::deserialize_uncompressed(&a_bytes[..])
+            .expect("proof_a must deserialize as a valid G1 point");
+        let b = G2Affine::deserialize_uncompressed(&b_bytes[..])
+            .expect("proof_b must deserialize as a valid G2 point");
+        let c = G1Affine::deserialize_uncompressed(&c_bytes[..])
+            .expect("proof_c must deserialize as a valid G1 point");
+
+        // Reconstruct a Proof from the uncompressed components and verify
+        let reconstructed = ark_groth16::Proof::<Bls12_381> { a, b, c };
+        let valid = verify(&setup_result.prepared_vk, &reconstructed, &public_inputs).unwrap();
+        assert!(valid, "Proof reconstructed from uncompressed components must verify");
     }
 
     #[test]

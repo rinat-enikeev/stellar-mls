@@ -4,7 +4,6 @@ import PackageDescription
 let package = Package(
     name: "SwiftMLS",
     platforms: [
-        .iOS(.v15),
         .macOS(.v13)
     ],
     products: [

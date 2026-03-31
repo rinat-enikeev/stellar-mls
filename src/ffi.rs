@@ -286,6 +286,25 @@ pub extern "C" fn sep_nostr_sign_event_id(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn sep_proof_to_contract_format(
+    compressed_proof_ptr: *const u8,
+    compressed_proof_len: usize,
+    out_proof_a: *mut SepByteBuffer,
+    out_proof_b: *mut SepByteBuffer,
+    out_proof_c: *mut SepByteBuffer,
+    out_error: *mut *mut c_char,
+) -> bool {
+    run_ffi(out_error, || {
+        let compressed = read_bytes(compressed_proof_ptr, compressed_proof_len, "compressed proof")?;
+        let proof = prover::proof_from_bytes(compressed).map_err(|e| e.to_string())?;
+        let (a, b, c) = prover::proof_to_uncompressed_components(&proof);
+        write_buffer(out_proof_a, a)?;
+        write_buffer(out_proof_b, b)?;
+        write_buffer(out_proof_c, c)
+    })
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn sep_compute_sha256_commitment(
     poseidon_root_ptr: *const u8,
     poseidon_root_len: usize,

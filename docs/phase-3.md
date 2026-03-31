@@ -65,36 +65,41 @@ Each VK contains:
 
 These are the same keys produced by Phase 2. They never change.
 
-### `create_group(group_id, commitment, tier, proof)`
+### `create_group(group_id, commitment, tier, proof, public_inputs)`
 
 Creates a new group at epoch 0.
 
 1. Checks the group doesn't already exist
-2. Verifies the Groth16 proof against `(commitment, epoch=0)`
-3. Stores the initial state
-4. Emits a `GroupCreated` event
+2. Validates that `public_inputs.commitment == commitment` and `public_inputs.epoch == 0`
+3. Verifies the Groth16 proof against the public inputs
+4. Stores the initial state
+5. Emits a `GroupCreated` event
 
 The proof proves: "I know a secret key whose hash is a leaf in the Merkle tree that produced this commitment at epoch 0."
 
-### `update_commitment(group_id, new_commitment, proof)`
+The `public_inputs` parameter carries `{ commitment, epoch }` — the contract verifies these match on-chain state before passing them to the pairing check.
+
+### `update_commitment(group_id, new_commitment, new_epoch, proof, public_inputs)`
 
 Advances the group to the next epoch.
 
 1. Loads the current state `(commitment, epoch)`
-2. Verifies the proof against the **current** state (not the new one!)
-3. Archives the current state to history
-4. Stores the new commitment at `epoch + 1`
-5. Emits a `CommitmentUpdated` event
+2. Validates `new_epoch == current epoch + 1`
+3. Validates `public_inputs` matches the **current** state (not the new one!)
+4. Verifies the proof against the current-state public inputs
+5. Archives the current state to history
+6. Stores the new commitment at `new_epoch`
+7. Emits a `CommitmentUpdated` event
 
 **Why verify against the current state?** This ensures the updater is a member *before* the change. Otherwise anyone could submit a new commitment without proving membership.
 
-### `verify_membership(group_id, proof) → bool`
+### `verify_membership(group_id, proof, public_inputs) → bool`
 
 Read-only. Checks if the proof is valid for the group's current state.
 
-Doesn't modify anything — useful for other contracts or off-chain queries to verify someone is a group member without learning who they are.
+The contract validates `public_inputs` against stored state before running the pairing check. Doesn't modify anything — useful for other contracts or off-chain queries to verify someone is a group member without learning who they are.
 
-### `deactivate_group(group_id, proof)`
+### `deactivate_group(group_id, proof, public_inputs)`
 
 Freezes the group permanently. Requires a membership proof (only a member can deactivate).
 
@@ -107,9 +112,9 @@ After deactivation:
 
 Returns the current group state.
 
-### `get_history(group_id) → Vec<CommitmentEntry>`
+### `get_history(group_id, max_entries) → Vec<CommitmentEntry>`
 
-Returns up to 64 most recent historical entries. Full history is available via contract events.
+Returns up to `max_entries` most recent historical entries (capped at available history). Full history is available via contract events.
 
 ---
 
@@ -240,6 +245,8 @@ No member identity appears in any event.
 | 7 | InvalidProof | Groth16 proof failed verification |
 | 8 | InvalidTier | Tier must be 0, 1, or 2 |
 | 9 | InvalidVkLength | VK must have exactly 3 IC points |
+| 10 | PublicInputsMismatch | Caller-supplied public_inputs don't match on-chain state |
+| 11 | InvalidEpoch | new_epoch ≠ current epoch + 1 |
 
 ---
 

@@ -53,6 +53,15 @@ bool sep_nostr_sign_event_id(
     char **out_error
 );
 
+bool sep_proof_to_contract_format(
+    const uint8_t *compressed_proof_ptr,
+    size_t compressed_proof_len,
+    sep_byte_buffer_t *out_proof_a,
+    sep_byte_buffer_t *out_proof_b,
+    sep_byte_buffer_t *out_proof_c,
+    char **out_error
+);
+
 bool sep_compute_sha256_commitment(
     const uint8_t *poseidon_root_ptr,
     size_t poseidon_root_len,

@@ -77,6 +77,37 @@ enum RustBridge {
         }
     }
 
+    static func proofToContractFormat(compressedProof: Data) throws -> SEPContractProofComponents {
+        var proofABuffer = sep_byte_buffer_t(ptr: nil, len: 0)
+        var proofBBuffer = sep_byte_buffer_t(ptr: nil, len: 0)
+        var proofCBuffer = sep_byte_buffer_t(ptr: nil, len: 0)
+        var rawError: UnsafeMutablePointer<CChar>?
+
+        let success = compressedProof.withUnsafeBytes { proofBytes in
+            sep_proof_to_contract_format(
+                proofBytes.bindMemory(to: UInt8.self).baseAddress,
+                compressedProof.count,
+                &proofABuffer,
+                &proofBBuffer,
+                &proofCBuffer,
+                &rawError
+            )
+        }
+
+        if !success {
+            if proofABuffer.ptr != nil { sep_byte_buffer_free(proofABuffer) }
+            if proofBBuffer.ptr != nil { sep_byte_buffer_free(proofBBuffer) }
+            if proofCBuffer.ptr != nil { sep_byte_buffer_free(proofCBuffer) }
+            throw consumeRustError(rawError)
+        }
+
+        return SEPContractProofComponents(
+            proofA: consumeBuffer(proofABuffer),
+            proofB: consumeBuffer(proofBBuffer),
+            proofC: consumeBuffer(proofCBuffer)
+        )
+    }
+
     static func computeSHA256Commitment(poseidonRoot: Data, epoch: UInt64, salt: Data) throws -> Data {
         try validateFieldElement(poseidonRoot)
         try validateSalt(salt)

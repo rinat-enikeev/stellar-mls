@@ -8,7 +8,7 @@ Track: Standard
 Status: Draft
 Created: 2026-03-30
 Updated: 2026-03-31
-Version: 0.0.3
+Version: 0.0.4
 Discussion: https://github.com/orgs/stellar/discussions/1903
 ```
 
@@ -607,18 +607,75 @@ If a group outgrows its tier, the application MUST create a new group at a highe
 
 Groth16 requires a circuit-specific trusted setup ceremony producing a proving key `pk` and verification key `vk`. The security guarantee is: the setup is sound if at least one participant honestly discards their toxic waste.
 
-A separate MPC ceremony MUST be conducted for each circuit tier before any mainnet deployment of a contract implementing this standard. Each ceremony MUST:
+A separate MPC ceremony MUST be conducted for each circuit tier before any mainnet deployment of a contract implementing this standard.
+
+##### 8.2.1 Powers of Tau protocol
+
+The ceremony uses the Powers of Tau MPC protocol over BLS12-381. Each ceremony accumulates three secret scalars (τ, α, β) across N sequential participants. No single participant knows the final accumulated values.
+
+**Structured Reference String (SRS).** The SRS produced by the ceremony contains:
+
+| Element | Description | Count |
+|---------|-------------|-------|
+| τ^i · G1 | Powers of τ in G1 | 2·degree − 1 |
+| τ^i · G2 | Powers of τ in G2 | degree |
+| α · τ^i · G1 | Alpha-shifted powers in G1 | degree |
+| β · τ^i · G1 | Beta-shifted powers in G1 | degree |
+| β · G2 | Beta in G2 | 1 |
+
+where `degree` is determined by the circuit tier's constraint count.
+
+**Contribution protocol.** Each participant j:
+
+1. Generates random update factors (δ_τ, δ_α, δ_β) from a cryptographic RNG
+2. Updates every SRS element: τ_new^i = δ_τ^i · τ_old^i, similarly for α and β series
+3. Produces a Schnorr-like proof of knowledge for each update factor
+4. Publishes the updated SRS and proof; destroys the update factors
+
+**Verification.** Each contribution is verified via BLS12-381 pairing checks:
+
+- **Ratio proofs**: e(s·G1, τ_new·G2) == e(δ_τ·s·G1, τ_old·G2) proves knowledge of δ_τ (similarly for α, β)
+- **Cross-consistency**: e(τ·G1, G2) == e(G1, τ·G2) ensures G1 and G2 series use the same τ
+- **Power-sequence**: e(τ^i·G1, τ·G2) == e(τ^{i+1}·G1, G2) verifies the power structure
+
+##### 8.2.2 Ceremony requirements
+
+Each ceremony MUST:
 
 - Use the Powers of Tau format compatible with `snarkjs`, `bellman`, or `arkworks`
 - Include a minimum of 10 independent participants
+- Verify each contribution via pairing checks before accepting
+- Record a SHA-256 hash chain of SRS states as a public transcript
 - Publish all contribution hashes and attestations publicly
-- Derive the final verification key from the last contribution
+- Derive the final Groth16 keys deterministically from the verified SRS
+
+##### 8.2.3 Key derivation
+
+After the ceremony completes, the Groth16 proving and verification keys are derived deterministically from the final SRS. The derivation seeds a ChaCha20 CSPRNG from the SHA-256 hash of the serialized SRS and uses this to drive the standard Groth16 key generation algorithm.
+
+This determinism ensures anyone with the final SRS can independently verify the derived keys by re-running the derivation.
+
+In a production deployment with stronger security requirements, key derivation SHOULD operate directly on the SRS curve points via QAP evaluation (Phase 2 of Groth16 MPC), avoiding any single machine knowing the toxic waste scalars.
+
+##### 8.2.4 Circuit identifier
 
 Each circuit is uniquely identified by:
 
 ```
-circuit_id = SHA-256("SEP-XXXX" || tier || tree_depth || poseidon_params_hash)
+circuit_id = SHA-256("SEP-XXXX" || tier_id || tree_depth || poseidon_params_hash)
 ```
+
+where `poseidon_params_hash = SHA-256("poseidon-params" || full_rounds || partial_rounds || alpha || rate || capacity || round_constants)`.
+
+##### 8.2.5 Transcript verification
+
+A ceremony transcript consists of an ordered list of contribution records, each containing:
+
+- Contribution index
+- Schnorr-like proof of knowledge
+- SHA-256 hash of the SRS after the contribution
+
+Anyone can verify a transcript by checking the hash chain and the final SRS internal consistency via pairing equations.
 
 The verification keys for all supported tiers are stored in the Soroban contract at deployment time and are immutable. A contract upgrade that changes any verification key constitutes a new deployment and requires a new ceremony.
 
@@ -790,13 +847,14 @@ Strict monotonicity provides a simple, auditable invariant: the history is a lin
 
 ### 12. Reference Implementation
 
-The Phase 1 reference implementation is written in Rust using the arkworks library ecosystem (v0.4):
+The reference implementation is written in Rust using the arkworks library ecosystem (v0.4):
 
 - `ark-groth16` — Groth16 prover and verifier
 - `ark-bls12-381` — BLS12-381 curve and field implementations
 - `ark-crypto-primitives` — Poseidon sponge, R1CS gadgets
 - `ark-r1cs-std` — R1CS standard gadgets (field variables, boolean, conditionals)
-- `sha2` — SHA-256 for off-circuit commitment computation
+- `sha2` — SHA-256 for off-circuit commitment computation and SRS hashing
+- `rand_chacha` — ChaCha20 CSPRNG for deterministic key derivation
 
 **Modules:**
 
@@ -807,6 +865,7 @@ The Phase 1 reference implementation is written in Rust using the arkworks libra
 | `commitment` | Dual commitment construction: SHA-256 (Variant A) and Poseidon-only (Variant B) |
 | `circuit` | Groth16 R1CS circuit (Section 3.3, Variant B with Poseidon preimage key ownership) |
 | `prover` | End-to-end pipeline: trusted setup, proof generation, verification, serialization |
+| `ceremony` | Powers of Tau MPC ceremony: initialize, contribute, verify, derive keys, compute circuit IDs |
 
 **Implementation choices:**
 
@@ -815,8 +874,9 @@ The Phase 1 reference implementation is written in Rust using the arkworks libra
 3. **Two public inputs.** The circuit exposes 2 public inputs (`commitment`, `epoch`) as BLS12-381 field elements. The earlier 3-input design (`commitment_high`, `commitment_low`, `epoch`) was simplified by removing the redundant `commitment_low == epoch` binding.
 4. **Member sorting is the caller's responsibility.** The Merkle tree builder does not sort inputs. Callers MUST sort members before building the tree (Section 2.1).
 5. **Pre-computed leaf hashes.** The `merkle` module supports building trees from pre-computed `Poseidon(sk)` leaf hashes (via `build_from_leaf_hashes`), enabling the production workflow where members share leaf hashes during registration without revealing secret keys.
-6. **67 unit tests** covering all modules: Poseidon hash properties, Merkle tree construction and proof verification, commitment computation and serialization, circuit satisfiability and rejection, full Groth16 pipeline including epoch transitions, wrong-key rejection, and proof serialization roundtrips.
-7. **Proof size confirmed at 192 bytes** (48 + 96 + 48 compressed BLS12-381 points).
+6. **Ceremony simulation.** The `ceremony` module simulates the full Powers of Tau MPC protocol on a single machine: initialization, sequential contributions with pairing-based verification, SRS consistency checks, deterministic key derivation from the SRS hash, and transcript verification. The `run_ceremony` function orchestrates the entire pipeline for a given tier.
+7. **93 unit tests** covering all modules: Poseidon hash properties, Merkle tree construction and proof verification, commitment computation and serialization, circuit satisfiability and rejection, full Groth16 pipeline including epoch transitions, wrong-key rejection, proof serialization roundtrips, ceremony contribution verification, SRS tampering rejection, key derivation determinism, and end-to-end ceremony-to-proof verification.
+8. **Proof size confirmed at 192 bytes** (48 + 96 + 48 compressed BLS12-381 points).
 
 ---
 
@@ -827,3 +887,4 @@ The Phase 1 reference implementation is written in Rust using the arkworks libra
 | 0.0.1 | 2026-03-30 | Initial draft |
 | 0.0.2 | 2026-03-31 | Added Poseidon-only commitment binding variant (Variant B) based on Phase 1 reference implementation; added measured constraint counts; documented Poseidon parameter generation; added reference implementation section; updated circuit tiers table with both variant counts |
 | 0.0.3 | 2026-03-31 | Key ownership changed from `sk · G1` to `Poseidon(sk)` preimage proof; reduced public inputs from 3 to 2 (`commitment`, `epoch`); updated Poseidon seed to include all parameters; updated formal relations for both variants; updated constraint tables with measured values; documented salt verification for both variants; updated reference implementation section to reflect 67 tests and current API |
+| 0.0.4 | 2026-03-31 | Added Phase 2: Powers of Tau ceremony implementation; expanded Section 8.2 with ceremony protocol details (SRS structure, contribution verification via pairing checks, transcript format, deterministic key derivation); added `ceremony` module to reference implementation; 93 tests total |

@@ -24,6 +24,7 @@ pub mod merkle;
 pub mod circuit;
 pub mod commitment;
 pub mod prover;
+pub mod ceremony;
 
 /// Circuit tier definitions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

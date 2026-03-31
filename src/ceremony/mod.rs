@@ -14,6 +14,21 @@
 //!
 //! 4. **Transcript:** A SHA-256 hash chain records each contribution for
 //!    public auditability.
+//!
+//! # Key derivation security
+//!
+//! In this reference implementation, `derive_keys` takes the accumulated
+//! ceremony scalars (τ, α, β) and hashes them into a ChaCha20 seed for
+//! arkworks' standard `circuit_specific_setup`. The seed is **not public**:
+//! it depends on the accumulated toxic waste, which no single ceremony
+//! participant knows (1-of-N trust).
+//!
+//! However, the machine executing `derive_keys` sees the accumulated
+//! scalars and can recover the Groth16 toxic waste. In a production
+//! deployment, key derivation MUST use Phase 2 of Groth16 MPC — the QAP
+//! is evaluated directly on SRS curve points so that no single machine
+//! learns the scalars. This module demonstrates the ceremony protocol;
+//! production deployments need a proper Phase 2 implementation.
 
 use ark_bls12_381::{Bls12_381, Fr, G1Affine, G1Projective, G2Affine, G2Projective};
 use ark_ec::pairing::Pairing;
@@ -82,6 +97,9 @@ pub struct ContributionRecord {
 pub struct CeremonyTranscript {
     /// Ordered list of contribution records.
     pub contributions: Vec<ContributionRecord>,
+    /// Ordered list of SRS snapshots (one per contribution).
+    /// Stored to enable full transcript replay and verification.
+    pub srs_snapshots: Vec<PowersOfTau>,
 }
 
 /// The complete output of a ceremony for one circuit tier.
@@ -187,11 +205,46 @@ pub fn contribute<R: Rng + rand::CryptoRng>(
 ///
 /// Checks that `after` was derived from `before` by a contributor who
 /// knows the update factors proven in `proof`.
+///
+/// Rejects identity (point-at-infinity) proof elements and degenerate SRS.
 pub fn verify_contribution(
     before: &PowersOfTau,
     after: &PowersOfTau,
     proof: &ContributionProof,
 ) -> bool {
+    // ---- Reject identity points in proof elements ----
+    // Without this check, an attacker can submit (0,0) pairs that make
+    // all pairing equations trivially true (e(O,Q) = 1 for all Q).
+    if proof.tau_proof.0.is_zero()
+        || proof.tau_proof.1.is_zero()
+        || proof.alpha_proof.0.is_zero()
+        || proof.alpha_proof.1.is_zero()
+        || proof.beta_proof.0.is_zero()
+        || proof.beta_proof.1.is_zero()
+    {
+        return false;
+    }
+
+    // ---- Reject degenerate SRS (zero update factors) ----
+    // A contributor using δ_τ = 0 would set all higher powers to the
+    // identity, making the SRS useless. Pairing checks with identity
+    // points are vacuously true, so we must reject explicitly.
+    if after.tau_g1.len() < 2
+        || after.tau_g2.len() < 2
+        || after.alpha_tau_g1.len() < 2
+        || after.beta_tau_g1.len() < 2
+    {
+        return false;
+    }
+    if after.tau_g1[1].is_zero()
+        || after.tau_g2[1].is_zero()
+        || after.alpha_tau_g1[0].is_zero()
+        || after.beta_tau_g1[0].is_zero()
+        || after.beta_g2.is_zero()
+    {
+        return false;
+    }
+
     let g1 = G1Affine::generator();
     let g2 = G2Affine::generator();
 
@@ -217,27 +270,41 @@ pub fn verify_contribution(
 
     // 5. Cross-consistency: alpha_tau_g1 uses the same τ as tau_g2.
     //    e(after.αG1[1], G2) == e(after.αG1[0], after.τG2[1])
-    let alpha_cross = after.alpha_tau_g1.len() > 1
-        && Bls12_381::pairing(after.alpha_tau_g1[1], g2)
-            == Bls12_381::pairing(after.alpha_tau_g1[0], after.tau_g2[1]);
+    let alpha_cross = Bls12_381::pairing(after.alpha_tau_g1[1], g2)
+        == Bls12_381::pairing(after.alpha_tau_g1[0], after.tau_g2[1]);
 
     // 6. Cross-consistency: beta_tau_g1 uses the same τ as tau_g2.
-    let beta_cross = after.beta_tau_g1.len() > 1
-        && Bls12_381::pairing(after.beta_tau_g1[1], g2)
-            == Bls12_381::pairing(after.beta_tau_g1[0], after.tau_g2[1]);
+    let beta_cross = Bls12_381::pairing(after.beta_tau_g1[1], g2)
+        == Bls12_381::pairing(after.beta_tau_g1[0], after.tau_g2[1]);
 
     tau_ok && alpha_ok && beta_ok && tau_cross && alpha_cross && beta_cross
 }
 
 /// Verify the internal consistency of an SRS.
 ///
-/// Checks that each series forms a valid power sequence using spot-check
-/// pairing equations.
+/// Checks that EVERY element in each series forms a valid power sequence
+/// via pairing equations. This is O(n) in SRS size.
 pub fn verify_consistency(srs: &PowersOfTau) -> bool {
+    if srs.tau_g1.len() < 2 || srs.tau_g2.len() < 2 {
+        return false;
+    }
+
+    // Reject degenerate SRS: key elements must not be identity
+    if srs.tau_g1[1].is_zero()
+        || srs.tau_g2[1].is_zero()
+        || srs.alpha_tau_g1[0].is_zero()
+        || srs.beta_tau_g1[0].is_zero()
+        || srs.beta_g2.is_zero()
+    {
+        return false;
+    }
+
+    let g1 = G1Affine::generator();
     let g2 = G2Affine::generator();
 
     // τ-powers in G1: e(τ^i · G1, τ · G2) == e(τ^{i+1} · G1, G2)
-    for i in 0..srs.tau_g1.len().min(5) - 1 {
+    // Check ALL elements, not just a spot-check.
+    for i in 0..srs.tau_g1.len() - 1 {
         if Bls12_381::pairing(srs.tau_g1[i], srs.tau_g2[1])
             != Bls12_381::pairing(srs.tau_g1[i + 1], g2)
         {
@@ -246,8 +313,7 @@ pub fn verify_consistency(srs: &PowersOfTau) -> bool {
     }
 
     // τ-powers in G2: e(τ · G1, τ^i · G2) == e(G1, τ^{i+1} · G2)
-    let g1 = G1Affine::generator();
-    for i in 0..srs.tau_g2.len().min(5) - 1 {
+    for i in 0..srs.tau_g2.len() - 1 {
         if Bls12_381::pairing(srs.tau_g1[1], srs.tau_g2[i])
             != Bls12_381::pairing(g1, srs.tau_g2[i + 1])
         {
@@ -256,7 +322,7 @@ pub fn verify_consistency(srs: &PowersOfTau) -> bool {
     }
 
     // α·τ-powers: e(α·τ^i · G1, τ · G2) == e(α·τ^{i+1} · G1, G2)
-    for i in 0..srs.alpha_tau_g1.len().min(5) - 1 {
+    for i in 0..srs.alpha_tau_g1.len() - 1 {
         if Bls12_381::pairing(srs.alpha_tau_g1[i], srs.tau_g2[1])
             != Bls12_381::pairing(srs.alpha_tau_g1[i + 1], g2)
         {
@@ -265,7 +331,7 @@ pub fn verify_consistency(srs: &PowersOfTau) -> bool {
     }
 
     // β·τ-powers: same structure
-    for i in 0..srs.beta_tau_g1.len().min(5) - 1 {
+    for i in 0..srs.beta_tau_g1.len() - 1 {
         if Bls12_381::pairing(srs.beta_tau_g1[i], srs.tau_g2[1])
             != Bls12_381::pairing(srs.beta_tau_g1[i + 1], g2)
         {
@@ -286,21 +352,26 @@ pub fn verify_consistency(srs: &PowersOfTau) -> bool {
 /// Compute the SHA-256 hash of an SRS state.
 pub fn hash_srs(srs: &PowersOfTau) -> [u8; 32] {
     let mut hasher = Sha256::new();
+    // Include vector lengths for unambiguous encoding
+    hasher.update((srs.tau_g1.len() as u64).to_le_bytes());
     for p in &srs.tau_g1 {
         let mut buf = Vec::new();
         p.serialize_compressed(&mut buf).unwrap();
         hasher.update(&buf);
     }
+    hasher.update((srs.tau_g2.len() as u64).to_le_bytes());
     for p in &srs.tau_g2 {
         let mut buf = Vec::new();
         p.serialize_compressed(&mut buf).unwrap();
         hasher.update(&buf);
     }
+    hasher.update((srs.alpha_tau_g1.len() as u64).to_le_bytes());
     for p in &srs.alpha_tau_g1 {
         let mut buf = Vec::new();
         p.serialize_compressed(&mut buf).unwrap();
         hasher.update(&buf);
     }
+    hasher.update((srs.beta_tau_g1.len() as u64).to_le_bytes());
     for p in &srs.beta_tau_g1 {
         let mut buf = Vec::new();
         p.serialize_compressed(&mut buf).unwrap();
@@ -321,23 +392,24 @@ pub fn hash_srs(srs: &PowersOfTau) -> [u8; 32] {
 // Key derivation
 // ================================================================
 
-/// Derive Groth16 keys deterministically from the final SRS.
+/// Derive Groth16 keys from accumulated ceremony scalars.
 ///
-/// Seeds a ChaCha20Rng from the SHA-256 hash of the SRS and uses that
-/// to drive arkworks' standard Groth16 `circuit_specific_setup`.
+/// Seeds a ChaCha20 RNG from a hash of the accumulated (τ, α, β) scalars.
+/// The seed is NOT public: it depends on the ceremony's toxic waste, which
+/// no single participant knows under the 1-of-N trust model.
 ///
-/// This is deterministic: anyone with the same SRS can re-derive the
-/// same keys, providing public verifiability.
-///
-/// In a production MPC ceremony, key derivation would operate on the
-/// SRS curve points directly via QAP evaluation (Phase 2 of Groth16 MPC).
-/// This reference implementation uses the seeded-RNG approach instead.
+/// **Limitation:** The machine executing this function sees the accumulated
+/// scalars and can recover the Groth16 toxic waste. In production, key
+/// derivation MUST use Phase 2 of Groth16 MPC (QAP evaluation on SRS
+/// curve points) so that no single machine learns the scalars.
 pub fn derive_keys(
     depth: usize,
-    srs: &PowersOfTau,
+    acc_tau: Fr,
+    acc_alpha: Fr,
+    acc_beta: Fr,
 ) -> Result<SetupResult, Box<dyn std::error::Error>> {
     let circuit = MembershipCircuit::<Fr>::empty(depth);
-    let seed = hash_srs(srs);
+    let seed = hash_ceremony_scalars(&acc_tau, &acc_alpha, &acc_beta);
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
     let (pk, vk) = Groth16::<Bls12_381>::circuit_specific_setup(circuit, &mut rng)?;
     let pvk = Groth16::<Bls12_381>::process_vk(&vk)?;
@@ -348,19 +420,24 @@ pub fn derive_keys(
     })
 }
 
-/// Verify that derived keys match the SRS by re-deriving them.
-///
-/// Since key derivation is deterministic from the SRS hash, anyone can
-/// verify by running `derive_keys` and comparing the verification key.
-pub fn verify_keys_match_srs(
-    srs: &PowersOfTau,
-    depth: usize,
-    vk: &VerifyingKey<Bls12_381>,
-) -> bool {
-    match derive_keys(depth, srs) {
-        Ok(setup) => setup.verifying_key == *vk,
-        Err(_) => false,
-    }
+/// Hash accumulated ceremony scalars into a 32-byte seed.
+/// Domain-separated to prevent cross-protocol attacks.
+fn hash_ceremony_scalars(tau: &Fr, alpha: &Fr, beta: &Fr) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"SEP-XXXX-ceremony-key-derivation-v1");
+    let mut buf = Vec::new();
+    tau.serialize_compressed(&mut buf).unwrap();
+    hasher.update(&buf);
+    buf.clear();
+    alpha.serialize_compressed(&mut buf).unwrap();
+    hasher.update(&buf);
+    buf.clear();
+    beta.serialize_compressed(&mut buf).unwrap();
+    hasher.update(&buf);
+    let result = hasher.finalize();
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&result);
+    seed
 }
 
 // ================================================================
@@ -406,6 +483,28 @@ pub fn compute_circuit_id(tier: &Tier) -> [u8; 32] {
     id
 }
 
+/// Compute the required SRS degree for a circuit tier.
+///
+/// The degree must be at least the QAP domain size (next power of 2
+/// above the constraint count). We use measured constraint counts
+/// plus headroom.
+pub fn required_degree(tier: &Tier) -> usize {
+    // Measured constraint counts from the reference implementation:
+    //   Small  (depth  5): ~1,910
+    //   Medium (depth  8): ~2,630
+    //   Large  (depth 11): ~3,350
+    //
+    // QAP domain = next power of 2 above constraint count.
+    // Add headroom for arkworks' internal padding.
+    let estimated_constraints = match tier {
+        Tier::Small => 2_048,
+        Tier::Medium => 4_096,
+        Tier::Large => 4_096,
+    };
+    // degree must cover QAP domain size
+    estimated_constraints
+}
+
 // ================================================================
 // Ceremony orchestration
 // ================================================================
@@ -423,17 +522,15 @@ pub fn run_ceremony<R: Rng + rand::CryptoRng>(
 ) -> Result<CeremonyResult, Box<dyn std::error::Error>> {
     assert!(num_participants >= 1, "Need at least 1 participant");
 
-    // Determine SRS degree from circuit tier.
-    // The QAP domain size is the next power of 2 above the constraint count.
-    // For safety, we use a generous upper bound.
-    let degree = tier.max_members() * 2; // Covers constraint count for any tier
+    let degree = required_degree(tier);
 
     // Phase 1: Powers of Tau
-    let (mut srs, init_proof, _tau, _alpha, _beta) =
+    let (srs, init_proof, mut acc_tau, mut acc_alpha, mut acc_beta) =
         initialize(degree, rng);
 
     let mut transcript = CeremonyTranscript {
         contributions: Vec::with_capacity(num_participants),
+        srs_snapshots: Vec::with_capacity(num_participants),
     };
 
     // Record the initial contribution
@@ -442,40 +539,48 @@ pub fn run_ceremony<R: Rng + rand::CryptoRng>(
         proof: init_proof,
         srs_hash: hash_srs(&srs),
     });
+    transcript.srs_snapshots.push(srs.clone());
+
+    let mut current_srs = srs;
 
     // Subsequent contributions
     for i in 1..num_participants {
-        let prev_srs = srs.clone();
-        let (new_srs, proof, _dt, _da, _db) = contribute(&srs, rng);
+        let (new_srs, proof, dt, da, db) = contribute(&current_srs, rng);
 
         // Verify this contribution
         assert!(
-            verify_contribution(&prev_srs, &new_srs, &proof),
+            verify_contribution(&current_srs, &new_srs, &proof),
             "Contribution {} failed verification",
             i
         );
 
-        srs = new_srs;
+        // Accumulate scalars (simulation only — in production no one knows these)
+        acc_tau *= dt;
+        acc_alpha *= da;
+        acc_beta *= db;
+
+        current_srs = new_srs;
         transcript.contributions.push(ContributionRecord {
             index: i,
             proof,
-            srs_hash: hash_srs(&srs),
+            srs_hash: hash_srs(&current_srs),
         });
+        transcript.srs_snapshots.push(current_srs.clone());
     }
 
     // Verify final SRS consistency
     assert!(
-        verify_consistency(&srs),
+        verify_consistency(&current_srs),
         "Final SRS failed consistency check"
     );
 
-    // Phase 2: Key derivation (deterministic from SRS hash)
-    let setup = derive_keys(tier.depth(), &srs)?;
+    // Phase 2: Key derivation from accumulated ceremony scalars
+    let setup = derive_keys(tier.depth(), acc_tau, acc_alpha, acc_beta)?;
 
     let circuit_id = compute_circuit_id(tier);
 
     Ok(CeremonyResult {
-        srs,
+        srs: current_srs,
         transcript,
         proving_key: setup.proving_key,
         verifying_key: setup.verifying_key,
@@ -484,21 +589,48 @@ pub fn run_ceremony<R: Rng + rand::CryptoRng>(
     })
 }
 
-/// Verify an entire ceremony transcript against an SRS.
+/// Verify an entire ceremony transcript.
 ///
-/// Re-checks the hash chain and the final SRS consistency.
+/// Replays every contribution, checking:
+/// 1. Each contribution proof against the before/after SRS pair
+/// 2. Each SRS hash matches the recorded hash
+/// 3. The final SRS passes full consistency verification
 pub fn verify_transcript(transcript: &CeremonyTranscript, final_srs: &PowersOfTau) -> bool {
-    if transcript.contributions.is_empty() {
+    if transcript.contributions.is_empty() || transcript.srs_snapshots.is_empty() {
+        return false;
+    }
+    if transcript.contributions.len() != transcript.srs_snapshots.len() {
         return false;
     }
 
-    // Check the last record's hash matches the final SRS
-    let last = transcript.contributions.last().unwrap();
-    if last.srs_hash != hash_srs(final_srs) {
+    // Verify each SRS hash matches the recorded hash
+    for (record, snapshot) in transcript
+        .contributions
+        .iter()
+        .zip(transcript.srs_snapshots.iter())
+    {
+        if record.srs_hash != hash_srs(snapshot) {
+            return false;
+        }
+    }
+
+    // Verify each contribution proof (starting from contribution 1)
+    for i in 1..transcript.contributions.len() {
+        let before = &transcript.srs_snapshots[i - 1];
+        let after = &transcript.srs_snapshots[i];
+        let proof = &transcript.contributions[i].proof;
+        if !verify_contribution(before, after, proof) {
+            return false;
+        }
+    }
+
+    // Verify the last snapshot matches the provided final SRS
+    let last_snapshot = transcript.srs_snapshots.last().unwrap();
+    if hash_srs(last_snapshot) != hash_srs(final_srs) {
         return false;
     }
 
-    // Verify final SRS internal consistency
+    // Verify final SRS internal consistency (full check)
     verify_consistency(final_srs)
 }
 
@@ -564,7 +696,7 @@ fn update_powers_g1(old: &[G1Affine], base_scalar: &Fr, coeff: &Fr) -> Vec<G1Aff
         .collect()
 }
 
-/// Update a G2 power series: new[i] = base_scalar^i · old[i].
+/// Update a G2 power series: new[i] = coeff · base_scalar^i · old[i].
 fn update_powers_g2(old: &[G2Affine], base_scalar: &Fr, coeff: &Fr) -> Vec<G2Affine> {
     let mut pow = Fr::one();
     old.iter()
@@ -611,7 +743,6 @@ fn make_contribution_proof<R: Rng + rand::CryptoRng>(
     }
 }
 
-
 // ================================================================
 // Tests
 // ================================================================
@@ -633,12 +764,13 @@ mod tests {
     #[test]
     fn test_initialize_and_verify_consistency() {
         let mut rng = test_rng();
-        let (srs, _proof, _tau, _alpha, _beta) = initialize(32, &mut rng);
+        let degree = 32;
+        let (srs, _proof, _tau, _alpha, _beta) = initialize(degree, &mut rng);
 
-        assert_eq!(srs.tau_g1.len(), 63); // 2*32 - 1
-        assert_eq!(srs.tau_g2.len(), 32);
-        assert_eq!(srs.alpha_tau_g1.len(), 32);
-        assert_eq!(srs.beta_tau_g1.len(), 32);
+        assert_eq!(srs.tau_g1.len(), 2 * degree - 1);
+        assert_eq!(srs.tau_g2.len(), degree);
+        assert_eq!(srs.alpha_tau_g1.len(), degree);
+        assert_eq!(srs.beta_tau_g1.len(), degree);
 
         assert!(verify_consistency(&srs), "Initial SRS must be consistent");
     }
@@ -737,6 +869,42 @@ mod tests {
     }
 
     #[test]
+    fn test_zero_proof_rejected() {
+        let mut rng = test_rng();
+        let (srs, _proof, _t, _a, _b) = initialize(32, &mut rng);
+
+        let (new_srs, _proof, _dt, _da, _db) = contribute(&srs, &mut rng);
+
+        // Forge a proof with identity (zero) points — this would trivially
+        // satisfy all pairing checks without the explicit rejection.
+        let zero_proof = ContributionProof {
+            tau_proof: (G1Affine::zero(), G1Affine::zero()),
+            alpha_proof: (G2Affine::zero(), G2Affine::zero()),
+            beta_proof: (G1Affine::zero(), G1Affine::zero()),
+        };
+
+        assert!(
+            !verify_contribution(&srs, &new_srs, &zero_proof),
+            "Zero-point proof must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_degenerate_srs_rejected() {
+        let mut rng = test_rng();
+        let (srs, _proof, _t, _a, _b) = initialize(32, &mut rng);
+
+        // Create a valid contribution, then make it degenerate by zeroing tau_g1[1]
+        let (mut degen_srs, proof, _dt, _da, _db) = contribute(&srs, &mut rng);
+        degen_srs.tau_g1[1] = G1Affine::zero();
+
+        assert!(
+            !verify_contribution(&srs, &degen_srs, &proof),
+            "Degenerate SRS (zero tau_g1[1]) must be rejected"
+        );
+    }
+
+    #[test]
     fn test_srs_hash_deterministic() {
         let mut rng = test_rng();
         let (srs, _proof, _t, _a, _b) = initialize(32, &mut rng);
@@ -762,31 +930,37 @@ mod tests {
 
     #[test]
     fn test_derive_keys_deterministic() {
-        // Deriving keys from the same SRS must produce identical results.
+        // Deriving keys from the same scalars must produce identical results.
         let mut rng = test_rng();
-        let (srs, _proof, _t, _a, _b) = initialize(64, &mut rng);
+        let tau = Fr::rand(&mut rng);
+        let alpha = Fr::rand(&mut rng);
+        let beta = Fr::rand(&mut rng);
 
-        let setup1 = derive_keys(5, &srs).expect("Key derivation 1 failed");
-        let setup2 = derive_keys(5, &srs).expect("Key derivation 2 failed");
+        let setup1 = derive_keys(5, tau, alpha, beta).expect("Key derivation 1 failed");
+        let setup2 = derive_keys(5, tau, alpha, beta).expect("Key derivation 2 failed");
 
         assert_eq!(
             setup1.verifying_key, setup2.verifying_key,
-            "Same SRS must produce same VK"
+            "Same scalars must produce same VK"
         );
     }
 
     #[test]
-    fn test_derive_keys_different_srs_different_keys() {
+    fn test_derive_keys_different_scalars_different_keys() {
         let mut rng = test_rng();
-        let (srs1, _proof, _t, _a, _b) = initialize(64, &mut rng);
-        let (srs2, _proof, _t, _a, _b) = initialize(64, &mut rng);
+        let tau1 = Fr::rand(&mut rng);
+        let alpha1 = Fr::rand(&mut rng);
+        let beta1 = Fr::rand(&mut rng);
+        let tau2 = Fr::rand(&mut rng);
+        let alpha2 = Fr::rand(&mut rng);
+        let beta2 = Fr::rand(&mut rng);
 
-        let setup1 = derive_keys(5, &srs1).expect("Key derivation 1 failed");
-        let setup2 = derive_keys(5, &srs2).expect("Key derivation 2 failed");
+        let setup1 = derive_keys(5, tau1, alpha1, beta1).expect("Key derivation 1 failed");
+        let setup2 = derive_keys(5, tau2, alpha2, beta2).expect("Key derivation 2 failed");
 
         assert_ne!(
             setup1.verifying_key, setup2.verifying_key,
-            "Different SRS must produce different VK"
+            "Different scalars must produce different VK"
         );
     }
 
@@ -795,14 +969,20 @@ mod tests {
         let mut rng = test_rng();
 
         // Run a small ceremony (3 participants)
-        let (mut srs, _proof, _t, _a, _b) = initialize(64, &mut rng);
+        let degree = 64;
+        let (mut srs, _proof, mut acc_tau, mut acc_alpha, mut acc_beta) =
+            initialize(degree, &mut rng);
 
         for _ in 0..2 {
-            let (new_srs, _proof, _dt, _da, _db) = contribute(&srs, &mut rng);
+            let (new_srs, _proof, dt, da, db) = contribute(&srs, &mut rng);
+            acc_tau *= dt;
+            acc_alpha *= da;
+            acc_beta *= db;
             srs = new_srs;
         }
 
-        let setup = derive_keys(5, &srs).expect("Key derivation failed");
+        let setup = derive_keys(5, acc_tau, acc_alpha, acc_beta)
+            .expect("Key derivation failed");
 
         // Use the ceremony-derived keys for a real proof
         let config = poseidon_config::<Fr>();
@@ -858,6 +1038,7 @@ mod tests {
             .expect("Ceremony failed");
 
         assert_eq!(result.transcript.contributions.len(), 3);
+        assert_eq!(result.transcript.srs_snapshots.len(), 3);
         assert!(verify_consistency(&result.srs));
         assert!(verify_transcript(&result.transcript, &result.srs));
 
@@ -886,7 +1067,7 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_transcript() {
+    fn test_verify_transcript_full_replay() {
         let mut rng = test_rng();
         let result = run_ceremony(&Tier::Small, 3, &mut rng).expect("Ceremony failed");
 
@@ -899,14 +1080,26 @@ mod tests {
     }
 
     #[test]
-    fn test_keys_match_srs() {
+    fn test_verify_transcript_rejects_tampered_intermediate() {
         let mut rng = test_rng();
         let result = run_ceremony(&Tier::Small, 3, &mut rng).expect("Ceremony failed");
 
-        assert!(verify_keys_match_srs(
-            &result.srs,
-            Tier::Small.depth(),
-            &result.verifying_key
-        ));
+        // Tamper with an intermediate SRS snapshot
+        let mut bad_transcript = result.transcript.clone();
+        bad_transcript.srs_snapshots[1].tau_g1[1] =
+            (G1Projective::generator() * Fr::from(7777u64)).into_affine();
+
+        assert!(
+            !verify_transcript(&bad_transcript, &result.srs),
+            "Tampered intermediate snapshot must fail transcript verification"
+        );
+    }
+
+    #[test]
+    fn test_required_degree() {
+        // Verify degree is sufficient for each tier's constraint count
+        assert!(required_degree(&Tier::Small) >= 2048);
+        assert!(required_degree(&Tier::Medium) >= 4096);
+        assert!(required_degree(&Tier::Large) >= 4096);
     }
 }

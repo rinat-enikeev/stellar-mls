@@ -408,6 +408,14 @@ pub fn verify_consistency(srs: &PowersOfTau) -> bool {
         return false;
     }
 
+    // Cross-check: β consistent between G1 and G2
+    // e(β·G1, G2) == e(G1, β·G2)
+    if Bls12_381::pairing(srs.beta_tau_g1[0], g2)
+        != Bls12_381::pairing(g1, srs.beta_g2)
+    {
+        return false;
+    }
+
     true
 }
 
@@ -1164,6 +1172,25 @@ mod tests {
         assert!(
             !verify_transcript(&bad_transcript, &result.srs),
             "Tampered intermediate snapshot must fail transcript verification"
+        );
+    }
+
+    #[test]
+    fn test_beta_g1_g2_desync_rejected() {
+        let mut rng = test_rng();
+        let (srs, _proof, _t, _a, _b) = initialize(32, &mut rng);
+
+        let (mut bad_srs, _proof, _dt, _da, _db) = contribute(&srs, &mut rng);
+
+        // Desync: apply a different factor to beta_g2 than was used for beta_tau_g1
+        bad_srs.beta_g2 = (G2Projective::generator() * Fr::from(9999u64)).into_affine();
+
+        // verify_contribution calls verify_consistency implicitly via the
+        // degenerate checks, but the β cross-check is in verify_consistency.
+        // The contribution check itself may pass, but consistency must fail.
+        assert!(
+            !verify_consistency(&bad_srs),
+            "β desync between G1 and G2 must fail consistency check"
         );
     }
 

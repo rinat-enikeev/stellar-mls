@@ -3,7 +3,7 @@ name = "sep-xxxx-contract"
 version = "0.1.0"
 edition = "2021"
 description = "Soroban smart contract for SEP-XXXX: Private Group Membership Registry"
-license = "Apache-2.0"
+license = "MIT"
 publish = false
 
 [lib]

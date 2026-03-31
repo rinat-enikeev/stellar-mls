@@ -3,7 +3,7 @@ name = "sep-xxxx-circuits"
 version = "0.1.0"
 edition = "2021"
 description = "Groth16 circuits for SEP-XXXX: Private Group Membership Registry with Zero-Knowledge Proof"
-license = "Apache-2.0"
+license = "MIT"
 
 [lib]
 crate-type = ["rlib", "staticlib"]

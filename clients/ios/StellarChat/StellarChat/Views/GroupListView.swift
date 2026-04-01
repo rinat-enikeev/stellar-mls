@@ -41,7 +41,8 @@ struct GroupListView: View {
                     viewModel: ChatViewModel(
                         group: group,
                         transport: NostrMessageTransport(),
-                        keyManager: appState.keyManager
+                        keyManager: appState.keyManager,
+                        store: appState.store
                     )
                 )
             }

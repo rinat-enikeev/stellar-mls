@@ -17,6 +17,7 @@ struct StellarChatApp: App {
 final class AppState {
     var keyManager: KeyManager
     var groups: [ChatGroup] = []
+    let store: PersistenceStore
     var relayURLs: [URL] = [
         URL(string: "wss://relay.damus.io")!,
         URL(string: "wss://nos.lol")!,
@@ -24,17 +25,18 @@ final class AppState {
 
     init() {
         self.keyManager = KeyManager()
-        self.groups = PersistenceStore.loadGroups()
+        self.store = try! PersistenceStore()
+        self.groups = store.loadGroups()
     }
 
     func addGroup(_ group: ChatGroup) {
         groups.append(group)
-        PersistenceStore.saveGroups(groups)
+        store.saveGroup(group)
     }
 
     func removeGroup(id: String) {
         groups.removeAll { $0.id == id }
-        PersistenceStore.saveGroups(groups)
+        store.deleteGroup(id: id)
     }
 
     /// Create a group with the local user as the first member, computing the initial commitment.

@@ -9,15 +9,17 @@ final class ChatViewModel {
     var errorMessage: String?
     private let transport: NostrMessageTransport
     private let keyManager: KeyManager
+    private let store: PersistenceStore
     private var seenIDs: Set<String> = []
 
-    init(group: ChatGroup, transport: NostrMessageTransport, keyManager: KeyManager) {
+    init(group: ChatGroup, transport: NostrMessageTransport, keyManager: KeyManager, store: PersistenceStore) {
         self.group = group
         self.transport = transport
         self.keyManager = keyManager
+        self.store = store
 
         // Load persisted messages
-        let persisted = PersistenceStore.loadMessages(groupID: group.id)
+        let persisted = store.loadMessages(groupID: group.id)
         self.messages = persisted
         self.seenIDs = Set(persisted.map(\.id))
 
@@ -36,7 +38,7 @@ final class ChatViewModel {
                     self.seenIDs.insert(msg.id)
                     self.messages.append(msg)
                     self.messages.sort { $0.timestamp < $1.timestamp }
-                    self.persistMessages()
+                    self.store.saveMessage(msg)
                 }
             }
         }
@@ -80,7 +82,7 @@ final class ChatViewModel {
             messages.append(msg)
             seenIDs.insert(msg.id)
             inputText = ""
-            persistMessages()
+            store.saveMessage(msg)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -92,9 +94,5 @@ final class ChatViewModel {
 
     func dismissError() {
         errorMessage = nil
-    }
-
-    private func persistMessages() {
-        PersistenceStore.saveMessages(messages, groupID: group.id)
     }
 }

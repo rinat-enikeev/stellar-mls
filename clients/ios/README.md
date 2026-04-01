@@ -89,8 +89,10 @@ StellarChat/
     │   ├── KeyManager.swift      # Dual-key Keychain storage, Rust-backed signing
     │   ├── KeyAttestation.swift  # BLS ↔ Nostr key binding (SEP-XXXX §1.1)
     │   ├── ChatGroup.swift       # Group model, SEP membership, InviteCode
-    │   ├── GroupCrypto.swift     # AES-256-GCM, HKDF, topic derivation
-    │   └── PersistenceStore.swift # JSON file persistence for groups + messages
+    │   ├── GroupCrypto.swift       # AES-256-GCM, HKDF, topic derivation
+    │   ├── StorageEncryption.swift # HKDF-derived AES-256-GCM field encryption
+    │   ├── PersistedModels.swift   # SwiftData @Model classes (encrypted fields)
+    │   └── PersistenceStore.swift  # SwiftData store with FileProtectionType.complete
     ├── Nostr/
     │   ├── NostrEvent.swift      # NIP-01 event builder with Schnorr signing
     │   ├── NostrRelayConnection.swift  # WebSocket relay (actor)
@@ -132,8 +134,9 @@ StellarChat/
 | Member sorting by compressed G1 key in `addMember()` | SEP-XXXX §2.1 | Implemented |
 | Independent secp256k1 and BLS12-381 keypairs | SEP-XXXX §1.1 | Implemented |
 | Key attestation (Schnorr binding of BLS to Nostr key) | SEP-XXXX §1.1 | Implemented |
-| Message persistence (JSON file store) | App-level | Implemented |
-| Group persistence across app restarts | App-level | Implemented |
+| Message persistence (SwiftData + field-level AES-256-GCM) | App-level | Implemented |
+| Group persistence (SwiftData + field-level AES-256-GCM) | App-level | Implemented |
+| At-rest file protection (`FileProtectionType.complete`) | App-level | Implemented |
 | Error surfacing (encryption, relay, decryption failures) | App-level | Implemented |
 
 ### What's Not Yet Implemented
@@ -172,7 +175,7 @@ This app is wire-compatible with the Android StellarChat app. Both use identical
 
 ### Phase 1: Core Improvements (completed)
 
-- ~~**Message persistence**: JSON file store for messages and groups~~
+- ~~**Message persistence**: SwiftData with field-level AES-256-GCM encryption + `FileProtectionType.complete`~~
 - ~~**Member sorting**: Sort by compressed G1 public key per SEP-XXXX §2.1~~
 - ~~**Separate key derivation**: Independent secp256k1 and BLS12-381 keypairs with `KeyAttestation`~~
 - ~~**Error handling**: Errors surfaced as alerts in ChatView, relay publish failures reported~~

@@ -45,7 +45,7 @@ final class InvitationTransport {
             for (_, conn) in self.connections {
                 let filter: [String: Any] = [
                     "kinds": [24113],
-                    "#sep_inbox": [inboxTag],
+                    "#d": ["sep-inbox:" + inboxTag],
                 ]
                 let stream = await conn.subscribe(subscriptionID: subID, filter: filter)
                 for await event in stream {
@@ -76,12 +76,8 @@ final class InvitationTransport {
             recipientPublicKey: recipientKeyAgreementPubkey
         )
 
-        // N-13: Custom tags used for invitation routing. These require relay support
-        // for custom tag indexing. Relays that only index standard NIP tags (t, p, e)
-        // will accept these events but may not return them in filter queries.
-        // Ensure configured relays support custom tag filtering for reliable delivery.
         let tags: [[String]] = [
-            ["sep_inbox", recipientInboxTag],
+            ["d", "sep-inbox:" + recipientInboxTag],
             ["sep_version", "1"],
         ]
 

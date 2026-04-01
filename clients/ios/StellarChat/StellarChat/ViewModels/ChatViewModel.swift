@@ -49,6 +49,10 @@ final class ChatViewModel {
                     self.messages.append(msg)
                     self.messages.sort { $0.timestamp < $1.timestamp }
                     self.store.saveMessage(msg)
+                    // Track latest event for offline catch-up
+                    if event.createdAt > self.group.lastEventTimestamp {
+                        self.appState?.updateLastEventTimestamp(groupID: group.id, timestamp: event.createdAt)
+                    }
                 }
             }
         }
@@ -71,6 +75,10 @@ final class ChatViewModel {
                 let msgType = SEPProtocolMessage.parse(json)
 
                 switch msgType {
+                case SEPMemberJoined.messageType:
+                    if let joined = try? decoder.decode(SEPMemberJoined.self, from: data) {
+                        await appState.handleMemberJoined(joined, groupID: group.id, transport: self.transport, keyManager: self.keyManager)
+                    }
                 case SEPGroupStateUpdate.messageType:
                     if let update = try? decoder.decode(SEPGroupStateUpdate.self, from: data) {
                         appState.applyStateUpdate(update, to: group.id)
@@ -96,6 +104,10 @@ final class ChatViewModel {
                     if let response = try? decoder.decode(SEPSaltResponse.self, from: data) {
                         appState.storeSalt(groupID: group.id, epoch: response.epoch, salt: response.salt)
                     }
+                case SEPGroupRenamed.messageType:
+                    if let renamed = try? decoder.decode(SEPGroupRenamed.self, from: data) {
+                        appState.applyGroupRenamed(renamed, to: group.id)
+                    }
                 default:
                     break
                 }
@@ -115,7 +127,8 @@ final class ChatViewModel {
         transport.subscribe(
             topic: group.topicTag,
             groupID: group.id,
-            key: group.encryptionKey
+            key: group.encryptionKey,
+            sinceTimestamp: group.lastEventTimestamp > 0 ? group.lastEventTimestamp : nil
         )
     }
 

@@ -26,7 +26,9 @@ data class ChatGroup(
     var salt: ByteArray = SEPCommitmentBuilder.generateSalt(),
     var commitment: ByteArray? = null,
     var tier: SEPTier = SEPTier.SMALL,
-    var isPublishedOnChain: Boolean = false
+    var isPublishedOnChain: Boolean = false,
+    /** Unix timestamp of the last received event, used for offline catch-up. */
+    var lastEventTimestamp: Long = 0
 ) {
     /** Group ID as raw bytes (hex string → ByteArray). */
     val groupIDData: ByteArray get() = id.hexToBytes()
@@ -83,16 +85,37 @@ data class InviteCode(
     val groupID: ByteArray,
     val groupSecret: ByteArray,
     val name: String,
-    val relayHints: List<String>
+    val relayHints: List<String>,
+    /** Full group state — required for joiners to share the same encryption key and member list. */
+    val members: List<SEPGroupMemberLeaf>,
+    val epoch: Long,
+    val salt: ByteArray,
+    val commitment: ByteArray?
 ) {
     /** Encode to a Base64 string using the canonical JSON format (base64 for binary fields).
      *  Compatible with iOS Codable serialization of Data fields. */
     fun encode(): String {
+        val membersArray = JSONArray().apply {
+            for (m in members) {
+                put(JSONObject().apply {
+                    put("publicKeyCompressed", android.util.Base64.encodeToString(
+                        m.publicKeyCompressed, android.util.Base64.NO_WRAP))
+                    put("leafHash", android.util.Base64.encodeToString(
+                        m.leafHash, android.util.Base64.NO_WRAP))
+                })
+            }
+        }
         val json = JSONObject().apply {
             put("groupID", android.util.Base64.encodeToString(groupID, android.util.Base64.NO_WRAP))
             put("groupSecret", android.util.Base64.encodeToString(groupSecret, android.util.Base64.NO_WRAP))
             put("name", name)
             put("relayHints", JSONArray(relayHints))
+            put("members", membersArray)
+            put("epoch", epoch)
+            put("salt", android.util.Base64.encodeToString(salt, android.util.Base64.NO_WRAP))
+            if (commitment != null) {
+                put("commitment", android.util.Base64.encodeToString(commitment, android.util.Base64.NO_WRAP))
+            }
         }
         return android.util.Base64.encodeToString(
             json.toString().toByteArray(),
@@ -107,13 +130,37 @@ data class InviteCode(
             )
             val groupIDStr = json.getString("groupID")
             val groupSecretStr = json.getString("groupSecret")
+
+            val members = mutableListOf<SEPGroupMemberLeaf>()
+            val membersArray = json.optJSONArray("members")
+            if (membersArray != null) {
+                for (i in 0 until membersArray.length()) {
+                    val mObj = membersArray.getJSONObject(i)
+                    members.add(SEPGroupMemberLeaf(
+                        publicKeyCompressed = android.util.Base64.decode(
+                            mObj.getString("publicKeyCompressed"), android.util.Base64.NO_WRAP),
+                        leafHash = android.util.Base64.decode(
+                            mObj.getString("leafHash"), android.util.Base64.NO_WRAP)
+                    ))
+                }
+            }
+
+            val saltStr = json.optString("salt", "")
+            val commitmentStr = json.optString("commitment", "")
+
             return InviteCode(
                 groupID = decodeFlexible(groupIDStr),
                 groupSecret = decodeFlexible(groupSecretStr),
                 name = json.getString("name"),
                 relayHints = (0 until json.getJSONArray("relayHints").length()).map {
                     json.getJSONArray("relayHints").getString(it)
-                }
+                },
+                members = members,
+                epoch = json.optLong("epoch", 0),
+                salt = if (saltStr.isNotEmpty()) android.util.Base64.decode(saltStr, android.util.Base64.NO_WRAP)
+                       else SEPCommitmentBuilder.generateSalt(),
+                commitment = if (commitmentStr.isNotEmpty()) android.util.Base64.decode(commitmentStr, android.util.Base64.NO_WRAP)
+                            else null
             )
         }
 

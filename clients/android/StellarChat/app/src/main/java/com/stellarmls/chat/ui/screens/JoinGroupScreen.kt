@@ -2,6 +2,7 @@ package com.stellarmls.chat.ui.screens
 
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,10 +22,15 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.stellarmls.chat.model.ChatGroup
+import com.stellarmls.chat.ui.components.QRScannerView
 import com.stellarmls.chat.viewmodel.JoinGroupViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -35,6 +41,17 @@ fun JoinGroupScreen(
     onGroupJoined: (ChatGroup) -> Unit
 ) {
     val context = LocalContext.current
+    var showScanner by remember { mutableStateOf(false) }
+
+    if (showScanner) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            QRScannerView { scannedCode ->
+                viewModel.inviteText = scannedCode
+                showScanner = false
+            }
+        }
+        return
+    }
 
     Scaffold(
         topBar = {
@@ -80,6 +97,15 @@ fun JoinGroupScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Paste from Clipboard")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = { showScanner = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Scan QR Code")
             }
 
             Spacer(modifier = Modifier.height(16.dp))

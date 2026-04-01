@@ -78,6 +78,8 @@ pub enum Error {
     ProofReplay = 12,
     /// Maximum number of groups for this tier has been reached.
     TierGroupLimitReached = 13,
+    /// Restricted mode: only admin can create groups (N-26).
+    AdminOnly = 14,
 }
 
 // ================================================================
@@ -211,6 +213,8 @@ pub enum DataKey {
     UsedProof(BytesN<32>),
     /// Active group count per tier (instance storage, for M-4 limit enforcement).
     GroupCount(u32),
+    /// When true, only the admin can create new groups (N-26 access control).
+    RestrictedMode,
 }
 
 // ================================================================
@@ -300,6 +304,22 @@ impl SepXxxxContract {
         Ok(())
     }
 
+    /// N-26: Toggle restricted mode. When enabled, only the admin can create groups.
+    pub fn set_restricted_mode(
+        env: Env,
+        restricted: bool,
+    ) -> Result<(), Error> {
+        Self::require_initialized(&env)?;
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::RestrictedMode, &restricted);
+        Ok(())
+    }
+
     /// N-16: Extend the TTL of a group's persistent storage.
     ///
     /// Callable by anyone — prevents inactive groups from silently expiring.
@@ -340,6 +360,23 @@ impl SepXxxxContract {
     ) -> Result<(), Error> {
         Self::require_initialized(&env)?;
         caller.require_auth();
+
+        // N-26: In restricted mode, only the admin can create groups.
+        let restricted: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::RestrictedMode)
+            .unwrap_or(false);
+        if restricted {
+            let admin: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::Admin)
+                .ok_or(Error::NotInitialized)?;
+            if caller != admin {
+                return Err(Error::AdminOnly);
+            }
+        }
 
         if tier > 2 {
             return Err(Error::InvalidTier);

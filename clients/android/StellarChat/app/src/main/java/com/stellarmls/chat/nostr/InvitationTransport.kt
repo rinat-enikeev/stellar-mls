@@ -51,7 +51,7 @@ class InvitationTransport(private val keyManager: KeyManager) {
 
         val filter = JSONObject().apply {
             put("kinds", JSONArray().put(24113))
-            put("#sep_inbox", JSONArray().put(inboxTag))
+            put("#d", JSONArray().put("sep-inbox:$inboxTag"))
         }
 
         for (conn in connections) {
@@ -83,10 +83,8 @@ class InvitationTransport(private val keyManager: KeyManager) {
 
         val recipientInboxTag = GroupCrypto.hiddenInboxTag(recipientKeyAgreementPubkey)
 
-        // N-13: Custom tags used for invitation routing. Requires relay support
-        // for custom tag indexing. See iOS InvitationTransport for matching tags.
         val tags = listOf(
-            listOf("sep_inbox", recipientInboxTag),
+            listOf("d", "sep-inbox:$recipientInboxTag"),
             listOf("sep_version", "1")
         )
 

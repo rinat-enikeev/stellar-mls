@@ -96,6 +96,34 @@ public struct SEPKeyAttestationPayload: Codable, Equatable, Sendable {
     }
 }
 
+/// Broadcast by a new joiner after joining via invite code.
+/// Existing members receive this, add the joiner to their member list,
+/// and respond with a `SEPGroupStateUpdate` containing the updated state.
+public struct SEPMemberJoined: Codable, Equatable, Sendable {
+    public static let messageType = "sep_member_joined"
+
+    public let type: String
+    public let member: SEPGroupMemberLeaf
+
+    public init(member: SEPGroupMemberLeaf) {
+        self.type = Self.messageType
+        self.member = member
+    }
+}
+
+/// Broadcast when a member renames the group.
+public struct SEPGroupRenamed: Codable, Equatable, Sendable {
+    public static let messageType = "sep_group_renamed"
+
+    public let type: String
+    public let name: String
+
+    public init(name: String) {
+        self.type = Self.messageType
+        self.name = name
+    }
+}
+
 // MARK: - Protocol Message Envelope
 
 /// Wrapper for protocol messages sent over the encrypted group channel.

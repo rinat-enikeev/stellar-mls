@@ -23,8 +23,10 @@ import com.stellarmls.chat.onchain.OnChainVerificationResult
 import com.stellarmls.chat.persistence.PersistenceStore
 import com.stellarmls.mls.SEPCommitmentBuilder
 import com.stellarmls.mls.SEPGroupMemberLeaf
+import com.stellarmls.mls.SEPGroupRenamed
 import com.stellarmls.mls.SEPGroupStateUpdate
 import com.stellarmls.mls.SEPKeyAttestationPayload
+import com.stellarmls.mls.SEPMemberJoined
 import com.stellarmls.mls.SEPSaltRequest
 import com.stellarmls.mls.SEPSaltResponse
 import kotlinx.coroutines.Dispatchers
@@ -192,7 +194,11 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 groupID = groupID,
                 groupSecret = groupSecret,
                 name = name,
-                relayHints = group.relayHints
+                relayHints = group.relayHints,
+                members = group.members.toList(),
+                epoch = group.epoch,
+                salt = group.salt,
+                commitment = group.commitment
             )
 
             addGroup(group)
@@ -506,6 +512,60 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /** Handle a member_joined announcement: add the joiner and broadcast updated state. */
+    private fun handleMemberJoined(member: SEPGroupMemberLeaf, groupID: String) {
+        val index = groups.indexOfFirst { it.id == groupID }
+        if (index < 0) return
+        val group = groups[index]
+
+        // Skip if already a member
+        if (group.members.any { it.publicKeyCompressed.contentEquals(member.publicKeyCompressed) }) return
+
+        // Add the joiner
+        group.addMember(member)
+
+        groups[index] = group
+        storeSalt(groupID, group.epoch, group.salt)
+        viewModelScope.launch {
+            try { store.saveGroup(group) } catch (_: Exception) { }
+        }
+
+        // Broadcast state update so all members (including the joiner) converge
+        val update = SEPGroupStateUpdate(
+            epoch = group.epoch,
+            salt = group.salt,
+            addedMembers = listOf(member),
+            commitment = group.commitment
+        )
+        broadcastStateUpdate(group, update)
+    }
+
+    /** Apply a group rename received via protocol message. */
+    private fun applyGroupRenamed(newName: String, groupID: String) {
+        val index = groups.indexOfFirst { it.id == groupID }
+        if (index < 0) return
+        val updated = groups[index].copy(name = newName)
+        groups[index] = updated
+        viewModelScope.launch {
+            try { store.saveGroup(updated) } catch (_: Exception) { }
+        }
+    }
+
+    /** Announce ourselves as a new member to the group over the Nostr transport. */
+    fun announceMemberJoined(group: ChatGroup) {
+        val member = keyManager.memberLeaf()
+        val json = JSONObject().apply {
+            put("type", SEPMemberJoined.MESSAGE_TYPE)
+            put("member", JSONObject().apply {
+                put("publicKeyCompressed", android.util.Base64.encodeToString(
+                    member.publicKeyCompressed, android.util.Base64.NO_WRAP))
+                put("leafHash", android.util.Base64.encodeToString(
+                    member.leafHash, android.util.Base64.NO_WRAP))
+            })
+        }.toString()
+        transport.sendProtocolMessage(group, json)
+    }
+
     /** Set up handler for protocol messages received on the group channel. */
     private fun setupProtocolMessageHandler() {
         transport.onProtocolMessage = { groupID, json, eventID, senderPubkey ->
@@ -521,6 +581,16 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 try {
                     val obj = JSONObject(json)
                     when (obj.optString("type")) {
+                        SEPMemberJoined.MESSAGE_TYPE -> {
+                            val memberObj = obj.getJSONObject("member")
+                            val member = SEPGroupMemberLeaf(
+                                publicKeyCompressed = android.util.Base64.decode(
+                                    memberObj.getString("publicKeyCompressed"), android.util.Base64.NO_WRAP),
+                                leafHash = android.util.Base64.decode(
+                                    memberObj.getString("leafHash"), android.util.Base64.NO_WRAP)
+                            )
+                            handleMemberJoined(member, groupID)
+                        }
                         SEPGroupStateUpdate.MESSAGE_TYPE -> {
                             val update = parseStateUpdate(obj)
                             applyStateUpdate(update, groupID)
@@ -545,6 +615,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                             val saltB64 = obj.getString("salt")
                             val salt = android.util.Base64.decode(saltB64, android.util.Base64.NO_WRAP)
                             storeSalt(groupID, epoch, salt)
+                        }
+                        SEPGroupRenamed.MESSAGE_TYPE -> {
+                            val newName = obj.getString("name")
+                            applyGroupRenamed(newName, groupID)
                         }
                     }
                 } catch (_: Exception) { }

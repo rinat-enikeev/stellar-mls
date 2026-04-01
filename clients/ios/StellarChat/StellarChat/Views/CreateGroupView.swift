@@ -25,6 +25,15 @@ struct CreateGroupView: View {
                 }
 
                 if !inviteCode.isEmpty {
+                    Section("QR Code") {
+                        HStack {
+                            Spacer()
+                            QRCodeView(inviteCode, size: 200)
+                            Spacer()
+                        }
+                        .padding(.vertical, 8)
+                    }
+
                     Section("Invite Code") {
                         Text(inviteCode)
                             .font(.caption)
@@ -43,7 +52,12 @@ struct CreateGroupView: View {
                     }
 
                     Section {
-                        Text("Share this invite code with group members. Anyone with this code can join and read messages.")
+                        let deepLink = "stellarchat://join?code=\(inviteCode)"
+                        ShareLink(item: deepLink) {
+                            Label("Share Invite Link", systemImage: "square.and.arrow.up")
+                        }
+
+                        Text("Share the QR code, invite link, or invite code with group members.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

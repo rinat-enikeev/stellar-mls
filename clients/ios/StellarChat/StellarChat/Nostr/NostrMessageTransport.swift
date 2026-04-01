@@ -41,11 +41,15 @@ final class NostrMessageTransport {
     }
 
     /// Subscribe to messages for a group topic on all connected relays.
-    func subscribe(topic: String, groupID: String, key: SymmetricKey) {
+    /// Subscribe to messages for a group topic on all connected relays.
+    /// - Parameter sinceTimestamp: Unix timestamp for catch-up. Defaults to 5 minutes ago.
+    func subscribe(topic: String, groupID: String, key: SymmetricKey, sinceTimestamp: Int64? = nil) {
         let subID = "chat-\(topic)"
 
         // Cancel existing subscription for this topic
         activeSubscriptions[subID]?.cancel()
+
+        let since = sinceTimestamp ?? (Int64(Date().timeIntervalSince1970) - 300)
 
         let task = Task { [weak self] in
             guard let self else { return }
@@ -53,6 +57,7 @@ final class NostrMessageTransport {
                 let filter: [String: Any] = [
                     "kinds": [24114],
                     "#t": [topic],
+                    "since": since,
                 ]
                 let stream = await conn.subscribe(subscriptionID: subID, filter: filter)
                 for await event in stream {

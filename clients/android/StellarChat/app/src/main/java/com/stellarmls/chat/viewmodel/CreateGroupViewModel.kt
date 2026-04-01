@@ -42,7 +42,11 @@ class CreateGroupViewModel : ViewModel() {
                 groupID = groupID,
                 groupSecret = groupSecret,
                 name = name,
-                relayHints = group.relayHints
+                relayHints = group.relayHints,
+                members = group.members.toList(),
+                epoch = group.epoch,
+                salt = group.salt,
+                commitment = group.commitment
             )
 
             createdGroup = group

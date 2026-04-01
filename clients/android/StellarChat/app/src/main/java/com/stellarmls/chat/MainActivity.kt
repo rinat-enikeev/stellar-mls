@@ -32,17 +32,28 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Handle deep link: stellarchat://join?code=<base64>
+        val deepLinkCode = intent?.data?.getQueryParameter("code")
+
         setContent {
             StellarChatTheme {
-                StellarChatNavHost(groupListViewModel)
+                StellarChatNavHost(groupListViewModel, deepLinkInviteCode = deepLinkCode)
             }
         }
     }
 }
 
 @Composable
-fun StellarChatNavHost(groupListViewModel: GroupListViewModel) {
+fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCode: String? = null) {
     val navController = rememberNavController()
+
+    // Navigate to join screen if deep link contains invite code
+    androidx.compose.runtime.LaunchedEffect(deepLinkInviteCode) {
+        if (deepLinkInviteCode != null) {
+            navController.navigate("join")
+        }
+    }
 
     NavHost(navController = navController, startDestination = "groups") {
         composable("groups") {
@@ -102,11 +113,16 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel) {
 
         composable("join") {
             val joinViewModel: JoinGroupViewModel = viewModel()
+            // Pre-fill from deep link if available
+            if (deepLinkInviteCode != null && joinViewModel.inviteText.isEmpty()) {
+                joinViewModel.inviteText = deepLinkInviteCode
+            }
             JoinGroupScreen(
                 viewModel = joinViewModel,
                 onBack = { navController.popBackStack() },
                 onGroupJoined = { group ->
                     groupListViewModel.addGroup(group)
+                    groupListViewModel.announceMemberJoined(group)
                     navController.popBackStack()
                 }
             )

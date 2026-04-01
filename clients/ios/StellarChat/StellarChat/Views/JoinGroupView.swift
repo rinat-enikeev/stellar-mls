@@ -6,6 +6,7 @@ struct JoinGroupView: View {
     @State private var codeText = ""
     @State private var errorMessage: String?
     @State private var joined = false
+    @State private var showScanner = false
 
     var body: some View {
         NavigationStack {
@@ -20,6 +21,12 @@ struct JoinGroupView: View {
                         if let text = UIPasteboard.general.string {
                             codeText = text
                         }
+                    }
+
+                    Button {
+                        showScanner = true
+                    } label: {
+                        Label("Scan QR Code", systemImage: "qrcode.viewfinder")
                     }
                 }
 
@@ -52,6 +59,12 @@ struct JoinGroupView: View {
                     }
                 }
             }
+            .sheet(isPresented: $showScanner) {
+                QRScannerView { scannedCode in
+                    codeText = scannedCode
+                    showScanner = false
+                }
+            }
         }
     }
 
@@ -67,17 +80,28 @@ struct JoinGroupView: View {
                 return
             }
 
-            let relayURLs = code.relayHints.compactMap(URL.init(string:))
+            let codeRelays = code.relayHints.compactMap(URL.init(string:))
+            // Merge invite code relays with user's relays (union) for maximum overlap
+            let mergedRelays = Array(Set(appState.relayURLs + codeRelays))
 
             let group = ChatGroup(
                 id: groupIDHex,
                 name: code.name,
                 groupSecret: code.groupSecret,
                 createdAt: Date(),
-                relayHints: relayURLs.isEmpty ? appState.relayURLs : relayURLs
+                relayHints: mergedRelays.isEmpty ? appState.relayURLs : mergedRelays,
+                members: code.members,
+                epoch: code.epoch,
+                salt: code.salt,
+                commitment: code.commitment
             )
             appState.addGroup(group)
             joined = true
+
+            // Announce ourselves to existing members so they add us
+            Task {
+                await appState.announceMemberJoined(group: group)
+            }
         } catch {
             errorMessage = error.localizedDescription
         }

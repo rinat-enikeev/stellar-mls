@@ -16,6 +16,8 @@ struct ChatGroup: Identifiable, Codable {
     var commitment: Data?   // latest verified commitment (SHA-256 variant)
     var tier: SEPTier = .small
     var isPublishedOnChain: Bool = false
+    /// Unix timestamp of the last received event, used for offline catch-up.
+    var lastEventTimestamp: Int64 = 0
 
     /// Nostr subscription topic tag for this group.
     /// Derivation (SEP-XXXX §3.1): `topicTag = hex(SHA-256("sep-topic-v1" || groupSecret)[0..8])`
@@ -75,6 +77,11 @@ struct InviteCode: Codable {
     let groupSecret: Data
     let name: String
     let relayHints: [String]
+    /// Full group state — required for joiners to share the same encryption key and member list.
+    let members: [SEPGroupMemberLeaf]
+    let epoch: UInt64
+    let salt: Data
+    let commitment: Data?
 
     func encode() -> String {
         let data = try! JSONEncoder().encode(self)

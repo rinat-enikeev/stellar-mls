@@ -29,6 +29,20 @@ data class SEPGroupStateUpdate(
 }
 
 /**
+ * Broadcast by a new joiner after joining via invite code.
+ * Existing members receive this, add the joiner to their member list,
+ * and respond with an [SEPGroupStateUpdate] containing the updated state.
+ */
+data class SEPMemberJoined(
+    val type: String = MESSAGE_TYPE,
+    val member: SEPGroupMemberLeaf
+) {
+    companion object {
+        const val MESSAGE_TYPE = "sep_member_joined"
+    }
+}
+
+/**
  * Request a salt for a specific epoch from other online group members.
  * Sent via the encrypted group channel when a member discovers it missed an epoch.
  */
@@ -84,6 +98,18 @@ data class SEPKeyAttestationPayload(
         result = 31 * result + ed25519Pubkey.contentHashCode()
         result = 31 * result + signature.contentHashCode()
         return result
+    }
+}
+
+/**
+ * Broadcast when a member renames the group.
+ */
+data class SEPGroupRenamed(
+    val type: String = MESSAGE_TYPE,
+    val name: String
+) {
+    companion object {
+        const val MESSAGE_TYPE = "sep_group_renamed"
     }
 }
 

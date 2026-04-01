@@ -48,17 +48,16 @@ class NostrMessageTransport(
         connections.clear()
     }
 
-    fun subscribe(group: ChatGroup) {
+    fun subscribe(group: ChatGroup, sinceTimestamp: Long? = null) {
         val subID = "grp-${group.id.take(8)}-${UUID.randomUUID().toString().take(8)}"
 
-        // Use a "since" timestamp to prevent historical event flood on subscription.
-        // Default to 5 minutes ago to catch recent messages while avoiding full replay.
-        val sinceTimestamp = (System.currentTimeMillis() / 1000) - 300
+        // Use the provided timestamp (e.g., last received event time) or default to 5 minutes ago
+        val since = sinceTimestamp ?: ((System.currentTimeMillis() / 1000) - 300)
 
         val filter = JSONObject().apply {
             put("kinds", JSONArray().put(24114))
             put("#t", JSONArray().put(group.topicTag))
-            put("since", sinceTimestamp)
+            put("since", since)
         }
 
         for (conn in connections) {

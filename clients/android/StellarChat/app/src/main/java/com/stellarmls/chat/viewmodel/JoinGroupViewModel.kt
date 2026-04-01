@@ -22,11 +22,19 @@ class JoinGroupViewModel : ViewModel() {
 
         try {
             val invite = InviteCode.decode(code)
+            // Merge invite code relays with default relays for maximum overlap
+            val defaultRelays = ChatGroup(id = "", name = "", groupSecret = ByteArray(0)).relayHints
+            val mergedRelays = (defaultRelays + invite.relayHints).distinct()
+
             joinedGroup = ChatGroup(
                 id = invite.groupID.toHex(),
                 name = invite.name,
                 groupSecret = invite.groupSecret,
-                relayHints = invite.relayHints
+                relayHints = mergedRelays,
+                members = invite.members.toMutableList(),
+                epoch = invite.epoch,
+                salt = invite.salt,
+                commitment = invite.commitment
             )
             error = null
         } catch (e: Exception) {

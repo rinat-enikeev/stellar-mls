@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.stellarmls.chat.model.ChatGroup
+import com.stellarmls.chat.ui.components.QRCodeImage
 import com.stellarmls.chat.viewmodel.CreateGroupViewModel
 import com.stellarmls.chat.viewmodel.GroupListViewModel
 
@@ -109,6 +110,19 @@ fun CreateGroupScreen(
 
             viewModel.inviteCode?.let { code ->
                 Spacer(modifier = Modifier.height(24.dp))
+
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text("QR Code", style = MaterialTheme.typography.titleMedium)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        QRCodeImage(text = code, size = 200.dp)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
 
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {

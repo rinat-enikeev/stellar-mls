@@ -12,6 +12,14 @@ struct StellarChatApp: App {
                 .task {
                     await appState.startInboxListener()
                 }
+                .onOpenURL { url in
+                    // Handle stellarchat://join?code=<base64>
+                    if url.scheme == "stellarchat", url.host == "join",
+                       let code = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                        .queryItems?.first(where: { $0.name == "code" })?.value {
+                        appState.deepLinkInviteCode = code
+                    }
+                }
         }
     }
 }
@@ -24,6 +32,8 @@ final class AppState {
     var keyManager: KeyManager
     var groups: [ChatGroup] = []
     let store: PersistenceStore
+    /// Set by deep link handler; consumed by ContentView to navigate to join screen.
+    var deepLinkInviteCode: String?
     let invitationTransport = InvitationTransport()
     var pendingInvitations: [PendingInvitation] = []
     var relayURLs: [URL] {
@@ -109,6 +119,32 @@ final class AppState {
         store.saveGroup(group)
     }
 
+    /// Announce ourselves as a new member to the group over the Nostr transport.
+    func announceMemberJoined(group: ChatGroup) async {
+        do {
+            let myLeaf = try keyManager.memberLeaf
+            let announcement = SEPMemberJoined(member: myLeaf)
+            let transport = NostrMessageTransport()
+            await transport.connect(to: group.relayHints)
+            try await transport.sendProtocolMessage(
+                announcement,
+                topic: group.topicTag,
+                key: group.encryptionKey,
+                keyManager: keyManager
+            )
+            await transport.disconnect()
+        } catch {
+            // Best-effort announcement — existing members will see us when we send a message
+        }
+    }
+
+    func updateLastEventTimestamp(groupID: String, timestamp: Int64) {
+        if let index = groups.firstIndex(where: { $0.id == groupID }) {
+            groups[index].lastEventTimestamp = timestamp
+            store.saveGroup(groups[index])
+        }
+    }
+
     func updateGroup(_ group: ChatGroup) {
         if let index = groups.firstIndex(where: { $0.id == group.id }) {
             groups[index] = group
@@ -157,7 +193,11 @@ final class AppState {
             groupID: groupID,
             groupSecret: groupSecret,
             name: name,
-            relayHints: relayURLs.map(\.absoluteString)
+            relayHints: relayURLs.map(\.absoluteString),
+            members: group.members,
+            epoch: group.epoch,
+            salt: group.salt,
+            commitment: group.commitment
         )
         return (group, code.encode())
     }
@@ -402,6 +442,68 @@ final class AppState {
         groups[index] = group
         store.saveGroup(group)
         storeSalt(groupID: groupID, epoch: update.epoch, salt: update.salt)
+    }
+
+    /// Apply a group rename received from the protocol channel.
+    func applyGroupRenamed(_ renamed: SEPGroupRenamed, to groupID: String) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        // ChatGroup.name is let — we need to create a new instance
+        let old = groups[index]
+        let updated = ChatGroup(
+            id: old.id,
+            name: renamed.name,
+            groupSecret: old.groupSecret,
+            createdAt: old.createdAt,
+            relayHints: old.relayHints,
+            members: old.members,
+            epoch: old.epoch,
+            salt: old.salt,
+            commitment: old.commitment,
+            tier: old.tier,
+            isPublishedOnChain: old.isPublishedOnChain,
+            lastEventTimestamp: old.lastEventTimestamp
+        )
+        groups[index] = updated
+        store.saveGroup(updated)
+    }
+
+    /// Handle a member_joined announcement: add the joiner and broadcast updated state.
+    func handleMemberJoined(
+        _ joined: SEPMemberJoined,
+        groupID: String,
+        transport: NostrMessageTransport,
+        keyManager: KeyManager
+    ) async {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        var group = groups[index]
+
+        // Skip if already a member
+        guard !group.members.contains(where: { $0.publicKeyCompressed == joined.member.publicKeyCompressed }) else { return }
+
+        // Add the joiner
+        group.members.append(joined.member)
+        group.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
+        group.epoch += 1
+        group.salt = SEPCommitmentBuilder.generateSalt()
+        try? group.recomputeCommitment()
+
+        groups[index] = group
+        store.saveGroup(group)
+        storeSalt(groupID: groupID, epoch: group.epoch, salt: group.salt)
+
+        // Broadcast state update so all members (including the joiner) converge
+        let update = SEPGroupStateUpdate(
+            epoch: group.epoch,
+            salt: group.salt,
+            addedMembers: [joined.member],
+            commitment: group.commitment
+        )
+        try? await transport.sendProtocolMessage(
+            update,
+            topic: group.topicTag,
+            key: group.encryptionKey,
+            keyManager: keyManager
+        )
     }
 
     // MARK: - Contract Configuration

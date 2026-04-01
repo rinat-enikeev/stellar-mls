@@ -68,6 +68,18 @@ dependencies {
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
 
+    // QR code generation
+    implementation("com.google.zxing:core:3.5.3")
+
+    // ML Kit barcode scanning (bundled model — no Play Services dependency)
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
+
+    // CameraX for QR scanner
+    implementation("androidx.camera:camera-core:1.4.1")
+    implementation("androidx.camera:camera-camera2:1.4.1")
+    implementation("androidx.camera:camera-lifecycle:1.4.1")
+    implementation("androidx.camera:camera-view:1.4.1")
+
     // Core
     implementation("androidx.core:core-ktx:1.15.0")
 

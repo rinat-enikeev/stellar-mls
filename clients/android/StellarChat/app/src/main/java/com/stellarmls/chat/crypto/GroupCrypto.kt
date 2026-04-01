@@ -155,8 +155,14 @@ object GroupCrypto {
 
     /**
      * Decrypt an invitation sealed envelope using the recipient's X25519 private key.
+     * N-1: If `senderEd25519Pubkey` is provided and the envelope has an ephemeral key signature,
+     * verifies the signature to prevent MITM substitution.
      */
-    fun decryptInvitation(envelopeJson: String, privateKey: X25519PrivateKeyParameters): ByteArray {
+    fun decryptInvitation(
+        envelopeJson: String,
+        privateKey: X25519PrivateKeyParameters,
+        senderEd25519Pubkey: ByteArray? = null
+    ): ByteArray {
         val envelope = JSONObject(envelopeJson)
         require(envelope.getString("scheme") == "x25519-aes-256-gcm-v1")
 
@@ -164,6 +170,21 @@ object GroupCrypto {
         val nonce = android.util.Base64.decode(envelope.getString("nonce"), android.util.Base64.NO_WRAP)
         val ct = android.util.Base64.decode(envelope.getString("ciphertext"), android.util.Base64.NO_WRAP)
         val tag = android.util.Base64.decode(envelope.getString("authentication_tag"), android.util.Base64.NO_WRAP)
+
+        // N-1: Verify ephemeral key signature if present
+        if (envelope.has("ephemeral_key_signature")) {
+            val sigBytes = android.util.Base64.decode(
+                envelope.getString("ephemeral_key_signature"), android.util.Base64.NO_WRAP)
+            requireNotNull(senderEd25519Pubkey) {
+                "Ephemeral key signature present but no sender pubkey to verify against"
+            }
+            val verifier = org.bouncycastle.crypto.signers.Ed25519Signer()
+            verifier.init(false, org.bouncycastle.crypto.params.Ed25519PublicKeyParameters(senderEd25519Pubkey, 0))
+            verifier.update(ephemeralPubBytes, 0, ephemeralPubBytes.size)
+            require(verifier.verifySignature(sigBytes)) {
+                "Ephemeral key signature verification failed"
+            }
+        }
 
         // ECDH shared secret
         val ephemeralPubParams = X25519PublicKeyParameters(ephemeralPubBytes, 0)

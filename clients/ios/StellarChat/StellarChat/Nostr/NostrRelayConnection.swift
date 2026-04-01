@@ -1,4 +1,5 @@
 import Foundation
+import os.log
 
 /// Persistent WebSocket connection to a Nostr relay.
 /// Supports publishing events and subscribing with filters.
@@ -145,7 +146,16 @@ actor NostrRelayConnection {
         }
     }
 
+    /// N-18: Maximum incoming WebSocket message size (1 MB).
+    private static let maxMessageSize = 1_048_576
+    private static let securityLogger = Logger(subsystem: "com.stellarmls.chat", category: "Security")
+
     private func handleMessage(_ text: String) {
+        // N-18: Reject oversized messages to prevent memory exhaustion from malicious relays
+        guard text.utf8.count <= Self.maxMessageSize else {
+            Self.securityLogger.warning("Relay oversized message rejected (\(text.utf8.count) bytes): \(self.url.absoluteString, privacy: .public)")
+            return
+        }
         guard let data = text.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data) as? [Any],
               let kind = array.first as? String
@@ -183,7 +193,7 @@ actor NostrRelayConnection {
               let sig = obj["sig"] as? String
         else { return nil }
 
-        return NostrEvent(
+        let event = NostrEvent(
             id: id,
             pubkey: pubkey,
             createdAt: createdAt,
@@ -192,5 +202,13 @@ actor NostrRelayConnection {
             content: content,
             sig: sig
         )
+
+        // N-7: Verify event ID integrity before processing.
+        if !event.verifyEventID() {
+            Self.securityLogger.warning("Relay invalid event ID: \(self.url.absoluteString, privacy: .public)")
+            return nil
+        }
+
+        return event
     }
 }

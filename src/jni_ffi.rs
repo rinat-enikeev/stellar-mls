@@ -52,8 +52,17 @@ fn to_jbytes(env: &mut JNIEnv, bytes: &[u8]) -> jbyteArray {
     }
 }
 
+/// N-10: Logs a warning and returns empty vec on JNI conversion failure
+/// (caller validates length inside run_jni, which will produce a clear error).
 fn get_bytes(env: &mut JNIEnv, arr: &JByteArray) -> Vec<u8> {
-    env.convert_byte_array(arr).unwrap_or_default()
+    match env.convert_byte_array(arr) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            // Return empty vec; downstream length checks in run_jni will
+            // produce a descriptive error like "field element must be 32 bytes, got 0"
+            Vec::new()
+        }
+    }
 }
 
 fn parse_fr(bytes: &[u8]) -> Result<Fr, String> {

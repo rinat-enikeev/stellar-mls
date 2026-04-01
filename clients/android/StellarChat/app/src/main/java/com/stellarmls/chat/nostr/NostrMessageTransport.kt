@@ -76,7 +76,7 @@ class NostrMessageTransport(
             val wrapper = JSONObject().apply {
                 put("text", text)
                 put("senderBlsPubkey", android.util.Base64.encodeToString(
-                    keyManager.blsPublicKey, android.util.Base64.NO_WRAP))
+                    keyManager.blsPublicKey(), android.util.Base64.NO_WRAP))
             }
             wrapper.toString()
         } catch (_: Exception) { text }
@@ -145,10 +145,13 @@ class NostrMessageTransport(
                         // Non-member messages are silently dropped
                         return
                     }
-                } catch (_: Exception) { /* Not JSON — fall through to legacy */ }
-
-                // Legacy unverified message (backward compat)
-                onMessage?.invoke(group.id, event.pubkey, plaintext, event.id, event.createdAt)
+                } catch (_: Exception) {
+                    // N-6: Reject messages without BLS sender authentication.
+                    // Legacy unverified messages are no longer accepted to prevent
+                    // bypass of H-4 sender authentication.
+                    com.stellarmls.chat.SecurityLog.nonMemberMessageRejected(group.id)
+                    return
+                }
             }
         } catch (_: Exception) {
             com.stellarmls.chat.SecurityLog.decryptionFailed("group message")

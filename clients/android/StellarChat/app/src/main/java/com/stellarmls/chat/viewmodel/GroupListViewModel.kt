@@ -35,7 +35,7 @@ import org.json.JSONObject
 import java.security.SecureRandom
 
 class GroupListViewModel(application: Application) : AndroidViewModel(application) {
-    val keyManager = KeyManager(application)
+    val keyManager = KeyManager.create(application)
     val groups = mutableStateListOf<ChatGroup>()
     val pendingInvitations = mutableStateListOf<PendingInvitation>()
 
@@ -65,11 +65,17 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         private set
 
     // Salt history for offline recovery: groupID → (epoch → salt)
-    private val saltHistory = mutableMapOf<String, MutableMap<Long, ByteArray>>()
+    // N-2: Thread-safe collections for concurrent access from relay callbacks
+    private val saltHistory = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.ConcurrentHashMap<Long, ByteArray>>()
     // Replay protection: processed protocol event IDs (H-7)
-    private val processedProtocolEventIDs = mutableSetOf<String>()
+    // N-8: Bounded LRU set to prevent unbounded memory growth
+    private val processedProtocolEventIDs: MutableSet<String> = java.util.Collections.synchronizedSet(
+        java.util.LinkedHashSet<String>()
+    )
     // Salt request rate limiting: "senderPubkey:epoch" keys already responded to (H-5)
-    private val saltRequestsResponded = mutableSetOf<String>()
+    private val saltRequestsResponded = java.util.Collections.newSetFromMap(
+        java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    )
 
     // Transports
     lateinit var transport: NostrMessageTransport
@@ -92,7 +98,13 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         contractEndpoint = contractPrefs.getString("endpoint", "") ?: ""
         contractID = contractPrefs.getString("contract_id", "") ?: ""
         relayerURL = contractPrefs.getString("relayer_url", "") ?: ""
-        relayerAuthToken = contractPrefs.getString("relayer_auth_token", "") ?: ""
+        // N-5: Load auth token from encrypted prefs (migrate from plaintext if needed)
+        val legacyToken = contractPrefs.getString("relayer_auth_token", null)
+        if (legacyToken != null && legacyToken.isNotBlank()) {
+            keyManager.saveRelayerAuthToken(legacyToken)
+            contractPrefs.edit().remove("relayer_auth_token").apply()
+        }
+        relayerAuthToken = keyManager.loadRelayerAuthToken()
 
         // Initialize transports
         transport = NostrMessageTransport(keyManager, relayURLs.toList())
@@ -255,14 +267,17 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     val isContractConfigured: Boolean
         get() = contractEndpoint.isNotBlank() && contractID.isNotBlank()
 
-    /** Save relayer configuration. */
+    /** Save relayer configuration.
+     *  N-5: Auth token stored in EncryptedSharedPreferences (via KeyManager's prefs)
+     *  to prevent plaintext credential exposure. URL is non-sensitive and stays in contractPrefs. */
     fun saveRelayerConfig(url: String, authToken: String) {
         relayerURL = url.trim()
         relayerAuthToken = authToken.trim()
         contractPrefs.edit()
             .putString("relayer_url", relayerURL)
-            .putString("relayer_auth_token", relayerAuthToken)
             .apply()
+        // N-5: Store auth token in encrypted prefs instead of plaintext SharedPreferences
+        keyManager.saveRelayerAuthToken(relayerAuthToken)
         configureContract()
     }
 
@@ -281,6 +296,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 parsed.protocol == "https" && parsed.host.isNotBlank()
             } catch (_: Exception) { false }
         }
+
+        private const val SALT_HISTORY_WINDOW = 64
+        /** N-8: Max entries for dedup sets to prevent unbounded memory growth. */
+        private const val MAX_DEDUP_SET_SIZE = 10_000
     }
 
     /** Reconfigure the on-chain service when contract settings change. */
@@ -387,17 +406,13 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     // -- Salt History --
 
     fun storeSalt(groupID: String, epoch: Long, salt: ByteArray) {
-        val history = saltHistory.getOrPut(groupID) { mutableMapOf() }
+        val history = saltHistory.getOrPut(groupID) { java.util.concurrent.ConcurrentHashMap() }
         history[epoch] = salt
         // Cap to last 64 epochs to prevent memory exhaustion
         if (history.size > SALT_HISTORY_WINDOW) {
             val oldest = history.keys.sorted().take(history.size - SALT_HISTORY_WINDOW)
             for (key in oldest) { history.remove(key) }
         }
-    }
-
-    companion object {
-        private const val SALT_HISTORY_WINDOW = 64
     }
 
     fun getSalt(groupID: String, epoch: Long): ByteArray? {
@@ -495,6 +510,13 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     private fun setupProtocolMessageHandler() {
         transport.onProtocolMessage = { groupID, json, eventID, senderPubkey ->
             // Replay protection: skip already-processed protocol events (H-7)
+            // N-8: Evict oldest entries when set exceeds max size
+            synchronized(processedProtocolEventIDs) {
+                if (processedProtocolEventIDs.size >= MAX_DEDUP_SET_SIZE) {
+                    val iter = processedProtocolEventIDs.iterator()
+                    if (iter.hasNext()) { iter.next(); iter.remove() }
+                }
+            }
             if (processedProtocolEventIDs.add(eventID)) {
                 try {
                     val obj = JSONObject(json)

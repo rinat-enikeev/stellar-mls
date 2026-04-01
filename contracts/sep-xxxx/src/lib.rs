@@ -28,6 +28,10 @@ use soroban_sdk::{
 // ================================================================
 
 /// Maximum number of history entries retained per group.
+///
+/// N-21: Older entries are pruned from contract state but remain permanently
+/// available via contract events (GroupCreated, CommitmentUpdated, GroupDeactivated).
+/// Off-chain event indexing is required for full audit trail beyond this window.
 const HISTORY_WINDOW: u32 = 64;
 
 /// Minimum TTL threshold for persistent storage (ledgers, ~1 day).
@@ -52,8 +56,8 @@ pub enum Error {
     NotInitialized = 1,
     /// Contract is already initialized.
     AlreadyInitialized = 2,
-    /// Caller is not the contract admin.
-    Unauthorized = 3,
+    /// Reserved (was: Unauthorized). Admin checks use require_auth() which panics.
+    Reserved3 = 3,
     /// A group with this ID already exists.
     GroupAlreadyExists = 4,
     /// No group exists with this ID.
@@ -261,6 +265,61 @@ impl SepXxxxContract {
         Ok(())
     }
 
+    // ---- Admin Operations ----
+
+    /// N-12: Update a verification key for a specific tier.
+    ///
+    /// Requires admin authorization. The new VK must have exactly 3 IC points.
+    /// This enables key rotation without contract redeployment if a circuit
+    /// vulnerability is discovered.
+    pub fn update_vk(
+        env: Env,
+        tier: u32,
+        new_vk: VerificationKeyData,
+    ) -> Result<(), Error> {
+        Self::require_initialized(&env)?;
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+
+        if tier > 2 {
+            return Err(Error::InvalidTier);
+        }
+        if new_vk.ic.len() != 3 {
+            return Err(Error::InvalidVkLength);
+        }
+
+        env.storage().persistent().set(&DataKey::VK(tier), &new_vk);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::VK(tier), LEDGER_THRESHOLD, LEDGER_BUMP);
+
+        Ok(())
+    }
+
+    /// N-16: Extend the TTL of a group's persistent storage.
+    ///
+    /// Callable by anyone — prevents inactive groups from silently expiring.
+    /// Groups that receive no state-changing operations for ~60 days would
+    /// otherwise lose their on-chain data.
+    pub fn bump_group_ttl(
+        env: Env,
+        group_id: BytesN<32>,
+    ) -> Result<(), Error> {
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::Group(group_id.clone()))
+        {
+            return Err(Error::GroupNotFound);
+        }
+        Self::bump_group(&env, &group_id);
+        Ok(())
+    }
+
     // ---- Group Operations ----
 
     /// Create a new private membership group.
@@ -353,6 +412,13 @@ impl SepXxxxContract {
     /// `new_epoch` MUST equal `stored_epoch + 1`. The proof is verified
     /// against the **current** commitment and epoch (via `public_inputs`),
     /// proving the updater is a member *before* the transition.
+    ///
+    /// N-14: **Design note:** This function uses proof-based authorization only
+    /// (no `caller.require_auth()`). Any Stellar account can call it — only a
+    /// valid Groth16 membership proof is required. This is intentional: the
+    /// protocol is proof-based, not identity-based. The proof replay mechanism
+    /// (C-2) prevents exact re-submission. For environments where address
+    /// binding is desired, an optional `caller: Address` parameter can be added.
     pub fn update_commitment(
         env: Env,
         group_id: BytesN<32>,
@@ -372,7 +438,9 @@ impl SepXxxxContract {
         if !current.active {
             return Err(Error::GroupInactive);
         }
-        if new_epoch != current.epoch + 1 {
+        // N-22: Use checked_add to guard against u64 overflow (theoretical).
+        let expected_epoch = current.epoch.checked_add(1).ok_or(Error::InvalidEpoch)?;
+        if new_epoch != expected_epoch {
             return Err(Error::InvalidEpoch);
         }
         if public_inputs.commitment != current.commitment
@@ -458,6 +526,8 @@ impl SepXxxxContract {
     ///
     /// After deactivation `verify_membership` and `get_state` still work,
     /// but `update_commitment` is rejected. This is irreversible.
+    ///
+    /// N-14: Uses proof-based authorization only (same rationale as `update_commitment`).
     pub fn deactivate_group(
         env: Env,
         group_id: BytesN<32>,
@@ -500,6 +570,19 @@ impl SepXxxxContract {
             .persistent()
             .set(&DataKey::Group(group_id.clone()), &deactivated);
         Self::bump_group(&env, &group_id);
+
+        // N-23: Decrement per-tier group count so deactivated groups
+        // don't permanently consume the M-4 tier limit.
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::GroupCount(current.tier))
+            .unwrap_or(0);
+        if count > 0 {
+            env.storage()
+                .instance()
+                .set(&DataKey::GroupCount(current.tier), &(count - 1));
+        }
 
         GroupDeactivated {
             group_id,

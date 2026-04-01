@@ -32,6 +32,21 @@ final class PersistenceStore {
         self.context = ModelContext(container)
     }
 
+    /// N-15: In-memory fallback when on-disk persistence fails (e.g., disk full, corrupted DB).
+    /// Data will not survive app restarts but the app remains usable.
+    static func inMemory() -> PersistenceStore {
+        let schema = Schema([PersistedGroup.self, PersistedMessage.self])
+        let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let container = try! ModelContainer(for: schema, configurations: [config])
+        let store = PersistenceStore(container: container)
+        return store
+    }
+
+    private init(container: ModelContainer) {
+        self.container = container
+        self.context = ModelContext(container)
+    }
+
     // MARK: - Groups
 
     func loadGroups() -> [ChatGroup] {

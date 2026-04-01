@@ -87,8 +87,11 @@ final class NostrMessageTransport {
                                 self.onError?("Message from non-member BLS key — rejected")
                                 }
                             } else {
-                                // Legacy unverified message (backward compat)
-                                self.onMessage?(plaintext, event)
+                                // N-6: Reject messages without BLS sender authentication.
+                                // Legacy unverified messages are no longer accepted to prevent
+                                // bypass of H-4 sender authentication.
+                                SecurityLog.nonMemberMessageRejected(groupID: groupID)
+                                self.onError?("Message rejected: missing sender authentication")
                             }
                         }
                     } catch {
@@ -159,7 +162,7 @@ final class NostrMessageTransport {
             ["t", topic],
         ]
 
-        let event = NostrEvent.build(
+        let event = try NostrEvent.build(
             kind: 24114,
             tags: tags,
             content: content,

@@ -83,6 +83,8 @@ class InvitationTransport(private val keyManager: KeyManager) {
 
         val recipientInboxTag = GroupCrypto.hiddenInboxTag(recipientKeyAgreementPubkey)
 
+        // N-13: Custom tags used for invitation routing. Requires relay support
+        // for custom tag indexing. See iOS InvitationTransport for matching tags.
         val tags = listOf(
             listOf("sep_inbox", recipientInboxTag),
             listOf("sep_version", "1")

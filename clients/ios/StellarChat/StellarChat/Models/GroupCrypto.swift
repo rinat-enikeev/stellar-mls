@@ -28,6 +28,13 @@ enum GroupCrypto {
     /// Derive an AES-256-GCM key for message encryption, bound to the current epoch and salt.
     /// Key rotates on every membership change (epoch increment + new salt), ensuring
     /// removed members cannot decrypt messages sent after their removal.
+    ///
+    /// N-20: **No forward secrecy.** If the group secret is compromised, all past messages
+    /// (for all epochs) are decryptable because the epoch key is deterministically derived
+    /// from `HKDF(groupSecret || epoch || salt)`. There is no ratcheting mechanism.
+    /// This is a deliberate design trade-off: the protocol favors simplicity and group-wide
+    /// key sharing over forward secrecy. For higher-security deployments, consider
+    /// integrating MLS-style ratcheting.
     static func deriveMessageKey(groupSecret: Data, epoch: UInt64, salt: Data) -> SymmetricKey {
         // IKM = groupSecret || epoch (big-endian) || salt
         var ikm = Data()
@@ -110,9 +117,12 @@ enum GroupCrypto {
     }
 
     /// Decrypt an invitation sealed envelope using the recipient's X25519 private key.
+    /// N-1: If `senderEd25519Pubkey` is provided, verifies the ephemeral key signature
+    /// to prevent MITM substitution. If signature is missing or invalid, decryption is rejected.
     static func decryptInvitation(
         _ envelope: SealedEnvelope,
-        privateKey: Curve25519.KeyAgreement.PrivateKey
+        privateKey: Curve25519.KeyAgreement.PrivateKey,
+        senderEd25519Pubkey: Data? = nil
     ) throws -> Data {
         guard envelope.scheme == "x25519-aes-256-gcm-v1" else {
             throw ChatError.decryptionFailed
@@ -121,6 +131,19 @@ enum GroupCrypto {
               let nonceData = envelope.nonce,
               let tag = envelope.authenticationTag
         else { throw ChatError.decryptionFailed }
+
+        // N-1: Verify ephemeral key signature if present
+        if let sigData = envelope.ephemeralKeySignature {
+            guard let senderPubkey = senderEd25519Pubkey else {
+                SecurityLog.invalidAttestation(reason: "ephemeral key signature present but no sender pubkey to verify against")
+                throw ChatError.decryptionFailed
+            }
+            let verifyingKey = try Curve25519.Signing.PublicKey(rawRepresentation: senderPubkey)
+            guard verifyingKey.isValidSignature(sigData, for: ephPubData) else {
+                SecurityLog.invalidAttestation(reason: "ephemeral key signature verification failed")
+                throw ChatError.decryptionFailed
+            }
+        }
 
         let ephPub = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: ephPubData)
         let sharedSecret = try privateKey.sharedSecretFromKeyAgreement(with: ephPub)

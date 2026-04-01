@@ -29,11 +29,6 @@ class NostrRelayConnection(
     private val subscriptionCallbacks = ConcurrentHashMap<String, (NostrEvent) -> Unit>()
     @Volatile private var reconnectAttempts = 0
 
-    companion object {
-        private const val MAX_RECONNECT_DELAY_MS = 120_000L
-        private const val BASE_RECONNECT_DELAY_MS = 1_000L
-    }
-
     fun connect() {
         val request = Request.Builder().url(url).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
@@ -95,7 +90,19 @@ class NostrRelayConnection(
         }
     }
 
+    /** N-18: Maximum incoming WebSocket message size (1 MB). */
+    private companion object {
+        private const val MAX_RECONNECT_DELAY_MS = 120_000L
+        private const val BASE_RECONNECT_DELAY_MS = 1_000L
+        private const val MAX_MESSAGE_SIZE = 1_048_576
+    }
+
     private fun handleMessage(text: String) {
+        // N-18: Reject oversized messages to prevent memory exhaustion from malicious relays
+        if (text.length > MAX_MESSAGE_SIZE) {
+            com.stellarmls.chat.SecurityLog.relayEvent("oversized message rejected (${text.length} bytes)", url)
+            return
+        }
         try {
             val array = JSONArray(text)
             when (array.getString(0)) {
@@ -109,7 +116,10 @@ class NostrRelayConnection(
                 }
                 "EOSE", "OK", "NOTICE" -> { /* ignored */ }
             }
-        } catch (_: Exception) { }
+        } catch (e: Exception) {
+            // N-19: Log malformed message parsing errors for debugging and security monitoring
+            com.stellarmls.chat.SecurityLog.relayEvent("malformed message: ${e.message}", url)
+        }
     }
 
     private fun parseEvent(json: JSONObject): NostrEvent? {
@@ -119,7 +129,7 @@ class NostrRelayConnection(
                 val inner = tagsArray.getJSONArray(i)
                 (0 until inner.length()).map { j -> inner.getString(j) }
             }
-            NostrEvent(
+            val event = NostrEvent(
                 id = json.getString("id"),
                 pubkey = json.getString("pubkey"),
                 createdAt = json.getLong("created_at"),
@@ -128,6 +138,12 @@ class NostrRelayConnection(
                 content = json.getString("content"),
                 sig = json.getString("sig")
             )
+            // N-7: Verify event ID integrity before processing.
+            if (!event.verifyEventID()) {
+                com.stellarmls.chat.SecurityLog.relayEvent("invalid event ID", url)
+                return null
+            }
+            event
         } catch (_: Exception) { null }
     }
 }

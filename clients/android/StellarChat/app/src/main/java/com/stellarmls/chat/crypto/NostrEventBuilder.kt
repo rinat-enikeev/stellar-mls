@@ -22,6 +22,21 @@ data class NostrEvent(
         put("content", content)
         put("sig", sig)
     }
+
+    /** N-7: Verify event ID integrity by recomputing from canonical JSON. */
+    fun verifyEventID(): Boolean {
+        val canonical = JSONArray().apply {
+            put(0)
+            put(pubkey)
+            put(createdAt)
+            put(kind)
+            put(JSONArray(tags.map { JSONArray(it) }))
+            put(content)
+        }
+        val serialized = canonical.toString().toByteArray()
+        val hash = java.security.MessageDigest.getInstance("SHA-256").digest(serialized)
+        return hash.toHex() == id
+    }
 }
 
 object NostrEventBuilder {

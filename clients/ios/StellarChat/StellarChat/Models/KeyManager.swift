@@ -9,7 +9,7 @@ final class KeyManager: Codable {
     private(set) var blsSecretKey: Data
     /// secp256k1 x-only public key (32 bytes).
     private(set) var publicKey: Data
-    private let signer: RustBackedNostrSigner
+    private var signer: RustBackedNostrSigner
     /// Ed25519 private key for Stellar, derived from nostrSecretKey via HKDF.
     private let stellarPrivateKey: Curve25519.Signing.PrivateKey
     /// X25519 private key for invitation ECDH, derived from nostrSecretKey via HKDF.
@@ -32,8 +32,18 @@ final class KeyManager: Codable {
             Self.saveToKeychain(self.blsSecretKey, key: Self.blsKeychainKey)
         }
 
-        self.signer = try! RustBackedNostrSigner(secretKey: self.nostrSecretKey)
-        self.publicKey = try! signer.publicKey()
+        // N-4: Use do/catch instead of try! to avoid crash on corrupted keychain data.
+        // If Rust FFI fails, regenerate keys rather than crashing.
+        do {
+            self.signer = try RustBackedNostrSigner(secretKey: self.nostrSecretKey)
+            self.publicKey = try signer.publicKey()
+        } catch {
+            // Last resort: regenerate nostr key if existing one is invalid
+            self.nostrSecretKey = Self.generateRandom(count: 32)
+            Self.saveToKeychain(self.nostrSecretKey, key: Self.nostrKeychainKey)
+            self.signer = try! RustBackedNostrSigner(secretKey: self.nostrSecretKey)
+            self.publicKey = try! signer.publicKey()
+        }
         self.stellarPrivateKey = Self.deriveStellarKey(from: self.nostrSecretKey)
         self.keyAgreementKey = Self.deriveKeyAgreementKey(from: self.nostrSecretKey)
     }
@@ -55,8 +65,8 @@ final class KeyManager: Codable {
     }
 
     /// Sign arbitrary data with the Stellar Ed25519 key.
-    func stellarSign(_ message: Data) -> Data {
-        let signature = try! stellarPrivateKey.signature(for: message)
+    func stellarSign(_ message: Data) throws -> Data {
+        let signature = try stellarPrivateKey.signature(for: message)
         return Data(signature)
     }
 
@@ -69,7 +79,13 @@ final class KeyManager: Codable {
             outputByteCount: 32
         )
         let seed = derived.withUnsafeBytes { Data($0) }
+        // HKDF output is always 32 bytes, CryptoKit PrivateKey accepts any 32 bytes.
         return try! Curve25519.Signing.PrivateKey(rawRepresentation: seed)
+    }
+
+    /// Ed25519 signing key for use in invitation transport (exposed for ephemeral key signing).
+    var ed25519SigningKey: Curve25519.Signing.PrivateKey {
+        stellarPrivateKey
     }
 
     // MARK: - X25519 Key Agreement (Invitation Encryption)
@@ -102,7 +118,16 @@ final class KeyManager: Codable {
             outputByteCount: 32
         )
         let seed = derived.withUnsafeBytes { Data($0) }
+        // HKDF output is always 32 bytes, CryptoKit PrivateKey accepts any 32 bytes.
         return try! Curve25519.KeyAgreement.PrivateKey(rawRepresentation: seed)
+    }
+
+    /// Verify an Ed25519 signature (static, for verifying other members' signatures).
+    static func verifyEd25519Signature(_ signature: Data, for message: Data, publicKey: Data) -> Bool {
+        guard let key = try? Curve25519.Signing.PublicKey(rawRepresentation: publicKey) else {
+            return false
+        }
+        return key.isValidSignature(signature, for: message)
     }
 
     // MARK: - BLS12-381 (Group Membership)
@@ -133,8 +158,8 @@ final class KeyManager: Codable {
 
     // MARK: - Nostr Signing
 
-    func signEventID(_ eventID: Data) -> Data {
-        try! signer.signEventID(eventID)
+    func signEventID(_ eventID: Data) throws -> Data {
+        try signer.signEventID(eventID)
     }
 
     // MARK: - Key Attestation (SEP-XXXX §1.1)
@@ -144,7 +169,7 @@ final class KeyManager: Codable {
     func createAttestation() throws -> KeyAttestation {
         let blsPub = try blsPublicKey
         let bindingMessage = KeyAttestation.bindingMessage(blsPubkey: blsPub)
-        let signature = stellarSign(bindingMessage)
+        let signature = try stellarSign(bindingMessage)
         return KeyAttestation(
             blsPubkey: blsPub,
             ed25519Pubkey: stellarPublicKey,

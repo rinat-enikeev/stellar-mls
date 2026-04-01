@@ -27,7 +27,9 @@ object StorageEncryption {
      */
     private const val DERIVATION_VERSION = 1
 
-    /** Initialize with application context. Must be called before encrypt/decrypt. */
+    /** Initialize with application context. Must be called before encrypt/decrypt.
+     *  N-3: Synchronized to prevent race condition on concurrent first-launch init. */
+    @Synchronized
     fun init(context: Context) {
         if (storageKeySpec != null) return
         val rootSecret = loadOrCreateRootSecret(context)

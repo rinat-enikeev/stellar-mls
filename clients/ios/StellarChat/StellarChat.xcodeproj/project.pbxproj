@@ -23,6 +23,7 @@
 		8403CC60E770407C27CF89ED /* SwiftMLS in Frameworks */ = {isa = PBXBuildFile; productRef = 93FDE6A85EACB5AD144480F3 /* SwiftMLS */; };
 		865234AA099329B7E4D41789 /* JoinGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 005C04E920D6B0FC3423EE24 /* JoinGroupView.swift */; };
 		95489626E5CAD02D3CDB0207 /* StellarStrKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */; };
+		98E0E1488EF63CAE84806541 /* SecurityLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 631C5C92A161F28DACAA5D8B /* SecurityLog.swift */; };
 		B5836D3E7760359CFB8C42AC /* GroupCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8210CED65D67082D16673F07 /* GroupCrypto.swift */; };
 		CF17A18CDF1209DC9F6CA369 /* OnChainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06014BB7573399F26644F9F6 /* OnChainService.swift */; };
 		D2E5C4CF0957DFE21E162979 /* SwiftMLS in Frameworks */ = {isa = PBXBuildFile; productRef = 48F22356AB515994AECC167E /* SwiftMLS */; };
@@ -58,6 +59,7 @@
 		3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StellarStrKey.swift; sourceTree = "<group>"; };
 		4705F8234AA6022CD782348E /* PersistedModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistedModels.swift; sourceTree = "<group>"; };
 		62FB83C87F9348F97EEDE0C8 /* StellarChatApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StellarChatApp.swift; sourceTree = "<group>"; };
+		631C5C92A161F28DACAA5D8B /* SecurityLog.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SecurityLog.swift; sourceTree = "<group>"; };
 		6E292A37C859D6BE12BE2376 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		703A9C8CDE76DF5C28608301 /* NostrEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrEvent.swift; sourceTree = "<group>"; };
 		70C111DF10AF94B4F95C4742 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
@@ -137,6 +139,7 @@
 				0E25D14293AC1BC6E3FB1E28 /* PersistenceStore.swift */,
 				3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */,
 				FD61B2440CA5ED81C983DA87 /* StorageEncryption.swift */,
+				631C5C92A161F28DACAA5D8B /* SecurityLog.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -270,7 +273,7 @@
 			mainGroup = 237EA72C7CEF1AD9196D281B;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				F33EE2A00CAA98337DB93D99 /* XCLocalSwiftPackageReference "../../../swift-mls" */,
+				F33EE2A00CAA98337DB93D99 /* XCLocalSwiftPackageReference "swift-mls" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E290D72BA448D601D86C5E67 /* Products */;
@@ -331,6 +334,7 @@
 				4FC9AB234CCA9BFAA0B112F1 /* StellarChatApp.swift in Sources */,
 				95489626E5CAD02D3CDB0207 /* StellarStrKey.swift in Sources */,
 				D6847B5213B8820FA30819D7 /* StorageEncryption.swift in Sources */,
+				98E0E1488EF63CAE84806541 /* SecurityLog.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -589,7 +593,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		F33EE2A00CAA98337DB93D99 /* XCLocalSwiftPackageReference "../../../swift-mls" */ = {
+		F33EE2A00CAA98337DB93D99 /* XCLocalSwiftPackageReference "swift-mls" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "../../../swift-mls";
 		};

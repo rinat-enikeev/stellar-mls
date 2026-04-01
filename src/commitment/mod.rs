@@ -21,6 +21,20 @@ use sha2::{Sha256, Digest};
 
 use crate::poseidon::poseidon_hash_two;
 
+/// N-11: Constant-time byte comparison to prevent timing side channels.
+/// Compares all bytes regardless of where mismatches occur.
+#[inline(never)]
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 /// Byte length of the commitment.
 pub const COMMITMENT_LEN: usize = 32;
 
@@ -118,6 +132,9 @@ pub fn bytes_be_to_field_checked<F: PrimeField>(bytes: &[u8; 32]) -> Result<F, S
 }
 
 /// Verify a commitment against known inputs.
+///
+/// N-11: Uses constant-time comparison to avoid leaking partial-match
+/// information via timing side channels.
 pub fn verify_commitment<F: PrimeField>(
     commitment: &Commitment,
     poseidon_root: &F,
@@ -125,7 +142,7 @@ pub fn verify_commitment<F: PrimeField>(
     salt: &Salt,
 ) -> bool {
     let computed = compute_commitment(poseidon_root, epoch, salt);
-    computed == *commitment
+    constant_time_eq(&computed, commitment)
 }
 
 /// Compute the Poseidon-only commitment (Variant B):
@@ -149,6 +166,9 @@ pub fn compute_poseidon_commitment<F: PrimeField + Absorb>(
 }
 
 /// Verify a Poseidon-only commitment (Variant B) against known inputs.
+///
+/// N-11: Uses constant-time comparison via serialized byte representation
+/// to avoid leaking partial-match information via timing side channels.
 pub fn verify_poseidon_commitment<F: PrimeField + Absorb>(
     commitment: &F,
     config: &PoseidonConfig<F>,
@@ -157,7 +177,9 @@ pub fn verify_poseidon_commitment<F: PrimeField + Absorb>(
     salt: &Salt,
 ) -> bool {
     let computed = compute_poseidon_commitment(config, poseidon_root, epoch, salt);
-    computed == *commitment
+    let computed_bytes = field_to_bytes_be(&computed);
+    let expected_bytes = field_to_bytes_be(commitment);
+    constant_time_eq(&computed_bytes, &expected_bytes)
 }
 
 /// Generate a random salt using a provided RNG.

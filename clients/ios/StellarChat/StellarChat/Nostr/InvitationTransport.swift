@@ -76,12 +76,16 @@ final class InvitationTransport {
             recipientPublicKey: recipientKeyAgreementPubkey
         )
 
+        // N-13: Custom tags used for invitation routing. These require relay support
+        // for custom tag indexing. Relays that only index standard NIP tags (t, p, e)
+        // will accept these events but may not return them in filter queries.
+        // Ensure configured relays support custom tag filtering for reliable delivery.
         let tags: [[String]] = [
             ["sep_inbox", recipientInboxTag],
             ["sep_version", "1"],
         ]
 
-        let event = NostrEvent.build(
+        let event = try NostrEvent.build(
             kind: 24113,
             tags: tags,
             content: content,

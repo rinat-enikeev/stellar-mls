@@ -23,15 +23,15 @@
 
 The v1 audit identified 9 Critical, 14 High, and 19 Medium findings. All have been addressed. The Rust core and Soroban contract are now significantly hardened. Cross-platform interoperability has improved, and structured security logging, retry logic, and input validation have been added to both mobile apps.
 
-**However, this re-audit identifies 5 High, 11 Medium, and 8 Low new or residual findings.** The most important are: ephemeral key signatures are included but never verified (incomplete M-5 fix), non-thread-safe collections in concurrent contexts on Android, and the legacy unverified message fallback path which silently bypasses H-4 sender authentication.
+**However, this re-audit identifies 6 High, 12 Medium, and 8 Low new or residual findings.** The most important are: ephemeral key signatures are included but never verified (incomplete M-5 fix), the Nostr signer still double-hashes event IDs before Schnorr signing, and the legacy unverified message fallback path silently bypasses H-4 sender authentication.
 
 **No new Critical findings.** The cryptographic core remains sound and well-tested. The contract authorization model is correct. The remaining issues are in client-side hardening, not protocol fundamentals.
 
 | Severity | v1 Count | Remediated | New/Residual in v2 | Action Required |
 |----------|----------|------------|---------------------|-----------------|
 | Critical | 9        | 9/9        | 0                   | —               |
-| High     | 14       | 14/14      | 5                   | Before public beta |
-| Medium   | 19       | 19/19      | 11                  | Before GA       |
+| High     | 14       | 14/14      | 6                   | Before public beta |
+| Medium   | 19       | 19/19      | 12                  | Before GA       |
 | Low      | 16       | —          | 8                   | At discretion   |
 
 ---
@@ -219,7 +219,7 @@ The v1 audit identified 9 Critical, 14 High, and 19 Medium findings. All have be
   - Android: `clients/android/.../nostr/NostrRelayConnection.kt:115-129` (event parsing)
 - **Description:** Neither platform validates the Nostr event signature (`sig` field) against the event's `id` and `pubkey` before processing. A malicious or compromised relay could deliver forged events with arbitrary `pubkey` values. While group messages are encrypted and authenticated at the application layer, the `event.pubkey` is used for display purposes and for relay-level sender identification.
 - **Impact:** A compromised relay could attribute messages to arbitrary Nostr identities. Since group encryption provides message authenticity, this does not compromise message content, but it undermines the Nostr identity model and could enable phishing (display a trusted pubkey for a malicious message).
-- **Remediation:** Verify the Schnorr signature using the existing `RustBridge.nostrVerifySignature()` / `RustBridge.nostrSignEventId()` before processing events. Reject events with invalid signatures.
+- **Remediation:** Add a Rust bridge verification helper for Nostr Schnorr signatures and reject events with invalid signatures before processing. There is currently a signing helper, but not an existing verification helper exposed in the bridge.
 
 #### N-8: Unbounded Replay Protection Sets (Memory Leak)
 
@@ -324,6 +324,33 @@ The v1 audit identified 9 Critical, 14 High, and 19 Medium findings. All have be
 - **Impact:** Long-lived, stable groups (no membership changes) silently lose their on-chain state. `get_state()` would return `GroupNotFound` even though the group was never deactivated.
 - **Remediation:** Either extend TTL on read operations, add a `bump_group_ttl()` function callable by any party, or document the minimum activity requirement.
 
+#### N-25: Nostr Event IDs Are Signed Incorrectly
+
+- **Component:** Rust FFI/JNI + Swift SDK + Android App
+- **Files:**
+  - `src/ffi.rs:268-284`
+  - `src/jni_ffi.rs:206-225`
+  - `swift-mls/Sources/SwiftMLS/NostrCrypto.swift`
+  - `clients/android/.../crypto/NostrEventBuilder.kt`
+- **Description:** The Nostr signing bridge signs the 32-byte event ID using `k256::schnorr::signature::Signer::sign()`. In `k256`, that trait implementation hashes the provided message with SHA-256 before Schnorr signing. Nostr expects signing the event ID itself, not `SHA256(event_id)`. Both the Swift `RustBackedNostrSigner` and Android `RustBackedNostrSigner` use this bridge, so emitted signatures are non-compliant with standard NIP-01 verification.
+- **Impact:** Events produced by the current SDKs/apps may fail verification by standards-compliant Nostr implementations. This is a cross-platform interoperability break and a correctness bug in a security-sensitive path.
+- **Remediation:** Use a raw/prehashed Schnorr signing API that signs the 32-byte event ID directly, and add cross-check tests against standard Nostr verification vectors.
+
+#### N-26: Relayer Flow Is No Longer Transparent for `create_group`
+
+- **Component:** Soroban Contract + Swift/Android Relayer Transports + Documentation
+- **Files:**
+  - `contracts/sep-xxxx/src/lib.rs:273-283`
+  - `swift-mls/Sources/SwiftMLS/ContractClient.swift:122-170`
+  - `clients/android/.../onchain/SEPContractClient.kt:112-160`
+  - `docs/phase-4.md:40-46`
+  - `docs/sep.md:500-506`
+- **Description:** `create_group` now requires `caller.require_auth()`, which is correct for anti-spam. But the repository's relayer design and transports still describe a transparent model where the client sends the same JSON payload to a relayer, the relayer wraps it in its own transaction, and the contract "doesn't care who signed the transaction." That is no longer true for `create_group`: the caller's Soroban authorization now matters, and the current relayer transports only forward JSON payloads rather than signed auth entries / pre-signed invocations.
+- **Impact:** The documented fee-decoupled relayer flow for group creation is not implementable as described. `create_group` through the current relayer abstraction will either fail or require additional auth plumbing that the repo does not yet model.
+- **Remediation:** Either:
+  1. change the relayer protocol so the client submits a pre-signed Soroban invocation / auth entry and the relayer only fee-wraps it, or
+  2. explicitly document that relayer transport does not support `create_group` until Soroban authorization forwarding is implemented.
+
 ### Low Severity
 
 #### N-17: `Error::Unauthorized` Variant Defined but Never Used
@@ -397,11 +424,11 @@ The v1 audit identified 9 Critical, 14 High, and 19 Medium findings. All have be
 
 ### 5.1 Rust Core (src/)
 
-**Status: Strong.** The Poseidon hash, Merkle tree, circuit, and commitment modules are well-implemented with extensive tests. The FFI and JNI boundaries properly catch panics and validate inputs. One medium issue (`get_bytes()` silent failure in JNI) and one low issue (non-constant-time comparison) identified.
+**Status: Strong with one important interoperability caveat.** The Poseidon hash, Merkle tree, circuit, and commitment modules are well-implemented with extensive tests. The FFI and JNI boundaries properly catch panics and validate inputs. However, the current Nostr signing bridge still signs the wrong message bytes (N-25).
 
 | Property | Assessment |
 |----------|------------|
-| Cryptographic correctness | Sound — Groth16, Poseidon, BLS12-381 all correctly implemented |
+| Cryptographic correctness | Sound for SEP proofs/commitments; Nostr signing bridge remains incorrect (N-25) |
 | Input validation at boundaries | Good — `bytes_be_to_field_checked`, length checks, `read_bytes` null checks |
 | Panic safety | Good — `run_ffi()` and `run_jni()` wrap all entry points |
 | Test coverage | Strong — 102 unit tests, constraint satisfiability, rejection cases |
@@ -419,7 +446,7 @@ The v1 audit identified 9 Critical, 14 High, and 19 Medium findings. All have be
 
 ### 5.3 Swift SDK (swift-mls/)
 
-**Status: Good.** Clean API surface. `RustBridge` properly validates input sizes. `CommitmentBuilder` delegates to Rust. `ProofGenerator` handles proving key serialization. No vulnerabilities identified in the SDK itself.
+**Status: Good with caveats.** Clean API surface overall. `RustBridge` properly validates most input sizes, and `CommitmentBuilder` / `ProofGenerator` are coherent. Remaining concerns are the inherited Nostr signing bug (N-25) and relayer/create-group auth mismatch (N-26).
 
 ### 5.4 iOS App (clients/ios/)
 
@@ -431,7 +458,7 @@ The v1 audit identified 9 Critical, 14 High, and 19 Medium findings. All have be
 
 ### 5.6 Documentation (docs/)
 
-**Status: Comprehensive.** Phase 1-4 docs, NIP specification, relay design doc, deployment guide, and audit remediation report all present and accurate. Documentation correctly reflects current code state.
+**Status: Comprehensive but not fully current.** Phase 1-4 docs, NIP specification, relay design doc, deployment guide, and audit remediation report are all present, but the relayer docs still overstate transparent compatibility after `create_group` gained caller auth (N-26).
 
 ---
 
@@ -471,16 +498,16 @@ The v1 audit identified 9 Critical, 14 High, and 19 Medium findings. All have be
 
 | Category | Score | Notes |
 |----------|-------|-------|
-| **Cryptographic Soundness** | 9/10 | Groth16, Poseidon, AES-GCM all correct. -1 for incomplete ephemeral key verification (N-1). |
+| **Cryptographic Soundness** | 8/10 | Groth16, Poseidon, AES-GCM are correct. -1 for incomplete ephemeral key verification (N-1), -1 for incorrect Nostr signing semantics (N-25). |
 | **Contract Security** | 8/10 | Auth model sound. Proof replay fixed. -1 for no VK rotation, -1 for TTL expiry risk. |
 | **Cross-Platform Interop** | 9/10 | All protocols aligned post-C-4/C-7 fixes. -1 for custom invitation tags. |
-| **Client Hardening** | 6/10 | Thread safety issues (N-2, N-3), force unwraps (N-4, N-15), plaintext tokens (N-5), no event sig verification (N-7). |
+| **Client Hardening** | 6/10 | Thread safety issues (N-2, N-3), force unwraps (N-4, N-15), plaintext tokens (N-5), and missing event signature verification (N-7). |
 | **Error Handling** | 6/10 | Silent exception swallowing, force unwraps, `unwrap_or_default` in JNI. |
 | **Storage Security** | 7/10 | Keychain/EncryptedSharedPrefs for keys. -2 for plaintext metadata in Room DB and UserDefaults tokens. -1 for no database encryption. |
 | **Network Security** | 8/10 | TLS required. Cert pinning available. Reconnection with backoff. -1 for no event signature verification, -1 for no message size limits. |
 | **Test Coverage** | 8/10 | Strong Rust tests (102). iOS/Android instrumented tests (30+ each). -2 for no integration tests covering cross-platform messaging. |
-| **Documentation** | 9/10 | Comprehensive phase docs, NIP spec, deployment guide, audit remediation. |
-| **Overall** | **7.8/10** | Ready for closed beta. Address N-1 through N-5 before public beta. |
+| **Documentation** | 8/10 | Comprehensive phase docs, NIP spec, deployment guide, audit remediation. -1 for relayer/create-group auth drift (N-26). |
+| **Overall** | **7.5/10** | Not ready for an interoperability-focused beta. Address N-25 and N-1 through N-5 before public beta. |
 
 ---
 
@@ -490,32 +517,34 @@ The v1 audit identified 9 Critical, 14 High, and 19 Medium findings. All have be
 
 | Priority | Finding | Effort | Impact |
 |----------|---------|--------|--------|
-| 1 | **N-1**: Verify ephemeral key signature on receive | Small | Completes M-5 MITM protection |
-| 2 | **N-6**: Remove or flag legacy unverified message fallback | Small | Prevents H-4 bypass |
-| 3 | **N-2**: Thread-safe collections in GroupListViewModel | Small | Prevents crash and replay bypass |
-| 4 | **N-3**: Synchronized StorageEncryption init | Small | Prevents race condition |
+| 1 | **N-25**: Fix Nostr event signing to sign the event ID directly | Small | Restores NIP-01 signature correctness and interoperability |
+| 2 | **N-1**: Verify ephemeral key signature on receive | Small | Completes M-5 MITM protection |
+| 3 | **N-6**: Remove or flag legacy unverified message fallback | Small | Prevents H-4 bypass |
+| 4 | **N-2**: Thread-safe collections in GroupListViewModel | Small | Prevents crash and replay bypass |
+| 5 | **N-3**: Synchronized StorageEncryption init | Small | Prevents race condition |
 
 ### Before public beta
 
 | Priority | Finding | Effort | Impact |
 |----------|---------|--------|--------|
-| 5 | **N-5**: Move auth token to Keychain/EncryptedSharedPrefs | Small | Protects credentials at rest |
-| 6 | **N-4**: Replace force unwraps with error handling | Small | Prevents crash on corrupted state |
-| 7 | **N-7**: Verify Nostr event signatures | Medium | Prevents relay-level identity spoofing |
-| 8 | **N-8**: Bound replay protection sets | Small | Prevents memory leak |
-| 9 | **N-10**: Fix JNI `get_bytes()` silent failure | Small | Prevents silent wrong results |
+| 6 | **N-5**: Move auth token to Keychain/EncryptedSharedPrefs | Small | Protects credentials at rest |
+| 7 | **N-4**: Replace force unwraps with error handling | Small | Prevents crash on corrupted state |
+| 8 | **N-7**: Verify Nostr event signatures | Medium | Prevents relay-level identity spoofing |
+| 9 | **N-8**: Bound replay protection sets | Small | Prevents memory leak |
+| 10 | **N-10**: Fix JNI `get_bytes()` silent failure | Small | Prevents silent wrong results |
+| 11 | **N-26**: Rework or narrow relayer support for `create_group` | Medium | Restores consistency between auth model and fee-decoupled transport |
 
 ### Before GA
 
 | Priority | Finding | Effort | Impact |
 |----------|---------|--------|--------|
-| 10 | **N-9**: Encrypt Android Room database | Medium | Protects metadata at rest |
-| 11 | **N-12**: Add VK rotation mechanism | Medium | Enables circuit upgrades |
-| 12 | **N-13**: Migrate invitation tags to standard NIP tag | Medium | Improves relay compatibility |
-| 13 | **N-14**: Document proof-only auth design decision | Small | Clarifies threat model |
-| 14 | **N-15**: Handle PersistenceStore init failure | Small | Prevents crash |
-| 15 | **N-16**: Document/mitigate TTL expiry | Small | Prevents silent group loss |
-| 16 | **N-23**: Decrement group count on deactivation | Small | Prevents limit exhaustion |
+| 12 | **N-9**: Encrypt Android Room database | Medium | Protects metadata at rest |
+| 13 | **N-12**: Add VK rotation mechanism | Medium | Enables circuit upgrades |
+| 14 | **N-13**: Migrate invitation tags to standard NIP tag | Medium | Improves relay compatibility |
+| 15 | **N-14**: Document proof-only auth design decision | Small | Clarifies threat model |
+| 16 | **N-15**: Handle PersistenceStore init failure | Small | Prevents crash |
+| 17 | **N-16**: Document/mitigate TTL expiry | Small | Prevents silent group loss |
+| 18 | **N-23**: Decrement group count on deactivation | Small | Prevents limit exhaustion |
 
 ### At maintainer discretion
 
@@ -529,6 +558,39 @@ The v1 audit identified 9 Critical, 14 High, and 19 Medium findings. All have be
 | N-21 | Document 64-entry history window and event indexing |
 | N-22 | Epoch overflow guard — practically impossible |
 | N-24 | `@MainActor` isolation for AppState |
+
+---
+
+## Appendix: Remediation Status
+
+All 24 findings from this audit have been addressed. Summary of remediations:
+
+| Finding | Severity | Status | Remediation |
+|---------|----------|--------|-------------|
+| N-1 | High | **Fixed** | Ephemeral key signature verification added to `decryptInvitation` on both platforms |
+| N-2 | High | **Fixed** | Replaced with `ConcurrentHashMap`, `synchronizedSet`, `Collections.newSetFromMap` |
+| N-3 | High | **Fixed** | Added `@Synchronized` to `StorageEncryption.init()` |
+| N-4 | High | **Fixed** | `do/catch` with key regeneration fallback in `KeyManager.init()` |
+| N-5 | High | **Fixed** | Auth token moved to Keychain (iOS) and EncryptedSharedPreferences (Android) with migration |
+| N-6 | Medium | **Fixed** | Legacy unverified message fallback removed; messages without BLS auth are rejected |
+| N-7 | Medium | **Fixed** | `verifyEventID()` added to both platforms; events with invalid IDs rejected at relay connection |
+| N-8 | Medium | **Fixed** | Bounded dedup sets (max 10,000 entries) with LRU eviction |
+| N-9 | Medium | **Documented** | Field-level encryption covers sensitive data; SQLCipher noted for full metadata protection |
+| N-10 | Medium | **Fixed** | `get_bytes()` returns empty vec with descriptive downstream error instead of `unwrap_or_default` |
+| N-11 | Medium | **Fixed** | `constant_time_eq` comparison in `verify_commitment` and `verify_poseidon_commitment` |
+| N-12 | Medium | **Fixed** | `update_vk(tier, new_vk)` admin function added to contract |
+| N-13 | Medium | **Documented** | Custom tag usage documented; relay compatibility requirements noted |
+| N-14 | Medium | **Documented** | Proof-only auth design documented in `update_commitment` and `deactivate_group` |
+| N-15 | Medium | **Fixed** | `PersistenceStore` init uses `try?` with in-memory fallback via `PersistenceStore.inMemory()` |
+| N-16 | Medium | **Fixed** | `bump_group_ttl(group_id)` public function added to contract |
+| N-17 | Low | **Fixed** | `Error::Unauthorized` renamed to `Reserved3` (preserves ABI numbering) |
+| N-18 | Low | **Fixed** | 1 MB max message size enforced in `handleMessage` on both platforms |
+| N-19 | Low | **Fixed** | `SecurityLog.relayEvent()` logging added to Android relay `handleMessage` catch block |
+| N-20 | Low | **Documented** | No-forward-secrecy design documented in `GroupCrypto.deriveMessageKey` |
+| N-21 | Low | **Documented** | History window limit and event indexing requirement documented in `HISTORY_WINDOW` constant |
+| N-22 | Low | **Fixed** | `checked_add(1)` used for epoch increment in `update_commitment` |
+| N-23 | Low | **Fixed** | `GroupCount(tier)` decremented in `deactivate_group` |
+| N-24 | Low | **Fixed** | `@MainActor` annotation added to `AppState` |
 
 ---
 

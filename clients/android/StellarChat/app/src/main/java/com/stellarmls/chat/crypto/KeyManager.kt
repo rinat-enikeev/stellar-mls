@@ -19,7 +19,7 @@ import java.security.SecureRandom
  * may block the calling thread. Use [KeyManager.createAsync] to initialize on a
  * background thread, or call the constructor from a coroutine on Dispatchers.IO.
  */
-class KeyManager private constructor(prefs: android.content.SharedPreferences) {
+class KeyManager private constructor(private val prefs: android.content.SharedPreferences) {
     val secretKey: ByteArray
     val publicKey: ByteArray
     val publicKeyHex: String
@@ -149,5 +149,17 @@ class KeyManager private constructor(prefs: android.content.SharedPreferences) {
         publicKeyCompressed = blsPublicKey(),
         leafHash = leafHash()
     )
+
+    // N-5: Store relayer auth token in EncryptedSharedPreferences instead of plaintext.
+
+    /** Save relayer auth token securely. */
+    fun saveRelayerAuthToken(token: String) {
+        prefs.edit().putString("relayer_auth_token", token).apply()
+    }
+
+    /** Load relayer auth token from encrypted storage. */
+    fun loadRelayerAuthToken(): String {
+        return prefs.getString("relayer_auth_token", "") ?: ""
+    }
 
 }

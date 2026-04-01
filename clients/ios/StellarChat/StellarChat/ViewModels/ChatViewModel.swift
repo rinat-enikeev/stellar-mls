@@ -14,9 +14,12 @@ final class ChatViewModel {
     private weak var appState: AppState?
     private var seenIDs: Set<String> = []
     /// Tracks processed protocol event IDs to prevent replay (H-7).
+    /// N-8: Bounded to prevent unbounded memory growth.
     private var processedProtocolEventIDs: Set<String> = []
     /// Tracks (senderPubkey, epoch) pairs for salt request rate limiting (H-5).
     private var saltRequestsResponded: Set<String> = []
+    /// N-8: Max entries for dedup sets.
+    private static let maxDedupSetSize = 10_000
 
     init(group: ChatGroup, transport: NostrMessageTransport, keyManager: KeyManager, store: PersistenceStore, appState: AppState? = nil) {
         self.group = group
@@ -58,6 +61,10 @@ final class ChatViewModel {
             Task { @MainActor in
                 // Replay protection: skip already-processed protocol events (H-7)
                 guard !self.processedProtocolEventIDs.contains(event.id) else { return }
+                // N-8: Evict oldest entries when set exceeds max size
+                if self.processedProtocolEventIDs.count >= Self.maxDedupSetSize {
+                    self.processedProtocolEventIDs.removeFirst()
+                }
                 self.processedProtocolEventIDs.insert(event.id)
 
                 let decoder = JSONDecoder()

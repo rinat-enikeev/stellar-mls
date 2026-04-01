@@ -16,6 +16,9 @@ struct StellarChatApp: App {
     }
 }
 
+/// N-24: @MainActor isolation ensures all property mutations happen on the
+/// main actor, preventing data races from concurrent relay callbacks.
+@MainActor
 @Observable
 final class AppState {
     var keyManager: KeyManager
@@ -43,8 +46,9 @@ final class AppState {
     var relayerURL: String {
         didSet { UserDefaults.standard.set(relayerURL, forKey: Self.relayerURLKey) }
     }
+    /// N-5: Auth token stored in Keychain instead of UserDefaults to prevent plaintext exposure.
     var relayerAuthToken: String {
-        didSet { UserDefaults.standard.set(relayerAuthToken, forKey: Self.relayerAuthTokenKey) }
+        didSet { Self.saveToKeychain(relayerAuthToken, key: Self.relayerAuthTokenKey) }
     }
     var isRelayerConfigured: Bool {
         !relayerURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -68,13 +72,29 @@ final class AppState {
 
     init() {
         self.keyManager = KeyManager()
-        self.store = try! PersistenceStore()
+        // N-15: Handle PersistenceStore init failure gracefully instead of crashing.
+        // If first attempt fails (e.g., disk full), retry once; if both fail, create
+        // an in-memory fallback so the app can still launch.
+        if let persistedStore = try? PersistenceStore() {
+            self.store = persistedStore
+        } else if let retryStore = try? PersistenceStore() {
+            self.store = retryStore
+        } else {
+            self.store = PersistenceStore.inMemory()
+        }
         self.groups = store.loadGroups()
         self.relayURLs = Self.loadRelayURLs()
         self.contractEndpoint = UserDefaults.standard.string(forKey: Self.contractEndpointKey) ?? ""
         self.contractID = UserDefaults.standard.string(forKey: Self.contractIDKey) ?? ""
         self.relayerURL = UserDefaults.standard.string(forKey: Self.relayerURLKey) ?? ""
-        self.relayerAuthToken = UserDefaults.standard.string(forKey: Self.relayerAuthTokenKey) ?? ""
+        // N-5: Load auth token from Keychain; migrate from UserDefaults if present
+        if let legacyToken = UserDefaults.standard.string(forKey: Self.relayerAuthTokenKey), !legacyToken.isEmpty {
+            Self.saveToKeychain(legacyToken, key: Self.relayerAuthTokenKey)
+            UserDefaults.standard.removeObject(forKey: Self.relayerAuthTokenKey)
+            self.relayerAuthToken = legacyToken
+        } else {
+            self.relayerAuthToken = Self.loadFromKeychain(key: Self.relayerAuthTokenKey) ?? ""
+        }
         configureContractIfReady()
 
         // M-17: Load persisted salt history, then add current group salts
@@ -494,5 +514,32 @@ final class AppState {
 
     func moveRelay(from source: IndexSet, to destination: Int) {
         relayURLs.move(fromOffsets: source, toOffset: destination)
+    }
+
+    // MARK: - Keychain Helpers (N-5: secure credential storage)
+
+    private static func loadFromKeychain(key: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecSuccess, let data = result as? Data {
+            return String(data: data, encoding: .utf8)
+        }
+        return nil
+    }
+
+    private static func saveToKeychain(_ value: String, key: String) {
+        let data = Data(value.utf8)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key,
+            kSecValueData as String: data,
+        ]
+        SecItemDelete(query as CFDictionary)
+        SecItemAdd(query as CFDictionary, nil)
     }
 }

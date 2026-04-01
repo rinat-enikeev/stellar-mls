@@ -22,3 +22,16 @@ target
 
 .DS_Store
 .claude
+
+# XCFramework build output (binary artifacts)
+build/
+
+# Xcode
+DerivedData/
+*.xcuserdata
+xcuserdata/
+
+# Android
+*.apk
+*.aab
+local.properties

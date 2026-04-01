@@ -1,9 +1,11 @@
 import CryptoKit
 import Foundation
+import SwiftMLS
 
 final class KeyManager: Codable {
     private(set) var secretKey: Data
     private(set) var publicKey: Data
+    private let signer: RustBackedNostrSigner
 
     init() {
         let storedKey = Self.loadFromKeychain()
@@ -15,32 +17,60 @@ final class KeyManager: Codable {
             self.secretKey = Data(bytes)
             Self.saveToKeychain(self.secretKey)
         }
-        self.publicKey = Self.derivePublicKey(from: self.secretKey)
+        self.signer = try! RustBackedNostrSigner(secretKey: self.secretKey)
+        self.publicKey = try! signer.publicKey()
     }
 
     var publicKeyHex: String {
         publicKey.map { String(format: "%02x", $0) }.joined()
     }
 
-    func signEventID(_ eventID: Data) -> Data {
-        // secp256k1 Schnorr signing using CryptoKit P256 as a placeholder.
-        // In production, this would use the Rust bridge (RustBackedNostrSigner).
-        // For the demo, we use a simplified HMAC-based signature that produces
-        // 64 bytes. Real Nostr validators won't accept this, but the relay will
-        // forward the event (relays don't verify signatures on custom kinds).
-        let key = SymmetricKey(data: secretKey)
-        let mac = HMAC<SHA256>.authenticationCode(for: eventID, using: key)
-        var sig = Data(mac)
-        sig.append(Data(repeating: 0, count: 32)) // pad to 64 bytes
-        return sig
+    /// BLS12-381 leaf hash for SEP Merkle tree membership.
+    var leafHash: Data {
+        get throws {
+            try SEPCommitmentBuilder.computeLeafHash(secretKey: secretKey)
+        }
     }
 
-    private static func derivePublicKey(from secretKey: Data) -> Data {
-        // Derive a deterministic 32-byte "public key" from the secret key.
-        // In production, this uses sep_nostr_derive_public_key (secp256k1 x-only).
-        // For the demo, we use SHA-256 of the secret key as the public key.
-        let hash = SHA256.hash(data: secretKey)
-        return Data(hash)
+    /// BLS12-381 compressed public key (48 bytes) for SEP group membership.
+    var blsPublicKey: Data {
+        get throws {
+            try SEPCommitmentBuilder.computePublicKey(secretKey: secretKey)
+        }
+    }
+
+    /// SEP group member leaf for Merkle tree construction.
+    var memberLeaf: SEPGroupMemberLeaf {
+        get throws {
+            SEPGroupMemberLeaf(
+                publicKeyCompressed: try blsPublicKey,
+                leafHash: try leafHash
+            )
+        }
+    }
+
+    func signEventID(_ eventID: Data) -> Data {
+        // Real secp256k1 Schnorr signature via Rust FFI
+        return try! signer.signEventID(eventID)
+    }
+
+    // MARK: - Codable (exclude signer)
+
+    enum CodingKeys: String, CodingKey {
+        case secretKey, publicKey
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.secretKey = try container.decode(Data.self, forKey: .secretKey)
+        self.publicKey = try container.decode(Data.self, forKey: .publicKey)
+        self.signer = try RustBackedNostrSigner(secretKey: self.secretKey)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(secretKey, forKey: .secretKey)
+        try container.encode(publicKey, forKey: .publicKey)
     }
 
     // MARK: - Keychain

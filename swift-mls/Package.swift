@@ -1,20 +1,29 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
-// Local development links against the debug Rust static library.
-// For release / CI, run `scripts/build-xcframework.sh` and switch to:
+// Requires the XCFramework to be built first:
+//   ./scripts/build-xcframework.sh
 //
-//   .binaryTarget(
+// For local macOS-only development with the debug Rust library, replace
+// the binaryTarget with:
+//
+//   .target(
 //       name: "CSEPMLSFFI",
-//       path: "../build/SEPMLSFFI.xcframework"
-//   )
+//       path: "Sources/CSEPMLSFFI",
+//       publicHeadersPath: "include"
+//   ),
 //
-// and remove the unsafeFlags linker settings below.
+// and add linkerSettings to the SwiftMLS target:
+//
+//   linkerSettings: [
+//       .unsafeFlags(["-L", "../target/debug", "-lsep_xxxx_circuits"])
+//   ]
 
 let package = Package(
     name: "SwiftMLS",
     platforms: [
-        .macOS(.v13)
+        .macOS(.v13),
+        .iOS(.v17)
     ],
     products: [
         .library(
@@ -23,21 +32,14 @@ let package = Package(
         )
     ],
     targets: [
-        .target(
+        .binaryTarget(
             name: "CSEPMLSFFI",
-            path: "Sources/CSEPMLSFFI",
-            publicHeadersPath: "include"
+            path: "../build/SEPMLSFFI.xcframework"
         ),
         .target(
             name: "SwiftMLS",
             dependencies: ["CSEPMLSFFI"],
-            path: "Sources/SwiftMLS",
-            linkerSettings: [
-                .unsafeFlags([
-                    "-L", "../target/debug",
-                    "-lsep_xxxx_circuits"
-                ])
-            ]
+            path: "Sources/SwiftMLS"
         ),
         .testTarget(
             name: "SwiftMLSTests",

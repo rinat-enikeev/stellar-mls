@@ -37,6 +37,9 @@ struct SettingsView: View {
                     LabeledContent("Encryption") { Text("AES-256-GCM") }
                     LabeledContent("Key Derivation") { Text("HKDF-SHA256") }
                     LabeledContent("Topic Derivation") { Text("SHA256(secret)") }
+                    LabeledContent("Signing") { Text("secp256k1 Schnorr") }
+                    LabeledContent("ZK Backend") { Text("Groth16 / BLS12-381") }
+                    LabeledContent("Commitment") { Text("Poseidon Merkle + SHA256") }
                 }
 
                 Section("About") {

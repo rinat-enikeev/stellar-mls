@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftMLS
 
 @main
 struct StellarChatApp: App {
@@ -31,5 +32,42 @@ final class AppState {
 
     func removeGroup(id: String) {
         groups.removeAll { $0.id == id }
+    }
+
+    /// Create a group with the local user as the first member, computing the initial commitment.
+    func createGroup(name: String) throws -> (ChatGroup, String) {
+        var groupIDBytes = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, 32, &groupIDBytes)
+        let groupID = Data(groupIDBytes)
+
+        var secretBytes = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, 32, &secretBytes)
+        let groupSecret = Data(secretBytes)
+
+        let groupIDHex = groupID.map { String(format: "%02x", $0) }.joined()
+
+        let myLeaf = try keyManager.memberLeaf
+
+        var group = ChatGroup(
+            id: groupIDHex,
+            name: name,
+            groupSecret: groupSecret,
+            createdAt: Date(),
+            relayHints: relayURLs,
+            members: [myLeaf],
+            epoch: 0,
+            salt: SEPCommitmentBuilder.generateSalt(),
+            tier: .small
+        )
+        try group.recomputeCommitment()
+        addGroup(group)
+
+        let code = InviteCode(
+            groupID: groupID,
+            groupSecret: groupSecret,
+            name: name,
+            relayHints: relayURLs.map(\.absoluteString)
+        )
+        return (group, code.encode())
     }
 }

@@ -6,6 +6,7 @@ struct CreateGroupView: View {
     @State private var groupName = ""
     @State private var inviteCode = ""
     @State private var copied = false
+    @State private var errorMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -38,6 +39,14 @@ struct CreateGroupView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+
+                if let errorMessage {
+                    Section {
+                        Text(errorMessage)
+                            .foregroundStyle(.red)
+                            .font(.caption)
+                    }
+                }
             }
             .navigationTitle("Create Group")
             .navigationBarTitleDisplayMode(.inline)
@@ -58,32 +67,12 @@ struct CreateGroupView: View {
     }
 
     private func createGroup() {
-        var groupIDBytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, 32, &groupIDBytes)
-        let groupID = Data(groupIDBytes)
-
-        var secretBytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, 32, &secretBytes)
-        let groupSecret = Data(secretBytes)
-
-        let groupIDHex = groupID.map { String(format: "%02x", $0) }.joined()
-
-        let group = ChatGroup(
-            id: groupIDHex,
-            name: groupName,
-            groupSecret: groupSecret,
-            createdAt: Date(),
-            relayHints: appState.relayURLs
-        )
-
-        appState.addGroup(group)
-
-        let code = InviteCode(
-            groupID: groupID,
-            groupSecret: groupSecret,
-            name: groupName,
-            relayHints: appState.relayURLs.map(\.absoluteString)
-        )
-        inviteCode = code.encode()
+        do {
+            let (_, code) = try appState.createGroup(name: groupName)
+            inviteCode = code
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }

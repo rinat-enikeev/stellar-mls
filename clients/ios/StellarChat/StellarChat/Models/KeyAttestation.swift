@@ -1,19 +1,25 @@
 import CryptoKit
 import Foundation
 
-/// Binds a BLS12-381 group membership key to a secp256k1 Nostr identity key.
+/// SEP-XXXX §1.1 Key Attestation — binds a BLS12-381 group membership key
+/// to a Stellar Ed25519 account key.
 ///
-/// Per SEP-XXXX §1.1, the attestation proves that the holder of the Nostr signing key
-/// also controls the BLS key used in the group Merkle tree. The signature covers
-/// `SHA-256("SEP-XXXX:key-binding" || bls_pubkey)`.
+/// ```
+/// KeyAttestation {
+///     bls_pubkey:     BytesN<48>   -- compressed G1 point
+///     ed25519_pubkey: BytesN<32>   -- Stellar account public key
+///     signature:      BytesN<64>   -- Ed25519 signature over SHA-256("SEP-XXXX:key-binding" || bls_pubkey)
+/// }
+/// ```
 ///
-/// The spec defines Ed25519 signatures for Stellar address binding; this implementation
-/// uses secp256k1 Schnorr signatures for Nostr identity binding.
+/// This attestation is a group-level artifact shared among members via the
+/// encrypted channel. It is never submitted on-chain.
 struct KeyAttestation: Codable, Equatable {
-    let blsPubkey: Data      // 48 bytes, compressed G1 point
-    let nostrPubkey: Data    // 32 bytes, secp256k1 x-only public key
-    let signature: Data      // 64 bytes, Schnorr signature
+    let blsPubkey: Data       // 48 bytes, compressed G1 point
+    let ed25519Pubkey: Data   // 32 bytes, Stellar Ed25519 public key
+    let signature: Data       // 64 bytes, Ed25519 signature
 
+    /// The binding message: SHA-256("SEP-XXXX:key-binding" || bls_pubkey).
     static func bindingMessage(blsPubkey: Data) -> Data {
         var hasher = SHA256()
         hasher.update(data: Data("SEP-XXXX:key-binding".utf8))

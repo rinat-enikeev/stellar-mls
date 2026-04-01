@@ -133,7 +133,8 @@ StellarChat/
 | Commitment recomputation on `addMember()` | SEP-XXXX | Implemented |
 | Member sorting by compressed G1 key in `addMember()` | SEP-XXXX §2.1 | Implemented |
 | Independent secp256k1 and BLS12-381 keypairs | SEP-XXXX §1.1 | Implemented |
-| Key attestation (Schnorr binding of BLS to Nostr key) | SEP-XXXX §1.1 | Implemented |
+| Stellar Ed25519 key (HKDF-derived from Nostr key) | SEP-XXXX §1.1 | Implemented |
+| Key attestation (Ed25519 signature binding BLS to Stellar key) | SEP-XXXX §1.1 | Implemented |
 | Message persistence (SwiftData + field-level AES-256-GCM) | App-level | Implemented |
 | Group persistence (SwiftData + field-level AES-256-GCM) | App-level | Implemented |
 | At-rest file protection (`FileProtectionType.complete`) | App-level | Implemented |
@@ -156,7 +157,7 @@ StellarChat/
 
 1. **No contract integration**: The app operates as a pure Nostr messaging client. Commitments are computed locally but never published to or verified against Stellar. This means group membership is trusted, not cryptographically proven on-chain.
 
-2. **Nostr-adapted attestation**: SEP-XXXX §1.1 defines Ed25519 attestations for Stellar address binding. This app uses secp256k1 Schnorr signatures to bind BLS keys to the Nostr identity, since there is no Stellar account in the current flow.
+2. **Derived Stellar key**: The Ed25519 Stellar key is deterministically derived from the Nostr secp256k1 secret via HKDF (`info: "stellar-ed25519-v1"`). This means Nostr key compromise implies Stellar key compromise. Acceptable for group state anchoring; for production with significant on-chain value, use an independent master seed.
 
 ## Interoperability
 

@@ -20,6 +20,22 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("Stellar Identity (Ed25519)") {
+                    LabeledContent("Account ID") {
+                        Text(appState.keyManager.stellarAccountID.prefix(16) + "...")
+                            .font(.caption)
+                            .monospaced()
+                    }
+
+                    Button("Copy Stellar Account ID") {
+                        UIPasteboard.general.string = appState.keyManager.stellarAccountID
+                    }
+
+                    Text("Derived from Nostr key via HKDF-SHA256. StrKey encoded (G...).")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Group Membership (BLS12-381)") {
                     if let blsHex = try? appState.keyManager.blsPublicKey
                         .map({ String(format: "%02x", $0) }).joined()
@@ -40,6 +56,10 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundStyle(status.hasPrefix("Error") ? .red : .green)
                     }
+
+                    Text("Ed25519 signature binding BLS group key to Stellar identity per SEP-XXXX §1.1.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Relays") {
@@ -60,7 +80,8 @@ struct SettingsView: View {
                     LabeledContent("Encryption") { Text("AES-256-GCM") }
                     LabeledContent("Key Derivation") { Text("HKDF-SHA256") }
                     LabeledContent("Topic Derivation") { Text("SHA256(secret)") }
-                    LabeledContent("Signing") { Text("secp256k1 Schnorr") }
+                    LabeledContent("Nostr Signing") { Text("secp256k1 Schnorr") }
+                    LabeledContent("Stellar Signing") { Text("Ed25519") }
                     LabeledContent("ZK Backend") { Text("Groth16 / BLS12-381") }
                     LabeledContent("Commitment") { Text("Poseidon Merkle + SHA256") }
                 }
@@ -85,11 +106,15 @@ struct SettingsView: View {
     private func createAttestation() {
         do {
             let attestation = try appState.keyManager.createAttestation()
+
+            // Verify it immediately to prove round-trip correctness
+            let valid = KeyManager.verifyAttestation(attestation)
+
             let blsHex = attestation.blsPubkey.prefix(8)
                 .map { String(format: "%02x", $0) }.joined()
-            let nostrHex = attestation.nostrPubkey.prefix(8)
+            let ed25519Hex = attestation.ed25519Pubkey.prefix(8)
                 .map { String(format: "%02x", $0) }.joined()
-            attestationStatus = "Bound BLS \(blsHex)... to Nostr \(nostrHex)..."
+            attestationStatus = "Bound BLS \(blsHex)... to Stellar \(ed25519Hex)... (\(valid ? "verified" : "INVALID"))"
         } catch {
             attestationStatus = "Error: \(error.localizedDescription)"
         }

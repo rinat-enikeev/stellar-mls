@@ -7,6 +7,9 @@ struct GroupListView: View {
     @State private var showSettings = false
     @State private var showInvitations = false
     @State private var inviteMemberGroup: ChatGroup?
+    @State private var verificationResult: OnChainVerificationResult?
+    @State private var verifyingGroupID: String?
+    @State private var showVerificationAlert = false
 
     var body: some View {
         List {
@@ -19,12 +22,24 @@ struct GroupListView: View {
             } else {
                 ForEach(appState.groups) { group in
                     NavigationLink(value: group.id) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(group.name)
-                                .font(.headline)
-                            Text("Topic: \(group.topicTag)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(group.name)
+                                    .font(.headline)
+                                Text("Topic: \(group.topicTag)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if group.isPublishedOnChain {
+                                Image(systemName: "checkmark.seal.fill")
+                                    .foregroundStyle(.green)
+                                    .font(.caption)
+                            } else if appState.isContractConfigured {
+                                Image(systemName: "circle")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption2)
+                            }
                         }
                         .padding(.vertical, 4)
                     }
@@ -36,6 +51,14 @@ struct GroupListView: View {
                         }
                     }
                     .swipeActions(edge: .leading) {
+                        if appState.isContractConfigured {
+                            Button {
+                                verifyGroup(group)
+                            } label: {
+                                Label("Verify", systemImage: "checkmark.seal")
+                            }
+                            .tint(.green)
+                        }
                         Button {
                             inviteMemberGroup = group
                         } label: {
@@ -108,6 +131,25 @@ struct GroupListView: View {
         }
         .sheet(item: $inviteMemberGroup) { group in
             InviteMemberView(group: group)
+        }
+        .alert(
+            "On-Chain Verification",
+            isPresented: $showVerificationAlert,
+            presenting: verificationResult
+        ) { _ in
+            Button("OK") {}
+        } message: { result in
+            Text(result.displayText)
+        }
+    }
+
+    private func verifyGroup(_ group: ChatGroup) {
+        verifyingGroupID = group.id
+        Task {
+            let result = await appState.verifyGroupOnChain(group)
+            verificationResult = result
+            verifyingGroupID = nil
+            showVerificationAlert = true
         }
     }
 }

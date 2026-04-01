@@ -91,6 +91,7 @@ StellarChat/
     │   ├── ChatGroup.swift         # Group model, SEP membership, InviteCode
     │   ├── BootstrapPayload.swift  # NIP-XX invitation payload + PendingInvitation
     │   ├── GroupCrypto.swift       # AES-256-GCM, HKDF, X25519 ECDH invitation crypto
+    │   ├── OnChainService.swift    # ZK proof generation + Soroban contract client
     │   ├── StellarStrKey.swift     # Stellar StrKey encoding (G... account IDs)
     │   ├── StorageEncryption.swift # HKDF-derived AES-256-GCM field encryption
     │   ├── PersistedModels.swift   # SwiftData @Model classes (encrypted fields)
@@ -104,13 +105,13 @@ StellarChat/
     │   └── ChatViewModel.swift   # Per-group message state, deduplication
     └── Views/
         ├── ContentView.swift
-        ├── GroupListView.swift        # Group list + invitation badge
+        ├── GroupListView.swift        # Group list + on-chain status badges
         ├── ChatView.swift
-        ├── CreateGroupView.swift
+        ├── CreateGroupView.swift      # Group creation + on-chain publishing
         ├── JoinGroupView.swift
         ├── InviteMemberView.swift     # Send invitation via Nostr
-        ├── PendingInvitationsView.swift # View/accept incoming invitations
-        └── SettingsView.swift         # Keys, relay management, attestation
+        ├── PendingInvitationsView.swift # View/accept with on-chain verification
+        └── SettingsView.swift         # Keys, relay, contract configuration
 ```
 
 ## Protocol Alignment with Specifications
@@ -150,24 +151,34 @@ StellarChat/
 | Inbox key derivation (X25519 from Nostr key via HKDF) | NIP-XX | Implemented |
 | Inbox subscription (auto-listen for incoming invitations) | NIP-XX | Implemented |
 | Relay management UI (add, remove, reorder, persist) | App-level | Implemented |
+| Soroban contract client (`SEPContractClient` integration) | SEP-XXXX | Implemented |
+| Groth16 ZK proof generation (`SEPProofGenerator` + `OnChainService`) | SEP-XXXX | Implemented |
+| Commitment publishing on group creation | SEP-XXXX | Implemented |
+| Commitment update publishing on membership change | SEP-XXXX | Implemented |
+| On-chain commitment verification (Poseidon commitment comparison) | SEP-XXXX | Implemented |
+| Epoch sync validation (local vs on-chain epoch check) | SEP-XXXX | Implemented |
+| On-chain membership proof verification (`verify_membership`) | SEP-XXXX | Implemented |
+| Invitation acceptance with on-chain verification | NIP-XX + SEP-XXXX | Implemented |
+| Contract configuration UI (endpoint, contract ID) | App-level | Implemented |
 
 ### What's Not Yet Implemented
 
 | Feature | Spec | Notes |
 |---------|------|-------|
-| Soroban contract interaction | SEP-XXXX | No on-chain commitment publishing or verification against ledger state |
-| Groth16 ZK proof generation | SEP-XXXX | Rust FFI supports it (`SEPProofGenerator`), but not wired into the app flow |
-| Groth16 proof verification | SEP-XXXX | No on-device or on-chain verification of membership proofs |
-| Fee decoupling / relayer pattern | SEP-XXXX | No transaction submission at all yet |
+| Fee decoupling / relayer pattern | SEP-XXXX | Transaction submitter identity is visible on-chain |
 | Salt distribution and recovery | SEP-XXXX | Salt generated locally but not shared with other members |
-| Epoch validation against Stellar ledger | SEP-XXXX | Epoch incremented locally, not verified against on-chain state |
 | Group deactivation | SEP-XXXX | No mechanism to deactivate or archive groups |
+| Key attestation distribution | SEP-XXXX | Attestations created locally but not shared with group |
+| Push notifications | App-level | No background notification support |
+| Multi-device sync | App-level | Keys and state are device-local |
 
 ### Known Design Deviations
 
-1. **No contract integration**: The app operates as a pure Nostr messaging client. Commitments are computed locally but never published to or verified against Stellar. This means group membership is trusted, not cryptographically proven on-chain.
+1. **Testing proving keys**: The app uses `generateTestingProvingKey` for ZK proof generation. For production, proving keys from a multi-party trusted setup ceremony should be bundled or downloaded.
 
 2. **Derived Stellar key**: The Ed25519 Stellar key is deterministically derived from the Nostr secp256k1 secret via HKDF (`info: "stellar-ed25519-v1"`). This means Nostr key compromise implies Stellar key compromise. Acceptable for group state anchoring; for production with significant on-chain value, use an independent master seed.
+
+3. **Contract transport**: The Soroban contract client uses HTTP transport (`URLSessionSEPContractTransport`). For production, direct Soroban RPC or a fee-decoupled relayer pattern should be used.
 
 ## Interoperability
 
@@ -199,13 +210,13 @@ This app is wire-compatible with the Android StellarChat app. Both use identical
 - ~~**Bootstrap payload**: Full NIP-XX payload including `group_id`, `group_secret`, `epoch`, `members`, `salt`, `commitment`, and `relay_hints`~~
 - ~~**Relay management UI**: Add, remove, and reorder relay URLs with UserDefaults persistence~~
 
-### Phase 3: On-Chain Integration
+### Phase 3: On-Chain Integration (completed)
 
-- **Soroban contract client**: Publish commitments to the SEP-XXXX contract on Stellar testnet after each membership change
-- **Commitment verification**: On receiving a group update, fetch the on-chain commitment and verify it matches the locally computed value
-- **Epoch sync**: Validate that the local epoch matches the on-chain epoch before accepting membership changes
-- **ZK proof generation**: Generate Groth16 membership proofs using `SEPProofGenerator` when submitting on-chain updates
-- **Proof verification**: Verify received proofs locally before accepting group state transitions
+- ~~**Soroban contract client**: `OnChainService` actor wrapping `SEPContractClient` for Stellar testnet interaction~~
+- ~~**Commitment verification**: Poseidon commitment comparison against on-chain state on invitation acceptance and manual verify~~
+- ~~**Epoch sync**: Local epoch validated against on-chain epoch before accepting membership changes~~
+- ~~**ZK proof generation**: Groth16 proofs via `SEPProofGenerator` with cached proving keys, auto-published on group creation~~
+- ~~**Proof verification**: On-chain `verify_membership` via contract, commitment update proofs against current state~~
 
 ### Phase 4: Production Readiness
 

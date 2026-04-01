@@ -13,8 +13,9 @@ struct ChatGroup: Identifiable, Codable {
     var members: [SEPGroupMemberLeaf] = []
     var epoch: UInt64 = 0
     var salt: Data = SEPCommitmentBuilder.generateSalt()
-    var commitment: Data?   // latest verified commitment
+    var commitment: Data?   // latest verified commitment (SHA-256 variant)
     var tier: SEPTier = .small
+    var isPublishedOnChain: Bool = false
 
     var topicTag: String {
         GroupCrypto.hiddenGroupTopic(groupSecret: groupSecret)
@@ -22,6 +23,16 @@ struct ChatGroup: Identifiable, Codable {
 
     var encryptionKey: SymmetricKey {
         GroupCrypto.deriveMessageKey(groupSecret: groupSecret)
+    }
+
+    /// Group ID as raw bytes (converts hex string back to 32-byte Data).
+    var groupIDData: Data {
+        let bytes = stride(from: 0, to: id.count, by: 2).compactMap { i -> UInt8? in
+            let start = id.index(id.startIndex, offsetBy: i)
+            let end = id.index(start, offsetBy: 2)
+            return UInt8(id[start..<end], radix: 16)
+        }
+        return Data(bytes)
     }
 
     /// Recompute Merkle root and commitment from current member list.
@@ -82,6 +93,8 @@ enum ChatError: LocalizedError {
     case noKey
     case verificationFailed(String)
     case relayPublishFailed
+    case contractNotConfigured
+    case onChainPublishFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -91,6 +104,8 @@ enum ChatError: LocalizedError {
         case .noKey: return "No signing key available"
         case .verificationFailed(let reason): return "Verification failed: \(reason)"
         case .relayPublishFailed: return "Failed to publish to any relay"
+        case .contractNotConfigured: return "Stellar contract not configured"
+        case .onChainPublishFailed(let reason): return "On-chain publish failed: \(reason)"
         }
     }
 }

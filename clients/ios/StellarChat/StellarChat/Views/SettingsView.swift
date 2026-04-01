@@ -6,6 +6,9 @@ struct SettingsView: View {
     @State private var attestationStatus: String?
     @State private var newRelayURL = ""
     @State private var relayError: String?
+    @State private var contractEndpoint = ""
+    @State private var contractIDInput = ""
+    @State private var contractSaveStatus: String?
 
     var body: some View {
         NavigationStack {
@@ -81,6 +84,8 @@ struct SettingsView: View {
                 }
 
                 relayManagementSection
+
+                contractSection
 
                 Section("Protocol") {
                     LabeledContent("Invitation Kind") { Text("24113") }
@@ -158,6 +163,55 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Stellar Contract
+
+    @ViewBuilder
+    private var contractSection: some View {
+        Section("Stellar Contract") {
+            HStack {
+                Image(systemName: appState.isContractConfigured
+                    ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(appState.isContractConfigured ? .green : .secondary)
+                Text(appState.isContractConfigured ? "Connected" : "Not configured")
+                    .font(.caption)
+            }
+
+            TextField("Endpoint URL", text: $contractEndpoint)
+                .font(.caption)
+                .monospaced()
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+
+            TextField("Contract ID", text: $contractIDInput)
+                .font(.caption)
+                .monospaced()
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+
+            Button("Save Contract Configuration") {
+                saveContractConfig()
+            }
+            .disabled(
+                contractEndpoint.trimmingCharacters(in: .whitespaces).isEmpty
+                    || contractIDInput.trimmingCharacters(in: .whitespaces).isEmpty
+            )
+
+            if let status = contractSaveStatus {
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(status.hasPrefix("Error") ? .red : .green)
+            }
+
+            Text("Enter the Soroban RPC endpoint and deployed SEP-XXXX contract address for testnet.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .onAppear {
+            contractEndpoint = appState.contractEndpoint
+            contractIDInput = appState.contractID
+        }
+    }
+
     // MARK: - Actions
 
     private func createAttestation() {
@@ -172,6 +226,15 @@ struct SettingsView: View {
         } catch {
             attestationStatus = "Error: \(error.localizedDescription)"
         }
+    }
+
+    private func saveContractConfig() {
+        appState.contractEndpoint = contractEndpoint
+        appState.contractID = contractIDInput
+        appState.configureContract()
+        contractSaveStatus = appState.isContractConfigured
+            ? "Configured successfully"
+            : "Error: Invalid endpoint URL or contract ID"
     }
 
     private func addRelay() {

@@ -7,6 +7,15 @@ struct CreateGroupView: View {
     @State private var inviteCode = ""
     @State private var copied = false
     @State private var errorMessage: String?
+    @State private var onChainStatus: OnChainPublishStatus = .idle
+    @State private var createdGroup: ChatGroup?
+
+    private enum OnChainPublishStatus {
+        case idle
+        case publishing
+        case published
+        case failed(String)
+    }
 
     var body: some View {
         NavigationStack {
@@ -40,6 +49,38 @@ struct CreateGroupView: View {
                     }
                 }
 
+                if !inviteCode.isEmpty && appState.isContractConfigured {
+                    Section("On-Chain Status") {
+                        switch onChainStatus {
+                        case .idle:
+                            EmptyView()
+                        case .publishing:
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("Publishing to Stellar testnet...")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        case .published:
+                            Label("Published on-chain", systemImage: "checkmark.seal.fill")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        case .failed(let reason):
+                            VStack(alignment: .leading, spacing: 4) {
+                                Label("Publication failed", systemImage: "exclamationmark.triangle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                                Text(reason)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                Button("Retry") { publishOnChain() }
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                }
+
                 if let errorMessage {
                     Section {
                         Text(errorMessage)
@@ -68,11 +109,31 @@ struct CreateGroupView: View {
 
     private func createGroup() {
         do {
-            let (_, code) = try appState.createGroup(name: groupName)
+            let (group, code) = try appState.createGroup(name: groupName)
             inviteCode = code
+            createdGroup = group
             errorMessage = nil
+
+            // Auto-publish on-chain if contract is configured
+            if appState.isContractConfigured {
+                publishOnChain()
+            }
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func publishOnChain() {
+        guard let group = createdGroup else { return }
+        onChainStatus = .publishing
+
+        Task {
+            do {
+                try await appState.publishGroupOnChain(group)
+                onChainStatus = .published
+            } catch {
+                onChainStatus = .failed(error.localizedDescription)
+            }
         }
     }
 }

@@ -23,6 +23,7 @@
 		865234AA099329B7E4D41789 /* JoinGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 005C04E920D6B0FC3423EE24 /* JoinGroupView.swift */; };
 		95489626E5CAD02D3CDB0207 /* StellarStrKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */; };
 		B5836D3E7760359CFB8C42AC /* GroupCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8210CED65D67082D16673F07 /* GroupCrypto.swift */; };
+		CF17A18CDF1209DC9F6CA369 /* OnChainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06014BB7573399F26644F9F6 /* OnChainService.swift */; };
 		D6847B5213B8820FA30819D7 /* StorageEncryption.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD61B2440CA5ED81C983DA87 /* StorageEncryption.swift */; };
 		D6C3C9E90F39CCA80D2DD029 /* GroupListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C2B0F0A2A137DC1BE419CC3 /* GroupListView.swift */; };
 		D80AA787557EC39AC88FF3F3 /* KeyAttestation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37304476C52093C0D34ECB92 /* KeyAttestation.swift */; };
@@ -36,6 +37,7 @@
 
 /* Begin PBXFileReference section */
 		005C04E920D6B0FC3423EE24 /* JoinGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinGroupView.swift; sourceTree = "<group>"; };
+		06014BB7573399F26644F9F6 /* OnChainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnChainService.swift; sourceTree = "<group>"; };
 		0E25D14293AC1BC6E3FB1E28 /* PersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStore.swift; sourceTree = "<group>"; };
 		211AE30EB5115E4BB85D9084 /* swift-mls */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "swift-mls"; path = "../../../swift-mls"; sourceTree = SOURCE_ROOT; };
 		37304476C52093C0D34ECB92 /* KeyAttestation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyAttestation.swift; sourceTree = "<group>"; };
@@ -107,6 +109,7 @@
 				8210CED65D67082D16673F07 /* GroupCrypto.swift */,
 				37304476C52093C0D34ECB92 /* KeyAttestation.swift */,
 				F5EB556EBD80A9DC1A99F1F4 /* KeyManager.swift */,
+				06014BB7573399F26644F9F6 /* OnChainService.swift */,
 				4705F8234AA6022CD782348E /* PersistedModels.swift */,
 				0E25D14293AC1BC6E3FB1E28 /* PersistenceStore.swift */,
 				3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */,
@@ -255,6 +258,7 @@
 				EDF053D5AE1660633B823B48 /* NostrEvent.swift in Sources */,
 				EFB9DF389A99555142550086 /* NostrMessageTransport.swift in Sources */,
 				F5E26B4C634D5DFCC4ECBD28 /* NostrRelayConnection.swift in Sources */,
+				CF17A18CDF1209DC9F6CA369 /* OnChainService.swift in Sources */,
 				1F2DC6C7FF3C465CBD31ABA9 /* PendingInvitationsView.swift in Sources */,
 				661B24EC80C52FD32C0DB020 /* PersistedModels.swift in Sources */,
 				4CF5F8CBF1B249B01EC14D1C /* PersistenceStore.swift in Sources */,

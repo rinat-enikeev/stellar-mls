@@ -3,6 +3,8 @@ import SwiftUI
 struct PendingInvitationsView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
+    @State private var verificationResults: [String: OnChainVerificationResult] = [:]
+    @State private var verifyingIDs: Set<String> = []
 
     var body: some View {
         NavigationStack {
@@ -36,6 +38,19 @@ struct PendingInvitationsView: View {
                                         .foregroundStyle(.secondary)
                                 }
 
+                                // On-chain verification status
+                                if let result = verificationResults[invitation.id] {
+                                    verificationBadge(result)
+                                } else if verifyingIDs.contains(invitation.id) {
+                                    HStack(spacing: 4) {
+                                        ProgressView()
+                                            .controlSize(.mini)
+                                        Text("Verifying on-chain...")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+
                                 HStack(spacing: 12) {
                                     Button("Accept") {
                                         acceptInvitation(invitation)
@@ -53,6 +68,9 @@ struct PendingInvitationsView: View {
                                 .padding(.top, 4)
                             }
                             .padding(.vertical, 4)
+                            .task {
+                                await verifyInvitation(invitation)
+                            }
                         }
                     }
                 }
@@ -67,15 +85,73 @@ struct PendingInvitationsView: View {
         }
     }
 
+    @ViewBuilder
+    private func verificationBadge(_ result: OnChainVerificationResult) -> some View {
+        HStack(spacing: 4) {
+            switch result {
+            case .verified:
+                Image(systemName: "checkmark.seal.fill")
+                    .foregroundStyle(.green)
+                Text("Verified on-chain")
+                    .foregroundStyle(.green)
+            case .notPublished:
+                Image(systemName: "circle")
+                    .foregroundStyle(.secondary)
+                Text("Not yet published on-chain")
+                    .foregroundStyle(.secondary)
+            case .epochMismatch(let local, let onChain):
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text("Epoch mismatch: local \(local), on-chain \(onChain)")
+                    .foregroundStyle(.orange)
+            case .commitmentMismatch:
+                Image(systemName: "xmark.seal.fill")
+                    .foregroundStyle(.red)
+                Text("Commitment mismatch")
+                    .foregroundStyle(.red)
+            case .inactive:
+                Image(systemName: "minus.circle.fill")
+                    .foregroundStyle(.red)
+                Text("Group deactivated")
+                    .foregroundStyle(.red)
+            case .error:
+                Image(systemName: "questionmark.circle")
+                    .foregroundStyle(.secondary)
+                Text("Could not verify")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .font(.caption2)
+    }
+
+    /// Verify invitation's commitment and epoch against on-chain state.
+    private func verifyInvitation(_ invitation: PendingInvitation) async {
+        guard appState.isContractConfigured else { return }
+        guard !verifyingIDs.contains(invitation.id) else { return }
+
+        verifyingIDs.insert(invitation.id)
+
+        let payload = invitation.payload
+        let tempGroup = payload.toChatGroup()
+        let result = await appState.verifyGroupOnChain(tempGroup)
+
+        verificationResults[invitation.id] = result
+        verifyingIDs.remove(invitation.id)
+    }
+
     private func acceptInvitation(_ invitation: PendingInvitation) {
-        let group = invitation.payload.toChatGroup()
+        var group = invitation.payload.toChatGroup()
         let groupIDHex = group.id
 
         // Check if already joined
         if appState.groups.contains(where: { $0.id == groupIDHex }) {
-            // Already in this group, just remove the invitation
             appState.removePendingInvitation(id: invitation.id)
             return
+        }
+
+        // Mark as published if on-chain verification passed
+        if let result = verificationResults[invitation.id], result == .verified {
+            group.isPublishedOnChain = true
         }
 
         appState.addGroup(group)

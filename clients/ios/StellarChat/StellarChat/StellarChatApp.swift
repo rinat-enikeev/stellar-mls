@@ -27,6 +27,17 @@ final class AppState {
         didSet { Self.persistRelayURLs(relayURLs) }
     }
 
+    // MARK: - On-Chain Integration
+
+    var onChainService: OnChainService?
+    var contractEndpoint: String {
+        didSet { UserDefaults.standard.set(contractEndpoint, forKey: Self.contractEndpointKey) }
+    }
+    var contractID: String {
+        didSet { UserDefaults.standard.set(contractID, forKey: Self.contractIDKey) }
+    }
+    var isContractConfigured: Bool { onChainService != nil }
+
     private static let defaultRelays: [URL] = [
         URL(string: "wss://relay.damus.io")!,
         URL(string: "wss://nos.lol")!,
@@ -37,10 +48,20 @@ final class AppState {
         self.store = try! PersistenceStore()
         self.groups = store.loadGroups()
         self.relayURLs = Self.loadRelayURLs()
+        self.contractEndpoint = UserDefaults.standard.string(forKey: Self.contractEndpointKey) ?? ""
+        self.contractID = UserDefaults.standard.string(forKey: Self.contractIDKey) ?? ""
+        configureContractIfReady()
     }
 
     func addGroup(_ group: ChatGroup) {
         groups.append(group)
+        store.saveGroup(group)
+    }
+
+    func updateGroup(_ group: ChatGroup) {
+        if let index = groups.firstIndex(where: { $0.id == group.id }) {
+            groups[index] = group
+        }
         store.saveGroup(group)
     }
 
@@ -88,6 +109,119 @@ final class AppState {
             relayHints: relayURLs.map(\.absoluteString)
         )
         return (group, code.encode())
+    }
+
+    // MARK: - On-Chain Operations
+
+    /// Publish a newly created group's commitment on-chain.
+    func publishGroupOnChain(_ group: ChatGroup) async throws {
+        guard let service = onChainService else {
+            throw ChatError.contractNotConfigured
+        }
+
+        let response = try await service.publishGroupCreation(
+            groupIDData: group.groupIDData,
+            members: group.members,
+            blsSecretKey: keyManager.blsSecretKey,
+            epoch: group.epoch,
+            salt: group.salt,
+            tier: group.tier
+        )
+
+        if response.accepted {
+            var updated = group
+            updated.isPublishedOnChain = true
+            updateGroup(updated)
+        } else {
+            throw ChatError.onChainPublishFailed(response.message ?? "Contract rejected submission")
+        }
+    }
+
+    /// Publish a commitment update after membership change.
+    func publishMemberUpdate(
+        group: ChatGroup,
+        oldMembers: [SEPGroupMemberLeaf],
+        oldEpoch: UInt64,
+        oldSalt: Data
+    ) async throws {
+        guard let service = onChainService else {
+            throw ChatError.contractNotConfigured
+        }
+
+        let response = try await service.publishCommitmentUpdate(
+            groupIDData: group.groupIDData,
+            oldMembers: oldMembers,
+            oldEpoch: oldEpoch,
+            oldSalt: oldSalt,
+            newMembers: group.members,
+            newEpoch: group.epoch,
+            newSalt: group.salt,
+            blsSecretKey: keyManager.blsSecretKey,
+            tier: group.tier
+        )
+
+        if response.accepted {
+            var updated = group
+            updated.isPublishedOnChain = true
+            updateGroup(updated)
+        } else {
+            throw ChatError.onChainPublishFailed(response.message ?? "Contract rejected update")
+        }
+    }
+
+    /// Verify a group's local state against its on-chain commitment.
+    func verifyGroupOnChain(_ group: ChatGroup) async -> OnChainVerificationResult {
+        guard let service = onChainService else {
+            return .error("Contract not configured")
+        }
+
+        return await service.verifyCommitment(
+            groupIDData: group.groupIDData,
+            members: group.members,
+            epoch: group.epoch,
+            salt: group.salt,
+            tier: group.tier
+        )
+    }
+
+    /// Verify membership on-chain via the contract (generates proof and calls verify_membership).
+    func verifyMembershipOnChain(_ group: ChatGroup) async throws -> Bool {
+        guard let service = onChainService else {
+            throw ChatError.contractNotConfigured
+        }
+
+        return try await service.verifyMembership(
+            groupIDData: group.groupIDData,
+            members: group.members,
+            blsSecretKey: keyManager.blsSecretKey,
+            epoch: group.epoch,
+            salt: group.salt,
+            tier: group.tier
+        )
+    }
+
+    // MARK: - Contract Configuration
+
+    private static let contractEndpointKey = "com.stellarmls.chat.contractEndpoint"
+    private static let contractIDKey = "com.stellarmls.chat.contractID"
+
+    func configureContract() {
+        configureContractIfReady()
+    }
+
+    private func configureContractIfReady() {
+        let endpoint = contractEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let id = contractID.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !endpoint.isEmpty,
+              !id.isEmpty,
+              let url = URL(string: endpoint)
+        else {
+            onChainService = nil
+            return
+        }
+
+        onChainService = OnChainService(contractID: id, endpoint: url)
     }
 
     // MARK: - Invitation Listener

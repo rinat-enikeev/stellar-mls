@@ -16,6 +16,7 @@ final class PersistedGroup {
     var encryptedSalt: Data
     var encryptedCommitment: Data?
     var tierRawValue: Int
+    var isPublishedOnChain: Bool
 
     init(
         id: String,
@@ -27,7 +28,8 @@ final class PersistedGroup {
         epoch: Int,
         encryptedSalt: Data,
         encryptedCommitment: Data?,
-        tierRawValue: Int
+        tierRawValue: Int,
+        isPublishedOnChain: Bool = false
     ) {
         self.id = id
         self.encryptedName = encryptedName
@@ -39,6 +41,7 @@ final class PersistedGroup {
         self.encryptedSalt = encryptedSalt
         self.encryptedCommitment = encryptedCommitment
         self.tierRawValue = tierRawValue
+        self.isPublishedOnChain = isPublishedOnChain
     }
 }
 

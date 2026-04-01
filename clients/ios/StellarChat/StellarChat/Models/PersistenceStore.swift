@@ -130,7 +130,8 @@ final class PersistenceStore {
             epoch: Int(group.epoch),
             encryptedSalt: encSalt,
             encryptedCommitment: encCommitment,
-            tierRawValue: group.tier.rawValue
+            tierRawValue: group.tier.rawValue,
+            isPublishedOnChain: group.isPublishedOnChain
         )
     }
 
@@ -153,7 +154,7 @@ final class PersistenceStore {
         let relayStrings = (try? JSONDecoder().decode([String].self, from: persisted.relayHintsJSON)) ?? []
         let relayURLs = relayStrings.compactMap(URL.init(string:))
 
-        return ChatGroup(
+        var group = ChatGroup(
             id: persisted.id,
             name: name,
             groupSecret: secret,
@@ -165,6 +166,8 @@ final class PersistenceStore {
             commitment: commitment,
             tier: SEPTier(rawValue: persisted.tierRawValue) ?? .small
         )
+        group.isPublishedOnChain = persisted.isPublishedOnChain
+        return group
     }
 
     private func encryptMessage(_ message: ChatMessage) -> PersistedMessage? {

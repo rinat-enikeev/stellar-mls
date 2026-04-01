@@ -51,8 +51,8 @@ dependencies {
     // Networking
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // secp256k1 for Schnorr signing
-    implementation("fr.acinq.secp256k1:secp256k1-kmp-jni-android:0.16.0")
+    // kotlin-mls: ZK proofs, Schnorr signing, commitment verification
+    implementation(project(":kotlin-mls"))
 
     // Security
     implementation("androidx.security:security-crypto:1.1.0-alpha06")

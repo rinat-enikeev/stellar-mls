@@ -16,3 +16,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "StellarChat"
 include(":app")
+include(":kotlin-mls")
+project(":kotlin-mls").projectDir = file("../../../kotlin-mls")

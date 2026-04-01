@@ -24,14 +24,17 @@ final class AppState {
 
     init() {
         self.keyManager = KeyManager()
+        self.groups = PersistenceStore.loadGroups()
     }
 
     func addGroup(_ group: ChatGroup) {
         groups.append(group)
+        PersistenceStore.saveGroups(groups)
     }
 
     func removeGroup(id: String) {
         groups.removeAll { $0.id == id }
+        PersistenceStore.saveGroups(groups)
     }
 
     /// Create a group with the local user as the first member, computing the initial commitment.

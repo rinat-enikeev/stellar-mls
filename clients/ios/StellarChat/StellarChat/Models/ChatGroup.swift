@@ -36,9 +36,11 @@ struct ChatGroup: Identifiable, Codable {
     }
 
     /// Add a member and recompute the commitment.
+    /// Members are sorted by compressed G1 public key per SEP-XXXX §2.1.
     mutating func addMember(_ leaf: SEPGroupMemberLeaf) throws {
         guard members.count < tier.maxMembers else { return }
         members.append(leaf)
+        members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
         epoch += 1
         salt = SEPCommitmentBuilder.generateSalt()
         try recomputeCommitment()
@@ -79,6 +81,7 @@ enum ChatError: LocalizedError {
     case decryptionFailed
     case noKey
     case verificationFailed(String)
+    case relayPublishFailed
 
     var errorDescription: String? {
         switch self {
@@ -87,6 +90,7 @@ enum ChatError: LocalizedError {
         case .decryptionFailed: return "Failed to decrypt message"
         case .noKey: return "No signing key available"
         case .verificationFailed(let reason): return "Verification failed: \(reason)"
+        case .relayPublishFailed: return "Failed to publish to any relay"
         }
     }
 }

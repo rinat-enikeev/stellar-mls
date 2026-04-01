@@ -6,6 +6,7 @@ final class ChatViewModel {
     let group: ChatGroup
     var messages: [ChatMessage] = []
     var inputText = ""
+    var errorMessage: String?
     private let transport: NostrMessageTransport
     private let keyManager: KeyManager
     private var seenIDs: Set<String> = []
@@ -14,6 +15,11 @@ final class ChatViewModel {
         self.group = group
         self.transport = transport
         self.keyManager = keyManager
+
+        // Load persisted messages
+        let persisted = PersistenceStore.loadMessages(groupID: group.id)
+        self.messages = persisted
+        self.seenIDs = Set(persisted.map(\.id))
 
         transport.onMessage = { [weak self] plaintext, event in
             guard let self else { return }
@@ -30,7 +36,14 @@ final class ChatViewModel {
                     self.seenIDs.insert(msg.id)
                     self.messages.append(msg)
                     self.messages.sort { $0.timestamp < $1.timestamp }
+                    self.persistMessages()
                 }
+            }
+        }
+
+        transport.onError = { [weak self] error in
+            Task { @MainActor in
+                self?.errorMessage = error
             }
         }
     }
@@ -65,13 +78,23 @@ final class ChatViewModel {
                 isMine: true
             )
             messages.append(msg)
+            seenIDs.insert(msg.id)
             inputText = ""
+            persistMessages()
         } catch {
-            // Display error in UI
+            errorMessage = error.localizedDescription
         }
     }
 
     func stopListening() async {
         transport.unsubscribe(topic: group.topicTag)
+    }
+
+    func dismissError() {
+        errorMessage = nil
+    }
+
+    private func persistMessages() {
+        PersistenceStore.saveMessages(messages, groupID: group.id)
     }
 }

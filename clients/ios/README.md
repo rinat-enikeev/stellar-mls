@@ -86,9 +86,11 @@ StellarChat/
 └── StellarChat/
     ├── StellarChatApp.swift      # @main entry, AppState, group creation
     ├── Models/
-    │   ├── KeyManager.swift      # Keychain storage, Rust-backed signing
+    │   ├── KeyManager.swift      # Dual-key Keychain storage, Rust-backed signing
+    │   ├── KeyAttestation.swift  # BLS ↔ Nostr key binding (SEP-XXXX §1.1)
     │   ├── ChatGroup.swift       # Group model, SEP membership, InviteCode
-    │   └── GroupCrypto.swift     # AES-256-GCM, HKDF, topic derivation
+    │   ├── GroupCrypto.swift     # AES-256-GCM, HKDF, topic derivation
+    │   └── PersistenceStore.swift # JSON file persistence for groups + messages
     ├── Nostr/
     │   ├── NostrEvent.swift      # NIP-01 event builder with Schnorr signing
     │   ├── NostrRelayConnection.swift  # WebSocket relay (actor)
@@ -127,6 +129,12 @@ StellarChat/
 | Base64 JSON invite codes with group secret + relay hints | App-level | Implemented |
 | Keychain secret key storage | App-level | Implemented |
 | Commitment recomputation on `addMember()` | SEP-XXXX | Implemented |
+| Member sorting by compressed G1 key in `addMember()` | SEP-XXXX §2.1 | Implemented |
+| Independent secp256k1 and BLS12-381 keypairs | SEP-XXXX §1.1 | Implemented |
+| Key attestation (Schnorr binding of BLS to Nostr key) | SEP-XXXX §1.1 | Implemented |
+| Message persistence (JSON file store) | App-level | Implemented |
+| Group persistence across app restarts | App-level | Implemented |
+| Error surfacing (encryption, relay, decryption failures) | App-level | Implemented |
 
 ### What's Not Yet Implemented
 
@@ -137,20 +145,15 @@ StellarChat/
 | Groth16 ZK proof generation | SEP-XXXX | Rust FFI supports it (`SEPProofGenerator`), but not wired into the app flow |
 | Groth16 proof verification | SEP-XXXX | No on-device or on-chain verification of membership proofs |
 | Fee decoupling / relayer pattern | SEP-XXXX | No transaction submission at all yet |
-| Key attestation (Ed25519 ↔ BLS12-381 binding) | SEP-XXXX §1.1 | BLS key derived from same secret as Nostr key; no separate attestation |
 | Salt distribution and recovery | SEP-XXXX | Salt generated locally but not shared with other members |
-| Member sorting enforcement in `addMember()` | SEP-XXXX §2 | Rust `computeMerkleRoot` sorts internally, but Swift-side `members` array is append-order |
 | Epoch validation against Stellar ledger | SEP-XXXX | Epoch incremented locally, not verified against on-chain state |
 | Group deactivation | SEP-XXXX | No mechanism to deactivate or archive groups |
-| Message persistence | App-level | Messages are in-memory only; lost on app restart |
 
 ### Known Design Deviations
 
-1. **Shared key derivation**: The secp256k1 Nostr signing key and BLS12-381 group membership key are both derived from the same 32-byte secret. The SEP spec envisions these as independent keypairs with an explicit attestation linking them. This is acceptable for a demo but should be separated for production use.
+1. **No contract integration**: The app operates as a pure Nostr messaging client. Commitments are computed locally but never published to or verified against Stellar. This means group membership is trusted, not cryptographically proven on-chain.
 
-2. **No contract integration**: The app operates as a pure Nostr messaging client. Commitments are computed locally but never published to or verified against Stellar. This means group membership is trusted, not cryptographically proven on-chain.
-
-3. **Append-only member list**: `ChatGroup.addMember()` appends to the array without sorting by compressed public key. The Rust `computeMerkleRoot` function sorts internally before building the tree, so commitments are correct, but the Swift-side ordering doesn't match the canonical sort order defined in the spec.
+2. **Nostr-adapted attestation**: SEP-XXXX §1.1 defines Ed25519 attestations for Stellar address binding. This app uses secp256k1 Schnorr signatures to bind BLS keys to the Nostr identity, since there is no Stellar account in the current flow.
 
 ## Interoperability
 
@@ -167,12 +170,12 @@ This app is wire-compatible with the Android StellarChat app. Both use identical
 
 ## Next Steps
 
-### Phase 1: Core Improvements
+### Phase 1: Core Improvements (completed)
 
-- **Message persistence**: Store decrypted messages in a local database (SwiftData or SQLite) so chat history survives app restarts
-- **Member sorting**: Sort `members` array by compressed BLS public key in `addMember()` to match the canonical order defined in SEP-XXXX, rather than relying on Rust-side sorting
-- **Separate key derivation**: Generate independent secp256k1 and BLS12-381 keypairs, linked by an explicit `KeyAttestation` as defined in SEP-XXXX §1.1
-- **Error handling**: Surface encryption/decryption failures and relay connection errors in the UI
+- ~~**Message persistence**: JSON file store for messages and groups~~
+- ~~**Member sorting**: Sort by compressed G1 public key per SEP-XXXX §2.1~~
+- ~~**Separate key derivation**: Independent secp256k1 and BLS12-381 keypairs with `KeyAttestation`~~
+- ~~**Error handling**: Errors surfaced as alerts in ChatView, relay publish failures reported~~
 
 ### Phase 2: Nostr Protocol Completion
 
@@ -192,7 +195,7 @@ This app is wire-compatible with the Android StellarChat app. Both use identical
 
 - **Fee decoupling**: Implement the relayer pattern so the Stellar account paying transaction fees is not the group member
 - **Salt distribution**: Distribute the per-epoch salt to all group members via the encrypted channel, and implement salt recovery for members who were offline
-- **Key attestation flow**: UI for creating and verifying `KeyAttestation` bindings between Stellar addresses and BLS12-381 group keys
+- **Key attestation distribution**: Share `KeyAttestation` with group members via encrypted channel; verify attestations on member join
 - **Group deactivation**: Allow authorized members to deactivate groups (with ZK-proof authorization as defined in SEP-XXXX)
 - **Push notifications**: Notify users of new messages when the app is backgrounded
 - **Multi-device support**: Sync group state and keys across devices

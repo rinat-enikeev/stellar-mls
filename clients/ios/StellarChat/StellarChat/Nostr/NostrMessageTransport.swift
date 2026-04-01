@@ -7,8 +7,10 @@ final class NostrMessageTransport {
     private var connections: [URL: NostrRelayConnection] = [:]
     private var activeSubscriptions: [String: Task<Void, Never>] = [:]
 
-    /// Callback for received messages.
+    /// Callback for received and decrypted messages.
     var onMessage: ((String, NostrEvent) -> Void)?
+    /// Callback for transport-level errors (decryption, relay, encoding).
+    var onError: ((String) -> Void)?
 
     func connect(to urls: [URL]) async {
         for url in urls {
@@ -48,12 +50,21 @@ final class NostrMessageTransport {
                 let stream = await conn.subscribe(subscriptionID: subID, filter: filter)
                 for await event in stream {
                     guard !Task.isCancelled else { break }
-                    // Decode and decrypt the message
-                    guard let envelopeData = Data(base64Encoded: event.content),
-                          let envelope = try? JSONDecoder().decode(SealedEnvelope.self, from: envelopeData),
-                          let plaintext = try? GroupCrypto.decrypt(envelope, key: key)
-                    else { continue }
-                    self.onMessage?(plaintext, event)
+
+                    guard let envelopeData = Data(base64Encoded: event.content) else {
+                        self.onError?("Failed to decode base64 event content")
+                        continue
+                    }
+                    guard let envelope = try? JSONDecoder().decode(SealedEnvelope.self, from: envelopeData) else {
+                        self.onError?("Failed to decode sealed envelope")
+                        continue
+                    }
+                    do {
+                        let plaintext = try GroupCrypto.decrypt(envelope, key: key)
+                        self.onMessage?(plaintext, event)
+                    } catch {
+                        self.onError?("Decryption failed: \(error.localizedDescription)")
+                    }
                 }
             }
         }
@@ -89,8 +100,18 @@ final class NostrMessageTransport {
             keyManager: keyManager
         )
 
+        var published = false
         for conn in connections.values {
-            try? await conn.publish(event: event)
+            do {
+                try await conn.publish(event: event)
+                published = true
+            } catch {
+                onError?("Relay \(await conn.url.host ?? "unknown") publish failed: \(error.localizedDescription)")
+            }
+        }
+
+        if !published && !connections.isEmpty {
+            throw ChatError.relayPublishFailed
         }
     }
 }

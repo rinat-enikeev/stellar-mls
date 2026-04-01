@@ -33,10 +33,20 @@ data class ChatGroup(
         commitment = SEPCommitmentBuilder.computeSHA256Commitment(root, epoch, salt)
     }
 
-    /** Add a member and recompute the commitment. */
+    /** Add a member and recompute the commitment.
+     *  Members are sorted by compressed G1 public key per SEP-XXXX §2.1. */
     fun addMember(leaf: SEPGroupMemberLeaf) {
         if (members.size >= tier.maxMembers) return
         members.add(leaf)
+        members.sortWith { a, b ->
+            val aKey = a.publicKeyCompressed
+            val bKey = b.publicKeyCompressed
+            for (i in 0 until minOf(aKey.size, bKey.size)) {
+                val cmp = (aKey[i].toInt() and 0xFF) - (bKey[i].toInt() and 0xFF)
+                if (cmp != 0) return@sortWith cmp
+            }
+            aKey.size - bKey.size
+        }
         epoch++
         salt = SEPCommitmentBuilder.generateSalt()
         recomputeCommitment()

@@ -3,19 +3,42 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
+    @State private var attestationStatus: String?
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Your Identity") {
+                Section("Nostr Identity (secp256k1)") {
                     LabeledContent("Public Key") {
                         Text(appState.keyManager.publicKeyHex.prefix(16) + "...")
                             .font(.caption)
                             .monospaced()
                     }
 
-                    Button("Copy Full Public Key") {
+                    Button("Copy Nostr Public Key") {
                         UIPasteboard.general.string = appState.keyManager.publicKeyHex
+                    }
+                }
+
+                Section("Group Membership (BLS12-381)") {
+                    if let blsHex = try? appState.keyManager.blsPublicKey
+                        .map({ String(format: "%02x", $0) }).joined()
+                    {
+                        LabeledContent("BLS Public Key") {
+                            Text(blsHex.prefix(16) + "...")
+                                .font(.caption)
+                                .monospaced()
+                        }
+                    }
+
+                    Button("Create Key Attestation") {
+                        createAttestation()
+                    }
+
+                    if let status = attestationStatus {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(status.hasPrefix("Error") ? .red : .green)
                     }
                 }
 
@@ -56,6 +79,19 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
+        }
+    }
+
+    private func createAttestation() {
+        do {
+            let attestation = try appState.keyManager.createAttestation()
+            let blsHex = attestation.blsPubkey.prefix(8)
+                .map { String(format: "%02x", $0) }.joined()
+            let nostrHex = attestation.nostrPubkey.prefix(8)
+                .map { String(format: "%02x", $0) }.joined()
+            attestationStatus = "Bound BLS \(blsHex)... to Nostr \(nostrHex)..."
+        } catch {
+            attestationStatus = "Error: \(error.localizedDescription)"
         }
     }
 }

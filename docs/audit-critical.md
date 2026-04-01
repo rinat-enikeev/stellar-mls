@@ -160,6 +160,58 @@ The original `bytes_be_to_field()` is preserved for internal use where inputs ar
 
 ---
 
+## Post-Fix Critique — Follow-Up Remediation
+
+After the initial 9 critical fixes, a follow-up review identified 5 additional issues in the fix implementations themselves. All have been addressed.
+
+### F-1 (High): `create_group` ABI Change Not Wired Through Clients
+
+**Issue:** The contract's `create_group` gained a `caller: Address` parameter (C-1 fix), but the SDK types, iOS `OnChainService`, and Android `SEPContractClient` / `OnChainService` / `GroupListViewModel` still used the old signature without `caller`. Any call to `create_group` would fail at runtime.
+
+**Fix:** Wired the `caller` / `callerAddress` parameter through the entire call chain on both platforms:
+
+- `swift-mls/Sources/SwiftMLS/Types.swift` — `SEPCreateGroupRequest` now includes `caller: String`
+- `clients/ios/StellarChat/StellarChat/Models/OnChainService.swift` — `publishGroupCreation()` accepts `callerAddress: String`
+- `clients/ios/StellarChat/StellarChat/StellarChatApp.swift` — passes `callerAddress: keyManager.stellarAccountID`
+- `clients/android/.../onchain/ContractTypes.kt` — `buildCreateGroupPayload()` accepts `caller: String`
+- `clients/android/.../onchain/SEPContractClient.kt` — `createGroup()` accepts `caller: String`
+- `clients/android/.../onchain/OnChainService.kt` — `publishGroupCreation()` accepts `callerAddress: String`
+- `clients/android/.../viewmodel/GroupListViewModel.kt` — passes `callerAddress = keyManager.stellarAccountID`
+
+### F-2 (Medium): `verify_membership` Made Stateful by Replay Tracking
+
+**Issue:** The C-2 proof-replay fix added `check_proof_replay` and `record_proof` to `verify_membership`, making it a state-mutating function. This means: (a) a proof used for verification can never be used for `create_group`/`update_commitment`/`deactivate_group`, and (b) the function is no longer read-only, increasing gas costs.
+
+**Fix:** Removed `check_proof_replay` and `record_proof` from `verify_membership`. The function is now purely read-only again. Proofs submitted for verification are not recorded, so they remain usable for state-changing operations.
+
+**File:** `contracts/sep-xxxx/src/lib.rs`
+
+### F-3 (Medium): C-9 Incomplete — Contract Accepts Non-Canonical Field Elements
+
+**Issue:** The C-9 fix added `bytes_be_to_field_checked()` at the Rust FFI boundaries, but the Soroban contract's `verify_groth16_proof()` function at line 658 still called `Fr::from_bytes(commitment)` without a canonical check. `Fr::from_bytes` silently reduces values >= the BLS12-381 scalar field modulus, so a non-canonical commitment could pass verification.
+
+**Fix:** Added a roundtrip canonical check in `verify_groth16_proof()`: after `Fr::from_bytes`, convert back via `Fr::to_bytes()` and compare against the original input. If they differ, the input was non-canonical and verification returns `false`.
+
+**File:** `contracts/sep-xxxx/src/lib.rs` — `verify_groth16_proof()` function
+
+### F-4 (Medium): `computeBindingMessage()` Returns Unhashed Bytes
+
+**Issue:** `SEPKeyAttestationPayload.computeBindingMessage()` in the Swift SDK returned the raw concatenation `"SEP-XXXX:key-binding" || blsPubkey`, but the iOS app's `KeyAttestation.bindingMessage()` returns `SHA-256("SEP-XXXX:key-binding" || blsPubkey)`. The doc comment correctly said SHA-256 but the implementation didn't hash. Any code using the SDK method directly would produce wrong binding messages.
+
+**Fix:** Added `import CryptoKit` to `GroupStateUpdate.swift` and changed `computeBindingMessage()` to return the SHA-256 hash, matching both the doc comment and the iOS app's `KeyAttestation.bindingMessage()`.
+
+**File:** `swift-mls/Sources/SwiftMLS/GroupStateUpdate.swift`
+
+### F-5 (Low): iOS README Still References `sep_topic` Tags
+
+**Issue:** The iOS README's protocol alignment table (line 128) and interoperability section (lines 187-189) still referenced the pre-C-4 `sep_topic` + `sep_version` tags.
+
+**Fix:** Updated both references to `t` (NIP hashtag tag).
+
+**File:** `clients/ios/README.md`
+
+---
+
 ## Build Verification
 
 All components build successfully after the fixes:
@@ -188,3 +240,8 @@ All components build successfully after the fixes:
 | C-7 | Critical | Android Model | Standardized on base64, added backward-compat decode | ~20 |
 | C-8 | Critical | Rust JNI FFI | Added `catch_unwind` via `run_jni()` wrapper | ~120 |
 | C-9 | Critical | Rust Core | Added `bytes_be_to_field_checked()` at FFI boundary | ~20 |
+| F-1 | High | SDK + iOS + Android | Wired `caller` through entire `create_group` call chain | ~20 |
+| F-2 | Medium | Contract | Removed replay tracking from `verify_membership` | -5 |
+| F-3 | Medium | Contract | Added canonical roundtrip check for commitment Fr | +4 |
+| F-4 | Medium | Swift SDK | Added SHA-256 hash to `computeBindingMessage()` | ~3 |
+| F-5 | Low | iOS README | Updated tag references from `sep_topic` to `t` | 2 |

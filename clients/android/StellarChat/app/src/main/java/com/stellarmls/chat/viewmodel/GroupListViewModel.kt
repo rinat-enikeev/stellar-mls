@@ -295,7 +295,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                         blsSecretKey = keyManager.blsSecretKey,
                         epoch = group.epoch,
                         salt = group.salt,
-                        tier = group.tier
+                        tier = group.tier,
+                        callerAddress = keyManager.stellarAccountID
                     )
                 }
                 if (response.accepted) {

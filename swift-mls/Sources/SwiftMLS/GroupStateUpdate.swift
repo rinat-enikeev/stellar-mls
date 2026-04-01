@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 // MARK: - Group State Update Protocol Messages
@@ -88,9 +89,10 @@ public struct SEPKeyAttestationPayload: Codable, Equatable, Sendable {
     /// `ed25519Pubkey` via CryptoKit or equivalent. The SDK does not
     /// perform the Ed25519 verification itself.
     public func computeBindingMessage() -> Data {
-        var message = Data("SEP-XXXX:key-binding".utf8)
-        message.append(blsPubkey)
-        return message
+        var hasher = SHA256()
+        hasher.update(data: Data("SEP-XXXX:key-binding".utf8))
+        hasher.update(data: blsPubkey)
+        return Data(hasher.finalize())
     }
 }
 

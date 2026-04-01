@@ -87,12 +87,14 @@ class OnChainService(contractID: String, transport: SEPContractTransport) {
         blsSecretKey: ByteArray,
         epoch: Long,
         salt: ByteArray,
-        tier: SEPTier
+        tier: SEPTier,
+        callerAddress: String
     ): SEPSubmissionResponse {
         val proofBundle = generateProof(members, blsSecretKey, epoch, salt, tier)
         val uncompressedProof = proofForContract(proofBundle.proof)
 
         return contractClient.createGroup(
+            caller = callerAddress,
             groupID = groupIDData,
             commitment = proofBundle.publicInputs.commitment,
             proof = uncompressedProof,

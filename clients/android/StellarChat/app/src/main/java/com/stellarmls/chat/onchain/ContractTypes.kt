@@ -50,6 +50,7 @@ data class SEPVerifyMembershipResponse(
 
 /** JSON builder for create_group request payload. */
 fun buildCreateGroupPayload(
+    caller: String,
     groupID: ByteArray,
     commitment: ByteArray,
     proof: ByteArray,
@@ -57,6 +58,7 @@ fun buildCreateGroupPayload(
     epoch: Long,
     tier: Int
 ): JSONObject = JSONObject().apply {
+    put("caller", caller)
     put("groupID", groupID.toBase64())
     put("commitment", commitment.toBase64())
     put("proof", proof.toBase64())

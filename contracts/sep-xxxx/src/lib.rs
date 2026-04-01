@@ -390,8 +390,9 @@ impl SepXxxxContract {
 
     /// Verify a membership proof against the current group state.
     ///
-    /// Read-only — does not modify contract state. The caller-supplied
-    /// `public_inputs` must match the current on-chain state.
+    /// Read-only — does not modify contract state. Proofs submitted here
+    /// are NOT recorded, so the same proof can be re-verified and can
+    /// still be used for state-changing operations.
     pub fn verify_membership(
         env: Env,
         group_id: BytesN<32>,
@@ -412,8 +413,6 @@ impl SepXxxxContract {
             return Err(Error::PublicInputsMismatch);
         }
 
-        Self::check_proof_replay(&env, &proof)?;
-
         let vk = Self::load_vk(&env, state.tier)?;
         let valid = verify_groth16_proof(
             &env,
@@ -422,10 +421,6 @@ impl SepXxxxContract {
             &state.commitment,
             state.epoch,
         );
-
-        if valid {
-            Self::record_proof(&env, &proof);
-        }
 
         Ok(valid)
     }
@@ -656,6 +651,12 @@ fn verify_groth16_proof(
     let ic2 = G1Affine::from_bytes(vk.ic.get(2).unwrap());
 
     let commitment_fr = Fr::from_bytes(commitment.clone());
+    // Canonical check: reject non-canonical field elements (>= modulus).
+    // Fr::from_bytes silently reduces mod r; the roundtrip detects this.
+    let canonical_bytes: BytesN<32> = commitment_fr.to_bytes();
+    if canonical_bytes != *commitment {
+        return false;
+    }
     let epoch_bytes = Bytes::from_array(env, &u64_to_u256_be(epoch));
     let epoch_fr = Fr::from_u256(U256::from_be_bytes(env, &epoch_bytes));
 

@@ -125,7 +125,7 @@ StellarChat/
 | Sealed envelope format (`version`, `scheme`, `nonce`, `ciphertext`, `authentication_tag`) | NIP-XX | Implemented |
 | Hidden group topic: `SHA256("sep-topic-v1" \|\| groupSecret).hex().prefix(16)` | NIP-XX | Implemented |
 | Hidden inbox tag: `SHA256("sep-inbox-v1" \|\| recipientPubkey).hex().prefix(16)` | NIP-XX | Implemented |
-| Kind 24114 group message events with `sep_topic` + `sep_version` tags | NIP-XX | Implemented |
+| Kind 24114 group message events with `t` (NIP hashtag) tag | NIP-XX | Implemented |
 | NIP-01 event serialization and SHA256 event ID computation | NIP-01 | Implemented |
 | secp256k1 Schnorr signature via Rust FFI (`RustBackedNostrSigner`) | NIP-01 | Implemented |
 | BLS12-381 key derivation (`SEPCommitmentBuilder.computePublicKey`) | SEP-XXXX | Implemented |
@@ -185,7 +185,7 @@ StellarChat/
 This app is wire-compatible with the Android StellarChat app. Both use identical:
 
 - Event kinds (24113, 24114)
-- Tag structure (`sep_topic`, `sep_version`)
+- Tag structure (`t` NIP hashtag tag)
 - Sealed envelope JSON format (`version`, `scheme`, `ephemeral_public_key`, `nonce`, `ciphertext`, `authentication_tag`)
 - Hidden topic derivation (`SHA256("sep-topic-v1" || secret).hex().prefix(16)`)
 - AES-256-GCM encryption with HKDF-SHA256 key derivation

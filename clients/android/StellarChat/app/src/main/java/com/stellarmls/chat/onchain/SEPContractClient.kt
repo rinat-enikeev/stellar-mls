@@ -50,6 +50,7 @@ class SEPContractClient(
     private val transport: SEPContractTransport
 ) {
     fun createGroup(
+        caller: String,
         groupID: ByteArray,
         commitment: ByteArray,
         proof: ByteArray,
@@ -58,7 +59,7 @@ class SEPContractClient(
         tier: Int
     ): SEPSubmissionResponse {
         val payload = buildCreateGroupPayload(
-            groupID, commitment, proof, publicInputsCommitment, epoch, tier
+            caller, groupID, commitment, proof, publicInputsCommitment, epoch, tier
         )
         val json = transport.invoke(contractID, "create_group", payload)
         return SEPSubmissionResponse.fromJson(json)

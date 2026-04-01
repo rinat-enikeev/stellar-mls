@@ -90,13 +90,15 @@ public struct SEPCommitmentEntry: Codable, Equatable, Sendable {
 }
 
 public struct SEPCreateGroupRequest: Codable, Equatable, Sendable {
+    public let caller: String
     public let groupID: Data
     public let commitment: Data
     public let proof: Data
     public let publicInputs: SEPPublicInputs
     public let tier: UInt32
 
-    public init(groupID: Data, commitment: Data, proof: Data, publicInputs: SEPPublicInputs, tier: UInt32) {
+    public init(caller: String, groupID: Data, commitment: Data, proof: Data, publicInputs: SEPPublicInputs, tier: UInt32) {
+        self.caller = caller
         self.groupID = groupID
         self.commitment = commitment
         self.proof = proof

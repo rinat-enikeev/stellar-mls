@@ -111,7 +111,8 @@ actor OnChainService {
         blsSecretKey: Data,
         epoch: UInt64,
         salt: Data,
-        tier: SEPTier
+        tier: SEPTier,
+        callerAddress: String
     ) async throws -> SEPSubmissionResponse {
         let proofBundle = try generateProof(
             members: members,
@@ -124,6 +125,7 @@ actor OnChainService {
         let uncompressedProof = try proofForContract(proofBundle.proof)
 
         let request = SEPCreateGroupRequest(
+            caller: callerAddress,
             groupID: groupIDData,
             commitment: proofBundle.publicInputs.commitment,
             proof: uncompressedProof,
@@ -263,9 +265,9 @@ actor OnChainService {
         return try await contractClient.deactivateGroup(request)
     }
 
-    /// Verify membership via the on-chain contract (read-only).
+    /// Verify membership via the on-chain contract.
     ///
-    /// Generates a proof, decompresses to 384-byte contract format,
+    /// Generates a fresh proof, decompresses to 384-byte contract format,
     /// and submits `verify_membership` to the contract.
     func verifyMembership(
         groupIDData: Data,

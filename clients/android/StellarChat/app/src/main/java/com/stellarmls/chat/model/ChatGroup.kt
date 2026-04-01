@@ -1,6 +1,9 @@
 package com.stellarmls.chat.model
 
 import com.stellarmls.chat.crypto.GroupCrypto
+import com.stellarmls.mls.SEPCommitmentBuilder
+import com.stellarmls.mls.SEPGroupMemberLeaf
+import com.stellarmls.mls.SEPTier
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Date
@@ -13,10 +16,31 @@ data class ChatGroup(
     val relayHints: List<String> = listOf(
         "wss://relay.damus.io",
         "wss://nos.lol"
-    )
+    ),
+    // SEP membership state
+    var members: MutableList<SEPGroupMemberLeaf> = mutableListOf(),
+    var epoch: Long = 0,
+    var salt: ByteArray = SEPCommitmentBuilder.generateSalt(),
+    var commitment: ByteArray? = null,
+    var tier: SEPTier = SEPTier.SMALL
 ) {
     val topicTag: String get() = GroupCrypto.hiddenGroupTopic(groupSecret)
     val encryptionKey: ByteArray get() = GroupCrypto.deriveMessageKey(groupSecret)
+
+    /** Recompute Merkle root and commitment from current member list. */
+    fun recomputeCommitment() {
+        val root = SEPCommitmentBuilder.computeMerkleRoot(members, tier)
+        commitment = SEPCommitmentBuilder.computeSHA256Commitment(root, epoch, salt)
+    }
+
+    /** Add a member and recompute the commitment. */
+    fun addMember(leaf: SEPGroupMemberLeaf) {
+        if (members.size >= tier.maxMembers) return
+        members.add(leaf)
+        epoch++
+        salt = SEPCommitmentBuilder.generateSalt()
+        recomputeCommitment()
+    }
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

@@ -1,0 +1,5 @@
+[target.aarch64-linux-android]
+linker = "/Users/rinatenikeev/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android26-clang"
+
+[target.x86_64-linux-android]
+linker = "/Users/rinatenikeev/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/x86_64-linux-android26-clang"

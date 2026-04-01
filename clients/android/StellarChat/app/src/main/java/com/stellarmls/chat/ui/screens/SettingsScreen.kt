@@ -82,6 +82,9 @@ fun SettingsScreen(
                     SettingsRow("Encryption", "AES-256-GCM")
                     SettingsRow("Key Derivation", "HKDF-SHA256")
                     SettingsRow("Topic Derivation", "SHA256(\"sep-topic-v1\" || secret)")
+                    SettingsRow("Signing", "secp256k1 Schnorr")
+                    SettingsRow("ZK Backend", "Groth16 / BLS12-381")
+                    SettingsRow("Commitment", "Poseidon Merkle + SHA256")
                 }
             }
         }

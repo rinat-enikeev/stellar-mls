@@ -2,7 +2,6 @@ package com.stellarmls.chat.crypto
 
 import com.stellarmls.chat.model.toHex
 import org.json.JSONArray
-import org.json.JSONObject
 import java.security.MessageDigest
 
 data class NostrEvent(
@@ -14,7 +13,7 @@ data class NostrEvent(
     val content: String,
     val sig: String
 ) {
-    fun toJson(): JSONObject = JSONObject().apply {
+    fun toJson(): org.json.JSONObject = org.json.JSONObject().apply {
         put("id", id)
         put("pubkey", pubkey)
         put("created_at", createdAt)
@@ -26,7 +25,7 @@ data class NostrEvent(
 }
 
 object NostrEventBuilder {
-    /** Build a NIP-01 event with computed ID and signature. */
+    /** Build a NIP-01 event with computed ID and real Schnorr signature. */
     fun build(
         kind: Int,
         tags: List<List<String>>,
@@ -49,6 +48,7 @@ object NostrEventBuilder {
         val hash = MessageDigest.getInstance("SHA-256").digest(serialized)
         val eventIDHex = hash.toHex()
 
+        // Real secp256k1 Schnorr signature via Rust FFI
         val signature = keyManager.signEventID(hash)
         val sigHex = signature.toHex()
 

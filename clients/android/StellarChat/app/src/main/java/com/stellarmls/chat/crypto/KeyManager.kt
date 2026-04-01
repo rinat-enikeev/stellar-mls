@@ -2,15 +2,16 @@ package com.stellarmls.chat.crypto
 
 import android.content.Context
 import com.stellarmls.chat.model.toHex
-import java.security.MessageDigest
+import com.stellarmls.mls.RustBackedNostrSigner
+import com.stellarmls.mls.SEPCommitmentBuilder
+import com.stellarmls.mls.SEPGroupMemberLeaf
 import java.security.SecureRandom
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
 
 class KeyManager(context: Context) {
     val secretKey: ByteArray
     val publicKey: ByteArray
     val publicKeyHex: String
+    private val signer: RustBackedNostrSigner
 
     init {
         val prefs = context.getSharedPreferences("stellar_keys", Context.MODE_PRIVATE)
@@ -25,24 +26,23 @@ class KeyManager(context: Context) {
             key
         }
 
-        publicKey = derivePublicKey(secretKey)
+        signer = RustBackedNostrSigner(secretKey)
+        publicKey = signer.publicKey()
         publicKeyHex = publicKey.toHex()
     }
 
-    /** Sign a 32-byte event ID. Returns 64-byte signature. */
-    fun signEventID(eventID: ByteArray): ByteArray {
-        // Simplified HMAC-based signature for demo.
-        // Production would use secp256k1 Schnorr via fr.acinq.secp256k1.
-        val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(secretKey, "HmacSHA256"))
-        val hmac = mac.doFinal(eventID)
-        return hmac + ByteArray(32) // pad to 64 bytes
-    }
+    /** Sign a 32-byte event ID with secp256k1 Schnorr. Returns 64-byte signature. */
+    fun signEventID(eventID: ByteArray): ByteArray = signer.signEventId(eventID)
 
-    companion object {
-        /** Derive public key from secret key (SHA-256 for demo). */
-        private fun derivePublicKey(secretKey: ByteArray): ByteArray {
-            return MessageDigest.getInstance("SHA-256").digest(secretKey)
-        }
-    }
+    /** BLS12-381 leaf hash for SEP Merkle tree. */
+    fun leafHash(): ByteArray = SEPCommitmentBuilder.computeLeafHash(secretKey)
+
+    /** BLS12-381 compressed public key (48 bytes). */
+    fun blsPublicKey(): ByteArray = SEPCommitmentBuilder.computePublicKey(secretKey)
+
+    /** SEP group member leaf for Merkle tree construction. */
+    fun memberLeaf(): SEPGroupMemberLeaf = SEPGroupMemberLeaf(
+        publicKeyCompressed = blsPublicKey(),
+        leafHash = leafHash()
+    )
 }

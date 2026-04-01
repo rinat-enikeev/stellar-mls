@@ -6,7 +6,7 @@ description = "Groth16 circuits for SEP-XXXX: Private Group Membership Registry 
 license = "MIT"
 
 [lib]
-crate-type = ["rlib", "staticlib"]
+crate-type = ["rlib", "staticlib", "cdylib"]
 
 [dependencies]
 # Arkworks core: constraint system and relations
@@ -34,6 +34,7 @@ sha2 = "0.10"
 rand = "0.8"
 rand_chacha = "0.3"
 k256 = { version = "0.13", features = ["schnorr"] }
+jni = "0.21"
 
 [dev-dependencies]
 ark-relations = { version = "0.4", features = ["std"] }

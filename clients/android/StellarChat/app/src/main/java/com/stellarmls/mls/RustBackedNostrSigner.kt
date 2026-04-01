@@ -1,0 +1,20 @@
+package com.stellarmls.mls
+
+/**
+ * Nostr event signer using real secp256k1 Schnorr signatures via Rust FFI.
+ * Drop-in replacement for the demo HMAC-based signer.
+ */
+class RustBackedNostrSigner(private val secretKey: ByteArray) {
+    init {
+        require(secretKey.size == 32) { "secret key must be 32 bytes" }
+    }
+
+    /** Derive the secp256k1 x-only public key (32 bytes). */
+    fun publicKey(): ByteArray = RustBridge.nostrDerivePublicKey(secretKey)
+
+    /** Sign a 32-byte event ID. Returns 64-byte Schnorr signature. */
+    fun signEventId(eventId: ByteArray): ByteArray {
+        require(eventId.size == 32) { "event ID must be 32 bytes" }
+        return RustBridge.nostrSignEventId(secretKey, eventId)
+    }
+}

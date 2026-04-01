@@ -82,6 +82,7 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel) {
             val createViewModel: CreateGroupViewModel = viewModel()
             CreateGroupScreen(
                 viewModel = createViewModel,
+                keyManager = groupListViewModel.keyManager,
                 onBack = { navController.popBackStack() },
                 onGroupCreated = { group ->
                     groupListViewModel.addGroup(group)

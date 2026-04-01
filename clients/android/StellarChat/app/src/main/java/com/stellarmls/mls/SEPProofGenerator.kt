@@ -1,0 +1,64 @@
+package com.stellarmls.mls
+
+import java.nio.ByteBuffer
+
+/** Zero-knowledge proof generation backed by the Rust FFI. */
+object SEPProofGenerator {
+
+    /** Generate a testing proving key (deterministic from seed). */
+    fun generateTestingProvingKey(tier: SEPTier, seed: Long = 42): ByteArray {
+        return RustBridge.generateTestingProvingKey(tier.depth, seed)
+    }
+
+    /** Generate a Groth16 membership proof. */
+    fun generateMembershipProof(
+        provingKey: ByteArray,
+        members: List<SEPGroupMemberLeaf>,
+        secretKey: ByteArray,
+        epoch: Long,
+        salt: ByteArray,
+        tier: SEPTier
+    ): SEPMembershipProofBundle {
+        require(secretKey.size == 32) { "secret key must be 32 bytes" }
+        require(salt.size == 32) { "salt must be 32 bytes" }
+
+        val (flatPk, flatLh) = SEPCommitmentBuilder.flattenMembers(members)
+        val packed = RustBridge.generateMembershipProof(
+            provingKey, flatPk, flatLh, secretKey, epoch, salt, tier.depth
+        )
+        return unpackProofBundle(packed, epoch)
+    }
+
+    /** Decompress a proof to uncompressed contract components (A, B, C). */
+    fun proofToContractFormat(compressedProof: ByteArray): SEPContractProofComponents {
+        val packed = RustBridge.proofToContractFormat(compressedProof)
+        return unpackContractComponents(packed)
+    }
+
+    /** Unpack [4B len][proof][4B len][commitment] into SEPMembershipProofBundle. */
+    internal fun unpackProofBundle(packed: ByteArray, epoch: Long): SEPMembershipProofBundle {
+        val buf = ByteBuffer.wrap(packed)
+        val proofLen = buf.int
+        val proof = ByteArray(proofLen)
+        buf.get(proof)
+        val commitmentLen = buf.int
+        val commitment = ByteArray(commitmentLen)
+        buf.get(commitment)
+        return SEPMembershipProofBundle(
+            proof = proof,
+            publicInputs = SEPPublicInputs(commitment = commitment, epoch = epoch)
+        )
+    }
+
+    /** Unpack [4B len][a][4B len][b][4B len][c] into SEPContractProofComponents. */
+    internal fun unpackContractComponents(packed: ByteArray): SEPContractProofComponents {
+        val buf = ByteBuffer.wrap(packed)
+        val aLen = buf.int
+        val a = ByteArray(aLen); buf.get(a)
+        val bLen = buf.int
+        val b = ByteArray(bLen); buf.get(b)
+        val cLen = buf.int
+        val c = ByteArray(cLen); buf.get(c)
+        return SEPContractProofComponents(proofA = a, proofB = b, proofC = c)
+    }
+}

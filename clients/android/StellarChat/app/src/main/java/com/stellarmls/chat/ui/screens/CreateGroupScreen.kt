@@ -34,6 +34,7 @@ import com.stellarmls.chat.viewmodel.CreateGroupViewModel
 @Composable
 fun CreateGroupScreen(
     viewModel: CreateGroupViewModel,
+    keyManager: com.stellarmls.chat.crypto.KeyManager,
     onBack: () -> Unit,
     onGroupCreated: (ChatGroup) -> Unit
 ) {
@@ -69,7 +70,7 @@ fun CreateGroupScreen(
 
             Button(
                 onClick = {
-                    viewModel.createGroup()
+                    viewModel.createGroup(keyManager)
                     viewModel.createdGroup?.let { onGroupCreated(it) }
                 },
                 modifier = Modifier.fillMaxWidth(),

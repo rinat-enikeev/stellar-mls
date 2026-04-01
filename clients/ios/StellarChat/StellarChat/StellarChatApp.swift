@@ -296,6 +296,19 @@ final class AppState {
         // Only apply if the update is newer
         guard update.epoch > group.epoch else { return }
 
+        // Verify sender attestation BEFORE mutating state
+        if let att = update.senderAttestation {
+            let attestation = KeyAttestation(
+                blsPubkey: att.blsPubkey,
+                ed25519Pubkey: att.ed25519Pubkey,
+                signature: att.signature
+            )
+            if !KeyManager.verifyAttestation(attestation) {
+                // Attestation invalid — discard update without modifying state
+                return
+            }
+        }
+
         // Apply member changes
         for removed in update.removedMemberKeys {
             group.members.removeAll { $0.publicKeyCompressed == removed }
@@ -311,19 +324,6 @@ final class AppState {
         group.salt = update.salt
         if let commitment = update.commitment {
             group.commitment = commitment
-        }
-
-        // Verify sender attestation if present
-        if let att = update.senderAttestation {
-            let attestation = KeyAttestation(
-                blsPubkey: att.blsPubkey,
-                ed25519Pubkey: att.ed25519Pubkey,
-                signature: att.signature
-            )
-            if !KeyManager.verifyAttestation(attestation) {
-                // Attestation invalid — skip this update
-                return
-            }
         }
 
         groups[index] = group

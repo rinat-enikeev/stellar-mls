@@ -12,8 +12,8 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 
 use crate::commitment::{
-    bytes_be_to_field, compute_commitment, compute_poseidon_commitment, field_to_bytes_be, Salt,
-    SALT_LEN,
+    bytes_be_to_field_checked, compute_commitment, compute_poseidon_commitment, field_to_bytes_be,
+    Salt, SALT_LEN,
 };
 use crate::merkle::{
     CanonicalMember, PoseidonMerkleTree, COMPRESSED_G1_PUBLIC_KEY_LEN, compressed_public_key_bytes,
@@ -103,7 +103,7 @@ fn read_fr(bytes: &[u8]) -> Result<Fr, String> {
     let array: [u8; FR_BYTES] = bytes
         .try_into()
         .map_err(|_| "failed to convert field element bytes".to_string())?;
-    Ok(bytes_be_to_field::<Fr>(&array))
+    bytes_be_to_field_checked::<Fr>(&array)
 }
 
 fn read_array_32(bytes: &[u8], label: &str) -> Result<[u8; 32], String> {

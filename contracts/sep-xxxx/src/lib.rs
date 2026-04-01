@@ -66,6 +66,8 @@ pub enum Error {
     PublicInputsMismatch = 10,
     /// Caller-supplied epoch is not exactly stored_epoch + 1.
     InvalidEpoch = 11,
+    /// This proof has already been used (replay detected).
+    ProofReplay = 12,
 }
 
 // ================================================================
@@ -187,6 +189,8 @@ pub enum DataKey {
     Group(BytesN<32>),
     /// Group history — rolling window of past entries (persistent storage).
     History(BytesN<32>),
+    /// Used proof hash — prevents cross-function and cross-group proof replay.
+    UsedProof(BytesN<32>),
 }
 
 // ================================================================
@@ -245,12 +249,14 @@ impl SepXxxxContract {
 
     /// Create a new private membership group.
     ///
+    /// The `caller` must authorize the invocation (prevents spam).
     /// The proof must verify against `(commitment, epoch=0)` using the
     /// verification key for `tier`. The caller-supplied `public_inputs`
     /// must match: `public_inputs.commitment == commitment` and
     /// `public_inputs.epoch == 0`.
     pub fn create_group(
         env: Env,
+        caller: Address,
         group_id: BytesN<32>,
         commitment: BytesN<32>,
         tier: u32,
@@ -258,6 +264,7 @@ impl SepXxxxContract {
         public_inputs: PublicInputs,
     ) -> Result<(), Error> {
         Self::require_initialized(&env)?;
+        caller.require_auth();
 
         if tier > 2 {
             return Err(Error::InvalidTier);
@@ -273,10 +280,14 @@ impl SepXxxxContract {
             return Err(Error::GroupAlreadyExists);
         }
 
+        Self::check_proof_replay(&env, &proof)?;
+
         let vk = Self::load_vk(&env, tier)?;
         if !verify_groth16_proof(&env, &vk, &proof, &commitment, 0) {
             return Err(Error::InvalidProof);
         }
+
+        Self::record_proof(&env, &proof);
 
         let timestamp = env.ledger().timestamp();
         let entry = CommitmentEntry {
@@ -341,10 +352,14 @@ impl SepXxxxContract {
             return Err(Error::PublicInputsMismatch);
         }
 
+        Self::check_proof_replay(&env, &proof)?;
+
         let vk = Self::load_vk(&env, current.tier)?;
         if !verify_groth16_proof(&env, &vk, &proof, &current.commitment, current.epoch) {
             return Err(Error::InvalidProof);
         }
+
+        Self::record_proof(&env, &proof);
 
         let timestamp = env.ledger().timestamp();
 
@@ -397,14 +412,22 @@ impl SepXxxxContract {
             return Err(Error::PublicInputsMismatch);
         }
 
+        Self::check_proof_replay(&env, &proof)?;
+
         let vk = Self::load_vk(&env, state.tier)?;
-        Ok(verify_groth16_proof(
+        let valid = verify_groth16_proof(
             &env,
             &vk,
             &proof,
             &state.commitment,
             state.epoch,
-        ))
+        );
+
+        if valid {
+            Self::record_proof(&env, &proof);
+        }
+
+        Ok(valid)
     }
 
     /// Deactivate a group (requires membership proof).
@@ -434,10 +457,14 @@ impl SepXxxxContract {
             return Err(Error::PublicInputsMismatch);
         }
 
+        Self::check_proof_replay(&env, &proof)?;
+
         let vk = Self::load_vk(&env, current.tier)?;
         if !verify_groth16_proof(&env, &vk, &proof, &current.commitment, current.epoch) {
             return Err(Error::InvalidProof);
         }
+
+        Self::record_proof(&env, &proof);
 
         let timestamp = env.ledger().timestamp();
         let deactivated = CommitmentEntry {
@@ -532,6 +559,46 @@ impl SepXxxxContract {
         );
         env.storage().persistent().extend_ttl(
             &DataKey::History(group_id.clone()),
+            LEDGER_THRESHOLD,
+            LEDGER_BUMP,
+        );
+        // Bump instance storage TTL to prevent admin key loss.
+        env.storage()
+            .instance()
+            .extend_ttl(LEDGER_THRESHOLD, LEDGER_BUMP);
+    }
+
+    /// Compute a SHA-256 hash of the proof components for replay tracking.
+    fn proof_hash(env: &Env, proof: &Groth16Proof) -> BytesN<32> {
+        let mut preimage = Bytes::new(env);
+        preimage.append(&Bytes::from_slice(env, proof.a.to_array().as_slice()));
+        preimage.append(&Bytes::from_slice(env, proof.b.to_array().as_slice()));
+        preimage.append(&Bytes::from_slice(env, proof.c.to_array().as_slice()));
+        env.crypto().sha256(&preimage).into()
+    }
+
+    /// Reject if this exact proof has been submitted before (cross-function
+    /// and cross-group replay prevention).
+    fn check_proof_replay(env: &Env, proof: &Groth16Proof) -> Result<(), Error> {
+        let hash = Self::proof_hash(env, proof);
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::UsedProof(hash))
+        {
+            return Err(Error::ProofReplay);
+        }
+        Ok(())
+    }
+
+    /// Record a proof hash so it cannot be replayed.
+    fn record_proof(env: &Env, proof: &Groth16Proof) {
+        let hash = Self::proof_hash(env, proof);
+        env.storage()
+            .persistent()
+            .set(&DataKey::UsedProof(hash.clone()), &true);
+        env.storage().persistent().extend_ttl(
+            &DataKey::UsedProof(hash),
             LEDGER_THRESHOLD,
             LEDGER_BUMP,
         );
@@ -702,6 +769,7 @@ mod test {
         let vk = mock_vk(&env);
         client.initialize(&admin, &vk, &vk, &vk);
 
+        let caller = Address::generate(&env);
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
         let pi = PublicInputs {
@@ -709,13 +777,14 @@ mod test {
             epoch: 0,
         };
 
-        client.create_group(&group_id, &commitment, &3u32, &mock_proof(&env), &pi);
+        client.create_group(&caller, &group_id, &commitment, &3u32, &mock_proof(&env), &pi);
     }
 
     #[test]
     #[should_panic(expected = "Error(Contract, #1)")]
     fn test_not_initialized_rejected() {
         let (env, client, _admin) = setup_env();
+        let caller = Address::generate(&env);
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
         let pi = PublicInputs {
@@ -723,7 +792,7 @@ mod test {
             epoch: 0,
         };
 
-        client.create_group(&group_id, &commitment, &0u32, &mock_proof(&env), &pi);
+        client.create_group(&caller, &group_id, &commitment, &0u32, &mock_proof(&env), &pi);
     }
 
     #[test]
@@ -733,6 +802,7 @@ mod test {
         let vk = mock_vk(&env);
         client.initialize(&admin, &vk, &vk, &vk);
 
+        let caller = Address::generate(&env);
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
         let wrong_pi = PublicInputs {
@@ -740,7 +810,7 @@ mod test {
             epoch: 0,
         };
 
-        client.create_group(&group_id, &commitment, &0u32, &mock_proof(&env), &wrong_pi);
+        client.create_group(&caller, &group_id, &commitment, &0u32, &mock_proof(&env), &wrong_pi);
     }
 
     #[test]
@@ -750,6 +820,7 @@ mod test {
         let vk = mock_vk(&env);
         client.initialize(&admin, &vk, &vk, &vk);
 
+        let caller = Address::generate(&env);
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
         let wrong_pi = PublicInputs {
@@ -757,7 +828,7 @@ mod test {
             epoch: 5,
         };
 
-        client.create_group(&group_id, &commitment, &0u32, &mock_proof(&env), &wrong_pi);
+        client.create_group(&caller, &group_id, &commitment, &0u32, &mock_proof(&env), &wrong_pi);
     }
 
     // NOTE: Tests exercising actual Groth16 verification require valid

@@ -1,6 +1,8 @@
 //! JNI bindings for Android. Each function corresponds to a native method
 //! in `com.stellarmls.mls.RustBridge`.
 
+use std::panic;
+
 use jni::objects::{JByteArray, JClass};
 use jni::sys::jbyteArray;
 use jni::JNIEnv;
@@ -14,8 +16,8 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 
 use crate::commitment::{
-    bytes_be_to_field, compute_commitment, compute_poseidon_commitment, field_to_bytes_be, Salt,
-    SALT_LEN,
+    bytes_be_to_field_checked, compute_commitment, compute_poseidon_commitment, field_to_bytes_be,
+    Salt, SALT_LEN,
 };
 use crate::merkle::{
     CanonicalMember, PoseidonMerkleTree, COMPRESSED_G1_PUBLIC_KEY_LEN, compressed_public_key_bytes,
@@ -28,6 +30,19 @@ const FR_BYTES: usize = 32;
 fn throw_and_null(env: &mut JNIEnv, msg: &str) -> jbyteArray {
     let _ = env.throw_new("java/lang/RuntimeException", msg);
     JByteArray::default().into_raw()
+}
+
+/// Run a closure with panic catching. If the closure panics, throw a Java
+/// RuntimeException instead of unwinding across the JNI boundary (which is UB).
+fn run_jni<F>(env: &mut JNIEnv, f: F) -> jbyteArray
+where
+    F: FnOnce() -> Result<Vec<u8>, String> + panic::UnwindSafe,
+{
+    match panic::catch_unwind(f) {
+        Ok(Ok(bytes)) => to_jbytes(env, &bytes),
+        Ok(Err(msg)) => throw_and_null(env, &msg),
+        Err(_) => throw_and_null(env, "Rust panic crossed JNI boundary"),
+    }
 }
 
 fn to_jbytes(env: &mut JNIEnv, bytes: &[u8]) -> jbyteArray {
@@ -52,7 +67,7 @@ fn parse_fr(bytes: &[u8]) -> Result<Fr, String> {
     let array: [u8; FR_BYTES] = bytes
         .try_into()
         .map_err(|_| "field element conversion failed".to_string())?;
-    Ok(bytes_be_to_field::<Fr>(&array))
+    bytes_be_to_field_checked::<Fr>(&array)
 }
 
 fn parse_members(
@@ -121,7 +136,8 @@ fn pack_three(a: &[u8], b: &[u8], c: &[u8]) -> Vec<u8> {
 }
 
 // -------- JNI exports --------
-// Pattern: extract byte arrays from JNI env first, then do pure Rust logic.
+// Pattern: extract byte arrays from JNI env first, then do pure Rust logic
+// inside run_jni() which catches panics to prevent UB at the JNI boundary.
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_stellarmls_mls_RustBridge_computeLeafHash(
@@ -130,10 +146,11 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_computeLeafHash(
     secret_key: JByteArray,
 ) -> jbyteArray {
     let sk = get_bytes(&mut env, &secret_key);
-    match parse_fr(&sk).map(|fr| prover::compute_leaf_hash(&fr)) {
-        Ok(leaf) => to_jbytes(&mut env, &field_to_bytes_be(&leaf)),
-        Err(msg) => throw_and_null(&mut env, &msg),
-    }
+    run_jni(&mut env, move || {
+        let fr = parse_fr(&sk)?;
+        let leaf = prover::compute_leaf_hash(&fr);
+        Ok(field_to_bytes_be(&leaf).to_vec())
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -143,10 +160,10 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_computePublicKey(
     secret_key: JByteArray,
 ) -> jbyteArray {
     let sk = get_bytes(&mut env, &secret_key);
-    match parse_fr(&sk).map(|fr| compressed_public_key_bytes(&fr)) {
-        Ok(pk) => to_jbytes(&mut env, &pk),
-        Err(msg) => throw_and_null(&mut env, &msg),
-    }
+    run_jni(&mut env, move || {
+        let fr = parse_fr(&sk)?;
+        Ok(compressed_public_key_bytes(&fr).to_vec())
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -159,17 +176,13 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_computeMerkleRoot(
 ) -> jbyteArray {
     let pk_bytes = get_bytes(&mut env, &member_public_keys);
     let lh_bytes = get_bytes(&mut env, &leaf_hashes);
-    let result = (|| -> Result<Vec<u8>, String> {
+    run_jni(&mut env, move || {
         let members = parse_members(&pk_bytes, &lh_bytes)?;
         let config = poseidon_config::<Fr>();
         let tree = PoseidonMerkleTree::build_from_members(&config, &members, depth as usize)
             .map_err(|e| e.to_string())?;
         Ok(field_to_bytes_be(&tree.root()).to_vec())
-    })();
-    match result {
-        Ok(bytes) => to_jbytes(&mut env, &bytes),
-        Err(msg) => throw_and_null(&mut env, &msg),
-    }
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -179,18 +192,14 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_nostrDerivePublicKey(
     secret_key: JByteArray,
 ) -> jbyteArray {
     let sk = get_bytes(&mut env, &secret_key);
-    let result = (|| -> Result<Vec<u8>, String> {
+    run_jni(&mut env, move || {
         if sk.len() != 32 {
             return Err(format!("secret key must be 32 bytes, got {}", sk.len()));
         }
         let arr: [u8; 32] = sk.try_into().unwrap();
         let signing_key = SigningKey::from_bytes(&arr).map_err(|e| e.to_string())?;
         Ok(signing_key.verifying_key().to_bytes().to_vec())
-    })();
-    match result {
-        Ok(bytes) => to_jbytes(&mut env, &bytes),
-        Err(msg) => throw_and_null(&mut env, &msg),
-    }
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -202,7 +211,7 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_nostrSignEventId(
 ) -> jbyteArray {
     let sk = get_bytes(&mut env, &secret_key);
     let eid = get_bytes(&mut env, &event_id);
-    let result = (|| -> Result<Vec<u8>, String> {
+    run_jni(&mut env, move || {
         if sk.len() != 32 {
             return Err(format!("secret key must be 32 bytes, got {}", sk.len()));
         }
@@ -214,11 +223,7 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_nostrSignEventId(
         let signing_key = SigningKey::from_bytes(&sk_arr).map_err(|e| e.to_string())?;
         let sig: Signature = signing_key.sign(&eid_arr);
         Ok(sig.to_bytes().to_vec())
-    })();
-    match result {
-        Ok(bytes) => to_jbytes(&mut env, &bytes),
-        Err(msg) => throw_and_null(&mut env, &msg),
-    }
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -231,7 +236,7 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_computeSha256Commitmen
 ) -> jbyteArray {
     let root_bytes = get_bytes(&mut env, &poseidon_root);
     let salt_bytes = get_bytes(&mut env, &salt);
-    let result = (|| -> Result<Vec<u8>, String> {
+    run_jni(&mut env, move || {
         let root = parse_fr(&root_bytes)?;
         if salt_bytes.len() != SALT_LEN {
             return Err(format!("salt must be {} bytes", SALT_LEN));
@@ -240,11 +245,7 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_computeSha256Commitmen
             .try_into()
             .map_err(|_| "salt conversion failed".to_string())?;
         Ok(compute_commitment(&root, epoch as u64, &salt_arr).to_vec())
-    })();
-    match result {
-        Ok(bytes) => to_jbytes(&mut env, &bytes),
-        Err(msg) => throw_and_null(&mut env, &msg),
-    }
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -257,7 +258,7 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_computePoseidonCommitm
 ) -> jbyteArray {
     let root_bytes = get_bytes(&mut env, &poseidon_root);
     let salt_bytes = get_bytes(&mut env, &salt);
-    let result = (|| -> Result<Vec<u8>, String> {
+    run_jni(&mut env, move || {
         let root = parse_fr(&root_bytes)?;
         if salt_bytes.len() != SALT_LEN {
             return Err(format!("salt must be {} bytes", SALT_LEN));
@@ -268,11 +269,7 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_computePoseidonCommitm
         let config = poseidon_config::<Fr>();
         let commitment = compute_poseidon_commitment(&config, &root, epoch as u64, &salt_arr);
         Ok(field_to_bytes_be(&commitment).to_vec())
-    })();
-    match result {
-        Ok(bytes) => to_jbytes(&mut env, &bytes),
-        Err(msg) => throw_and_null(&mut env, &msg),
-    }
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -282,7 +279,7 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_generateTestingProving
     depth: i32,
     seed: i64,
 ) -> jbyteArray {
-    let result = (|| -> Result<Vec<u8>, String> {
+    run_jni(&mut env, move || {
         let mut rng = ChaCha20Rng::seed_from_u64(seed as u64);
         let setup = prover::setup(depth as usize, &mut rng).map_err(|e| e.to_string())?;
         let mut bytes = Vec::new();
@@ -291,11 +288,7 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_generateTestingProving
             .serialize_compressed(&mut bytes)
             .map_err(|e| e.to_string())?;
         Ok(bytes)
-    })();
-    match result {
-        Ok(bytes) => to_jbytes(&mut env, &bytes),
-        Err(msg) => throw_and_null(&mut env, &msg),
-    }
+    })
 }
 
 /// Returns packed: [4-byte proof_len BE][proof][4-byte commitment_len BE][commitment]
@@ -316,7 +309,7 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_generateMembershipProo
     let lh_bytes = get_bytes(&mut env, &leaf_hashes);
     let sk_bytes = get_bytes(&mut env, &secret_key);
     let salt_bytes = get_bytes(&mut env, &salt);
-    let result = (|| -> Result<Vec<u8>, String> {
+    run_jni(&mut env, move || {
         let proving_key_obj = ProvingKey::<Bls12_381>::deserialize_compressed(&pk_key_bytes[..])
             .map_err(|e| e.to_string())?;
         let members = parse_members(&pk_bytes, &lh_bytes)?;
@@ -340,11 +333,7 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_generateMembershipProo
         let proof_bytes = prover::proof_to_bytes(&proof);
         let commitment_bytes = field_to_bytes_be(&public_inputs.commitment).to_vec();
         Ok(pack_two(&proof_bytes, &commitment_bytes))
-    })();
-    match result {
-        Ok(bytes) => to_jbytes(&mut env, &bytes),
-        Err(msg) => throw_and_null(&mut env, &msg),
-    }
+    })
 }
 
 /// Returns packed: [4-byte a_len][a][4-byte b_len][b][4-byte c_len][c]
@@ -355,13 +344,9 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_proofToContractFormat(
     compressed_proof: JByteArray,
 ) -> jbyteArray {
     let compressed = get_bytes(&mut env, &compressed_proof);
-    let result = (|| -> Result<Vec<u8>, String> {
+    run_jni(&mut env, move || {
         let proof = prover::proof_from_bytes(&compressed).map_err(|e| e.to_string())?;
         let (a, b, c) = prover::proof_to_uncompressed_components(&proof);
         Ok(pack_three(&a, &b, &c))
-    })();
-    match result {
-        Ok(bytes) => to_jbytes(&mut env, &bytes),
-        Err(msg) => throw_and_null(&mut env, &msg),
-    }
+    })
 }

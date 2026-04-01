@@ -414,6 +414,19 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         // Only apply if newer
         if (update.epoch <= group.epoch) return
 
+        // Verify sender attestation BEFORE mutating state
+        val senderAtt = update.senderAttestation
+        if (senderAtt != null) {
+            val att = KeyAttestation(
+                blsPubkey = senderAtt.blsPubkey,
+                ed25519Pubkey = senderAtt.ed25519Pubkey,
+                signature = senderAtt.signature
+            )
+            if (!KeyAttestation.verify(att)) {
+                return // Invalid attestation — discard update without modifying state
+            }
+        }
+
         // Apply member changes
         for (removed in update.removedMemberKeys) {
             group.members.removeAll { it.publicKeyCompressed.contentEquals(removed) }
@@ -437,19 +450,6 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         group.salt = update.salt
         if (update.commitment != null) {
             group.commitment = update.commitment
-        }
-
-        // Verify sender attestation if present
-        val senderAtt = update.senderAttestation
-        if (senderAtt != null) {
-            val att = KeyAttestation(
-                blsPubkey = senderAtt.blsPubkey,
-                ed25519Pubkey = senderAtt.ed25519Pubkey,
-                signature = senderAtt.signature
-            )
-            if (!KeyAttestation.verify(att)) {
-                return // Invalid attestation — discard update
-            }
         }
 
         groups[index] = group

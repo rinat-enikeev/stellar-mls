@@ -90,12 +90,31 @@ pub fn field_to_bytes_be<F: PrimeField>(f: &F) -> [u8; 32] {
 }
 
 /// Convert 32 big-endian bytes back to a field element.
+///
+/// For trusted internal inputs only. For untrusted FFI inputs, use
+/// [`bytes_be_to_field_checked`] which rejects non-canonical encodings.
 pub fn bytes_be_to_field<F: PrimeField>(bytes: &[u8; 32]) -> F {
     let mut le_bytes = [0u8; 32];
     for i in 0..32 {
         le_bytes[i] = bytes[31 - i];
     }
     F::from_le_bytes_mod_order(&le_bytes)
+}
+
+/// Convert 32 big-endian bytes to a field element, rejecting non-canonical
+/// encodings (values >= field modulus).
+///
+/// This prevents two different byte representations from silently mapping
+/// to the same field element, which is a soundness concern at FFI boundaries.
+pub fn bytes_be_to_field_checked<F: PrimeField>(bytes: &[u8; 32]) -> Result<F, String> {
+    let result = bytes_be_to_field::<F>(bytes);
+    let roundtrip = field_to_bytes_be(&result);
+    if bytes != &roundtrip {
+        return Err(format!(
+            "non-canonical field element: input bytes were reduced modulo the field order"
+        ));
+    }
+    Ok(result)
 }
 
 /// Verify a commitment against known inputs.

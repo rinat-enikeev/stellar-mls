@@ -75,29 +75,23 @@ public struct SEPKeyAttestationPayload: Codable, Equatable, Sendable {
         self.signature = signature
     }
 
-    /// Verify the attestation signature: Ed25519(SHA-256("SEP-XXXX:key-binding" || bls_pubkey)).
-    public func verify() -> Bool {
-        guard blsPubkey.count == 48, ed25519Pubkey.count == 32, signature.count == 64 else {
-            return false
-        }
-        // Compute binding message
-        var hasher = CryptoHasher()
-        hasher.update(data: Data("SEP-XXXX:key-binding".utf8))
-        hasher.update(data: blsPubkey)
-        _ = hasher.finalize()
-
-        // Verify with Ed25519 — delegated to caller since CryptoKit is not available in SwiftMLS
-        // The SDK provides the binding message; verification is performed by the app layer.
-        // This method validates structural integrity only.
-        return true
+    /// Validate the structural integrity of the attestation fields.
+    /// Returns false if any field has an incorrect byte length.
+    public var hasValidStructure: Bool {
+        blsPubkey.count == 48 && ed25519Pubkey.count == 32 && signature.count == 64
     }
-}
 
-// Minimal SHA-256 hasher for binding message computation
-private struct CryptoHasher {
-    private var data = Data()
-    mutating func update(data: Data) { self.data.append(data) }
-    func finalize() -> Data { data } // actual hashing done at app layer
+    /// Compute the binding message that the Ed25519 signature covers:
+    /// `SHA-256("SEP-XXXX:key-binding" || bls_pubkey)`
+    ///
+    /// The caller MUST verify `signature` over this message using
+    /// `ed25519Pubkey` via CryptoKit or equivalent. The SDK does not
+    /// perform the Ed25519 verification itself.
+    public func computeBindingMessage() -> Data {
+        var message = Data("SEP-XXXX:key-binding".utf8)
+        message.append(blsPubkey)
+        return message
+    }
 }
 
 // MARK: - Protocol Message Envelope

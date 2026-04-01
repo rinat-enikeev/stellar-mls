@@ -48,7 +48,7 @@ final class NostrMessageTransport {
             for (_, conn) in self.connections {
                 let filter: [String: Any] = [
                     "kinds": [24114],
-                    "#sep_topic": [topic],
+                    "#t": [topic],
                 ]
                 let stream = await conn.subscribe(subscriptionID: subID, filter: filter)
                 for await event in stream {
@@ -118,8 +118,7 @@ final class NostrMessageTransport {
         let content = envelopeData.base64EncodedString()
 
         let tags: [[String]] = [
-            ["sep_topic", topic],
-            ["sep_version", "1"],
+            ["t", topic],
         ]
 
         let event = NostrEvent.build(

@@ -79,10 +79,12 @@ data class InviteCode(
     val name: String,
     val relayHints: List<String>
 ) {
+    /** Encode to a Base64 string using the canonical JSON format (base64 for binary fields).
+     *  Compatible with iOS Codable serialization of Data fields. */
     fun encode(): String {
         val json = JSONObject().apply {
-            put("groupID", groupID.toHex())
-            put("groupSecret", groupSecret.toHex())
+            put("groupID", android.util.Base64.encodeToString(groupID, android.util.Base64.NO_WRAP))
+            put("groupSecret", android.util.Base64.encodeToString(groupSecret, android.util.Base64.NO_WRAP))
             put("name", name)
             put("relayHints", JSONArray(relayHints))
         }
@@ -97,14 +99,27 @@ data class InviteCode(
             val json = JSONObject(
                 String(android.util.Base64.decode(encoded, android.util.Base64.NO_WRAP))
             )
+            val groupIDStr = json.getString("groupID")
+            val groupSecretStr = json.getString("groupSecret")
             return InviteCode(
-                groupID = json.getString("groupID").hexToBytes(),
-                groupSecret = json.getString("groupSecret").hexToBytes(),
+                groupID = decodeFlexible(groupIDStr),
+                groupSecret = decodeFlexible(groupSecretStr),
                 name = json.getString("name"),
                 relayHints = (0 until json.getJSONArray("relayHints").length()).map {
                     json.getJSONArray("relayHints").getString(it)
                 }
             )
+        }
+
+        /** Decode a string that may be base64 or hex-encoded (for backward compatibility). */
+        private fun decodeFlexible(value: String): ByteArray {
+            // Base64-encoded 32 bytes → 44 chars; hex-encoded 32 bytes → 64 chars.
+            // Hex strings are always even-length and contain only [0-9a-fA-F].
+            return if (value.length == 64 && value.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
+                value.hexToBytes()
+            } else {
+                android.util.Base64.decode(value, android.util.Base64.NO_WRAP)
+            }
         }
     }
 }

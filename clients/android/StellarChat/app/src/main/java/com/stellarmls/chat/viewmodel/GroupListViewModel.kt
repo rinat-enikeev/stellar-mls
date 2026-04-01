@@ -412,7 +412,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     // -- Salt History --
 
     fun storeSalt(groupID: String, epoch: Long, salt: ByteArray) {
-        val history = saltHistory.getOrPut(groupID) { java.util.concurrent.ConcurrentHashMap() }
+        val history = saltHistory.computeIfAbsent(groupID) { java.util.concurrent.ConcurrentHashMap() }
         history[epoch] = salt
         // Cap to last 64 epochs to prevent memory exhaustion
         if (history.size > SALT_HISTORY_WINDOW) {
@@ -571,13 +571,14 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         transport.onProtocolMessage = { groupID, json, eventID, senderPubkey ->
             // Replay protection: skip already-processed protocol events (H-7)
             // N-8: Evict oldest entries when set exceeds max size
-            synchronized(processedProtocolEventIDs) {
+            val isNew = synchronized(processedProtocolEventIDs) {
                 if (processedProtocolEventIDs.size >= MAX_DEDUP_SET_SIZE) {
                     val iter = processedProtocolEventIDs.iterator()
                     if (iter.hasNext()) { iter.next(); iter.remove() }
                 }
+                processedProtocolEventIDs.add(eventID)
             }
-            if (processedProtocolEventIDs.add(eventID)) {
+            if (isNew) {
                 try {
                     val obj = JSONObject(json)
                     when (obj.optString("type")) {

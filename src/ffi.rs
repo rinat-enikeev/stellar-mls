@@ -6,7 +6,8 @@ use std::slice;
 use ark_bls12_381::{Bls12_381, Fr};
 use ark_groth16::ProvingKey;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use k256::schnorr::{signature::Signer, Signature, SigningKey};
+use k256::schnorr::{signature::hazmat::PrehashSigner, Signature, SigningKey, VerifyingKey};
+use k256::schnorr::signature::hazmat::PrehashVerifier;
 use rand::rngs::OsRng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
@@ -280,8 +281,51 @@ pub extern "C" fn sep_nostr_sign_event_id(
         let event_id_bytes = read_array_32(event_id_bytes, "Nostr event id")?;
 
         let signing_key = SigningKey::from_bytes(&secret_key_bytes).map_err(|e| e.to_string())?;
-        let signature: Signature = signing_key.sign(&event_id_bytes);
+        // N-25: Use sign_prehash to sign the raw event ID bytes directly.
+        // The event ID is already SHA-256(canonical_json) per NIP-01.
+        // The previous Signer::sign() would double-hash, producing invalid signatures.
+        let signature: Signature = signing_key
+            .sign_prehash(&event_id_bytes)
+            .map_err(|e| e.to_string())?;
         write_buffer(out_signature, signature.to_bytes().to_vec())
+    })
+}
+
+/// N-7/N-25: Verify a Nostr Schnorr signature over a pre-hashed event ID.
+///
+/// Returns true if the signature is valid, false otherwise.
+/// On internal error (e.g., malformed key), writes the error message
+/// and returns false.
+#[unsafe(no_mangle)]
+pub extern "C" fn sep_nostr_verify_event_signature(
+    public_key_ptr: *const u8,
+    public_key_len: usize,
+    event_id_ptr: *const u8,
+    event_id_len: usize,
+    signature_ptr: *const u8,
+    signature_len: usize,
+    out_error: *mut *mut c_char,
+) -> bool {
+    run_ffi(out_error, || {
+        let pubkey_bytes = read_bytes(public_key_ptr, public_key_len, "Nostr public key")?;
+        let pubkey_bytes = read_array_32(pubkey_bytes, "Nostr public key")?;
+        let event_id_bytes = read_bytes(event_id_ptr, event_id_len, "Nostr event id")?;
+        let event_id_bytes = read_array_32(event_id_bytes, "Nostr event id")?;
+        let sig_bytes = read_bytes(signature_ptr, signature_len, "Nostr signature")?;
+        require_len("Nostr signature", sig_bytes.len(), 64)?;
+        let sig_array: [u8; 64] = sig_bytes
+            .try_into()
+            .map_err(|_| "failed to convert signature bytes".to_string())?;
+
+        let verifying_key =
+            VerifyingKey::from_bytes(&pubkey_bytes).map_err(|e| e.to_string())?;
+        let signature = Signature::try_from(sig_array.as_slice()).map_err(|e| e.to_string())?;
+
+        verifying_key
+            .verify_prehash(&event_id_bytes, &signature)
+            .map_err(|e| e.to_string())?;
+
+        Ok(())
     })
 }
 
@@ -420,4 +464,131 @@ pub extern "C" fn sep_generate_membership_proof(
         )?;
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use k256::schnorr::{
+        signature::hazmat::{PrehashSigner, PrehashVerifier},
+        SigningKey, VerifyingKey,
+    };
+    use sha2::{Digest, Sha256};
+
+    fn decode_hex(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// Sign/verify round-trip: sign_prehash produces a signature that verify_prehash accepts.
+    #[test]
+    fn test_nostr_sign_verify_roundtrip() {
+        let mut sk_bytes = [0u8; 32];
+        sk_bytes[31] = 1;
+        let signing_key = SigningKey::from_bytes(&sk_bytes).unwrap();
+        let verifying_key = signing_key.verifying_key();
+
+        // Simulate NIP-01 event id (SHA-256 of canonical JSON)
+        let event_id: [u8; 32] = Sha256::digest(b"test-event-canonical-json").into();
+
+        let signature = signing_key.sign_prehash(&event_id).unwrap();
+        assert!(
+            verifying_key.verify_prehash(&event_id, &signature).is_ok(),
+            "sign_prehash signature must pass verify_prehash"
+        );
+    }
+
+    /// Different event IDs produce different signatures that don't cross-verify.
+    #[test]
+    fn test_nostr_signature_binds_to_event_id() {
+        let mut sk_bytes = [0u8; 32];
+        sk_bytes[31] = 1;
+        let signing_key = SigningKey::from_bytes(&sk_bytes).unwrap();
+        let verifying_key = signing_key.verifying_key();
+
+        let eid1: [u8; 32] = Sha256::digest(b"event-1").into();
+        let eid2: [u8; 32] = Sha256::digest(b"event-2").into();
+
+        let sig1 = signing_key.sign_prehash(&eid1).unwrap();
+        assert!(
+            verifying_key.verify_prehash(&eid2, &sig1).is_err(),
+            "signature for event-1 must not verify against event-2"
+        );
+    }
+
+    /// BIP-340 test vector 0:
+    /// Secret key: 0x03, Public key: F9308A..., Message: 32 zero bytes
+    #[test]
+    fn test_bip340_test_vector_0() {
+        let sk = decode_hex("0000000000000000000000000000000000000000000000000000000000000003");
+        let expected_pubkey = decode_hex(
+            "F9308A019258C31049344F85F89D5229B531C845836F99B08601F113BCE036F9",
+        );
+        let msg = [0u8; 32];
+        let expected_sig = decode_hex(
+            "E907831F80848D1069A5371B402410364BDF1C5F8307B0084C55F1CE2DCA821525F66A4A85EA8B71E482A74F382D2CE5EBEEE8FDB2172F477DF4900D310536C0",
+        );
+
+        let signing_key = SigningKey::from_bytes(sk.as_slice().try_into().unwrap()).unwrap();
+        let verifying_key = signing_key.verifying_key();
+
+        assert_eq!(
+            verifying_key.to_bytes().as_slice(),
+            expected_pubkey.as_slice(),
+            "derived pubkey must match BIP-340 test vector"
+        );
+
+        let signature = signing_key.sign_prehash(&msg).unwrap();
+        assert_eq!(
+            signature.to_bytes().as_slice(),
+            expected_sig.as_slice(),
+            "signature must match BIP-340 test vector"
+        );
+
+        assert!(verifying_key.verify_prehash(&msg, &signature).is_ok());
+    }
+
+    /// BIP-340 verification-only test vector 4.
+    #[test]
+    fn test_bip340_test_vector_4_verify() {
+        let pk = decode_hex("D69C3509BB99E412E68B0FE8544E72837DFA30746D8BE2AA65975F29D22DC7B9");
+        let msg = decode_hex("4DF3C3F68FCC83B27E9D42C90431A72499F17875C81A599B566C9889B9696703");
+        let sig = decode_hex(
+            "00000000000000000000003B78CE563F89A0ED9414F5AA28AD0D96D6795F9C6376AFB1548AF603B3EB45C9F8207DEE1060CB71C04E80F593060B07D28308D7F4",
+        );
+
+        let pk_arr: [u8; 32] = pk.try_into().unwrap();
+        let msg_arr: [u8; 32] = msg.try_into().unwrap();
+        let sig_arr: [u8; 64] = sig.try_into().unwrap();
+
+        let verifying_key = VerifyingKey::from_bytes(&pk_arr).unwrap();
+        let signature = k256::schnorr::Signature::try_from(sig_arr.as_slice()).unwrap();
+
+        assert!(
+            verifying_key.verify_prehash(&msg_arr, &signature).is_ok(),
+            "BIP-340 test vector 4 must verify"
+        );
+    }
+
+    /// Negative test: old Signer::sign (double-hashes) must NOT pass verify_prehash.
+    #[test]
+    fn test_old_signer_double_hash_does_not_verify() {
+        use k256::schnorr::signature::Signer;
+
+        let mut sk_bytes = [0u8; 32];
+        sk_bytes[31] = 1;
+        let signing_key = SigningKey::from_bytes(&sk_bytes).unwrap();
+        let verifying_key = signing_key.verifying_key();
+
+        let event_id: [u8; 32] = Sha256::digest(b"double-hash-test").into();
+
+        // Old behavior: Signer::sign internally SHA-256-hashes the input again
+        let old_sig: k256::schnorr::Signature = signing_key.sign(&event_id);
+
+        assert!(
+            verifying_key.verify_prehash(&event_id, &old_sig).is_err(),
+            "Signer::sign output must NOT pass PrehashVerifier::verify_prehash (double-hash bug)"
+        );
+    }
 }

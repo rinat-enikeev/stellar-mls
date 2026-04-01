@@ -63,6 +63,7 @@ enum GroupCrypto {
             scheme: "aes-256-gcm-v1",
             ephemeralPublicKey: nil,
             ephemeralKeySignature: nil,
+            senderEd25519PublicKey: nil,
             nonce: Data(nonce),
             ciphertext: sealed.ciphertext,
             authenticationTag: sealed.tag
@@ -99,10 +100,14 @@ enum GroupCrypto {
         // M-5: Sign ephemeral public key with sender's Ed25519 identity key
         let ephPubData = Data(ephemeral.publicKey.rawRepresentation)
         let ephKeySignature: Data?
+        let senderEd25519PubData: Data?
         if let signingKey = senderSigningKey {
             ephKeySignature = try signingKey.signature(for: ephPubData)
+            // N-1: Embed sender's Ed25519 public key so recipient can verify without out-of-band exchange
+            senderEd25519PubData = Data(signingKey.publicKey.rawRepresentation)
         } else {
             ephKeySignature = nil
+            senderEd25519PubData = nil
         }
 
         return SealedEnvelope(
@@ -110,6 +115,7 @@ enum GroupCrypto {
             scheme: "x25519-aes-256-gcm-v1",
             ephemeralPublicKey: ephPubData,
             ephemeralKeySignature: ephKeySignature,
+            senderEd25519PublicKey: senderEd25519PubData,
             nonce: Data(nonce),
             ciphertext: sealed.ciphertext,
             authenticationTag: sealed.tag
@@ -132,13 +138,15 @@ enum GroupCrypto {
               let tag = envelope.authenticationTag
         else { throw ChatError.decryptionFailed }
 
-        // N-1: Verify ephemeral key signature if present
+        // N-1: Verify ephemeral key signature if present.
+        // Prefer pubkey embedded in the envelope; fall back to caller-supplied one.
         if let sigData = envelope.ephemeralKeySignature {
-            guard let senderPubkey = senderEd25519Pubkey else {
+            let effectivePubkey = envelope.senderEd25519PublicKey ?? senderEd25519Pubkey
+            guard let pubkeyData = effectivePubkey else {
                 SecurityLog.invalidAttestation(reason: "ephemeral key signature present but no sender pubkey to verify against")
                 throw ChatError.decryptionFailed
             }
-            let verifyingKey = try Curve25519.Signing.PublicKey(rawRepresentation: senderPubkey)
+            let verifyingKey = try Curve25519.Signing.PublicKey(rawRepresentation: pubkeyData)
             guard verifyingKey.isValidSignature(sigData, for: ephPubData) else {
                 SecurityLog.invalidAttestation(reason: "ephemeral key signature verification failed")
                 throw ChatError.decryptionFailed
@@ -190,6 +198,9 @@ struct SealedEnvelope: Codable {
     /// Ed25519 signature over the ephemeral public key by the sender's identity key (M-5).
     /// Prevents MITM substitution of the ephemeral X25519 key in invitations.
     let ephemeralKeySignature: Data?
+    /// N-1: Sender's Ed25519 public key embedded in the envelope so the recipient
+    /// can verify the ephemeral key signature without out-of-band key exchange.
+    let senderEd25519PublicKey: Data?
     let nonce: Data?
     let ciphertext: Data
     let authenticationTag: Data?
@@ -198,6 +209,7 @@ struct SealedEnvelope: Codable {
         case version, scheme
         case ephemeralPublicKey = "ephemeral_public_key"
         case ephemeralKeySignature = "ephemeral_key_signature"
+        case senderEd25519PublicKey = "sender_ed25519_public_key"
         case nonce, ciphertext
         case authenticationTag = "authentication_tag"
     }

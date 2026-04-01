@@ -24,6 +24,9 @@ internal object RustBridge {
     /** Sign a 32-byte event ID with secp256k1 Schnorr. Returns 64-byte signature. */
     external fun nostrSignEventId(secretKey: ByteArray, eventId: ByteArray): ByteArray
 
+    /** Verify a Schnorr signature over a pre-hashed event ID. Returns [1] on success, throws on failure. */
+    external fun nostrVerifyEventSignature(publicKey: ByteArray, eventId: ByteArray, signature: ByteArray): ByteArray
+
     /** SHA256(poseidon_root || epoch_be || salt). Returns 32 bytes. */
     external fun computeSha256Commitment(poseidonRoot: ByteArray, epoch: Long, salt: ByteArray): ByteArray
 

@@ -10,7 +10,8 @@ use jni::JNIEnv;
 use ark_bls12_381::{Bls12_381, Fr};
 use ark_groth16::ProvingKey;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use k256::schnorr::{signature::Signer, Signature, SigningKey};
+use k256::schnorr::{signature::hazmat::PrehashSigner, Signature, SigningKey, VerifyingKey};
+use k256::schnorr::signature::hazmat::PrehashVerifier;
 use rand::rngs::OsRng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
@@ -230,8 +231,50 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_nostrSignEventId(
         let sk_arr: [u8; 32] = sk.try_into().unwrap();
         let eid_arr: [u8; 32] = eid.try_into().unwrap();
         let signing_key = SigningKey::from_bytes(&sk_arr).map_err(|e| e.to_string())?;
-        let sig: Signature = signing_key.sign(&eid_arr);
+        // N-25: Use sign_prehash to sign the raw event ID bytes directly.
+        // The event ID is already SHA-256(canonical_json) per NIP-01.
+        let sig: Signature = signing_key
+            .sign_prehash(&eid_arr)
+            .map_err(|e| e.to_string())?;
         Ok(sig.to_bytes().to_vec())
+    })
+}
+
+/// N-7/N-25: Verify a Nostr Schnorr signature over a pre-hashed event ID.
+///
+/// Returns a 1-byte array `[1]` on success, or throws a RuntimeException on failure.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_stellarmls_mls_RustBridge_nostrVerifyEventSignature(
+    mut env: JNIEnv,
+    _class: JClass,
+    public_key: JByteArray,
+    event_id: JByteArray,
+    signature: JByteArray,
+) -> jbyteArray {
+    let pk = get_bytes(&mut env, &public_key);
+    let eid = get_bytes(&mut env, &event_id);
+    let sig = get_bytes(&mut env, &signature);
+    run_jni(&mut env, move || {
+        if pk.len() != 32 {
+            return Err(format!("public key must be 32 bytes, got {}", pk.len()));
+        }
+        if eid.len() != 32 {
+            return Err(format!("event id must be 32 bytes, got {}", eid.len()));
+        }
+        if sig.len() != 64 {
+            return Err(format!("signature must be 64 bytes, got {}", sig.len()));
+        }
+        let pk_arr: [u8; 32] = pk.try_into().unwrap();
+        let eid_arr: [u8; 32] = eid.try_into().unwrap();
+        let sig_arr: [u8; 64] = sig.try_into().unwrap();
+
+        let verifying_key =
+            VerifyingKey::from_bytes(&pk_arr).map_err(|e| e.to_string())?;
+        let signature = Signature::try_from(sig_arr.as_slice()).map_err(|e| e.to_string())?;
+        verifying_key
+            .verify_prehash(&eid_arr, &signature)
+            .map_err(|e| e.to_string())?;
+        Ok(vec![1u8])
     })
 }
 

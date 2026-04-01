@@ -32,6 +32,34 @@ enum RustBridge {
         }
     }
 
+    static func verifyNostrEventSignature(publicKey: Data, eventID: Data, signature: Data) throws -> Bool {
+        var rawError: UnsafeMutablePointer<CChar>?
+        let success = publicKey.withUnsafeBytes { pubKeyBytes in
+            eventID.withUnsafeBytes { eventIDBytes in
+                signature.withUnsafeBytes { sigBytes in
+                    sep_nostr_verify_event_signature(
+                        pubKeyBytes.bindMemory(to: UInt8.self).baseAddress,
+                        publicKey.count,
+                        eventIDBytes.bindMemory(to: UInt8.self).baseAddress,
+                        eventID.count,
+                        sigBytes.bindMemory(to: UInt8.self).baseAddress,
+                        signature.count,
+                        &rawError
+                    )
+                }
+            }
+        }
+        if !success {
+            if let rawError {
+                let message = String(cString: rawError)
+                sep_string_free(rawError)
+                throw SEPError.ffiFailure(message)
+            }
+            return false
+        }
+        return true
+    }
+
     static func computeLeafHash(secretKey: Data) throws -> Data {
         try withSingleOutputBuffer { buffer, errorPointer in
             secretKey.withUnsafeBytes { rawBytes in

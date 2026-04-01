@@ -53,6 +53,16 @@ bool sep_nostr_sign_event_id(
     char **out_error
 );
 
+bool sep_nostr_verify_event_signature(
+    const uint8_t *public_key_ptr,
+    size_t public_key_len,
+    const uint8_t *event_id_ptr,
+    size_t event_id_len,
+    const uint8_t *signature_ptr,
+    size_t signature_len,
+    char **out_error
+);
+
 bool sep_proof_to_contract_format(
     const uint8_t *compressed_proof_ptr,
     size_t compressed_proof_len,

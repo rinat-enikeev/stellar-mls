@@ -6,6 +6,7 @@
 #
 # Prerequisites:
 #   rustup target add aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim
+#   (missing targets are installed automatically via rustup target add)
 #
 # Output:
 #   <out-dir>/SEPMLSFFI.xcframework   — XCFramework containing the static library + C header
@@ -73,35 +74,35 @@ fi
 XCFRAMEWORK_ARGS="-library $MACOS_DIR/$LIB_NAME -headers $HEADER_DIR"
 
 # ================================================================
-# iOS device: arm64
+# iOS device: arm64 (always included)
 # ================================================================
-if rustup target list --installed | grep -q "^aarch64-apple-ios$"; then
-    build_target aarch64-apple-ios
-    IOS_DIR="$STAGING/ios"
-    mkdir -p "$IOS_DIR"
-    cp "$REPO_ROOT/target/aarch64-apple-ios/release/$LIB_NAME" "$IOS_DIR/$LIB_NAME"
-    XCFRAMEWORK_ARGS="$XCFRAMEWORK_ARGS -library $IOS_DIR/$LIB_NAME -headers $HEADER_DIR"
-fi
+require_target aarch64-apple-ios
+build_target aarch64-apple-ios
+IOS_DIR="$STAGING/ios"
+mkdir -p "$IOS_DIR"
+cp "$REPO_ROOT/target/aarch64-apple-ios/release/$LIB_NAME" "$IOS_DIR/$LIB_NAME"
+XCFRAMEWORK_ARGS="$XCFRAMEWORK_ARGS -library $IOS_DIR/$LIB_NAME -headers $HEADER_DIR"
 
 # ================================================================
-# iOS simulator: arm64 (+ x86_64 if available)
+# iOS simulator: arm64 + x86_64 (universal when x86_64 target available)
 # ================================================================
-if rustup target list --installed | grep -q "^aarch64-apple-ios-sim$"; then
-    build_target aarch64-apple-ios-sim
-    IOS_SIM_DIR="$STAGING/ios-sim"
-    mkdir -p "$IOS_SIM_DIR"
+require_target aarch64-apple-ios-sim
+build_target aarch64-apple-ios-sim
+IOS_SIM_DIR="$STAGING/ios-sim"
+mkdir -p "$IOS_SIM_DIR"
 
-    if rustup target list --installed | grep -q "^x86_64-apple-ios$"; then
-        build_target x86_64-apple-ios
-        lipo -create \
-            "$REPO_ROOT/target/aarch64-apple-ios-sim/release/$LIB_NAME" \
-            "$REPO_ROOT/target/x86_64-apple-ios/release/$LIB_NAME" \
-            -output "$IOS_SIM_DIR/$LIB_NAME"
-    else
-        cp "$REPO_ROOT/target/aarch64-apple-ios-sim/release/$LIB_NAME" "$IOS_SIM_DIR/$LIB_NAME"
-    fi
-    XCFRAMEWORK_ARGS="$XCFRAMEWORK_ARGS -library $IOS_SIM_DIR/$LIB_NAME -headers $HEADER_DIR"
+if rustup target list --installed | grep -q "^x86_64-apple-ios$"; then
+    build_target x86_64-apple-ios
+    echo "==> Creating iOS simulator universal binary (arm64 + x86_64)"
+    lipo -create \
+        "$REPO_ROOT/target/aarch64-apple-ios-sim/release/$LIB_NAME" \
+        "$REPO_ROOT/target/x86_64-apple-ios/release/$LIB_NAME" \
+        -output "$IOS_SIM_DIR/$LIB_NAME"
+else
+    echo "==> x86_64-apple-ios not installed, using arm64-only iOS simulator library"
+    cp "$REPO_ROOT/target/aarch64-apple-ios-sim/release/$LIB_NAME" "$IOS_SIM_DIR/$LIB_NAME"
 fi
+XCFRAMEWORK_ARGS="$XCFRAMEWORK_ARGS -library $IOS_SIM_DIR/$LIB_NAME -headers $HEADER_DIR"
 
 # ================================================================
 # Create XCFramework

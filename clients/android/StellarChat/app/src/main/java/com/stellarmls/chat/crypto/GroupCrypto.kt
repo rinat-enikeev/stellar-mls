@@ -145,6 +145,8 @@ object GroupCrypto {
             put("ephemeral_public_key", android.util.Base64.encodeToString(ephemeralPublic.encoded, android.util.Base64.NO_WRAP))
             if (ephKeySignature != null) {
                 put("ephemeral_key_signature", android.util.Base64.encodeToString(ephKeySignature, android.util.Base64.NO_WRAP))
+                // N-1: Embed sender's Ed25519 public key so recipient can verify without out-of-band exchange
+                put("sender_ed25519_public_key", android.util.Base64.encodeToString(senderKeyManager.stellarPublicKey, android.util.Base64.NO_WRAP))
             }
             put("nonce", android.util.Base64.encodeToString(iv, android.util.Base64.NO_WRAP))
             put("ciphertext", android.util.Base64.encodeToString(ct, android.util.Base64.NO_WRAP))
@@ -171,15 +173,20 @@ object GroupCrypto {
         val ct = android.util.Base64.decode(envelope.getString("ciphertext"), android.util.Base64.NO_WRAP)
         val tag = android.util.Base64.decode(envelope.getString("authentication_tag"), android.util.Base64.NO_WRAP)
 
-        // N-1: Verify ephemeral key signature if present
+        // N-1: Verify ephemeral key signature if present.
+        // Prefer pubkey embedded in the envelope; fall back to caller-supplied one.
         if (envelope.has("ephemeral_key_signature")) {
             val sigBytes = android.util.Base64.decode(
                 envelope.getString("ephemeral_key_signature"), android.util.Base64.NO_WRAP)
-            requireNotNull(senderEd25519Pubkey) {
+            val embeddedPubkey = if (envelope.has("sender_ed25519_public_key")) {
+                android.util.Base64.decode(envelope.getString("sender_ed25519_public_key"), android.util.Base64.NO_WRAP)
+            } else null
+            val effectivePubkey = embeddedPubkey ?: senderEd25519Pubkey
+            requireNotNull(effectivePubkey) {
                 "Ephemeral key signature present but no sender pubkey to verify against"
             }
             val verifier = org.bouncycastle.crypto.signers.Ed25519Signer()
-            verifier.init(false, org.bouncycastle.crypto.params.Ed25519PublicKeyParameters(senderEd25519Pubkey, 0))
+            verifier.init(false, org.bouncycastle.crypto.params.Ed25519PublicKeyParameters(effectivePubkey, 0))
             verifier.update(ephemeralPubBytes, 0, ephemeralPubBytes.size)
             require(verifier.verifySignature(sigBytes)) {
                 "Ephemeral key signature verification failed"

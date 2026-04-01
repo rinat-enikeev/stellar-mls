@@ -78,7 +78,7 @@
 		C958564E515954D41E226897 /* InvitationTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InvitationTransport.swift; sourceTree = "<group>"; };
 		CEE93134C2D32A03E89226B8 /* NostrMessageTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrMessageTransport.swift; sourceTree = "<group>"; };
 		E8D38B6A8AA5A166074EA951 /* InviteMemberView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InviteMemberView.swift; sourceTree = "<group>"; };
-		F406EABD519847834878AA47 /* StellarChat.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = StellarChat.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F406EABD519847834878AA47 /* StellarChat.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = StellarChat.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F5EB556EBD80A9DC1A99F1F4 /* KeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyManager.swift; sourceTree = "<group>"; };
 		F8FD22552EBCF23A89DB7700 /* ChatGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGroup.swift; sourceTree = "<group>"; };
 		FA96977038D2F9F4EC31EF3D /* BootstrapPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BootstrapPayload.swift; sourceTree = "<group>"; };
@@ -264,7 +264,6 @@
 						ProvisioningStyle = Automatic;
 					};
 					7E1AB0C084DAFEAB2A75FC86 = {
-						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -279,7 +278,7 @@
 			mainGroup = 237EA72C7CEF1AD9196D281B;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				F33EE2A00CAA98337DB93D99 /* XCLocalSwiftPackageReference "swift-mls" */,
+				F33EE2A00CAA98337DB93D99 /* XCLocalSwiftPackageReference "../../../swift-mls" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E290D72BA448D601D86C5E67 /* Products */;
@@ -364,7 +363,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = StellarChat/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -474,7 +473,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = StellarChat/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -603,7 +602,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		F33EE2A00CAA98337DB93D99 /* XCLocalSwiftPackageReference "swift-mls" */ = {
+		F33EE2A00CAA98337DB93D99 /* XCLocalSwiftPackageReference "../../../swift-mls" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "../../../swift-mls";
 		};

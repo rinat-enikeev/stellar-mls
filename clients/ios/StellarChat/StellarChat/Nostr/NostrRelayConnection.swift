@@ -40,7 +40,9 @@ actor NostrRelayConnection {
         task.resume()
         isConnected = true
         reconnectAttempts = 0
+        #if DEBUG
         print("[Relay] Connected to \(url.host ?? url.absoluteString)")
+        #endif
         Task { await receiveLoop() }
         startHeartbeat()
 
@@ -131,7 +133,9 @@ actor NostrRelayConnection {
                     Self.maxReconnectDelay,
                     Self.baseReconnectDelay * pow(2.0, Double(min(reconnectAttempts - 1, 6)))
                 )
+                #if DEBUG
                 print("[Relay] Disconnected from \(url.host ?? url.absoluteString), reconnecting in \(Int(delay))s (attempt \(reconnectAttempts))")
+                #endif
                 try? await Task.sleep(for: .seconds(delay))
                 connect()
                 return
@@ -182,22 +186,15 @@ actor NostrRelayConnection {
                   let subID = array[1] as? String,
                   let eventObj = array[2] as? [String: Any]
             else { return }
-            let hasSubscription = subscriptions[subID] != nil
-            print("[Relay] EVENT from \(url.host ?? "?") subID=\(subID.suffix(12)) hasSub=\(hasSubscription)")
             if let event = parseEvent(eventObj),
                let (_, callback) = subscriptions[subID]
             {
                 callback(event)
             }
         case "EOSE":
-            print("[Relay] EOSE from \(url.host ?? "?") subID=\(String(describing: (array.count > 1 ? array[1] : nil)))")
+            break // End of stored events
         case "OK":
-            if array.count >= 3,
-               let eventId = array[1] as? String,
-               let accepted = array[2] as? Bool {
-                let reason = (array.count >= 4 ? array[3] as? String : nil) ?? ""
-                print("[Relay] OK from \(url.host ?? "?") eventId=\(eventId.prefix(12)) accepted=\(accepted) reason=\(reason)")
-            }
+            break // Publish acknowledgement
         case "NOTICE":
             break // Relay notice
         default:

@@ -2,6 +2,7 @@ package com.stellarmls.chat.viewmodel
 
 import android.app.Application
 import android.content.Context
+import com.stellarmls.chat.BuildConfig
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -547,17 +548,17 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Handle a member_joined announcement: add the joiner and broadcast updated state. */
     private fun handleMemberJoined(member: SEPGroupMemberLeaf, groupID: String) {
-        android.util.Log.d("GroupListVM", "handleMemberJoined group=${groupID.take(8)} memberKey=${android.util.Base64.encodeToString(member.publicKeyCompressed.take(6).toByteArray(), android.util.Base64.NO_WRAP)}")
+        if (BuildConfig.DEBUG) android.util.Log.d("GroupListVM", "handleMemberJoined group=${groupID.take(8)}")
         val index = groups.indexOfFirst { it.id == groupID }
         if (index < 0) {
-            android.util.Log.w("GroupListVM", "handleMemberJoined: group not found")
+            if (BuildConfig.DEBUG) android.util.Log.w("GroupListVM", "handleMemberJoined: group not found")
             return
         }
         val group = groups[index]
 
         // Skip if already a member
         if (group.members.any { it.publicKeyCompressed.contentEquals(member.publicKeyCompressed) }) {
-            android.util.Log.d("GroupListVM", "handleMemberJoined: already a member, skipping")
+            if (BuildConfig.DEBUG) android.util.Log.d("GroupListVM", "handleMemberJoined: already a member, skipping")
             return
         }
 
@@ -587,7 +588,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             commitment = group.commitment
         )
         broadcastStateUpdate(group, update, overrideKey = previousKey)
-        android.util.Log.d("GroupListVM", "broadcastStateUpdate SENT group=${groupID.take(8)} epoch=${group.epoch} members=${group.members.size}")
+        if (BuildConfig.DEBUG) android.util.Log.d("GroupListVM", "broadcastStateUpdate SENT group=${groupID.take(8)} epoch=${group.epoch} members=${group.members.size}")
 
         // Resubscribe with new key after epoch change
         transport.subscribe(group)
@@ -691,7 +692,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 try {
                     val obj = JSONObject(json)
                     val msgType = obj.optString("type")
-                    android.util.Log.d("GroupListVM", "Protocol msg type=$msgType group=${groupID.take(8)}")
+                    if (BuildConfig.DEBUG) android.util.Log.d("GroupListVM", "Protocol msg type=$msgType group=${groupID.take(8)}")
                     when (msgType) {
                         SEPMemberJoined.MESSAGE_TYPE -> {
                             val memberObj = obj.getJSONObject("member")

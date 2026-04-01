@@ -77,7 +77,6 @@ class NostrMessageTransport(
 
         val key = group.encryptionKey
         val groupID = group.id
-        android.util.Log.d("MsgTransport", "subscribe group=${groupID.take(8)} epoch=${group.epoch} key=${android.util.Base64.encodeToString(key.take(6).toByteArray(), android.util.Base64.NO_WRAP)} salt=${android.util.Base64.encodeToString(group.salt.take(6).toByteArray(), android.util.Base64.NO_WRAP)}")
 
         // Subscribe to ALL connections concurrently (each gets its own coroutine)
         for (conn in connections) {
@@ -141,7 +140,7 @@ class NostrMessageTransport(
             keyManager = keyManager
         )
 
-        android.util.Log.d("MsgTransport", "sendProtocol to ${connections.size} relays eventId=${event.id.take(12)}")
+        if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.d("MsgTransport", "sendProtocol to ${connections.size} relays")
         for (conn in connections) {
             conn.publish(event)
         }
@@ -161,12 +160,12 @@ class NostrMessageTransport(
 
             if (innerText.isNullOrEmpty() || blsPubkeyB64.isNullOrEmpty()) {
                 // N-6: Reject messages without BLS sender authentication.
-                android.util.Log.w("MsgTransport", "Rejected: missing BLS auth. plaintext_start=${plaintext.take(80)}")
+                if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.w("MsgTransport", "Rejected: missing BLS auth.")
                 com.stellarmls.chat.SecurityLog.nonMemberMessageRejected(groupID)
                 return
             }
 
-            android.util.Log.d("MsgTransport", "Decrypted OK group=$groupID isProtocol=${isProtocolMessage(innerText)} members=${currentMembers.size}")
+            if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.d("MsgTransport", "Decrypted OK group=${groupID.take(8)} isProtocol=${isProtocolMessage(innerText)} members=${currentMembers.size}")
 
             // Check inner text for protocol messages (state updates, salt, etc.)
             if (isProtocolMessage(innerText)) {
@@ -182,12 +181,12 @@ class NostrMessageTransport(
                     onMessage?.invoke(groupID, event.pubkey, innerText,
                         event.id, event.createdAt)
                 } else {
-                    android.util.Log.w("MsgTransport", "BLS rejected: pubkey=${blsPubkeyB64.take(20)} members=${currentMembers.size}")
+                    if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.w("MsgTransport", "BLS rejected: members=${currentMembers.size}")
                     com.stellarmls.chat.SecurityLog.nonMemberMessageRejected(groupID)
                 }
             }
         } catch (e: Exception) {
-            android.util.Log.e("MsgTransport", "Decrypt failed group=$groupID err=${e.message} content_start=${event.content.take(60)}")
+            if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.e("MsgTransport", "Decrypt failed group=${groupID.take(8)} err=${e.message}")
             com.stellarmls.chat.SecurityLog.decryptionFailed("group message")
         }
     }

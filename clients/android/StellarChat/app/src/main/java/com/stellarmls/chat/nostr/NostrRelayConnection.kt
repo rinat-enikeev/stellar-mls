@@ -120,7 +120,7 @@ class NostrRelayConnection(
                         val eventId = array.getString(1)
                         val accepted = array.getBoolean(2)
                         val reason = if (array.length() >= 4) array.optString(3, "") else ""
-                        android.util.Log.d("Relay", "OK from $url eventId=${eventId.take(12)} accepted=$accepted reason=$reason")
+                        if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.d("Relay", "OK from $url eventId=${eventId.take(12)} accepted=$accepted reason=$reason")
                     }
                 }
                 "NOTICE" -> { /* relay notice */ }

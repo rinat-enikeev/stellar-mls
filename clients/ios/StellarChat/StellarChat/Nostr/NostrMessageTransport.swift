@@ -86,11 +86,9 @@ final class NostrMessageTransport {
     /// Process a single incoming Nostr event: decrypt, unwrap BLS, route to chat or protocol handler.
     private func handleIncomingEvent(_ event: NostrEvent, groupID: String, key: SymmetricKey) {
         guard let envelopeData = Data(base64Encoded: event.content) else {
-            print("[Transport] base64 decode failed group=\(groupID.prefix(8)) content_start=\(event.content.prefix(40))")
             return
         }
         guard let envelope = try? JSONDecoder().decode(SealedEnvelope.self, from: envelopeData) else {
-            print("[Transport] envelope decode failed group=\(groupID.prefix(8))")
             return
         }
         do {
@@ -102,14 +100,10 @@ final class NostrMessageTransport {
                   let blsPubkey = Data(base64Encoded: blsPubkeyB64)
             else {
                 SecurityLog.nonMemberMessageRejected(groupID: groupID)
-                print("[Transport] rejected: missing BLS auth group=\(groupID.prefix(8))")
                 return
             }
 
-            let isProtocol = SEPProtocolMessage.parse(innerText) != nil
-            print("[Transport] Decrypted OK group=\(groupID.prefix(8)) isProtocol=\(isProtocol) members=\(currentMembers.count)")
-
-            if isProtocol {
+            if SEPProtocolMessage.parse(innerText) != nil {
                 applyMemberChanges(from: innerText)
                 onProtocolMessage?(innerText, event)
             } else {
@@ -117,12 +111,10 @@ final class NostrMessageTransport {
                 if isMember {
                     onMessage?(innerText, event)
                 } else {
-                    print("[Transport] BLS rejected group=\(groupID.prefix(8)) members=\(currentMembers.count)")
                     SecurityLog.nonMemberMessageRejected(groupID: groupID)
                 }
             }
         } catch {
-            print("[Transport] Decrypt failed group=\(groupID.prefix(8)) err=\(error)")
             SecurityLog.decryptionFailed(context: "group message")
         }
     }
@@ -211,17 +203,15 @@ final class NostrMessageTransport {
             keyManager: keyManager
         )
 
-        print("[Transport] sendRaw to \(connections.count) relays eventId=\(event.id.prefix(12))")
         var published = false
         for conn in connections.values {
             do {
                 try await conn.publish(event: event)
                 published = true
             } catch {
-                print("[Transport] publish failed relay=\(await conn.url.host ?? "?") err=\(error)")
+                // Relay publish failures are non-fatal; we succeed if any relay accepts
             }
         }
-        print("[Transport] sendRaw done published=\(published)")
 
         if !published && !connections.isEmpty {
             throw ChatError.relayPublishFailed

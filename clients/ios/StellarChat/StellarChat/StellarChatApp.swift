@@ -167,9 +167,13 @@ final class AppState {
                 key: group.encryptionKey,
                 keyManager: keyManager
             )
+            #if DEBUG
             print("[AppState] announceMemberJoined sent for group=\(group.id.prefix(8))")
+            #endif
         } catch {
+            #if DEBUG
             print("[AppState] announceMemberJoined failed: \(error)")
+            #endif
         }
     }
 
@@ -591,10 +595,11 @@ final class AppState {
                 // Find which group this event belongs to (by matching topic tag)
                 let topicTag = event.tags.first(where: { $0.first == "t" }).flatMap { $0.dropFirst().first }
                 guard let groupID = self.groups.first(where: { $0.topicTag == topicTag })?.id else {
-                    print("[AppState] Protocol msg type=\(msgType ?? "nil") no group for topic=\(topicTag ?? "nil")")
                     return
                 }
+                #if DEBUG
                 print("[AppState] Protocol msg type=\(msgType ?? "nil") group=\(groupID.prefix(8))")
+                #endif
 
                 switch msgType {
                 case SEPMemberJoined.messageType:
@@ -609,14 +614,18 @@ final class AppState {
                 case SEPGroupStateUpdate.messageType:
                     do {
                         let update = try decoder.decode(SEPGroupStateUpdate.self, from: data)
+                        #if DEBUG
                         print("[AppState] Received state update epoch=\(update.epoch) for group=\(groupID.prefix(8))")
+                        #endif
                         self.applyStateUpdate(update, to: groupID)
                         if let updated = self.groups.first(where: { $0.id == groupID }) {
                             self.chatTransport.currentMembers = updated.members
                             self.subscribeGroup( updated)
                         }
                     } catch {
+                        #if DEBUG
                         print("[AppState] FAILED to decode state update: \(error) json=\(json.prefix(200))")
+                        #endif
                     }
                 case SEPSaltRequest.messageType:
                     if let request = try? decoder.decode(SEPSaltRequest.self, from: data) {
@@ -660,8 +669,10 @@ final class AppState {
     /// Subscribe a single group on the persistent transport (chat + protocol).
     private func subscribeGroup(_ group: ChatGroup) {
         chatTransport.currentMembers = groups.flatMap(\.members)
+        #if DEBUG
         let keyData = group.encryptionKey.withUnsafeBytes { Data($0) }
         print("[AppState] subscribeGroup id=\(group.id.prefix(8)) epoch=\(group.epoch) key=\(keyData.prefix(6).base64EncodedString()) salt=\(group.salt.prefix(6).base64EncodedString())")
+        #endif
         chatTransport.subscribe(
             topic: group.topicTag,
             groupID: group.id,

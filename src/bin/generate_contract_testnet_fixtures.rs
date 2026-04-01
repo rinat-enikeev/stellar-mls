@@ -93,6 +93,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &proof_json(&proof_epoch_1),
     )?;
 
+    // Public inputs for each epoch (commitment + epoch as expected by the contract's PublicInputs type)
+    write_string(
+        &out_dir.join("public-inputs-epoch-0.json"),
+        &public_inputs_json(
+            &field_to_bytes_be(&public_inputs_epoch_0.commitment),
+            0,
+        ),
+    )?;
+    write_string(
+        &out_dir.join("public-inputs-epoch-1.json"),
+        &public_inputs_json(
+            &field_to_bytes_be(&public_inputs_epoch_1.commitment),
+            1,
+        ),
+    )?;
+
     let summary = format!(
         concat!(
             "{{\n",
@@ -105,7 +121,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "    \"vk_medium\": \"vk-medium.json\",\n",
             "    \"vk_large\": \"vk-large.json\",\n",
             "    \"proof_epoch_0\": \"proof-epoch-0.json\",\n",
-            "    \"proof_epoch_1\": \"proof-epoch-1.json\"\n",
+            "    \"proof_epoch_1\": \"proof-epoch-1.json\",\n",
+            "    \"public_inputs_epoch_0\": \"public-inputs-epoch-0.json\",\n",
+            "    \"public_inputs_epoch_1\": \"public-inputs-epoch-1.json\"\n",
             "  }}\n",
             "}}\n"
         ),
@@ -182,6 +200,19 @@ fn proof_json(proof: &Proof<Bls12_381>) -> String {
         hex_encode(&serialize_g1(&proof.a)),
         hex_encode(&serialize_g2(&proof.b)),
         hex_encode(&serialize_g1(&proof.c)),
+    )
+}
+
+fn public_inputs_json(commitment_bytes: &[u8], epoch: u64) -> String {
+    format!(
+        concat!(
+            "{{",
+            "\"commitment\":\"{}\",",
+            "\"epoch\":{}",
+            "}}\n"
+        ),
+        hex_encode(commitment_bytes),
+        epoch,
     )
 }
 

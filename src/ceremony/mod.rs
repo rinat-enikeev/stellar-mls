@@ -1,6 +1,22 @@
 //! Groth16 trusted setup ceremony for SEP-XXXX.
 //!
-//! Implements the Powers of Tau MPC protocol over BLS12-381:
+//! # Production readiness
+//!
+//! **This module is reference-grade.** It implements a correct Powers of Tau
+//! Phase 1 MPC protocol, but it is NOT a production ceremony coordinator:
+//!
+//! - All participants run in a single process (no network transport).
+//! - Contribution secrets are held in memory (no secure enclaves / HSMs).
+//! - There is no Groth16 Phase 2 MPC implementation (see below).
+//! - `run_ceremony` is suitable for testing and local key generation only.
+//!
+//! Before any mainnet deployment, you MUST:
+//! 1. Run Phase 1 via a distributed coordinator (e.g. `snarkjs` Powers of Tau).
+//! 2. Run Groth16 Phase 2 MPC to derive circuit-specific keys without
+//!    any single party reconstructing the toxic waste scalars.
+//! 3. Publish contribution hashes and attestations for public verification.
+//!
+//! # What this module provides
 //!
 //! 1. **Phase 1 (Powers of Tau):** Accumulates (τ, α, β) across N participants.
 //!    Each participant adds their own randomness; security holds if at least
@@ -580,7 +596,12 @@ pub fn required_degree(tier: &Tier) -> usize {
 ///
 /// Simulates `num_participants` sequential contributions and verifies each.
 ///
-/// Minimum 10 participants for production; fewer allowed for testing.
+/// **This is a single-process simulation.** It is suitable for testing and
+/// local key generation. A production ceremony MUST use a distributed
+/// coordinator where each participant contributes from their own machine
+/// and only the SRS (not the secrets) is transmitted between rounds.
+///
+/// Minimum 10 participants recommended for production; fewer allowed for testing.
 pub fn run_ceremony<R: Rng + rand::CryptoRng>(
     tier: &Tier,
     num_participants: usize,

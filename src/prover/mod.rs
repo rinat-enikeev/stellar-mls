@@ -482,6 +482,108 @@ mod tests {
         assert!(valid, "Proof reconstructed from uncompressed components must verify");
     }
 
+    /// End-to-end integration test: simulates the full pipeline from proof
+    /// generation through to contract-ready artifacts.
+    ///
+    /// 1. Trusted setup → VK + PK
+    /// 2. Proof generation → compressed (192 bytes)
+    /// 3. Decompression → uncompressed components (96 + 192 + 96)
+    /// 4. VK serialization → uncompressed alpha/beta/gamma/delta/IC
+    /// 5. Epoch transition: generate second proof at epoch 1
+    /// 6. Cross-epoch rejection: epoch 0 proof fails against epoch 1 inputs
+    ///
+    /// This validates the exact byte-level pipeline that the testnet
+    /// deployment script and Soroban contract consume.
+    #[test]
+    fn test_end_to_end_proof_to_contract_pipeline() {
+        use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+        use ark_bls12_381::{G1Affine, G2Affine};
+        use crate::commitment::field_to_bytes_be;
+
+        let mut rng = test_rng();
+
+        // === Phase 1: Trusted setup ===
+        let setup_result = setup(5, &mut rng).expect("Setup failed");
+        let vk = &setup_result.verifying_key;
+
+        // Serialize VK to uncompressed (contract format)
+        let mut alpha_bytes = Vec::new();
+        vk.alpha_g1.serialize_uncompressed(&mut alpha_bytes).unwrap();
+        assert_eq!(alpha_bytes.len(), 96, "alpha_g1 must be 96 bytes uncompressed");
+
+        let mut beta_bytes = Vec::new();
+        vk.beta_g2.serialize_uncompressed(&mut beta_bytes).unwrap();
+        assert_eq!(beta_bytes.len(), 192, "beta_g2 must be 192 bytes uncompressed");
+
+        let mut gamma_bytes = Vec::new();
+        vk.gamma_g2.serialize_uncompressed(&mut gamma_bytes).unwrap();
+        assert_eq!(gamma_bytes.len(), 192, "gamma_g2 must be 192 bytes uncompressed");
+
+        let mut delta_bytes = Vec::new();
+        vk.delta_g2.serialize_uncompressed(&mut delta_bytes).unwrap();
+        assert_eq!(delta_bytes.len(), 192, "delta_g2 must be 192 bytes uncompressed");
+
+        // IC points — contract expects exactly 3 (base + commitment + epoch)
+        assert_eq!(vk.gamma_abc_g1.len(), 3, "VK must have exactly 3 IC points");
+        for (i, ic_point) in vk.gamma_abc_g1.iter().enumerate() {
+            let mut ic_bytes = Vec::new();
+            ic_point.serialize_uncompressed(&mut ic_bytes).unwrap();
+            assert_eq!(ic_bytes.len(), 96, "IC[{i}] must be 96 bytes uncompressed");
+        }
+
+        // === Phase 2: Proof generation at epoch 0 ===
+        let keys = vec![Fr::from(100u64), Fr::from(200u64)];
+        let input_0 = make_prover_input(&keys, 0, 0, [0xAA; 32], 5);
+        let (proof_0, pi_0) = prove(&setup_result.proving_key, &input_0, &mut rng).unwrap();
+
+        // Compressed proof
+        let compressed = proof_to_bytes(&proof_0);
+        assert_eq!(compressed.len(), 192, "Compressed proof must be 192 bytes");
+
+        // === Phase 3: Decompress to contract format ===
+        let (a_bytes, b_bytes, c_bytes) = proof_to_uncompressed_components(&proof_0);
+        assert_eq!(a_bytes.len(), 96);
+        assert_eq!(b_bytes.len(), 192);
+        assert_eq!(c_bytes.len(), 96);
+
+        // Verify they're valid curve points
+        let a = G1Affine::deserialize_uncompressed(&a_bytes[..]).expect("proof_a must be valid G1");
+        let b = G2Affine::deserialize_uncompressed(&b_bytes[..]).expect("proof_b must be valid G2");
+        let c = G1Affine::deserialize_uncompressed(&c_bytes[..]).expect("proof_c must be valid G1");
+
+        // Reconstruct and verify
+        let reconstructed = ark_groth16::Proof::<Bls12_381> { a, b, c };
+        assert!(verify(&setup_result.prepared_vk, &reconstructed, &pi_0).unwrap());
+
+        // === Phase 4: Compressed → deserialized roundtrip ===
+        let recovered = proof_from_bytes(&compressed).unwrap();
+        assert!(verify(&setup_result.prepared_vk, &recovered, &pi_0).unwrap());
+
+        // === Phase 5: Public inputs match contract format ===
+        let commitment_bytes = field_to_bytes_be(&pi_0.commitment);
+        assert_eq!(commitment_bytes.len(), 32, "Commitment must be 32 bytes");
+
+        // === Phase 6: Epoch transition ===
+        let mut rng2 = ChaCha20Rng::seed_from_u64(99);
+        let input_1 = make_prover_input(&keys, 0, 1, [0xBB; 32], 5);
+        let (proof_1, pi_1) = prove(&setup_result.proving_key, &input_1, &mut rng2).unwrap();
+
+        // Epoch 1 proof verifies with epoch 1 inputs
+        assert!(verify(&setup_result.prepared_vk, &proof_1, &pi_1).unwrap());
+
+        // Epoch 0 proof MUST NOT verify with epoch 1 inputs (replay protection)
+        let cross_valid = verify(&setup_result.prepared_vk, &proof_0, &pi_1).unwrap();
+        assert!(!cross_valid, "Epoch 0 proof must not verify against epoch 1 inputs");
+
+        // Epoch 1 decompressed proof also verifies
+        let (a1, b1, c1) = proof_to_uncompressed_components(&proof_1);
+        let a1 = G1Affine::deserialize_uncompressed(&a1[..]).unwrap();
+        let b1 = G2Affine::deserialize_uncompressed(&b1[..]).unwrap();
+        let c1 = G1Affine::deserialize_uncompressed(&c1[..]).unwrap();
+        let reconstructed_1 = ark_groth16::Proof::<Bls12_381> { a: a1, b: b1, c: c1 };
+        assert!(verify(&setup_result.prepared_vk, &reconstructed_1, &pi_1).unwrap());
+    }
+
     #[test]
     fn test_max_epoch_value() {
         // Boundary test: epoch = u64::MAX must work correctly.

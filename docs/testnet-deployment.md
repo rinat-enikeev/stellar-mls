@@ -13,13 +13,13 @@ The script:
 5. deploys the contract
 6. initializes it with verification keys for all three tiers
 7. executes and checks:
-   - `create_group`
-   - `verify_membership` at epoch 0
-   - `update_commitment`
-   - `get_state`
-   - `verify_membership` at epoch 1
-   - `deactivate_group`
-   - `get_history`
+   - `create_group` with `public_inputs` for epoch 0
+   - `verify_membership` at epoch 0 with matching `public_inputs`
+   - `update_commitment` with `new_epoch=1` and current-state `public_inputs`
+   - `get_state` (verifies epoch 1, new commitment, active)
+   - `verify_membership` at epoch 1 with matching `public_inputs`
+   - `deactivate_group` with current-state `public_inputs`
+   - `get_history` with `max_entries=64`
 
 ## Important limitation
 
@@ -50,15 +50,12 @@ cargo run --bin generate_contract_testnet_fixtures -- --out-dir <dir>
 
 That helper writes:
 
-- `vk-small.json`
-- `vk-medium.json`
-- `vk-large.json`
-- `proof-epoch-0.json`
-- `proof-epoch-1.json`
-- `group-id.hex`
-- `commitment-epoch-0.hex`
-- `commitment-epoch-1.hex`
-- `summary.json`
+- `vk-small.json`, `vk-medium.json`, `vk-large.json` — verification keys (uncompressed BLS12-381 points)
+- `proof-epoch-0.json`, `proof-epoch-1.json` — Groth16 proofs (uncompressed `{a, b, c}` components)
+- `public-inputs-epoch-0.json`, `public-inputs-epoch-1.json` — `{commitment, epoch}` for each epoch
+- `group-id.hex`, `commitment-epoch-0.hex`, `commitment-epoch-1.hex` — hex-encoded 32-byte values
+- `tier.txt` — circuit tier (0 = Small)
+- `summary.json` — metadata index
 
 These files are formatted specifically for `stellar contract invoke`, using:
 

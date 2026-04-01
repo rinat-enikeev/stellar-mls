@@ -107,7 +107,8 @@ stellar contract invoke \
     --group-id "$GROUP_ID" \
     --commitment "$COMMITMENT_0" \
     --tier "$TIER" \
-    --proof-file-path "$FIXTURE_DIR/proof-epoch-0.json" >/dev/null
+    --proof-file-path "$FIXTURE_DIR/proof-epoch-0.json" \
+    --public-inputs-file-path "$FIXTURE_DIR/public-inputs-epoch-0.json" >/dev/null
 
 echo "==> verify_membership at epoch 0"
 VERIFY_0="$(
@@ -119,7 +120,8 @@ VERIFY_0="$(
         --send no \
         -- verify_membership \
         --group-id "$GROUP_ID" \
-        --proof-file-path "$FIXTURE_DIR/proof-epoch-0.json"
+        --proof-file-path "$FIXTURE_DIR/proof-epoch-0.json" \
+        --public-inputs-file-path "$FIXTURE_DIR/public-inputs-epoch-0.json"
 )"
 VERIFY_0_COMPACT="$(printf '%s' "$VERIFY_0" | tr -d '[:space:]')"
 printf '%s' "$VERIFY_0_COMPACT" | grep -F 'true'
@@ -133,7 +135,9 @@ stellar contract invoke \
     -- update_commitment \
     --group-id "$GROUP_ID" \
     --new-commitment "$COMMITMENT_1" \
-    --proof-file-path "$FIXTURE_DIR/proof-epoch-0.json" >/dev/null
+    --new-epoch 1 \
+    --proof-file-path "$FIXTURE_DIR/proof-epoch-0.json" \
+    --public-inputs-file-path "$FIXTURE_DIR/public-inputs-epoch-0.json" >/dev/null
 
 echo "==> get_state after update"
 STATE_AFTER_UPDATE="$(
@@ -161,7 +165,8 @@ VERIFY_1="$(
         --send no \
         -- verify_membership \
         --group-id "$GROUP_ID" \
-        --proof-file-path "$FIXTURE_DIR/proof-epoch-1.json"
+        --proof-file-path "$FIXTURE_DIR/proof-epoch-1.json" \
+        --public-inputs-file-path "$FIXTURE_DIR/public-inputs-epoch-1.json"
 )"
 VERIFY_1_COMPACT="$(printf '%s' "$VERIFY_1" | tr -d '[:space:]')"
 printf '%s' "$VERIFY_1_COMPACT" | grep -F 'true'
@@ -174,7 +179,8 @@ stellar contract invoke \
     --source-account "$IDENTITY" \
     -- deactivate_group \
     --group-id "$GROUP_ID" \
-    --proof-file-path "$FIXTURE_DIR/proof-epoch-1.json" >/dev/null
+    --proof-file-path "$FIXTURE_DIR/proof-epoch-1.json" \
+    --public-inputs-file-path "$FIXTURE_DIR/public-inputs-epoch-1.json" >/dev/null
 
 echo "==> get_state after deactivation"
 STATE_AFTER_DEACTIVATE="$(
@@ -199,7 +205,8 @@ HISTORY="$(
         --source-account "$IDENTITY" \
         --send no \
         -- get_history \
-        --group-id "$GROUP_ID"
+        --group-id "$GROUP_ID" \
+        --max-entries 64
 )"
 HISTORY_COMPACT="$(printf '%s' "$HISTORY" | tr -d '[:space:]')"
 printf '%s' "$HISTORY_COMPACT" | grep -F "\"commitment\":\"$COMMITMENT_0\""

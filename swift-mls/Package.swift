@@ -1,6 +1,16 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
+// Local development links against the debug Rust static library.
+// For release / CI, run `scripts/build-xcframework.sh` and switch to:
+//
+//   .binaryTarget(
+//       name: "CSEPMLSFFI",
+//       path: "../build/SEPMLSFFI.xcframework"
+//   )
+//
+// and remove the unsafeFlags linker settings below.
+
 let package = Package(
     name: "SwiftMLS",
     platforms: [

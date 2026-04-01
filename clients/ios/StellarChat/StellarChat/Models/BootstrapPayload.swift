@@ -32,16 +32,21 @@ struct BootstrapPayload: Codable, Equatable {
     }
 
     /// Convert to a ChatGroup for local storage.
+    /// Members are re-sorted by compressed G1 key per SEP-XXXX §2.1
+    /// to guard against out-of-order payloads.
     func toChatGroup() -> ChatGroup {
         let groupIDHex = groupID.map { String(format: "%02x", $0) }.joined()
         let relayURLs = relayHints.compactMap(URL.init(string:))
+        let sortedMembers = members.sorted {
+            $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed)
+        }
         return ChatGroup(
             id: groupIDHex,
             name: name,
             groupSecret: groupSecret,
             createdAt: Date(),
             relayHints: relayURLs,
-            members: members,
+            members: sortedMembers,
             epoch: epoch,
             salt: salt,
             commitment: commitment,

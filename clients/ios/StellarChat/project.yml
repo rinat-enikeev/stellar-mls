@@ -32,3 +32,21 @@ targets:
         DEVELOPMENT_TEAM: ""
     dependencies:
       - package: SwiftMLS
+
+  StellarChatTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - StellarChatTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.stellarmls.chat.tests
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/StellarChat.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/StellarChat"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+    dependencies:
+      - target: StellarChat
+      - package: SwiftMLS

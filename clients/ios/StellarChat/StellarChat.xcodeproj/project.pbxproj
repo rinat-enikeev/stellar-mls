@@ -18,12 +18,14 @@
 		4FC9AB234CCA9BFAA0B112F1 /* StellarChatApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62FB83C87F9348F97EEDE0C8 /* StellarChatApp.swift */; };
 		661B24EC80C52FD32C0DB020 /* PersistedModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4705F8234AA6022CD782348E /* PersistedModels.swift */; };
 		69502F4BED8DAE5BB7CDC5A6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */; };
+		76E39A66EA185E3741BB902B /* Phase3Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30F3176E6A6E2A7C75F9CB47 /* Phase3Tests.swift */; };
 		7C027F9FEC64BC2471784A58 /* InviteMemberView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8D38B6A8AA5A166074EA951 /* InviteMemberView.swift */; };
 		8403CC60E770407C27CF89ED /* SwiftMLS in Frameworks */ = {isa = PBXBuildFile; productRef = 93FDE6A85EACB5AD144480F3 /* SwiftMLS */; };
 		865234AA099329B7E4D41789 /* JoinGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 005C04E920D6B0FC3423EE24 /* JoinGroupView.swift */; };
 		95489626E5CAD02D3CDB0207 /* StellarStrKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */; };
 		B5836D3E7760359CFB8C42AC /* GroupCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8210CED65D67082D16673F07 /* GroupCrypto.swift */; };
 		CF17A18CDF1209DC9F6CA369 /* OnChainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06014BB7573399F26644F9F6 /* OnChainService.swift */; };
+		D2E5C4CF0957DFE21E162979 /* SwiftMLS in Frameworks */ = {isa = PBXBuildFile; productRef = 48F22356AB515994AECC167E /* SwiftMLS */; };
 		D6847B5213B8820FA30819D7 /* StorageEncryption.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD61B2440CA5ED81C983DA87 /* StorageEncryption.swift */; };
 		D6C3C9E90F39CCA80D2DD029 /* GroupListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C2B0F0A2A137DC1BE419CC3 /* GroupListView.swift */; };
 		D80AA787557EC39AC88FF3F3 /* KeyAttestation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37304476C52093C0D34ECB92 /* KeyAttestation.swift */; };
@@ -35,11 +37,23 @@
 		FE754451C690FD52A395B8B2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		1EFF7167A75DE1FC7EB88FF9 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 251E05B18A6ED69B293D52CC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7E1AB0C084DAFEAB2A75FC86;
+			remoteInfo = StellarChat;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		005C04E920D6B0FC3423EE24 /* JoinGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinGroupView.swift; sourceTree = "<group>"; };
+		03DDE39E8A2DC3CBF08D400C /* StellarChatTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = StellarChatTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		06014BB7573399F26644F9F6 /* OnChainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnChainService.swift; sourceTree = "<group>"; };
 		0E25D14293AC1BC6E3FB1E28 /* PersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStore.swift; sourceTree = "<group>"; };
 		211AE30EB5115E4BB85D9084 /* swift-mls */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "swift-mls"; path = "../../../swift-mls"; sourceTree = SOURCE_ROOT; };
+		30F3176E6A6E2A7C75F9CB47 /* Phase3Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Phase3Tests.swift; sourceTree = "<group>"; };
 		37304476C52093C0D34ECB92 /* KeyAttestation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyAttestation.swift; sourceTree = "<group>"; };
 		3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StellarStrKey.swift; sourceTree = "<group>"; };
 		4705F8234AA6022CD782348E /* PersistedModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistedModels.swift; sourceTree = "<group>"; };
@@ -74,6 +88,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F232AFFD2C39C59C11C7FB3C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D2E5C4CF0957DFE21E162979 /* SwiftMLS in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -97,6 +119,7 @@
 			children = (
 				ABDD2AD803B8C85F0ACC3714 /* Packages */,
 				80602CB4E8F63DBA92D87C56 /* StellarChat */,
+				C1AFFA22C05C5C880CC15516 /* StellarChatTests */,
 				E290D72BA448D601D86C5E67 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -147,10 +170,19 @@
 			name = Packages;
 			sourceTree = "<group>";
 		};
+		C1AFFA22C05C5C880CC15516 /* StellarChatTests */ = {
+			isa = PBXGroup;
+			children = (
+				30F3176E6A6E2A7C75F9CB47 /* Phase3Tests.swift */,
+			);
+			path = StellarChatTests;
+			sourceTree = "<group>";
+		};
 		E290D72BA448D601D86C5E67 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				F406EABD519847834878AA47 /* StellarChat.app */,
+				03DDE39E8A2DC3CBF08D400C /* StellarChatTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -169,6 +201,26 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		79B5A663264579340235CB0C /* StellarChatTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 8F07CBB989550D4B7B6A79F5 /* Build configuration list for PBXNativeTarget "StellarChatTests" */;
+			buildPhases = (
+				4063E533998C2EEFCEEA7B71 /* Sources */,
+				F232AFFD2C39C59C11C7FB3C /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				0A32383649DC3296484785F9 /* PBXTargetDependency */,
+			);
+			name = StellarChatTests;
+			packageProductDependencies = (
+				48F22356AB515994AECC167E /* SwiftMLS */,
+			);
+			productName = StellarChatTests;
+			productReference = 03DDE39E8A2DC3CBF08D400C /* StellarChatTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		7E1AB0C084DAFEAB2A75FC86 /* StellarChat */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = AD86622DBF90D7F9FE95EC3B /* Build configuration list for PBXNativeTarget "StellarChat" */;
@@ -198,6 +250,10 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1540;
 				TargetAttributes = {
+					79B5A663264579340235CB0C = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
 					7E1AB0C084DAFEAB2A75FC86 = {
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
@@ -222,6 +278,7 @@
 			projectRoot = "";
 			targets = (
 				7E1AB0C084DAFEAB2A75FC86 /* StellarChat */,
+				79B5A663264579340235CB0C /* StellarChatTests */,
 			);
 		};
 /* End PBXProject section */
@@ -238,6 +295,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		4063E533998C2EEFCEEA7B71 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				76E39A66EA185E3741BB902B /* Phase3Tests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A1F09619AC4E0C9E792E7EC6 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -270,6 +335,14 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		0A32383649DC3296484785F9 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7E1AB0C084DAFEAB2A75FC86 /* StellarChat */;
+			targetProxy = 1EFF7167A75DE1FC7EB88FF9 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		0A6E778AF81863D06AC9806B /* Release */ = {
@@ -361,6 +434,26 @@
 			};
 			name = Debug;
 		};
+		2144E0F76BEB9E875D53FE89 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.stellarmls.chat.tests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/StellarChat.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/StellarChat";
+			};
+			name = Release;
+		};
 		5BFA34BBF8BEE7E9BF93438A /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -384,6 +477,26 @@
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		C72ABB3D15FE56679A8A8A19 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.stellarmls.chat.tests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/StellarChat.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/StellarChat";
 			};
 			name = Debug;
 		};
@@ -455,6 +568,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
+		8F07CBB989550D4B7B6A79F5 /* Build configuration list for PBXNativeTarget "StellarChatTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C72ABB3D15FE56679A8A8A19 /* Debug */,
+				2144E0F76BEB9E875D53FE89 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		AD86622DBF90D7F9FE95EC3B /* Build configuration list for PBXNativeTarget "StellarChat" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -474,6 +596,10 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		48F22356AB515994AECC167E /* SwiftMLS */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SwiftMLS;
+		};
 		93FDE6A85EACB5AD144480F3 /* SwiftMLS */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = SwiftMLS;

@@ -77,12 +77,28 @@ actor OnChainService {
         )
     }
 
+    // MARK: - Proof Format Conversion
+
+    /// Convert a compressed Groth16 proof (192 bytes) to the uncompressed
+    /// contract format (384 bytes = proofA‖proofB‖proofC) expected by the
+    /// Soroban contract's `Groth16Proof { a: BytesN<96>, b: BytesN<192>, c: BytesN<96> }`.
+    private func proofForContract(_ compressedProof: Data) throws -> Data {
+        let components = try SEPProofGenerator.proofToContractFormat(compressedProof: compressedProof)
+        // Concatenate: A (96 bytes) || B (192 bytes) || C (96 bytes) = 384 bytes
+        var uncompressed = Data(capacity: 384)
+        uncompressed.append(components.proofA)
+        uncompressed.append(components.proofB)
+        uncompressed.append(components.proofC)
+        return uncompressed
+    }
+
     // MARK: - Contract Operations
 
     /// Publish a new group creation on-chain.
     ///
     /// 1. Generates a membership proof at the initial state (epoch 0).
-    /// 2. Submits `create_group` to the Soroban contract.
+    /// 2. Decompresses the proof to uncompressed BLS12-381 points (384 bytes).
+    /// 3. Submits `create_group` to the Soroban contract.
     func publishGroupCreation(
         groupIDData: Data,
         members: [SEPGroupMemberLeaf],
@@ -99,10 +115,12 @@ actor OnChainService {
             tier: tier
         )
 
+        let uncompressedProof = try proofForContract(proofBundle.proof)
+
         let request = SEPCreateGroupRequest(
             groupID: groupIDData,
             commitment: proofBundle.publicInputs.commitment,
-            proof: proofBundle.proof,
+            proof: uncompressedProof,
             publicInputs: proofBundle.publicInputs,
             tier: UInt32(tier.rawValue)
         )
@@ -112,8 +130,9 @@ actor OnChainService {
     /// Publish a commitment update after a membership change.
     ///
     /// 1. Generates a membership proof at the OLD state (proving current membership).
-    /// 2. Computes the new Poseidon commitment from the new state.
-    /// 3. Submits `update_commitment` to the Soroban contract.
+    /// 2. Decompresses the proof to uncompressed format (384 bytes).
+    /// 3. Computes the new Poseidon commitment from the new state.
+    /// 4. Submits `update_commitment` to the Soroban contract.
     func publishCommitmentUpdate(
         groupIDData: Data,
         oldMembers: [SEPGroupMemberLeaf],
@@ -134,6 +153,8 @@ actor OnChainService {
             tier: tier
         )
 
+        let uncompressedProof = try proofForContract(oldProofBundle.proof)
+
         // Compute the new Poseidon commitment for the updated state
         let newRoot = try SEPCommitmentBuilder.computeMerkleRoot(members: newMembers, tier: tier)
         let newPoseidonCommitment = try SEPCommitmentBuilder.computePoseidonCommitment(
@@ -146,7 +167,7 @@ actor OnChainService {
             groupID: groupIDData,
             newCommitment: newPoseidonCommitment,
             newEpoch: newEpoch,
-            proof: oldProofBundle.proof,
+            proof: uncompressedProof,
             publicInputs: oldProofBundle.publicInputs
         )
         return try await contractClient.updateCommitment(request)
@@ -208,7 +229,8 @@ actor OnChainService {
 
     /// Verify membership via the on-chain contract (read-only).
     ///
-    /// Generates a proof and submits `verify_membership` to the contract.
+    /// Generates a proof, decompresses to 384-byte contract format,
+    /// and submits `verify_membership` to the contract.
     func verifyMembership(
         groupIDData: Data,
         members: [SEPGroupMemberLeaf],
@@ -225,9 +247,11 @@ actor OnChainService {
             tier: tier
         )
 
+        let uncompressedProof = try proofForContract(proofBundle.proof)
+
         let request = SEPVerifyMembershipRequest(
             groupID: groupIDData,
-            proof: proofBundle.proof,
+            proof: uncompressedProof,
             publicInputs: proofBundle.publicInputs
         )
         let response = try await contractClient.verifyMembership(request)

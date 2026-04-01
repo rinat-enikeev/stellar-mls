@@ -22,4 +22,10 @@ public enum SEPProofGenerator {
             depth: tier.depth
         )
     }
+
+    /// Convert a compressed Groth16 proof (192 bytes) to uncompressed
+    /// contract format components (proofA: 96, proofB: 192, proofC: 96).
+    public static func proofToContractFormat(compressedProof: Data) throws -> SEPContractProofComponents {
+        try RustBridge.proofToContractFormat(compressedProof: compressedProof)
+    }
 }

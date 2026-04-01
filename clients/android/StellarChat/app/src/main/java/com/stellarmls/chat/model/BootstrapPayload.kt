@@ -1,0 +1,142 @@
+package com.stellarmls.chat.model
+
+import com.stellarmls.mls.SEPCommitmentBuilder
+import com.stellarmls.mls.SEPGroupMemberLeaf
+import com.stellarmls.mls.SEPTier
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.Date
+
+/**
+ * NIP-XX bootstrap payload — the decrypted content of a kind 24113 invitation.
+ * Contains everything a recipient needs to join the group.
+ */
+data class BootstrapPayload(
+    val groupID: ByteArray,           // 32 bytes
+    val groupSecret: ByteArray,       // 32 bytes
+    val name: String,
+    val epoch: Long,
+    val members: List<SEPGroupMemberLeaf>,
+    val relayHints: List<String>,
+    val salt: ByteArray,              // 32 bytes
+    val tierRawValue: Int,
+    val commitment: ByteArray?,
+    val senderNostrPubkey: String
+) {
+    /** Convert to a ChatGroup for local storage.
+     *  Members are re-sorted by compressed G1 key per SEP-XXXX §2.1
+     *  to guard against out-of-order payloads. */
+    fun toChatGroup(): ChatGroup {
+        val groupIDHex = groupID.toHex()
+        val sortedMembers = members.sortedWith { a, b ->
+            val aKey = a.publicKeyCompressed
+            val bKey = b.publicKeyCompressed
+            for (i in 0 until minOf(aKey.size, bKey.size)) {
+                val cmp = (aKey[i].toInt() and 0xFF) - (bKey[i].toInt() and 0xFF)
+                if (cmp != 0) return@sortedWith cmp
+            }
+            aKey.size - bKey.size
+        }
+        val tier = SEPTier.entries.find { it.id == tierRawValue } ?: SEPTier.SMALL
+        return ChatGroup(
+            id = groupIDHex,
+            name = name,
+            groupSecret = groupSecret,
+            createdAt = Date(),
+            relayHints = relayHints,
+            members = sortedMembers.toMutableList(),
+            epoch = epoch,
+            salt = salt,
+            commitment = commitment,
+            tier = tier
+        )
+    }
+
+    fun toJson(): String {
+        val obj = JSONObject()
+        obj.put("groupID", android.util.Base64.encodeToString(groupID, android.util.Base64.NO_WRAP))
+        obj.put("groupSecret", android.util.Base64.encodeToString(groupSecret, android.util.Base64.NO_WRAP))
+        obj.put("name", name)
+        obj.put("epoch", epoch)
+        obj.put("relayHints", JSONArray(relayHints))
+        obj.put("salt", android.util.Base64.encodeToString(salt, android.util.Base64.NO_WRAP))
+        obj.put("tierRawValue", tierRawValue)
+        obj.put("senderNostrPubkey", senderNostrPubkey)
+        if (commitment != null) {
+            obj.put("commitment", android.util.Base64.encodeToString(commitment, android.util.Base64.NO_WRAP))
+        }
+        val membersArr = JSONArray()
+        for (m in members) {
+            val mObj = JSONObject()
+            mObj.put("publicKeyCompressed", android.util.Base64.encodeToString(m.publicKeyCompressed, android.util.Base64.NO_WRAP))
+            mObj.put("leafHash", android.util.Base64.encodeToString(m.leafHash, android.util.Base64.NO_WRAP))
+            membersArr.put(mObj)
+        }
+        obj.put("members", membersArr)
+        return obj.toString()
+    }
+
+    companion object {
+        /** Build a bootstrap payload from a ChatGroup. */
+        fun from(group: ChatGroup, senderPubkey: String): BootstrapPayload {
+            return BootstrapPayload(
+                groupID = group.groupIDData,
+                groupSecret = group.groupSecret,
+                name = group.name,
+                epoch = group.epoch,
+                members = group.members.toList(),
+                relayHints = group.relayHints,
+                salt = group.salt,
+                tierRawValue = group.tier.id,
+                commitment = group.commitment,
+                senderNostrPubkey = senderPubkey
+            )
+        }
+
+        fun fromJson(json: String): BootstrapPayload {
+            val obj = JSONObject(json)
+            val membersArr = obj.getJSONArray("members")
+            val members = (0 until membersArr.length()).map { i ->
+                val mObj = membersArr.getJSONObject(i)
+                SEPGroupMemberLeaf(
+                    publicKeyCompressed = android.util.Base64.decode(mObj.getString("publicKeyCompressed"), android.util.Base64.NO_WRAP),
+                    leafHash = android.util.Base64.decode(mObj.getString("leafHash"), android.util.Base64.NO_WRAP)
+                )
+            }
+            val relayArr = obj.getJSONArray("relayHints")
+            val relayHints = (0 until relayArr.length()).map { relayArr.getString(it) }
+            val commitmentStr = obj.optString("commitment", "")
+            val commitment = if (commitmentStr.isNotEmpty()) {
+                android.util.Base64.decode(commitmentStr, android.util.Base64.NO_WRAP)
+            } else null
+
+            return BootstrapPayload(
+                groupID = android.util.Base64.decode(obj.getString("groupID"), android.util.Base64.NO_WRAP),
+                groupSecret = android.util.Base64.decode(obj.getString("groupSecret"), android.util.Base64.NO_WRAP),
+                name = obj.getString("name"),
+                epoch = obj.getLong("epoch"),
+                members = members,
+                relayHints = relayHints,
+                salt = android.util.Base64.decode(obj.getString("salt"), android.util.Base64.NO_WRAP),
+                tierRawValue = obj.getInt("tierRawValue"),
+                commitment = commitment,
+                senderNostrPubkey = obj.getString("senderNostrPubkey")
+            )
+        }
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is BootstrapPayload) return false
+        return groupID.contentEquals(other.groupID) && name == other.name
+    }
+
+    override fun hashCode(): Int = groupID.contentHashCode()
+}
+
+/** Represents a received invitation before the user accepts it. */
+data class PendingInvitation(
+    val id: String,                  // Nostr event ID
+    val payload: BootstrapPayload,
+    val receivedAt: Date
+)

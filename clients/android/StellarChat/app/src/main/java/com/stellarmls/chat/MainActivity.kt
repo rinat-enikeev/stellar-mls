@@ -16,7 +16,9 @@ import androidx.navigation.navArgument
 import com.stellarmls.chat.ui.screens.ChatScreen
 import com.stellarmls.chat.ui.screens.CreateGroupScreen
 import com.stellarmls.chat.ui.screens.GroupListScreen
+import com.stellarmls.chat.ui.screens.InviteMemberScreen
 import com.stellarmls.chat.ui.screens.JoinGroupScreen
+import com.stellarmls.chat.ui.screens.PendingInvitationsScreen
 import com.stellarmls.chat.ui.screens.SettingsScreen
 import com.stellarmls.chat.ui.theme.StellarChatTheme
 import com.stellarmls.chat.viewmodel.ChatViewModel
@@ -46,13 +48,18 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel) {
         composable("groups") {
             GroupListScreen(
                 groups = groupListViewModel.groups,
+                pendingInvitationCount = groupListViewModel.pendingInvitations.size,
                 onGroupClick = { group ->
                     navController.navigate("chat/${group.id}")
+                },
+                onInviteMember = { group ->
+                    navController.navigate("invite/${group.id}")
                 },
                 onCreateGroup = { navController.navigate("create") },
                 onJoinGroup = { navController.navigate("join") },
                 onSettings = { navController.navigate("settings") },
-                onDeleteGroup = { index -> groupListViewModel.removeGroup(index) }
+                onInvitations = { navController.navigate("invitations") },
+                onDeleteGroup = { id -> groupListViewModel.removeGroup(id) }
             )
         }
 
@@ -67,7 +74,8 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel) {
                 ChatViewModel(
                     group = group,
                     transport = groupListViewModel.transport,
-                    myPubkey = groupListViewModel.keyManager.publicKeyHex
+                    myPubkey = groupListViewModel.keyManager.publicKeyHex,
+                    store = groupListViewModel.store
                 )
             }
 
@@ -83,6 +91,7 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel) {
             CreateGroupScreen(
                 viewModel = createViewModel,
                 keyManager = groupListViewModel.keyManager,
+                groupListViewModel = groupListViewModel,
                 onBack = { navController.popBackStack() },
                 onGroupCreated = { group ->
                     groupListViewModel.addGroup(group)
@@ -105,8 +114,43 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel) {
 
         composable("settings") {
             SettingsScreen(
-                publicKeyHex = groupListViewModel.keyManager.publicKeyHex,
-                relayURLs = listOf("wss://relay.damus.io", "wss://nos.lol"),
+                viewModel = groupListViewModel,
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            "invite/{groupId}",
+            arguments = listOf(navArgument("groupId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val groupId = backStackEntry.arguments?.getString("groupId") ?: return@composable
+            val group = groupListViewModel.groups.find { it.id == groupId } ?: return@composable
+
+            InviteMemberScreen(
+                group = group,
+                invitationTransport = groupListViewModel.invitationTransport,
+                keyManager = groupListViewModel.keyManager,
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable("invitations") {
+            PendingInvitationsScreen(
+                invitations = groupListViewModel.pendingInvitations,
+                groupListViewModel = groupListViewModel,
+                onAccept = { invitation, verificationResult ->
+                    val group = invitation.payload.toChatGroup()
+                    // Mark as published if on-chain verification passed
+                    if (verificationResult is com.stellarmls.chat.onchain.OnChainVerificationResult.Verified) {
+                        group.isPublishedOnChain = true
+                    }
+                    groupListViewModel.addGroup(group)
+                    groupListViewModel.removePendingInvitation(invitation.id)
+                    navController.popBackStack()
+                },
+                onDecline = { invitation ->
+                    groupListViewModel.removePendingInvitation(invitation.id)
+                },
                 onBack = { navController.popBackStack() }
             )
         }

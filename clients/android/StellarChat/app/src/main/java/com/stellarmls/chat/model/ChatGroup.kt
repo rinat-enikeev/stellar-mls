@@ -22,8 +22,11 @@ data class ChatGroup(
     var epoch: Long = 0,
     var salt: ByteArray = SEPCommitmentBuilder.generateSalt(),
     var commitment: ByteArray? = null,
-    var tier: SEPTier = SEPTier.SMALL
+    var tier: SEPTier = SEPTier.SMALL,
+    var isPublishedOnChain: Boolean = false
 ) {
+    /** Group ID as raw bytes (hex string → ByteArray). */
+    val groupIDData: ByteArray get() = id.hexToBytes()
     val topicTag: String get() = GroupCrypto.hiddenGroupTopic(groupSecret)
     val encryptionKey: ByteArray get() = GroupCrypto.deriveMessageKey(groupSecret)
 

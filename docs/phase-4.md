@@ -1,403 +1,465 @@
-# Phase 4: Nostr Relay Layer — Explained Simply
+# Phase 4: Production Readiness — Explained Simply
 
-## What does it do?
+Phase 4 takes the cryptographic foundation (Phases 1-3) and wires it into real applications. The contract already works. The ZK proofs already verify. Phase 4 answers the question: *how do real users on real phones actually use this system without leaking their identity or getting stuck?*
 
-Phase 4 adds the **transport layer** — the part that actually moves invitations and messages between devices. It uses Nostr relays as dumb message buses while keeping all group authority on Stellar.
-
-Think of it as a postal service:
-- You write a **sealed letter** (encrypted invitation) addressed to someone's **hidden mailbox** (inbox tag)
-- You drop copies at **multiple post offices** (Nostr relays) for redundancy
-- The post offices can't read the letter, don't know what group it's about, and don't store it forever
-- The recipient picks it up, opens it, and **verifies the contents against the blockchain** before trusting anything
+Four features, each solving a concrete problem.
 
 ---
 
-## Why Nostr?
+## 1. Fee Decoupling (The Relayer Pattern)
 
-Blockchains are great for consensus but terrible for chatting. You can't put real-time group messages on Stellar — it's too slow, too expensive, and too public.
+### The problem
 
-Nostr gives you:
-- A simple event protocol (JSON + WebSockets)
-- Global relay interoperability (no single server)
-- Multi-relay fanout (drop a message at 5 relays, recipient checks any of them)
-- No requirement that relays understand your application
+Every Stellar transaction has a fee. Someone pays it. That someone's public key is recorded on the ledger — permanently, publicly, and irrevocably.
 
-The key insight: **relays are dumb pipes**. They forward bytes. Your client decides what's valid.
+If Alice submits a `create_group` transaction directly, the Stellar network records: "Account `GALICE...` paid 100 stroops for a Soroban invocation on contract `CXYZ...`." The ZK proof inside is perfectly private — the contract learns nothing about Alice's membership. But the *ledger* just recorded her account ID right next to the group ID. Anyone watching the chain can correlate "Alice interacted with group X."
+
+This defeats the entire privacy model.
+
+### The solution
+
+Don't let Alice submit the transaction herself. Instead, she sends the payload to a **relayer** — a server that wraps her payload in its own transaction, pays the fee with its own account, and submits it. The chain sees the relayer's account, not Alice's.
+
+```
+Alice's phone                  Relayer                     Stellar Network
+────────────                   ───────                     ───────────────
+
+1. Build contract payload
+   (group_id, commitment,
+    proof, public_inputs)
+
+2. POST to relayer ──────────> 3. Wrap in Soroban tx
+                                  signed by relayer key
+                               4. Submit tx ──────────────> 5. Verify proof
+                                                               Store commitment
+                               6. Return tx hash <────────── 7. Return result
+
+   <──────────────────────────  Result: accepted
+```
+
+The contract doesn't care who signed the transaction. It only checks the ZK proof. The proof proves Alice is a member. The transaction signature proves the relayer authorized the fee. These are completely independent checks.
+
+### How it works under the hood
+
+The relayer is just an HTTP endpoint. The client sends the exact same JSON payload it would send to the Soroban RPC endpoint. The relayer wraps it in a Stellar transaction, signs with its own keypair, submits, and returns the result.
+
+From the client's perspective, the only difference is the URL. A `SEPRelayerTransport` replaces the `URLSessionSEPContractTransport` (iOS) or `OkHttpSEPContractTransport` (Android). All contract operations — create, update, verify, deactivate — transparently route through the relayer with zero code changes in the calling layer.
+
+An optional `Authorization: Bearer <token>` header allows the relayer to authenticate clients (rate limiting, abuse prevention) without learning their on-chain identity.
+
+### What was built
+
+**Swift SDK** (`ContractClient.swift`):
+- `SEPRelayerTransport` — a new transport that conforms to `SEPContractTransport`. Same JSON payload format, different destination URL. Optional Bearer auth.
+
+**Kotlin SDK** (`GroupStateUpdate.kt`):
+- `SEPRelayerConfig` — a data class holding `relayerURL` and optional `authToken`.
+
+**iOS app** (`OnChainService.swift`, `StellarChatApp.swift`):
+- `OnChainService` gained a second initializer: `init(contractID:relayerConfig:)`. When a relayer is configured, all contract calls route through it.
+- `AppState.configureContractIfReady()` checks `isRelayerConfigured`. If the user has entered a relayer URL, the service is initialized with `SEPRelayerTransport` instead of `URLSessionSEPContractTransport`.
+- Relayer URL and auth token are persisted in `UserDefaults`.
+
+**Android app** (`SEPContractClient.kt`, `OnChainService.kt`, `GroupListViewModel.kt`):
+- `OkHttpRelayerTransport` — OkHttp-based transport that routes through the relayer.
+- `OnChainService` gained a third constructor: `OnChainService(contractID, relayerURL, authToken)`.
+- `GroupListViewModel.configureContract()` picks the relayer transport when configured.
+- Relayer config persisted in `SharedPreferences`.
+
+### What the relayer does NOT do
+
+The relayer never sees secret keys, never sees the member list, and never learns who is in any group. It receives the same opaque payload the contract receives. A compromised relayer can:
+- **Refuse to submit** (denial of service — client retries or switches relayers)
+- **Log the payload** (but the payload reveals nothing — it's a ZK proof and an opaque commitment)
+- **Correlate IP addresses to submissions** (mitigate with Tor/VPN)
+
+A compromised relayer **cannot**: forge proofs, modify commitments, impersonate members, or decrypt any group communication.
 
 ---
 
-## The three-layer cake
+## 2. Salt Distribution
+
+### The problem
+
+Every time a group's membership changes (someone joins or leaves), the group generates a new random salt and computes a new commitment:
 
 ```
-┌─────────────────────────────────────────────┐
-│  Nostr Relays (Phase 4)                     │
-│  Transport only. Dumb. Best-effort.         │
-│  Moves encrypted bytes between devices.     │
-├─────────────────────────────────────────────┤
-│  Stellar + SEP Contract (Phase 3)           │
-│  Authoritative group state. Epochs.         │
-│  Commitments. ZK proof verification.        │
-├─────────────────────────────────────────────┤
-│  Circuits + Ceremony (Phases 1–2)           │
-│  Groth16 proofs. Poseidon Merkle trees.     │
-│  Powers of Tau ceremony.                    │
-└─────────────────────────────────────────────┘
+commitment = Poseidon(Poseidon(merkle_root, epoch), salt)
 ```
 
-Each layer has a single job. Nostr never validates group state. Stellar never carries messages. The circuits never touch the network.
+The salt is 32 random bytes. It serves a critical privacy purpose: it makes the commitment unpredictable. Without it, an attacker who guesses the member set could compute the expected commitment and verify their guess against the chain. The salt makes this a brute-force search over 2^256 possibilities — computationally impossible.
+
+But here's the catch: **every member needs the salt** to verify their own commitment and generate proofs. If Alice adds Bob and generates a new salt, she needs to tell Carol, Dave, and everyone else what the new salt is. And if Carol was offline when the salt changed, she's stuck — she can't generate proofs until she learns the new salt.
+
+### The solution
+
+Salt is distributed through the same encrypted group channel (Nostr kind 24114) that carries chat messages. After a membership change, the initiator broadcasts a **state update** message containing the new salt, epoch, and member delta.
+
+For members who were offline and missed the update, there's a **salt recovery protocol**: they send a salt request, and any online member who has the salt responds.
+
+### State update flow (normal case)
+
+```
+Alice (initiates add)          Encrypted Group Channel        Bob, Carol, Dave
+─────────────────────          ───────────────────────        ──────────────────
+
+1. Add Eve to group
+2. Increment epoch (2 -> 3)
+3. Generate new salt
+4. Recompute commitment
+5. Build state update:
+   { type: "sep_state_update",
+     epoch: 3,
+     salt: <32 bytes>,
+     addedMembers: [Eve],
+     commitment: <32 bytes> }
+6. Encrypt & broadcast ───────> kind 24114 event ──────────> 7. Decrypt
+                                                              8. Parse as protocol msg
+                                                              9. Apply: add Eve,
+                                                                 set epoch=3,
+                                                                 set salt=new,
+                                                                 set commitment=new
+                                                             10. Store salt in history
+```
+
+### Salt recovery flow (offline member)
+
+If Carol was offline and comes back at epoch 5, but her local state is at epoch 2:
+
+```
+Carol (behind)                 Encrypted Group Channel        Dave (up to date)
+──────────────                 ───────────────────────        ─────────────────
+
+1. Discover epoch mismatch
+2. Send salt request:
+   { type: "sep_salt_request",
+     epoch: 3 }
+   ─────────────────────────>  kind 24114 event ────────────> 3. Check salt history
+                                                               4. Found salt for epoch 3
+                                                               5. Send salt response:
+                                                                  { type: "sep_salt_response",
+                                                                    epoch: 3,
+                                                                    salt: <32 bytes> }
+                               kind 24114 event <────────────
+6. Receive salt
+7. Store in history
+   <────────────────────────
+```
+
+### Protocol message disambiguation
+
+Chat messages and protocol messages travel on the same encrypted channel. They're distinguished by trying to parse the decrypted text as JSON with a `type` field:
+
+| `type` field | Message type | Action |
+|---|---|---|
+| `sep_state_update` | State update | Apply member delta, update epoch/salt/commitment |
+| `sep_salt_request` | Salt request | Reply with salt if we have it |
+| `sep_salt_response` | Salt response | Store in local salt history |
+| (no `type` / not JSON) | Plain text chat | Display as chat message |
+
+This happens in `NostrMessageTransport` on both platforms. After decrypting a kind 24114 event, the transport checks if the plaintext is a protocol message. If yes, it's dispatched to the protocol handler. If no, it's dispatched to the chat UI.
+
+### What was built
+
+**Swift SDK** (`GroupStateUpdate.swift`):
+- `SEPGroupStateUpdate` — the state update message carrying epoch, salt, member delta, optional commitment, and optional sender attestation.
+- `SEPSaltRequest` / `SEPSaltResponse` — salt recovery protocol messages.
+- `SEPProtocolMessage` — parser that extracts the `type` field from JSON to decide if a message is a protocol message.
+
+**Kotlin SDK** (`GroupStateUpdate.kt`):
+- Equivalent Kotlin data classes: `SEPGroupStateUpdate`, `SEPSaltRequest`, `SEPSaltResponse`.
+
+**iOS app**:
+- `NostrMessageTransport` — added `onProtocolMessage` callback alongside existing `onMessage`. After decryption, calls `SEPProtocolMessage.parse()` to dispatch. Added `sendProtocolMessage()` for broadcasting protocol messages.
+- `ChatViewModel` — sets the `onProtocolMessage` handler. State updates are forwarded to `AppState.applyStateUpdate()`. Salt requests trigger a response if the salt is in local history. Salt responses are stored in history.
+- `AppState` — `saltHistory: [String: [UInt64: Data]]` stores salts per group per epoch. `storeSalt()` and `getSalt()` manage the history. `buildStateUpdate()` constructs a state update with the current group state and sender attestation. `applyStateUpdate()` applies received state updates: adds/removes members, updates epoch/salt/commitment, verifies sender attestation, persists to storage.
+
+**Android app**:
+- `NostrMessageTransport` — added `onProtocolMessage` callback, `isProtocolMessage()` check, and `sendProtocolMessage()`. Decrypted messages are checked for a JSON `type` field to distinguish protocol from chat.
+- `GroupListViewModel` — `saltHistory` map, `storeSalt()`/`getSalt()`, `applyStateUpdate()`, `broadcastStateUpdate()`, `setupProtocolMessageHandler()` with full JSON parsing and dispatch of state updates, salt requests, and salt responses.
+
+### Why salt history is per-group, per-epoch
+
+Each member keeps a local map: `groupID -> (epoch -> salt)`. When a state update arrives, the salt is stored. When a salt request arrives, the member looks up the requested epoch and responds if found.
+
+This means: **the more members are online, the more resilient the system is.** Even if the original updater goes offline, any member who received the state update can serve the salt to latecomers. The system degrades gracefully — you only lose salt recovery when *all* members who received the update go offline and purge their history.
 
 ---
 
-## How an invitation works
+## 3. Key Attestation Distribution
 
-This is the core flow — inviting someone to a private group:
+### The problem
 
-```
-Sender (iOS/macOS)                          Nostr Relays
-──────────────────                          ────────────
+Every user in Stellar MLS has four types of cryptographic keys:
 
-1. Build bootstrap payload:
-   { groupID, epoch, contractID,
-     relayHints, welcomePayload,
-     sepBootstrapMaterial }
+| Key type | Curve | Purpose | Size |
+|----------|-------|---------|------|
+| secp256k1 | Koblitz | Nostr identity (public events, Schnorr signatures) | 32 bytes |
+| BLS12-381 | BLS | Group membership (ZK proofs, Merkle leaves) | 32 bytes (secret) / 48 bytes (public) |
+| Ed25519 | Twisted Edwards | Stellar on-chain identity (account key, transaction signing) | 32 bytes |
+| X25519 | Montgomery | Key agreement (encrypted invitations via ECDH) | 32 bytes |
 
-2. JSON-encode it → plaintext
+The BLS key proves you're in a group. The Ed25519 key proves you control a Stellar account. But how do other members know that the same person controls both keys? Without a cryptographic binding, an attacker could:
+- Steal or intercept a BLS key
+- Claim it's bound to their own Stellar account
+- Push malicious state updates appearing to come from the legitimate member
 
-3. Derive hidden inbox tag for
-   recipient (opaque to relays)
+### The solution
 
-4. Encrypt plaintext → sealed envelope
-   (ephemeral key + nonce + ciphertext
-    + auth tag)
-
-5. Base64-encode the envelope → content
-
-6. Build Nostr event:
-   tags: [["sep_inbox", tag],
-          ["sep_version", "1"]]
-   kind: 24113
-   content: base64 envelope
-
-7. Compute event ID:
-   SHA256([0, pubkey, created_at,
-           kind, tags, content])
-
-8. Sign event ID with Schnorr
-   (secp256k1, via Rust k256)
-
-9. Publish to relay A ──────────────────▶  Relay A stores event
-   Publish to relay B ──────────────────▶  Relay B stores event
-   (concurrent, best-effort)               (may drop it later)
-```
-
-The recipient subscribes to their hidden inbox tag on any relay, decrypts the envelope, and verifies the group state against Stellar before accepting.
-
----
-
-## What was built
-
-### Rust core (`src/ffi.rs`)
-
-Two new FFI functions using the `k256` crate (secp256k1 with Schnorr):
-
-| Function | Input | Output | Purpose |
-|----------|-------|--------|---------|
-| `sep_nostr_derive_public_key` | 32-byte secret key | 32-byte x-only public key | Nostr identity |
-| `sep_nostr_sign_event_id` | 32-byte secret key + 32-byte event ID | 64-byte Schnorr signature | NIP-01 event signing |
-
-These are exposed through the C header (`sep_ffi.h`) and called from Swift via the `RustBridge`.
-
-**Why Rust for signing?** Nostr uses secp256k1 Schnorr signatures. Rather than adding a separate Swift crypto library, the signing goes through the same Rust FFI bridge that handles BLS12-381 operations. One static library, one trust boundary.
-
-### Swift SDK (`swift-mls/Sources/SwiftMLS/`)
-
-Six new or modified files:
+A **key attestation** cryptographically binds the BLS public key to the Ed25519 public key:
 
 ```
-SwiftMLS/
-├── NostrTypes.swift          ← All types + protocols
-├── NostrCrypto.swift         ← RustBackedNostrSigner
-├── NostrClient.swift         ← WebSocket relay transport
-├── InvitationSender.swift    ← End-to-end invitation assembly
-├── RustBridge.swift          ← FFI wrappers (extended)
-└── Errors.swift              ← Nostr error cases (extended)
-```
+binding_message = SHA-256("SEP-XXXX:key-binding" || bls_pubkey_48_bytes)
+signature = Ed25519_sign(stellar_private_key, binding_message)
 
----
-
-## The types
-
-### Bootstrap payload — what gets encrypted
-
-```swift
-SEPInvitationBootstrap
-├── groupID: Data              // which group
-├── epoch: UInt64              // current epoch on Stellar
-├── stellarContractID: String  // Soroban contract address
-├── relayHints: [URL]          // advisory relay list
-├── welcomePayload: Data       // MLS Welcome-like material
-└── sepBootstrapMaterial: Data // SEP salt / bootstrap data
-```
-
-This is the sensitive stuff — it tells the recipient everything they need to join. It's JSON-encoded, encrypted to the recipient's public key, and never visible to relays.
-
-### Sealed envelope — the encryption wrapper
-
-```swift
-SEPSealedInvitationEnvelope
-├── version: UInt32            // envelope format version
-├── scheme: String             // encryption algorithm name
-├── ephemeralPublicKey: Data?  // ECDH ephemeral key
-├── nonce: Data?               // IV for symmetric cipher
-├── ciphertext: Data           // encrypted bootstrap
-└── authenticationTag: Data?   // AEAD tag
-```
-
-This envelope is base64-encoded and stuffed into the Nostr event's `content` field.
-
-### Nostr event — what goes on the wire
-
-```swift
-SEPNostrEvent
-├── id: String       // SHA256 of canonical JSON (hex, 64 chars)
-├── pubkey: String   // sender's Nostr public key (hex, 64 chars)
-├── createdAt: Int64 // Unix timestamp
-├── kind: Int        // 24113 for SEP invitations
-├── tags: [[String]] // [["sep_inbox", tag], ["sep_version", "1"]]
-├── content: String  // base64 sealed envelope
-└── sig: String      // Schnorr signature (hex, 128 chars)
-```
-
-The event ID follows [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md): `SHA256([0, pubkey, created_at, kind, tags, content])`.
-
----
-
-## The three protocols (injection points)
-
-The invitation sender doesn't hardcode crypto or transport. Instead, three protocols let you swap implementations:
-
-### 1. `SEPNostrEventSigner` — who signs the event
-
-```swift
-protocol SEPNostrEventSigner {
-    func publicKey() throws -> Data       // 32 bytes
-    func signEventID(_ eventID: Data) throws -> Data  // 64 bytes
+attestation = {
+  bls_pubkey:     48 bytes (compressed G1 point),
+  ed25519_pubkey: 32 bytes (Stellar public key),
+  signature:      64 bytes (Ed25519 signature over binding_message)
 }
 ```
 
-**Concrete implementation:** `RustBackedNostrSigner` — uses `k256` Schnorr signing through the Rust FFI bridge.
+To verify: recompute the binding message from the claimed BLS key, then verify the Ed25519 signature using the claimed Stellar public key. If it passes, the holder of the Stellar private key has endorsed "this BLS key is mine."
 
-### 2. `SEPInvitationCryptoProvider` — how the invitation is encrypted
+The prefix `"SEP-XXXX:key-binding"` prevents the binding message from colliding with any other protocol message. The attestation is 144 bytes total.
 
-```swift
-protocol SEPInvitationCryptoProvider {
-    func hiddenInboxTag(recipientPublicKey: Data) throws -> String
-    func sealInvitation(_ plaintext: Data, recipientPublicKey: Data) throws -> SEPSealedInvitationEnvelope
+### Where attestations are distributed
+
+Attestations travel through two channels:
+
+**1. Invitations (kind 24113)**
+
+When Alice invites Bob, the `BootstrapPayload` includes Alice's attestation:
+
+```json
+{
+  "groupID": "...",
+  "groupSecret": "...",
+  "members": [...],
+  "senderNostrPubkey": "...",
+  "senderAttestation": {
+    "blsPubkey": "<48 bytes, base64>",
+    "ed25519Pubkey": "<32 bytes, base64>",
+    "signature": "<64 bytes, base64>"
+  }
 }
 ```
 
-**No concrete implementation shipped.** This is intentionally injected — the encryption scheme (ECDH + ChaCha20, NIP-44, etc.) is an application decision. The SDK provides the type structure; you provide the crypto.
+Bob can verify: "Alice's BLS key (which appears in the member list) is bound to the Stellar account she claims to control."
 
-### 3. `SEPNostrRelayTransport` — how events reach relays
+**2. State updates (kind 24114)**
 
-```swift
-protocol SEPNostrRelayTransport {
-    func publish(event: SEPNostrEvent, to relayURL: URL) async throws -> SEPNostrRelaySendResult
+When Alice changes the group membership, the state update includes her attestation:
+
+```json
+{
+  "type": "sep_state_update",
+  "epoch": 3,
+  "salt": "...",
+  "addedMembers": [...],
+  "senderAttestation": {
+    "blsPubkey": "...",
+    "ed25519Pubkey": "...",
+    "signature": "..."
+  }
 }
 ```
 
-**Concrete implementation:** `URLSessionSEPNostrRelayTransport` — ephemeral WebSocket connections, NIP-01 `["EVENT", {...}]` framing, parses `["OK", ...]` / `["NOTICE", ...]` responses.
+All recipients verify the attestation before applying the state update. If verification fails, the update is **silently discarded**. This prevents an attacker who intercepted a BLS key from pushing malicious state updates.
+
+### What was built
+
+**Both platforms**:
+- `BootstrapPayload` gained an optional `senderAttestation` field (iOS: `KeyAttestation?`, Android: `KeyAttestation?`). The `from()` factory method accepts an optional attestation parameter.
+- `SEPGroupStateUpdate` includes an optional `senderAttestation: SEPKeyAttestationPayload?` field.
+- `applyStateUpdate()` verifies the attestation before applying changes. Invalid attestation = update discarded.
+- JSON serialization and deserialization of the attestation in `BootstrapPayload.toJson()` / `fromJson()`.
+
+### What attestation does NOT do
+
+An attestation proves **key binding**. It does **not** prove identity. Knowing that BLS key X and Stellar account Y belong to the same entity tells you nothing about *who* that entity is — unless you can independently map the Stellar account to a real-world identity.
+
+Attestation also does **not** prove the BLS key is still secret. If a key is compromised, the attestation remains valid. Key compromise requires group re-keying (new epoch, new members, new salt), not just attestation revocation.
 
 ---
 
-## How the WebSocket transport works
+## 4. Group Deactivation
+
+### The problem
+
+Groups need to end. A project wraps up, a team disbands, or a group is compromised and should be frozen. But who gets to shut it down?
+
+In a traditional system, you'd have an admin role. But Stellar MLS has no admin — the contract doesn't know who the members are. It can't enforce "only the group creator can deactivate" because it doesn't know who created the group. The ZK proof hides that information by design.
+
+### The solution
+
+**Any member can deactivate.** The only requirement is a valid ZK proof of membership — the same proof type used for creating and updating the group. If you can prove you're in the group, you can deactivate it.
 
 ```
-Client                              Relay (wss://relay.example)
-──────                              ─────
+Member's phone                              Soroban Contract
+──────────────                              ────────────────
 
-1. Open WebSocket ──────────────▶   Accept connection
+1. Generate membership proof
+   (same as for create/update)
+2. Decompress to 384 bytes
 
-2. Send frame:
-   ["EVENT", {
-     "id": "abc...",
-     "pubkey": "def...",
-     "created_at": 1717171717,
-     "kind": 24113,
-     "tags": [["sep_inbox","..."]],
-     "content": "base64...",
-     "sig": "ghi..."
-   }]                ───────────▶   Store event (best-effort)
-
-3. Receive response:
-   ["OK", "abc...", true, ""]  ◀──  Acknowledge
-
-4. Close WebSocket ─────────────▶   Done
+3. Submit deactivate_group(   ──────────>   4. Load current state
+     group_id,                               5. Verify proof against state
+     proof,                                  6. Set active = false
+     public_inputs                           7. Emit GroupDeactivated event
+   )                          <──────────   8. Return accepted
 ```
 
-Key details:
-- Ephemeral `URLSession` (no cookies, no cache, no tracking)
-- Only `ws://` and `wss://` schemes accepted
-- One WebSocket per relay per publish (open → send → receive → close)
-- Relay responses: `["OK", event_id, accepted, message?]` or `["NOTICE", message?]`
-- All relays published to concurrently via Swift structured concurrency
+After deactivation:
+- `verify_membership` still works — you can prove you were a member at the final epoch
+- `update_commitment` is rejected — no more membership changes
+- `get_state` still works — the group's final state remains readable
+
+Deactivation is permanent and irreversible. There's no "reactivate" function. If a group needs to resume, create a new group.
+
+### What was built
+
+**The contract already had `deactivate_group` from Phase 3.** No contract changes were needed. Phase 4 just exposes this capability through the app layer.
+
+**iOS app** (`OnChainService.swift`, `StellarChatApp.swift`):
+- `OnChainService.deactivateGroup()` — generates a membership proof, decompresses from 192 bytes (compressed) to 384 bytes (uncompressed BLS12-381 points), submits `deactivate_group` to the contract.
+- `AppState.deactivateGroupOnChain()` — calls the service and handles errors.
+
+**Android app** (`ContractTypes.kt`, `SEPContractClient.kt`, `OnChainService.kt`, `GroupListViewModel.kt`):
+- `buildDeactivateGroupPayload()` — JSON builder for the deactivation request.
+- `SEPContractClient.deactivateGroup()` — typed method wrapping the transport call.
+- `OnChainService.deactivateGroup()` — orchestrates proof generation, format conversion, and contract call.
+- `GroupListViewModel.deactivateGroupOnChain()` — ViewModel method with IO dispatching and result callback.
 
 ---
 
-## Concurrent relay fanout
+## How all four features work together
 
-When you publish to multiple relays, they all run in parallel:
+Here's a complete flow showing all four Phase 4 features in a single scenario:
 
-```swift
-let relayResults = await withTaskGroup(of: SEPNostrRelaySendResult.self) { group in
-    for relayURL in relayURLs {
-        group.addTask {
-            // Each relay is independent — one failing doesn't block others
-            try await relayTransport.publish(event: event, to: relayURL)
-        }
-    }
-    // Collect all results
-}
 ```
+Timeline: Alice adds Bob to a group that's published on-chain
+──────────────────────────────────────────────────────────────
 
-Each result tells you:
-- Which relay (`relayURL`)
-- Whether it accepted (`accepted: Bool`)
-- Any message from the relay (`message: String?`)
+1. Alice's phone:
+   a. Add Bob's leaf to member list
+   b. Increment epoch (0 -> 1)
+   c. Generate new 32-byte salt
+   d. Recompute Poseidon commitment
+   e. Generate ZK proof against OLD state (epoch 0)
+   f. Decompress proof: 192 bytes -> 384 bytes
 
-A failed relay returns `accepted: false` with the error message — it doesn't throw or stop the others.
+2. Alice's phone -> Relayer:                                 <-- FEE DECOUPLING
+   POST update_commitment payload to relayer URL
+   (Relayer pays the Stellar fee. Alice's account is invisible.)
 
----
+3. Relayer -> Stellar/Soroban:
+   Submit transaction. Contract verifies proof. Stores new commitment.
 
-## Error handling
+4. Alice's phone -> Encrypted channel (kind 24114):          <-- SALT DISTRIBUTION
+   Broadcast state update with:
+   - epoch: 1
+   - salt: <new 32 bytes>
+   - addedMembers: [Bob's leaf]
+   - senderAttestation: {bls, ed25519, sig}                  <-- KEY ATTESTATION
 
-| Error | When |
-|-------|------|
-| `emptyRelayList` | No relay URLs provided |
-| `invalidRelayURL` | URL scheme is not `ws` or `wss` |
-| `invalidRelayResponse` | Relay sent unparseable or mismatched response |
-| `invalidNostrSecretKeyLength` | Secret key is not 32 bytes |
-| `invalidNostrPublicKeyLength` | Public key is not 32 bytes |
-| `invalidNostrEventIDLength` | Event ID is not 32 bytes |
-| `invalidNostrSignatureLength` | Signature is not 64 bytes |
-| `ffiFailure` | Rust/k256 error propagated through FFI |
+5. Carol's phone (online):
+   a. Decrypt state update from channel
+   b. Verify Alice's key attestation                         <-- KEY ATTESTATION
+   c. Apply: add Bob, set epoch=1, set salt=new
+   d. Store salt in history for epoch 1                      <-- SALT DISTRIBUTION
 
-All errors are `Equatable` and `Sendable` — safe for async/await and actor contexts.
+6. Dave's phone (was offline, comes back later):
+   a. Discover local epoch (0) < group epoch (1)
+   b. Send salt request for epoch 1 on group channel         <-- SALT DISTRIBUTION
+   c. Carol responds with salt for epoch 1
+   d. Dave stores salt and applies update
 
----
-
-## What the relay sees vs. what it doesn't
-
-| Visible to relay | Hidden from relay |
-|---|---|
-| Sender's Nostr public key | Group ID |
-| Publication timestamp | Who the recipient is |
-| Event size | Member list |
-| Hidden inbox tag (opaque string) | Bootstrap payload contents |
-| Event kind (24113) | Epoch, contract ID, salt |
-| Relay fanout pattern | MLS Welcome material |
-
-The inbox tag is **opaque** — derived from the recipient's secret material. The relay can match events to subscribers but can't reverse-engineer the recipient identity or the group relationship.
-
----
-
-## Usage example (Swift)
-
-### Sending an invitation
-
-```swift
-// 1. Create the bootstrap payload
-let bootstrap = SEPInvitationBootstrap(
-    groupID: myGroupID,
-    epoch: currentEpoch,
-    stellarContractID: "CABCDEF...",
-    relayHints: [URL(string: "wss://relay.example")!],
-    welcomePayload: mlsWelcome,
-    sepBootstrapMaterial: saltAndKeys
-)
-
-// 2. Set up the signer (Rust-backed Schnorr)
-let signer = try RustBackedNostrSigner(secretKey: myNostrSecretKey)
-
-// 3. Send to multiple relays
-let result = try await SEPInvitationSender.sendInvitation(
-    bootstrap: bootstrap,
-    recipientPublicKey: recipientNostrPubkey,
-    relayURLs: [
-        URL(string: "wss://relay-a.example")!,
-        URL(string: "wss://relay-b.example")!,
-    ],
-    cryptoProvider: myCryptoProvider,  // you implement this
-    signer: signer
-)
-
-// 4. Check results
-for relay in result.relayResults {
-    print("\(relay.relayURL): accepted=\(relay.accepted)")
-}
-```
-
-### Deriving a Nostr public key
-
-```swift
-let publicKey = try SEPCommitmentBuilder.computePublicKey(secretKey: nostrSecretKeyData)
-// 32 bytes — this is your Nostr identity
+7. Later, Alice decides to end the group:
+   a. Generate ZK membership proof
+   b. Submit deactivate_group via relayer                    <-- FEE DECOUPLING
+   c. Contract verifies proof, sets active=false             <-- GROUP DEACTIVATION
+   d. No more updates allowed. verify_membership still works.
 ```
 
 ---
 
-## Security properties
+## The message flow diagram
 
-### What Phase 4 guarantees
+Here's how protocol messages and chat messages coexist on the same encrypted channel:
 
-1. **Payload confidentiality**: Invitation contents are encrypted end-to-end. Relays see ciphertext only.
-2. **Sender authenticity at transport layer**: Events are Schnorr-signed. Relays and recipients can verify the sender's Nostr key.
-3. **Recipient privacy**: Hidden inbox tags prevent relays from learning who an invitation is for.
-4. **No single relay dependency**: Multi-relay fanout means no single point of failure or surveillance.
+```
+                    Encrypted Group Channel (kind 24114)
+                    ────────────────────────────────────
+                                    |
+                              [Decrypt]
+                                    |
+                          [Is it JSON with "type"?]
+                           /                    \
+                         Yes                     No
+                          |                       |
+                    [Parse "type"]          [Plain text chat]
+                    /      |       \              |
+           state_update  salt_req  salt_resp   Display in UI
+                |           |          |
+          Apply delta    Reply if    Store in
+          to group       we have     salt history
+                         the salt
+```
 
-### What Phase 4 does NOT guarantee
-
-1. **Sender anonymity**: The sender's Nostr public key is visible in every event. Use a per-session ephemeral key if this matters.
-2. **Traffic analysis resistance**: Timing, event size, and activity bursts are observable. Optional padding and dummy traffic can help but are not included by default.
-3. **Durable delivery**: Relays may drop events. Senders may need to rebroadcast.
-4. **Relay honesty**: A relay could silently drop events. Multi-relay fanout is the mitigation.
+All messages — chat and protocol — are encrypted with the same AES-256-GCM key derived from the group secret. Relays see identical ciphertext regardless of whether the content is "hey everyone" or a state update. No metadata leakage.
 
 ---
 
 ## File map
 
-```
-Rust core:
-  Cargo.toml                          ← k256 = "0.13" (schnorr feature)
-  src/ffi.rs                          ← sep_nostr_derive_public_key, sep_nostr_sign_event_id
+### SDK layer
 
-Swift SDK:
-  swift-mls/Package.swift             ← .iOS(.v15), .macOS(.v13)
-  swift-mls/Sources/CSEPMLSFFI/
-    include/sep_ffi.h                 ← C header for Nostr FFI functions
-  swift-mls/Sources/SwiftMLS/
-    NostrTypes.swift                  ← Types + protocols (141 lines)
-    NostrCrypto.swift                 ← RustBackedNostrSigner (23 lines)
-    NostrClient.swift                 ← URLSessionSEPNostrRelayTransport (103 lines)
-    InvitationSender.swift            ← SEPInvitationSender (92 lines)
-    RustBridge.swift                  ← deriveNostrPublicKey, signNostrEventID
-    Errors.swift                      ← 7 new Nostr error cases
-  swift-mls/Tests/SwiftMLSTests/
-    SwiftMLSTests.swift               ← 3 Nostr tests + mock implementations
+| File | Platform | What was added |
+|------|----------|----------------|
+| `swift-mls/Sources/SwiftMLS/GroupStateUpdate.swift` | Swift | `SEPGroupStateUpdate`, `SEPSaltRequest`, `SEPSaltResponse`, `SEPKeyAttestationPayload`, `SEPProtocolMessage`, `SEPRelayerConfig` |
+| `swift-mls/Sources/SwiftMLS/ContractClient.swift` | Swift | `SEPRelayerTransport` — HTTP transport routing through relayer |
+| `kotlin-mls/src/main/java/com/stellarmls/mls/GroupStateUpdate.kt` | Kotlin | `SEPGroupStateUpdate`, `SEPSaltRequest`, `SEPSaltResponse`, `SEPKeyAttestationPayload`, `SEPRelayerConfig` |
 
-Design:
-  docs/relay-design-doc.md            ← Full architecture document
-```
+### iOS app
+
+| File | What changed |
+|------|-------------|
+| `Nostr/NostrMessageTransport.swift` | `onProtocolMessage` callback, `sendProtocolMessage()`, protocol/chat dispatch after decryption |
+| `ViewModels/ChatViewModel.swift` | Protocol message handling — forwards state updates to AppState, responds to salt requests, stores salt responses |
+| `Models/OnChainService.swift` | `init(contractID:relayerConfig:)` relayer constructor, `deactivateGroup()` method |
+| `StellarChatApp.swift` | Relayer config + persistence, salt history (`storeSalt`/`getSalt`), `buildStateUpdate()`, `applyStateUpdate()`, `deactivateGroupOnChain()`, relayer-aware `configureContractIfReady()` |
+| `Models/BootstrapPayload.swift` | `senderAttestation: KeyAttestation?` field, updated `from()` factory |
+
+### Android app
+
+| File | What changed |
+|------|-------------|
+| `nostr/NostrMessageTransport.kt` | `onProtocolMessage` callback, `sendProtocolMessage()`, `isProtocolMessage()` JSON check |
+| `onchain/SEPContractClient.kt` | `deactivateGroup()` method, `OkHttpRelayerTransport` class |
+| `onchain/ContractTypes.kt` | `buildDeactivateGroupPayload()` JSON builder |
+| `onchain/OnChainService.kt` | Relayer constructor, `deactivateGroup()` method |
+| `viewmodel/GroupListViewModel.kt` | Relayer config + persistence, salt history, state update build/apply/broadcast, protocol message handler, `deactivateGroupOnChain()`, JSON helpers |
+| `model/BootstrapPayload.kt` | `senderAttestation: KeyAttestation?` field, JSON serialization, updated `from()` factory |
 
 ---
 
-## How it connects to the other phases
+## Security summary
 
-| Phase | Role | Phase 4 interaction |
-|-------|------|---------------------|
-| Phase 1 (Circuits) | ZK proof generation | Bootstrap material includes the proving context |
-| Phase 2 (Ceremony) | Trusted setup | Proving keys distributed to members offline |
-| Phase 3 (Contract) | On-chain group state | Recipient verifies invitation against contract state |
-| **Phase 4 (Relay)** | **Transport** | **Moves encrypted invitations between devices** |
+| Feature | What it protects | What it doesn't protect |
+|---------|-----------------|------------------------|
+| Fee decoupling | On-chain identity (fee payer != member) | IP-level tracking (use Tor/VPN) |
+| Salt distribution | Commitment unpredictability (prevents member-set guessing) | Availability (needs at least one online member with the salt) |
+| Key attestation | Key binding integrity (BLS <-> Ed25519) | Key compromise (compromised key still has valid attestation) |
+| Group deactivation | Frozen state (no further updates) | Reversibility (deactivation is permanent) |
 
-The invitation carries everything a new member needs to join: group ID, epoch, contract address, MLS Welcome, and SEP bootstrap material. But the recipient doesn't trust any of it until they check the Stellar contract. The relay is just the messenger.
+---
+
+## What's NOT in Phase 4
+
+Two features were deferred from the original production readiness plan:
+
+- **Push notifications** — alerting users to new messages/invitations when the app is backgrounded. Requires platform-specific infrastructure (APNs for iOS, FCM for Android) and a notification relay service.
+- **Sync device state** — syncing group membership, salt history, and key material across multiple devices owned by the same user. Requires a secure device-linking protocol and encrypted cross-device sync channel.
+
+Both are user-experience features. The cryptographic and protocol foundations are complete — these are deployment concerns rather than security concerns.

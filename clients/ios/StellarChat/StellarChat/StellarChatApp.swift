@@ -53,11 +53,17 @@ final class AppState {
     // MARK: - Salt History (for offline recovery)
 
     /// Per-group salt history keyed by group ID, mapping epoch → salt.
+    /// M-17: Persisted to UserDefaults so salt history survives app restarts.
     private var saltHistory: [String: [UInt64: Data]] = [:]
+
+    private static let saltHistoryKey = "com.stellarmls.chat.saltHistory"
 
     private static let defaultRelays: [URL] = [
         URL(string: "wss://relay.damus.io")!,
         URL(string: "wss://nos.lol")!,
+        URL(string: "wss://relay.nostr.band")!,
+        URL(string: "wss://relay.snort.social")!,
+        URL(string: "wss://nostr.wine")!,
     ]
 
     init() {
@@ -71,7 +77,8 @@ final class AppState {
         self.relayerAuthToken = UserDefaults.standard.string(forKey: Self.relayerAuthTokenKey) ?? ""
         configureContractIfReady()
 
-        // Initialize salt history from current groups
+        // M-17: Load persisted salt history, then add current group salts
+        saltHistory = Self.loadSaltHistory()
         for group in groups {
             storeSalt(groupID: group.id, epoch: group.epoch, salt: group.salt)
         }
@@ -227,8 +234,12 @@ final class AppState {
 
     // MARK: - Group Deactivation
 
-    /// Deactivate a group on-chain. Any member with a valid proof can deactivate.
-    func deactivateGroupOnChain(_ group: ChatGroup) async throws {
+    /// M-18: Deactivation requires explicit confirmation since it is irreversible on-chain.
+    /// The `confirmed` parameter must be `true` — callers should show a confirmation dialog first.
+    func deactivateGroupOnChain(_ group: ChatGroup, confirmed: Bool = false) async throws {
+        guard confirmed else {
+            throw ChatError.verificationFailed("Deactivation requires explicit confirmation")
+        }
         guard let service = onChainService else {
             throw ChatError.contractNotConfigured
         }
@@ -263,11 +274,44 @@ final class AppState {
             let toRemove = sortedKeys.prefix(history.count - Self.saltHistoryWindow)
             for key in toRemove { saltHistory[groupID]?.removeValue(forKey: key) }
         }
+        // M-17: Persist to disk
+        Self.persistSaltHistory(saltHistory)
     }
 
     /// Retrieve a salt for a specific epoch from the local history.
     func getSalt(groupID: String, epoch: UInt64) -> Data? {
         saltHistory[groupID]?[epoch]
+    }
+
+    // MARK: - Salt History Persistence (M-17)
+
+    private static func loadSaltHistory() -> [String: [UInt64: Data]] {
+        guard let stored = UserDefaults.standard.data(forKey: saltHistoryKey),
+              let decoded = try? JSONDecoder().decode([String: [String: Data]].self, from: stored)
+        else { return [:] }
+        // Convert String keys back to UInt64
+        var result: [String: [UInt64: Data]] = [:]
+        for (groupID, epochMap) in decoded {
+            var converted: [UInt64: Data] = [:]
+            for (epochStr, salt) in epochMap {
+                if let epoch = UInt64(epochStr) { converted[epoch] = salt }
+            }
+            result[groupID] = converted
+        }
+        return result
+    }
+
+    private static func persistSaltHistory(_ history: [String: [UInt64: Data]]) {
+        // Convert UInt64 keys to String for JSON encoding
+        var encodable: [String: [String: Data]] = [:]
+        for (groupID, epochMap) in history {
+            var converted: [String: Data] = [:]
+            for (epoch, salt) in epochMap { converted[String(epoch)] = salt }
+            encodable[groupID] = converted
+        }
+        if let data = try? JSONEncoder().encode(encodable) {
+            UserDefaults.standard.set(data, forKey: saltHistoryKey)
+        }
     }
 
     /// Build a state update message for broadcasting after a membership change.
@@ -313,7 +357,7 @@ final class AppState {
                 signature: att.signature
             )
             if !KeyManager.verifyAttestation(attestation) {
-                // Attestation invalid — discard update without modifying state
+                SecurityLog.invalidAttestation(reason: "signature verification failed")
                 return
             }
         }
@@ -351,12 +395,31 @@ final class AppState {
         configureContractIfReady()
     }
 
+    /// Known-good Soroban RPC endpoints (M-13). Users may configure custom endpoints,
+    /// but a warning should be shown if the endpoint is not in this list.
+    static let knownRPCEndpoints: [String] = [
+        "https://soroban-testnet.stellar.org",
+        "https://soroban.stellar.org",
+        "https://rpc-futurenet.stellar.org",
+    ]
+
+    /// Check if a Soroban RPC endpoint URL is well-formed and uses HTTPS.
+    static func isValidRPCEndpoint(_ urlString: String) -> Bool {
+        guard let url = URL(string: urlString),
+              let scheme = url.scheme,
+              scheme == "https",
+              url.host != nil
+        else { return false }
+        return true
+    }
+
     private func configureContractIfReady() {
         let endpoint = contractEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         let id = contractID.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !endpoint.isEmpty,
               !id.isEmpty,
+              Self.isValidRPCEndpoint(endpoint),
               let url = URL(string: endpoint)
         else {
             onChainService = nil

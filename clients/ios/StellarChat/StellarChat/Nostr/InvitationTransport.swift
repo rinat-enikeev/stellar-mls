@@ -66,7 +66,8 @@ final class InvitationTransport {
 
         let envelope = try GroupCrypto.encryptInvitation(
             payloadData,
-            recipientKeyAgreementPubkey: recipientKeyAgreementPubkey
+            recipientKeyAgreementPubkey: recipientKeyAgreementPubkey,
+            senderSigningKey: keyManager.ed25519SigningKey
         )
         let envelopeData = try JSONEncoder().encode(envelope)
         let content = envelopeData.base64EncodedString()

@@ -13,6 +13,19 @@
 //! a one-way commitment — only the private key holder can produce the
 //! preimage. The binding between the private key and the BLS12-381 public
 //! key `pk = sk * G1` is verified off-chain during member registration.
+//!
+//! ## Circuit Tiers (M-14)
+//!
+//! The `depth` parameter determines the Merkle tree height and thus the
+//! maximum group size. Each tier uses a separate proving/verification key:
+//!
+//! - **Small** (depth=5): up to 32 members, ~1,910 R1CS constraints
+//! - **Medium** (depth=8): up to 256 members, ~2,630 R1CS constraints
+//! - **Large** (depth=11): up to 2,048 members, ~3,350 R1CS constraints
+//!
+//! The depth is fixed at key generation time. Migrating to a different depth
+//! requires new proving/verification keys and re-publishing all affected
+//! groups' commitments.
 
 use ark_bls12_381::Fr;
 use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;

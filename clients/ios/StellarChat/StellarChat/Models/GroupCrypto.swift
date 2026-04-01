@@ -2,8 +2,11 @@ import CryptoKit
 import Foundation
 
 enum GroupCrypto {
-    /// Derive a hidden group topic from the group secret.
-    /// Topic = first 16 hex chars of SHA256("sep-topic-v1" || groupSecret).
+    /// Derive a hidden group topic from the group secret (SEP-XXXX §3.1).
+    ///
+    /// Canonical derivation: `topicTag = hex(SHA-256("sep-topic-v1" || groupSecret)[0..8])`
+    /// Result: 16-character hex string used as the `t` tag value in Nostr kind 24114 events.
+    /// This derivation MUST be identical on all platforms for cross-platform interoperability.
     static func hiddenGroupTopic(groupSecret: Data) -> String {
         var hasher = SHA256()
         hasher.update(data: Data("sep-topic-v1".utf8))
@@ -52,6 +55,7 @@ enum GroupCrypto {
             version: 1,
             scheme: "aes-256-gcm-v1",
             ephemeralPublicKey: nil,
+            ephemeralKeySignature: nil,
             nonce: Data(nonce),
             ciphertext: sealed.ciphertext,
             authenticationTag: sealed.tag
@@ -62,7 +66,13 @@ enum GroupCrypto {
 
     /// Encrypt a bootstrap payload to a specific recipient using ephemeral X25519 ECDH.
     /// The sealed envelope carries the ephemeral public key so the recipient can derive the shared secret.
-    static func encryptInvitation(_ payload: Data, recipientKeyAgreementPubkey: Data) throws -> SealedEnvelope {
+    /// The ephemeral public key is signed with the sender's Ed25519 identity key (M-5) to prevent
+    /// MITM substitution of the ephemeral key.
+    static func encryptInvitation(
+        _ payload: Data,
+        recipientKeyAgreementPubkey: Data,
+        senderSigningKey: Curve25519.Signing.PrivateKey? = nil
+    ) throws -> SealedEnvelope {
         let ephemeral = Curve25519.KeyAgreement.PrivateKey()
         let recipientPubkey = try Curve25519.KeyAgreement.PublicKey(
             rawRepresentation: recipientKeyAgreementPubkey
@@ -79,10 +89,20 @@ enum GroupCrypto {
         let nonce = AES.GCM.Nonce()
         let sealed = try AES.GCM.seal(payload, using: key, nonce: nonce)
 
+        // M-5: Sign ephemeral public key with sender's Ed25519 identity key
+        let ephPubData = Data(ephemeral.publicKey.rawRepresentation)
+        let ephKeySignature: Data?
+        if let signingKey = senderSigningKey {
+            ephKeySignature = try signingKey.signature(for: ephPubData)
+        } else {
+            ephKeySignature = nil
+        }
+
         return SealedEnvelope(
             version: 1,
             scheme: "x25519-aes-256-gcm-v1",
-            ephemeralPublicKey: Data(ephemeral.publicKey.rawRepresentation),
+            ephemeralPublicKey: ephPubData,
+            ephemeralKeySignature: ephKeySignature,
             nonce: Data(nonce),
             ciphertext: sealed.ciphertext,
             authenticationTag: sealed.tag
@@ -144,6 +164,9 @@ struct SealedEnvelope: Codable {
     let version: Int
     let scheme: String
     let ephemeralPublicKey: Data?
+    /// Ed25519 signature over the ephemeral public key by the sender's identity key (M-5).
+    /// Prevents MITM substitution of the ephemeral X25519 key in invitations.
+    let ephemeralKeySignature: Data?
     let nonce: Data?
     let ciphertext: Data
     let authenticationTag: Data?
@@ -151,6 +174,7 @@ struct SealedEnvelope: Codable {
     enum CodingKeys: String, CodingKey {
         case version, scheme
         case ephemeralPublicKey = "ephemeral_public_key"
+        case ephemeralKeySignature = "ephemeral_key_signature"
         case nonce, ciphertext
         case authenticationTag = "authentication_tag"
     }

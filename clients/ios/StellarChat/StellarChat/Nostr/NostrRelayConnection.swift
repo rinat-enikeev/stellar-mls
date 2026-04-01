@@ -2,6 +2,7 @@ import Foundation
 
 /// Persistent WebSocket connection to a Nostr relay.
 /// Supports publishing events and subscribing with filters.
+/// M-8: Includes configurable timeout, heartbeat ping, and exponential backoff reconnection.
 actor NostrRelayConnection {
     let url: URL
     private var webSocketTask: URLSessionWebSocketTask?
@@ -9,11 +10,24 @@ actor NostrRelayConnection {
     private var subscriptions: [String: ([String: Any], (NostrEvent) -> Void)] = [:]
     private var isConnected = false
     private var continuations: [AsyncStream<NostrEvent>.Continuation] = []
+    private var reconnectAttempts = 0
+    private var pingTask: Task<Void, Never>?
+
+    /// Maximum reconnect delay in seconds (caps exponential backoff).
+    private static let maxReconnectDelay: TimeInterval = 120
+    /// Base reconnect delay in seconds.
+    private static let baseReconnectDelay: TimeInterval = 1
+    /// Heartbeat ping interval in seconds.
+    private static let pingInterval: TimeInterval = 30
+    /// Connection timeout in seconds.
+    private static let connectionTimeout: TimeInterval = 15
 
     init(url: URL) {
         self.url = url
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = true
+        config.timeoutIntervalForRequest = Self.connectionTimeout
+        config.timeoutIntervalForResource = Self.connectionTimeout * 4
         self.session = URLSession(configuration: config)
     }
 
@@ -23,7 +37,9 @@ actor NostrRelayConnection {
         self.webSocketTask = task
         task.resume()
         isConnected = true
+        reconnectAttempts = 0
         Task { await receiveLoop() }
+        startHeartbeat()
 
         // Resubscribe existing subscriptions
         for (subID, (filter, _)) in subscriptions {
@@ -32,9 +48,12 @@ actor NostrRelayConnection {
     }
 
     func disconnect() {
+        pingTask?.cancel()
+        pingTask = nil
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         webSocketTask = nil
         isConnected = false
+        reconnectAttempts = 0
     }
 
     /// Publish an event to the relay.
@@ -97,12 +116,31 @@ actor NostrRelayConnection {
                 }
                 handleMessage(text)
             } catch {
-                // Connection lost, attempt reconnect after delay
+                // Connection lost — reconnect with exponential backoff (M-8)
                 isConnected = false
                 webSocketTask = nil
-                try? await Task.sleep(for: .seconds(3))
+                pingTask?.cancel()
+                pingTask = nil
+                reconnectAttempts += 1
+                let delay = min(
+                    Self.maxReconnectDelay,
+                    Self.baseReconnectDelay * pow(2.0, Double(min(reconnectAttempts - 1, 6)))
+                )
+                try? await Task.sleep(for: .seconds(delay))
                 connect()
                 return
+            }
+        }
+    }
+
+    /// Periodic WebSocket ping to detect stale connections (M-8).
+    private func startHeartbeat() {
+        pingTask?.cancel()
+        pingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.pingInterval))
+                guard !Task.isCancelled else { break }
+                try? await self?.webSocketTask?.sendPing(pongReceiveHandler: { _ in })
             }
         }
     }

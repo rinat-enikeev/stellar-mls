@@ -17,6 +17,9 @@ struct ChatGroup: Identifiable, Codable {
     var tier: SEPTier = .small
     var isPublishedOnChain: Bool = false
 
+    /// Nostr subscription topic tag for this group.
+    /// Derivation (SEP-XXXX §3.1): `topicTag = hex(SHA-256("sep-topic-v1" || groupSecret)[0..8])`
+    /// Both platforms MUST use this same derivation to ensure cross-platform message visibility.
     var topicTag: String {
         GroupCrypto.hiddenGroupTopic(groupSecret: groupSecret)
     }

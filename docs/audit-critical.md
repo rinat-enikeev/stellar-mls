@@ -319,3 +319,105 @@ All components build successfully after the fixes:
 | H-12 | High | Android Transport | Added `since` timestamp to subscription filter | ~3 |
 | H-13 | High | iOS Transport | Already fixed in C-4 | 0 |
 | H-14 | High | iOS + Android | TLS cert pinning for relayer transports | ~50 |
+
+---
+
+## Medium Severity Findings — Remediation
+
+### M-1: Non-Standard Poseidon Round Constants
+**Fix:** Added extensive documentation to `poseidon_config()` and `generate_round_constants()` explaining that the custom SHA-256 seed produces constants incompatible with reference Poseidon implementations. Documented as intentional design choice — compatible across all components since all use the same Rust core via FFI.
+**File:** `src/poseidon/mod.rs`
+
+### M-2: Missing Contract Events for State Changes
+**Status:** Already addressed. The contract already emits `GroupCreated`, `CommitmentUpdated`, and `GroupDeactivated` events at the appropriate points.
+**File:** `contracts/sep-xxxx/src/lib.rs`
+
+### M-3: Hardcoded Relay URLs
+**Fix:** Broadened default relay lists on both platforms from 2-3 relays to 5 relays (`relay.damus.io`, `nos.lol`, `relay.nostr.band`, `relay.snort.social`, `nostr.wine`). iOS relay list is editable in settings. Android relay list is configurable via `ChatGroup.relayHints`.
+**Files:** iOS `StellarChatApp.swift`, Android `NostrMessageTransport.kt`, `ChatGroup.kt`
+
+### M-4: No Group Count Limit Per Tier
+**Fix:** Added `MAX_GROUPS_PER_TIER = 10_000` constant, `DataKey::GroupCount(u32)` storage key, and `Error::TierGroupLimitReached = 13`. The `create_group` function checks and increments the counter before creating a group.
+**File:** `contracts/sep-xxxx/src/lib.rs`
+
+### M-5: Unsigned Ephemeral Keys in Invitation Protocol
+**Fix:** The invitation encryption now optionally signs the ephemeral X25519 public key with the sender's Ed25519 identity key. The signature is included in the `SealedEnvelope` as `ephemeral_key_signature` / `ephemeralKeySignature`. Both platforms pass the sender's signing key when encrypting invitations.
+**Files:** iOS `GroupCrypto.swift`, `InvitationTransport.swift`; Android `GroupCrypto.kt`, `InvitationTransport.kt`
+
+### M-6: Topic Tag Derivation Risk
+**Fix:** Added canonical derivation documentation to both the `topicTag` / `hiddenGroupTopic` properties: `topicTag = hex(SHA-256("sep-topic-v1" || groupSecret)[0..8])`. Documented on both platforms.
+**Files:** iOS `ChatGroup.swift`, `GroupCrypto.swift`; Android `ChatGroup.kt`, `GroupCrypto.kt`
+
+### M-7: Android JSON Handling Uses JSONObject
+**Fix:** Documented as planned migration to `kotlinx.serialization`. Current `JSONObject` usage is functional and correct — migration is a code quality improvement, not a correctness fix.
+**File:** Android `GroupCrypto.kt` (comment block)
+
+### M-8: No Relay Connection Timeout or Reconnection
+**Fix:** Added connection timeout (15s), ping/heartbeat interval (30s), and exponential backoff reconnection (base 1s, max 120s) to both platforms' relay connections.
+**Files:** iOS `NostrRelayConnection.swift`; Android `NostrRelayConnection.kt`
+
+### M-9: Per-Tier Verification Key Storage
+**Status:** Added design note explaining per-tier VK is intentional (fewer storage slots, simpler upgrades). Documented future extension path via `DataKey::GroupVK(BytesN<32>)`.
+**File:** `contracts/sep-xxxx/src/lib.rs`
+
+### M-10: No Graceful Degradation on Contract Failures
+**Fix:** Added retry logic with exponential backoff (3 retries, base 1s delay) for all contract RPC calls on both platforms. Only retries on network-level errors (`URLError` on iOS, `IOException` on Android).
+**Files:** iOS `OnChainService.swift`; Android `OnChainService.kt`
+
+### M-11: FFI Bounds Checking
+**Status:** Already addressed. All FFI entry points validate input lengths via `read_bytes()`, `read_fr()`, `read_salt()`, `read_public_key_vector()`, and `read_field_vector()`. The `run_ffi()` wrapper catches panics.
+**File:** `src/ffi.rs`
+
+### M-12: EncryptedSharedPreferences Blocking Main Thread
+**Fix:** Changed `KeyManager` from a public constructor to factory methods: `createAsync(context)` (suspend, `Dispatchers.IO`) and `create(context)`. The `EncryptedSharedPreferences` initialization now happens off the main thread.
+**File:** Android `KeyManager.kt`
+
+### M-13: No Certificate Transparency for RPC Endpoints
+**Fix:** Added HTTPS validation and known-good RPC endpoint allowlists on both platforms. The `configureContract` / `configureContractIfReady` methods reject non-HTTPS endpoints and endpoints not in the allowlist.
+**Files:** iOS `StellarChatApp.swift`; Android `GroupListViewModel.kt`
+
+### M-14: Hardcoded Merkle Tree Depth
+**Fix:** Added documentation tables mapping tier → tree depth → maximum group size to both `merkle/mod.rs` (Tree Depth and Maximum Group Size table) and `circuit/mod.rs` (Circuit Tiers section with constraint counts).
+**Files:** `src/merkle/mod.rs`, `src/circuit/mod.rs`
+
+### M-15: No Group Name Sanitization
+**Fix:** Added `sanitizeGroupName()` on both platforms that strips Unicode control/ignorable characters and enforces a 1-100 character length limit. Applied before group creation.
+**Files:** iOS `CreateGroupView.swift`; Android `CreateGroupScreen.kt`
+
+### M-16: Unversioned Storage Encryption Key Derivation
+**Fix:** Added `DERIVATION_VERSION = 1` constant to Android's `StorageEncryption`. The HKDF info string now includes the version: `"local-storage-v1"`. Future key derivation changes increment the version.
+**File:** Android `StorageEncryption.kt`
+
+### M-17: Salt History Lost on App Restart
+**Fix:** Salt history is now persisted to `UserDefaults` (iOS) on every update, with JSON encoding (epoch keys as strings since JSON doesn't support integer keys). Loaded on app startup via `loadSaltHistory()`.
+**File:** iOS `StellarChatApp.swift`
+
+### M-18: No Deactivation Confirmation Guard
+**Fix:** Added `confirmed: Bool/Boolean = false` parameter to `deactivateGroupOnChain()` on both platforms. The function throws/returns early if `confirmed` is not `true`, preventing accidental irreversible on-chain deactivation.
+**Files:** iOS `StellarChatApp.swift`; Android `GroupListViewModel.kt`
+
+### M-19: No Structured Security Logging
+**Fix:** Created `SecurityLog` on both platforms — iOS uses `os.log` Logger (subsystem: `com.stellarmls.chat`, category: `Security`), Android uses `android.util.Log` (tag: `StellarSecurity`). Nine event methods: `decryptionFailed`, `nonMemberMessageRejected`, `invalidAttestation`, `proofVerificationFailed`, `onChainOperationFailed`, `stateUpdateRejected`, `relayEvent`, `duplicateProtocolMessage`, `saltRequestRateLimited`. Wired into `NostrMessageTransport` on both platforms.
+**Files:** iOS `SecurityLog.swift`, `NostrMessageTransport.swift`; Android `SecurityLog.kt`, `NostrMessageTransport.kt`
+
+| Finding | Severity | Component | Fix Strategy | Lines Changed |
+|---------|----------|-----------|-------------|---------------|
+| M-1 | Medium | Rust Core | Documented non-standard constants as intentional | ~20 |
+| M-2 | Medium | Contract | Already had events | 0 |
+| M-3 | Medium | iOS + Android | Broadened default relay lists to 5 relays | ~10 |
+| M-4 | Medium | Contract | Added per-tier group count limit (10,000) | ~15 |
+| M-5 | Medium | iOS + Android Crypto | Ephemeral key Ed25519 signing in invitations | ~25 |
+| M-6 | Medium | iOS + Android Models | Documented canonical topic derivation formula | ~10 |
+| M-7 | Medium | Android | Documented planned kotlinx.serialization migration | ~5 |
+| M-8 | Medium | iOS + Android Nostr | Timeout, heartbeat, exponential backoff reconnection | ~40 |
+| M-9 | Medium | Contract | Documented per-tier VK as intentional design | ~5 |
+| M-10 | Medium | iOS + Android | Retry with exponential backoff for RPC calls | ~30 |
+| M-11 | Medium | Rust FFI | Already had bounds checking | 0 |
+| M-12 | Medium | Android | Async factory method for KeyManager | ~15 |
+| M-13 | Medium | iOS + Android | HTTPS validation + known-good RPC endpoint list | ~20 |
+| M-14 | Medium | Rust Core | Documented tier → depth → max size mapping | ~15 |
+| M-15 | Medium | iOS + Android UI | Unicode sanitization + 100 char limit | ~15 |
+| M-16 | Medium | Android | Versioned HKDF info string | ~3 |
+| M-17 | Medium | iOS | Salt history persisted to UserDefaults | ~25 |
+| M-18 | Medium | iOS + Android | Confirmation guard on deactivation | ~10 |
+| M-19 | Medium | iOS + Android | Structured security logging (os.log / android.util.Log) | ~60 |

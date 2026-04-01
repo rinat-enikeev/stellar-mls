@@ -21,14 +21,21 @@ object StorageEncryption {
     @Volatile
     private var storageKeySpec: SecretKeySpec? = null
 
+    /**
+     * Current derivation version. If the derivation path changes, increment this
+     * and handle migration of existing encrypted data (M-16).
+     */
+    private const val DERIVATION_VERSION = 1
+
     /** Initialize with application context. Must be called before encrypt/decrypt. */
     fun init(context: Context) {
         if (storageKeySpec != null) return
         val rootSecret = loadOrCreateRootSecret(context)
+        // M-16: Version number included in HKDF info to enable future derivation changes.
         val storageKeyBytes = GroupCrypto.hkdf(
             ikm = rootSecret,
             salt = "com.stellarmls.chat.storage".toByteArray(),
-            info = "local-storage-v1".toByteArray(),
+            info = "local-storage-v${DERIVATION_VERSION}".toByteArray(),
             length = 32
         )
         storageKeySpec = SecretKeySpec(storageKeyBytes, "AES")

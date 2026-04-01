@@ -83,7 +83,8 @@ final class NostrMessageTransport {
                                 if isMember {
                                     self.onMessage?(text, event)
                                 } else {
-                                    self.onError?("Message from non-member BLS key — rejected")
+                                    SecurityLog.nonMemberMessageRejected(groupID: groupID)
+                                self.onError?("Message from non-member BLS key — rejected")
                                 }
                             } else {
                                 // Legacy unverified message (backward compat)
@@ -91,6 +92,7 @@ final class NostrMessageTransport {
                             }
                         }
                     } catch {
+                        SecurityLog.decryptionFailed(context: "group message")
                         self.onError?("Decryption failed: \(error.localizedDescription)")
                     }
                 }

@@ -107,9 +107,26 @@ struct CreateGroupView: View {
         }
     }
 
+    /// M-15: Sanitize group name — strip control characters and enforce length limit.
+    private static func sanitizeGroupName(_ name: String) -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Remove Unicode control characters (C0, C1, and format characters)
+        let sanitized = trimmed.unicodeScalars.filter {
+            !$0.properties.isDefaultIgnorableCodePoint &&
+            ($0.value >= 0x20 || $0 == "\n" || $0 == "\t")
+        }
+        let result = String(String.UnicodeScalarView(sanitized))
+        guard !result.isEmpty, result.count <= 100 else { return nil }
+        return result
+    }
+
     private func createGroup() {
+        guard let sanitizedName = Self.sanitizeGroupName(groupName) else {
+            errorMessage = "Group name must be 1-100 characters with no control characters"
+            return
+        }
         do {
-            let (group, code) = try appState.createGroup(name: groupName)
+            let (group, code) = try appState.createGroup(name: sanitizedName)
             inviteCode = code
             createdGroup = group
             errorMessage = nil

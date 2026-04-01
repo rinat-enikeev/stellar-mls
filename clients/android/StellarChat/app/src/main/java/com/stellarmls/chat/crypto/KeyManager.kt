@@ -14,7 +14,12 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import java.security.SecureRandom
 
-class KeyManager(context: Context) {
+/**
+ * M-12: KeyManager initialization (EncryptedSharedPreferences + MasterKey generation)
+ * may block the calling thread. Use [KeyManager.createAsync] to initialize on a
+ * background thread, or call the constructor from a coroutine on Dispatchers.IO.
+ */
+class KeyManager private constructor(prefs: android.content.SharedPreferences) {
     val secretKey: ByteArray
     val publicKey: ByteArray
     val publicKeyHex: String
@@ -35,17 +40,37 @@ class KeyManager(context: Context) {
     /** Hidden inbox tag derived from X25519 public key. */
     val inboxTag: String
 
+    /** Create a KeyManager on a background thread to avoid blocking the main thread (M-12). */
+    companion object {
+        suspend fun createAsync(context: Context): KeyManager =
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                create(context)
+            }
+
+        fun create(context: Context): KeyManager {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            val prefs = EncryptedSharedPreferences.create(
+                context,
+                "stellar_keys_encrypted",
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+            return KeyManager(prefs)
+        }
+
+        /** Verify an Ed25519 signature against a public key. */
+        fun verifyEd25519(publicKey: ByteArray, message: ByteArray, signature: ByteArray): Boolean {
+            val verifier = Ed25519Signer()
+            verifier.init(false, Ed25519PublicKeyParameters(publicKey, 0))
+            verifier.update(message, 0, message.size)
+            return verifier.verifySignature(signature)
+        }
+    }
+
     init {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        val prefs = EncryptedSharedPreferences.create(
-            context,
-            "stellar_keys_encrypted",
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
 
         // Nostr secp256k1 key
         val storedNostr = prefs.getString("nostr_secret_key", null)
@@ -125,13 +150,4 @@ class KeyManager(context: Context) {
         leafHash = leafHash()
     )
 
-    companion object {
-        /** Verify an Ed25519 signature against a public key. */
-        fun verifyEd25519(publicKey: ByteArray, message: ByteArray, signature: ByteArray): Boolean {
-            val verifier = Ed25519Signer()
-            verifier.init(false, Ed25519PublicKeyParameters(publicKey, 0))
-            verifier.update(message, 0, message.size)
-            return verifier.verifySignature(signature)
-        }
-    }
 }

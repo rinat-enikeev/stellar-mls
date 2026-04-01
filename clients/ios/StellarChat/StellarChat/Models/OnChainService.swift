@@ -32,11 +32,34 @@ enum OnChainVerificationResult: Equatable {
 ///
 /// Uses the existing `SEPContractClient` from SwiftMLS for HTTP-based
 /// contract invocations and `SEPProofGenerator` for Groth16 proof generation.
+///
+/// M-10: Network operations are retried with exponential backoff (up to 3 attempts).
+/// Groups continue to function in "unverified" mode when the endpoint is unreachable.
 actor OnChainService {
     let contractClient: SEPContractClient
 
     /// Cached proving keys per tier (generated on first use).
     private var provingKeys: [SEPTier: Data] = [:]
+
+    private static let maxRetries = 3
+    private static let baseRetryDelay: TimeInterval = 1.0
+
+    /// Execute an async block with exponential backoff retry on URLError.
+    private func withRetry<T>(_ block: () async throws -> T) async throws -> T {
+        var lastError: Error?
+        for attempt in 0..<Self.maxRetries {
+            do {
+                return try await block()
+            } catch let error as URLError {
+                lastError = error
+                if attempt < Self.maxRetries - 1 {
+                    let delay = Self.baseRetryDelay * pow(2.0, Double(attempt))
+                    try? await Task.sleep(for: .seconds(delay))
+                }
+            }
+        }
+        throw lastError!
+    }
 
     init(contractID: String, endpoint: URL) {
         let transport = URLSessionSEPContractTransport(endpoint: endpoint)
@@ -132,7 +155,7 @@ actor OnChainService {
             publicInputs: proofBundle.publicInputs,
             tier: UInt32(tier.rawValue)
         )
-        return try await contractClient.createGroup(request)
+        return try await withRetry { try await self.contractClient.createGroup(request) }
     }
 
     /// Publish a commitment update after a membership change.
@@ -178,12 +201,12 @@ actor OnChainService {
             proof: uncompressedProof,
             publicInputs: oldProofBundle.publicInputs
         )
-        return try await contractClient.updateCommitment(request)
+        return try await withRetry { try await self.contractClient.updateCommitment(request) }
     }
 
     /// Fetch the current on-chain state for a group.
     func fetchOnChainState(groupIDData: Data) async throws -> SEPCommitmentEntry {
-        try await contractClient.getState(groupID: groupIDData)
+        try await withRetry { try await self.contractClient.getState(groupID: groupIDData) }
     }
 
     // MARK: - Verification
@@ -262,7 +285,7 @@ actor OnChainService {
             proof: uncompressedProof,
             publicInputs: proofBundle.publicInputs
         )
-        return try await contractClient.deactivateGroup(request)
+        return try await withRetry { try await self.contractClient.deactivateGroup(request) }
     }
 
     /// Verify membership via the on-chain contract.
@@ -292,7 +315,7 @@ actor OnChainService {
             proof: uncompressedProof,
             publicInputs: proofBundle.publicInputs
         )
-        let response = try await contractClient.verifyMembership(request)
+        let response = try await withRetry { try await self.contractClient.verifyMembership(request) }
         return response.valid
     }
 }

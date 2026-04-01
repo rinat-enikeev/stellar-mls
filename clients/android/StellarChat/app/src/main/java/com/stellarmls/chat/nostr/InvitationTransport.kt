@@ -71,7 +71,8 @@ class InvitationTransport(private val keyManager: KeyManager) {
         val payloadJson = payload.toJson()
         val envelopeJson = GroupCrypto.encryptInvitation(
             payload = payloadJson.toByteArray(),
-            recipientKeyAgreementPubkey = recipientKeyAgreementPubkey
+            recipientKeyAgreementPubkey = recipientKeyAgreementPubkey,
+            senderKeyManager = keyManager
         )
 
         // Base64 encode the envelope

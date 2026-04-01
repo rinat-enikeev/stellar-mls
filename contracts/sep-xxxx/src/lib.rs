@@ -36,6 +36,10 @@ const LEDGER_THRESHOLD: u32 = 17_280;
 /// TTL bump amount for persistent storage (ledgers, ~30 days).
 const LEDGER_BUMP: u32 = 518_400;
 
+/// Maximum number of active groups allowed per tier (M-4: storage abuse prevention).
+/// The admin can increase this limit by re-deploying with a higher value.
+const MAX_GROUPS_PER_TIER: u32 = 10_000;
+
 // ================================================================
 // Errors
 // ================================================================
@@ -68,6 +72,8 @@ pub enum Error {
     InvalidEpoch = 11,
     /// This proof has already been used (replay detected).
     ProofReplay = 12,
+    /// Maximum number of groups for this tier has been reached.
+    TierGroupLimitReached = 13,
 }
 
 // ================================================================
@@ -139,6 +145,14 @@ pub struct PublicInputs {
 
 /// Groth16 verification key stored as raw bytes (contract-storage friendly).
 ///
+/// **Design note (M-9):** Verification keys are stored per tier, not per group.
+/// All groups of the same tier share a VK. This is intentional: the circuit is
+/// parameterized only by tree depth (tier), so all groups of a given tier use
+/// the same circuit and therefore the same VK. If the VK needs rotation (e.g.,
+/// circuit bug), all groups of that tier are affected. A future per-group VK
+/// override can be added via `DataKey::GroupVK(BytesN<32>)` with fallback to
+/// the tier-level VK if not set.
+///
 /// Points use the BLS12-381 uncompressed serialization:
 ///   G1 = x(48 bytes) || y(48 bytes) = 96 bytes
 ///   G2 = x0(48) || x1(48) || y0(48) || y1(48) = 192 bytes
@@ -191,6 +205,8 @@ pub enum DataKey {
     History(BytesN<32>),
     /// Used proof hash — prevents cross-function and cross-group proof replay.
     UsedProof(BytesN<32>),
+    /// Active group count per tier (instance storage, for M-4 limit enforcement).
+    GroupCount(u32),
 }
 
 // ================================================================
@@ -280,6 +296,16 @@ impl SepXxxxContract {
             return Err(Error::GroupAlreadyExists);
         }
 
+        // M-4: Enforce per-tier group count limit to prevent storage abuse.
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::GroupCount(tier))
+            .unwrap_or(0);
+        if count >= MAX_GROUPS_PER_TIER {
+            return Err(Error::TierGroupLimitReached);
+        }
+
         Self::check_proof_replay(&env, &proof)?;
 
         let vk = Self::load_vk(&env, tier)?;
@@ -305,6 +331,9 @@ impl SepXxxxContract {
             &DataKey::History(group_id.clone()),
             &Vec::<CommitmentEntry>::new(&env),
         );
+        env.storage()
+            .instance()
+            .set(&DataKey::GroupCount(tier), &(count + 1));
         Self::bump_group(&env, &group_id);
 
         GroupCreated {

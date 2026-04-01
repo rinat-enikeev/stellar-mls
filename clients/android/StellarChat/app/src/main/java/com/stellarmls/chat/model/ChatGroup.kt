@@ -15,7 +15,10 @@ data class ChatGroup(
     val createdAt: Date = Date(),
     val relayHints: List<String> = listOf(
         "wss://relay.damus.io",
-        "wss://nos.lol"
+        "wss://nos.lol",
+        "wss://relay.nostr.band",
+        "wss://relay.snort.social",
+        "wss://nostr.wine"
     ),
     // SEP membership state
     var members: MutableList<SEPGroupMemberLeaf> = mutableListOf(),
@@ -27,6 +30,9 @@ data class ChatGroup(
 ) {
     /** Group ID as raw bytes (hex string → ByteArray). */
     val groupIDData: ByteArray get() = id.hexToBytes()
+    /** Nostr subscription topic tag for this group.
+     *  Derivation (SEP-XXXX §3.1): `topicTag = hex(SHA-256("sep-topic-v1" || groupSecret)[0..8])`
+     *  Both platforms MUST use this same derivation to ensure cross-platform message visibility. */
     val topicTag: String get() = GroupCrypto.hiddenGroupTopic(groupSecret)
     val encryptionKey: ByteArray get() = GroupCrypto.deriveMessageKey(groupSecret, epoch, salt)
 

@@ -266,9 +266,26 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         configureContract()
     }
 
+    companion object {
+        /** Known-good Soroban RPC endpoints (M-13). */
+        val KNOWN_RPC_ENDPOINTS = listOf(
+            "https://soroban-testnet.stellar.org",
+            "https://soroban.stellar.org",
+            "https://rpc-futurenet.stellar.org",
+        )
+
+        /** Check if a Soroban RPC endpoint URL is well-formed and uses HTTPS. */
+        fun isValidRPCEndpoint(url: String): Boolean {
+            return try {
+                val parsed = java.net.URL(url)
+                parsed.protocol == "https" && parsed.host.isNotBlank()
+            } catch (_: Exception) { false }
+        }
+    }
+
     /** Reconfigure the on-chain service when contract settings change. */
     fun configureContract() {
-        if (isContractConfigured) {
+        if (isContractConfigured && isValidRPCEndpoint(contractEndpoint)) {
             onChainService = if (isRelayerConfigured) {
                 OnChainService(
                     contractID,
@@ -515,8 +532,16 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     // -- Group Deactivation --
 
-    /** Deactivate a group on-chain. Any member with a valid proof can deactivate. */
-    fun deactivateGroupOnChain(group: ChatGroup, onResult: (Result<Unit>) -> Unit) {
+    /**
+     * Deactivate a group on-chain. Any member with a valid proof can deactivate.
+     * M-18: [confirmed] must be true — callers should show a confirmation dialog first,
+     * since deactivation is irreversible on-chain.
+     */
+    fun deactivateGroupOnChain(group: ChatGroup, confirmed: Boolean = false, onResult: (Result<Unit>) -> Unit) {
+        if (!confirmed) {
+            onResult(Result.failure(IllegalStateException("Deactivation requires explicit confirmation")))
+            return
+        }
         val service = onChainService
         if (service == null) {
             onResult(Result.failure(ChatError.ContractNotConfigured))

@@ -6,6 +6,20 @@
 //! - Internal nodes: `Poseidon(left, right)`
 //! - Root: `poseidon_root` used in the on-chain commitment
 //!
+//! ## Tree Depth and Maximum Group Size (M-14)
+//!
+//! The tree depth is fixed at compile time per circuit tier:
+//!
+//! | Tier   | Depth | Max Members (2^depth) | Constraint Count |
+//! |--------|-------|----------------------|-----------------|
+//! | Small  |   5   | 32                   | ~1,910          |
+//! | Medium |   8   | 256                  | ~2,630          |
+//! | Large  |  11   | 2,048                | ~3,350          |
+//!
+//! Changing the depth requires regenerating the proving and verification keys
+//! (via the ceremony module) and migrating all groups of that tier. The
+//! verification keys stored in the Soroban contract must also be updated.
+//!
 //! Two construction methods:
 //! - `build()`: takes raw secret key scalars, hashes each to produce leaves (testing)
 //! - `build_from_members()`: takes `{compressed G1 public key, leaf hash}` records

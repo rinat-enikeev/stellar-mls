@@ -12,8 +12,17 @@ import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
+// M-7: This file uses org.json.JSONObject for JSON serialization, which is untyped
+// and error-prone. A future migration to kotlinx.serialization with @Serializable
+// data classes would provide compile-time type safety and eliminate runtime parsing
+// errors from missing or mistyped fields. See audit finding M-7 for details.
 object GroupCrypto {
-    /** Derive hidden group topic: first 16 hex chars of SHA256("sep-topic-v1" || groupSecret). */
+    /**
+     * Derive hidden group topic (SEP-XXXX §3.1).
+     * Canonical derivation: `topicTag = hex(SHA-256("sep-topic-v1" || groupSecret)[0..8])`
+     * Result: 16-character hex string used as the `t` tag value in Nostr kind 24114 events.
+     * This derivation MUST be identical on all platforms for cross-platform interoperability.
+     */
     fun hiddenGroupTopic(groupSecret: ByteArray): String {
         val digest = MessageDigest.getInstance("SHA-256")
         digest.update("sep-topic-v1".toByteArray())
@@ -89,8 +98,15 @@ object GroupCrypto {
     /**
      * Encrypt an invitation payload using ephemeral X25519 ECDH + AES-256-GCM.
      * Returns a sealed envelope JSON string with scheme "x25519-aes-256-gcm-v1".
+     *
+     * M-5: The ephemeral public key is signed with the sender's Ed25519 identity key
+     * to prevent MITM substitution of the ephemeral key.
      */
-    fun encryptInvitation(payload: ByteArray, recipientKeyAgreementPubkey: ByteArray): String {
+    fun encryptInvitation(
+        payload: ByteArray,
+        recipientKeyAgreementPubkey: ByteArray,
+        senderKeyManager: KeyManager? = null
+    ): String {
         // Generate ephemeral X25519 key pair
         val ephemeralPrivate = X25519PrivateKeyParameters(SecureRandom())
         val ephemeralPublic = ephemeralPrivate.generatePublicKey()
@@ -120,10 +136,16 @@ object GroupCrypto {
         val ct = ciphertext.copyOfRange(0, ciphertext.size - tagLen)
         val tag = ciphertext.copyOfRange(ciphertext.size - tagLen, ciphertext.size)
 
+        // M-5: Sign ephemeral public key with sender's Ed25519 identity key
+        val ephKeySignature = senderKeyManager?.stellarSign(ephemeralPublic.encoded)
+
         val envelope = JSONObject().apply {
             put("version", 1)
             put("scheme", "x25519-aes-256-gcm-v1")
             put("ephemeral_public_key", android.util.Base64.encodeToString(ephemeralPublic.encoded, android.util.Base64.NO_WRAP))
+            if (ephKeySignature != null) {
+                put("ephemeral_key_signature", android.util.Base64.encodeToString(ephKeySignature, android.util.Base64.NO_WRAP))
+            }
             put("nonce", android.util.Base64.encodeToString(iv, android.util.Base64.NO_WRAP))
             put("ciphertext", android.util.Base64.encodeToString(ct, android.util.Base64.NO_WRAP))
             put("authentication_tag", android.util.Base64.encodeToString(tag, android.util.Base64.NO_WRAP))

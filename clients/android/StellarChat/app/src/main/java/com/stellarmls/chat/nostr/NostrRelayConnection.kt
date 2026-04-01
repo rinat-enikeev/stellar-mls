@@ -14,25 +14,45 @@ import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
+/**
+ * M-8: Includes configurable connection timeout, heartbeat ping, and exponential backoff reconnection.
+ */
 class NostrRelayConnection(
     private val url: String,
     private val client: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
+        .pingInterval(30, TimeUnit.SECONDS)
         .build()
 ) {
     private var webSocket: WebSocket? = null
     private val subscriptionCallbacks = ConcurrentHashMap<String, (NostrEvent) -> Unit>()
+    @Volatile private var reconnectAttempts = 0
+
+    companion object {
+        private const val MAX_RECONNECT_DELAY_MS = 120_000L
+        private const val BASE_RECONNECT_DELAY_MS = 1_000L
+    }
 
     fun connect() {
         val request = Request.Builder().url(url).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                reconnectAttempts = 0
+            }
+
             override fun onMessage(webSocket: WebSocket, text: String) {
                 handleMessage(text)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                // Auto-reconnect after delay
-                Thread.sleep(3000)
+                // M-8: Exponential backoff reconnection
+                reconnectAttempts++
+                val delay = minOf(
+                    MAX_RECONNECT_DELAY_MS,
+                    BASE_RECONNECT_DELAY_MS * (1L shl minOf(reconnectAttempts - 1, 6))
+                )
+                Thread.sleep(delay)
                 connect()
             }
         })
@@ -41,6 +61,7 @@ class NostrRelayConnection(
     fun disconnect() {
         webSocket?.close(1000, "Bye")
         webSocket = null
+        reconnectAttempts = 0
         subscriptionCallbacks.clear()
     }
 

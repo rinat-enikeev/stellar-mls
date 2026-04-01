@@ -83,6 +83,9 @@ fun CreateGroupScreen(
 
             Button(
                 onClick = {
+                    // M-15: Sanitize group name before creation
+                    val sanitized = sanitizeGroupName(viewModel.groupName) ?: return@Button
+                    viewModel.groupName = sanitized
                     viewModel.createGroup(keyManager)
                     viewModel.createdGroup?.let { group ->
                         onGroupCreated(group)
@@ -188,4 +191,14 @@ private sealed class OnChainPublishStatus {
     object Publishing : OnChainPublishStatus()
     object Published : OnChainPublishStatus()
     data class Failed(val reason: String) : OnChainPublishStatus()
+}
+
+/** M-15: Sanitize group name — strip control characters and enforce length limit. */
+internal fun sanitizeGroupName(name: String): String? {
+    val trimmed = name.trim()
+    // Remove Unicode control characters and zero-width characters
+    val sanitized = trimmed.filter { ch ->
+        !ch.isISOControl() && ch.category != CharCategory.FORMAT
+    }
+    return if (sanitized.isNotEmpty() && sanitized.length <= 100) sanitized else null
 }

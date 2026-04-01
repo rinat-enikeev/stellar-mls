@@ -19,7 +19,10 @@ class NostrMessageTransport(
     private val keyManager: KeyManager,
     private val relayURLs: List<String> = listOf(
         "wss://relay.damus.io",
-        "wss://nos.lol"
+        "wss://nos.lol",
+        "wss://relay.nostr.band",
+        "wss://relay.snort.social",
+        "wss://nostr.wine"
     )
 ) {
     private val connections = mutableListOf<NostrRelayConnection>()
@@ -136,6 +139,9 @@ class NostrMessageTransport(
                             onMessage?.invoke(group.id, event.pubkey, obj.getString("text"),
                                 event.id, event.createdAt)
                         }
+                        if (!isMember) {
+                            com.stellarmls.chat.SecurityLog.nonMemberMessageRejected(group.id)
+                        }
                         // Non-member messages are silently dropped
                         return
                     }
@@ -145,7 +151,7 @@ class NostrMessageTransport(
                 onMessage?.invoke(group.id, event.pubkey, plaintext, event.id, event.createdAt)
             }
         } catch (_: Exception) {
-            // Decryption failed — event not for this group or corrupted
+            com.stellarmls.chat.SecurityLog.decryptionFailed("group message")
         }
     }
 

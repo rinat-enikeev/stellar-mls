@@ -11,6 +11,10 @@ import com.stellarmls.mls.SEPTier
  *
  * Uses [SEPContractClient] for HTTP-based contract invocations and
  * [SEPProofGenerator] for Groth16 proof generation.
+ *
+ * M-10: Operations that fail due to network errors are retried with exponential
+ * backoff (up to 3 attempts). Groups continue to function in "unverified" mode
+ * when the contract endpoint is unreachable.
  */
 class OnChainService(contractID: String, transport: SEPContractTransport) {
 
@@ -31,6 +35,27 @@ class OnChainService(contractID: String, transport: SEPContractTransport) {
 
     /** Cached proving keys per tier (generated on first use). */
     private val provingKeys = mutableMapOf<SEPTier, ByteArray>()
+
+    companion object {
+        private const val MAX_RETRIES = 3
+        private const val BASE_RETRY_DELAY_MS = 1000L
+    }
+
+    /** Execute a block with exponential backoff retry on IOException. */
+    private fun <T> withRetry(block: () -> T): T {
+        var lastException: Exception? = null
+        for (attempt in 0 until MAX_RETRIES) {
+            try {
+                return block()
+            } catch (e: java.io.IOException) {
+                lastException = e
+                if (attempt < MAX_RETRIES - 1) {
+                    Thread.sleep(BASE_RETRY_DELAY_MS * (1L shl attempt))
+                }
+            }
+        }
+        throw lastException!!
+    }
 
     // -- Proving Key Management --
 
@@ -93,15 +118,17 @@ class OnChainService(contractID: String, transport: SEPContractTransport) {
         val proofBundle = generateProof(members, blsSecretKey, epoch, salt, tier)
         val uncompressedProof = proofForContract(proofBundle.proof)
 
-        return contractClient.createGroup(
-            caller = callerAddress,
-            groupID = groupIDData,
-            commitment = proofBundle.publicInputs.commitment,
-            proof = uncompressedProof,
-            publicInputsCommitment = proofBundle.publicInputs.commitment,
-            epoch = epoch,
-            tier = tier.id
-        )
+        return withRetry {
+            contractClient.createGroup(
+                caller = callerAddress,
+                groupID = groupIDData,
+                commitment = proofBundle.publicInputs.commitment,
+                proof = uncompressedProof,
+                publicInputsCommitment = proofBundle.publicInputs.commitment,
+                epoch = epoch,
+                tier = tier.id
+            )
+        }
     }
 
     /**
@@ -133,19 +160,21 @@ class OnChainService(contractID: String, transport: SEPContractTransport) {
             newRoot, newEpoch, newSalt
         )
 
-        return contractClient.updateCommitment(
-            groupID = groupIDData,
-            newCommitment = newPoseidonCommitment,
-            newEpoch = newEpoch,
-            proof = uncompressedProof,
-            oldCommitment = oldProofBundle.publicInputs.commitment,
-            oldEpoch = oldEpoch
-        )
+        return withRetry {
+            contractClient.updateCommitment(
+                groupID = groupIDData,
+                newCommitment = newPoseidonCommitment,
+                newEpoch = newEpoch,
+                proof = uncompressedProof,
+                oldCommitment = oldProofBundle.publicInputs.commitment,
+                oldEpoch = oldEpoch
+            )
+        }
     }
 
     /** Fetch the current on-chain state for a group. */
     fun fetchOnChainState(groupIDData: ByteArray): SEPCommitmentEntry {
-        return contractClient.getState(groupIDData)
+        return withRetry { contractClient.getState(groupIDData) }
     }
 
     // -- Verification --

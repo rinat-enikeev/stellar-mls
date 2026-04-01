@@ -22,7 +22,7 @@ struct ChatGroup: Identifiable, Codable {
     }
 
     var encryptionKey: SymmetricKey {
-        GroupCrypto.deriveMessageKey(groupSecret: groupSecret)
+        GroupCrypto.deriveMessageKey(groupSecret: groupSecret, epoch: epoch, salt: salt)
     }
 
     /// Group ID as raw bytes (converts hex string back to 32-byte Data).

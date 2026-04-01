@@ -66,6 +66,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     // Salt history for offline recovery: groupID → (epoch → salt)
     private val saltHistory = mutableMapOf<String, MutableMap<Long, ByteArray>>()
+    // Replay protection: processed protocol event IDs (H-7)
+    private val processedProtocolEventIDs = mutableSetOf<String>()
+    // Salt request rate limiting: "senderPubkey:epoch" keys already responded to (H-5)
+    private val saltRequestsResponded = mutableSetOf<String>()
 
     // Transports
     lateinit var transport: NostrMessageTransport
@@ -366,7 +370,17 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     // -- Salt History --
 
     fun storeSalt(groupID: String, epoch: Long, salt: ByteArray) {
-        saltHistory.getOrPut(groupID) { mutableMapOf() }[epoch] = salt
+        val history = saltHistory.getOrPut(groupID) { mutableMapOf() }
+        history[epoch] = salt
+        // Cap to last 64 epochs to prevent memory exhaustion
+        if (history.size > SALT_HISTORY_WINDOW) {
+            val oldest = history.keys.sorted().take(history.size - SALT_HISTORY_WINDOW)
+            for (key in oldest) { history.remove(key) }
+        }
+    }
+
+    companion object {
+        private const val SALT_HISTORY_WINDOW = 64
     }
 
     fun getSalt(groupID: String, epoch: Long): ByteArray? {
@@ -462,33 +476,40 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Set up handler for protocol messages received on the group channel. */
     private fun setupProtocolMessageHandler() {
-        transport.onProtocolMessage = { groupID, json ->
-            try {
-                val obj = JSONObject(json)
-                when (obj.optString("type")) {
-                    SEPGroupStateUpdate.MESSAGE_TYPE -> {
-                        val update = parseStateUpdate(obj)
-                        applyStateUpdate(update, groupID)
-                    }
-                    SEPSaltRequest.MESSAGE_TYPE -> {
-                        val epoch = obj.getLong("epoch")
-                        val salt = getSalt(groupID, epoch)
-                        if (salt != null) {
-                            val group = groups.find { it.id == groupID }
-                            if (group != null) {
-                                val response = SEPSaltResponse(epoch = epoch, salt = salt)
-                                transport.sendProtocolMessage(group, saltResponseToJson(response))
+        transport.onProtocolMessage = { groupID, json, eventID, senderPubkey ->
+            // Replay protection: skip already-processed protocol events (H-7)
+            if (processedProtocolEventIDs.add(eventID)) {
+                try {
+                    val obj = JSONObject(json)
+                    when (obj.optString("type")) {
+                        SEPGroupStateUpdate.MESSAGE_TYPE -> {
+                            val update = parseStateUpdate(obj)
+                            applyStateUpdate(update, groupID)
+                        }
+                        SEPSaltRequest.MESSAGE_TYPE -> {
+                            val epoch = obj.getLong("epoch")
+                            // Rate-limit: respond only once per (sender, epoch) pair (H-5)
+                            val rateKey = "$senderPubkey:$epoch"
+                            if (saltRequestsResponded.add(rateKey)) {
+                                val salt = getSalt(groupID, epoch)
+                                if (salt != null) {
+                                    val group = groups.find { it.id == groupID }
+                                    if (group != null) {
+                                        val response = SEPSaltResponse(epoch = epoch, salt = salt)
+                                        transport.sendProtocolMessage(group, saltResponseToJson(response))
+                                    }
+                                }
                             }
                         }
+                        SEPSaltResponse.MESSAGE_TYPE -> {
+                            val epoch = obj.getLong("epoch")
+                            val saltB64 = obj.getString("salt")
+                            val salt = android.util.Base64.decode(saltB64, android.util.Base64.NO_WRAP)
+                            storeSalt(groupID, epoch, salt)
+                        }
                     }
-                    SEPSaltResponse.MESSAGE_TYPE -> {
-                        val epoch = obj.getLong("epoch")
-                        val saltB64 = obj.getString("salt")
-                        val salt = android.util.Base64.decode(saltB64, android.util.Base64.NO_WRAP)
-                        storeSalt(groupID, epoch, salt)
-                    }
-                }
-            } catch (_: Exception) { }
+                } catch (_: Exception) { }
+            }
         }
     }
 

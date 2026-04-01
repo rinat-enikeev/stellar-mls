@@ -28,7 +28,7 @@ class NostrMessageTransport(
 
     var onMessage: ((groupID: String, senderPubkey: String, text: String, eventID: String, timestamp: Long) -> Unit)? = null
     /** Called when a decrypted message is a protocol message (state update, salt request/response). */
-    var onProtocolMessage: ((groupID: String, json: String) -> Unit)? = null
+    var onProtocolMessage: ((groupID: String, json: String, eventID: String, senderPubkey: String) -> Unit)? = null
 
     fun connect() {
         for (url in relayURLs) {
@@ -48,9 +48,14 @@ class NostrMessageTransport(
     fun subscribe(group: ChatGroup) {
         val subID = "grp-${group.id.take(8)}-${UUID.randomUUID().toString().take(8)}"
 
+        // Use a "since" timestamp to prevent historical event flood on subscription.
+        // Default to 5 minutes ago to catch recent messages while avoiding full replay.
+        val sinceTimestamp = (System.currentTimeMillis() / 1000) - 300
+
         val filter = JSONObject().apply {
             put("kinds", JSONArray().put(24114))
             put("#t", JSONArray().put(group.topicTag))
+            put("since", sinceTimestamp)
         }
 
         for (conn in connections) {
@@ -63,7 +68,16 @@ class NostrMessageTransport(
 
     fun send(group: ChatGroup, text: String) {
         val key = group.encryptionKey
-        val envelope = GroupCrypto.encrypt(text, key)
+        // Wrap text with sender BLS pubkey for receiver-side membership verification (H-4)
+        val authenticatedText = try {
+            val wrapper = JSONObject().apply {
+                put("text", text)
+                put("senderBlsPubkey", android.util.Base64.encodeToString(
+                    keyManager.blsPublicKey, android.util.Base64.NO_WRAP))
+            }
+            wrapper.toString()
+        } catch (_: Exception) { text }
+        val envelope = GroupCrypto.encrypt(authenticatedText, key)
 
         val tags = listOf(
             listOf("t", group.topicTag)
@@ -109,15 +123,26 @@ class NostrMessageTransport(
 
             // Distinguish protocol messages from plain-text chat
             if (isProtocolMessage(plaintext)) {
-                onProtocolMessage?.invoke(group.id, plaintext)
+                onProtocolMessage?.invoke(group.id, plaintext, event.id, event.pubkey)
             } else {
-                onMessage?.invoke(
-                    group.id,
-                    event.pubkey,
-                    plaintext,
-                    event.id,
-                    event.createdAt
-                )
+                // Sender authentication (H-4): verify BLS pubkey is in member list
+                try {
+                    val obj = JSONObject(plaintext)
+                    if (obj.has("text") && obj.has("senderBlsPubkey")) {
+                        val blsPubkey = android.util.Base64.decode(
+                            obj.getString("senderBlsPubkey"), android.util.Base64.NO_WRAP)
+                        val isMember = group.members.any { it.publicKeyCompressed.contentEquals(blsPubkey) }
+                        if (isMember) {
+                            onMessage?.invoke(group.id, event.pubkey, obj.getString("text"),
+                                event.id, event.createdAt)
+                        }
+                        // Non-member messages are silently dropped
+                        return
+                    }
+                } catch (_: Exception) { /* Not JSON — fall through to legacy */ }
+
+                // Legacy unverified message (backward compat)
+                onMessage?.invoke(group.id, event.pubkey, plaintext, event.id, event.createdAt)
             }
         } catch (_: Exception) {
             // Decryption failed — event not for this group or corrupted

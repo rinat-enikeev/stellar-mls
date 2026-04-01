@@ -114,11 +114,32 @@ class SEPContractClient(
  * The relayer wraps the payload in a Stellar transaction signed with its own keypair,
  * preventing identity leakage through the transaction signer address (SEP-XXXX §4.1).
  */
+/**
+ * Relayer transport that routes contract invocations through a fee-paying relayer.
+ * The relayer wraps the payload in a Stellar transaction signed with its own keypair,
+ * preventing identity leakage through the transaction signer address (SEP-XXXX §4.1).
+ *
+ * @param pinnedCertificateHashes SHA-256 hashes of the relayer's TLS certificate public keys
+ *        (base64-encoded). When non-empty, connections to relayers whose certificate doesn't
+ *        match are rejected, preventing MITM interception of proofs (H-14).
+ */
 class OkHttpRelayerTransport(
     private val relayerURL: String,
     private val authToken: String? = null,
-    private val client: OkHttpClient = OkHttpClient()
+    pinnedCertificateHashes: List<String> = emptyList(),
+    private val client: OkHttpClient = buildClient(relayerURL, pinnedCertificateHashes)
 ) : SEPContractTransport {
+
+    companion object {
+        private fun buildClient(relayerURL: String, pins: List<String>): OkHttpClient {
+            if (pins.isEmpty()) return OkHttpClient()
+            val host = java.net.URL(relayerURL).host
+            val pinner = okhttp3.CertificatePinner.Builder().apply {
+                for (hash in pins) add(host, "sha256/$hash")
+            }.build()
+            return OkHttpClient.Builder().certificatePinner(pinner).build()
+        }
+    }
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 

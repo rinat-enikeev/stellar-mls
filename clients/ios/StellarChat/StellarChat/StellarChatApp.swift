@@ -250,11 +250,19 @@ final class AppState {
     // MARK: - Salt Distribution
 
     /// Store a salt in the per-group history for offline recovery.
+    private static let saltHistoryWindow = 64
+
     func storeSalt(groupID: String, epoch: UInt64, salt: Data) {
         if saltHistory[groupID] == nil {
             saltHistory[groupID] = [:]
         }
         saltHistory[groupID]?[epoch] = salt
+        // Cap to last 64 epochs to prevent memory exhaustion
+        if let history = saltHistory[groupID], history.count > Self.saltHistoryWindow {
+            let sortedKeys = history.keys.sorted()
+            let toRemove = sortedKeys.prefix(history.count - Self.saltHistoryWindow)
+            for key in toRemove { saltHistory[groupID]?.removeValue(forKey: key) }
+        }
     }
 
     /// Retrieve a salt for a specific epoch from the local history.

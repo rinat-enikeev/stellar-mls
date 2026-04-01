@@ -29,11 +29,15 @@ object GroupCrypto {
         return digest.digest().take(8).toByteArray().toHex()
     }
 
-    /** Derive AES-256-GCM key from group secret via HKDF-SHA256. */
-    fun deriveMessageKey(groupSecret: ByteArray): ByteArray {
-        val salt = "sep-msg-key-v1".toByteArray()
-        val info = "traffic".toByteArray()
-        return hkdf(groupSecret, salt, info, 32)
+    /** Derive AES-256-GCM key bound to current epoch and salt via HKDF-SHA256.
+     *  Key rotates on every membership change, ensuring removed members
+     *  cannot decrypt messages sent after their removal. */
+    fun deriveMessageKey(groupSecret: ByteArray, epoch: Long, salt: ByteArray): ByteArray {
+        // IKM = groupSecret || epoch (big-endian) || salt
+        val epochBytes = ByteArray(8)
+        for (i in 0 until 8) epochBytes[i] = (epoch shr (56 - i * 8) and 0xFF).toByte()
+        val ikm = groupSecret + epochBytes + salt
+        return hkdf(ikm, "sep-msg-key-v1".toByteArray(), "traffic".toByteArray(), 32)
     }
 
     // -- Group message encryption (AES-256-GCM, kind 24114) --

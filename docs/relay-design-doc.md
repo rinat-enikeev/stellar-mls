@@ -162,6 +162,8 @@ The architecture assumes relays may drop traffic, prune old events quickly, or r
 
 ### 7.1 Single-seed device model
 
+> **Status: Not yet implemented.** The current apps derive keys from a Nostr secp256k1 secret via HKDF. BIP39 mnemonic generation, display, and recovery are planned but not yet available. Users currently have no key backup mechanism.
+
 Each device has a BIP39 seed from which it derives all required identities:
 
 - a Stellar key for interacting with the SEP ecosystem

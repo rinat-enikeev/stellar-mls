@@ -22,12 +22,20 @@ enum GroupCrypto {
         return hash.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Derive an AES-256-GCM key for message encryption from the group secret.
-    static func deriveMessageKey(groupSecret: Data) -> SymmetricKey {
-        let salt = Data("sep-msg-key-v1".utf8)
+    /// Derive an AES-256-GCM key for message encryption, bound to the current epoch and salt.
+    /// Key rotates on every membership change (epoch increment + new salt), ensuring
+    /// removed members cannot decrypt messages sent after their removal.
+    static func deriveMessageKey(groupSecret: Data, epoch: UInt64, salt: Data) -> SymmetricKey {
+        // IKM = groupSecret || epoch (big-endian) || salt
+        var ikm = Data()
+        ikm.append(groupSecret)
+        var epochBE = epoch.bigEndian
+        withUnsafeBytes(of: &epochBE) { ikm.append(contentsOf: $0) }
+        ikm.append(salt)
+
         let key = HKDF<SHA256>.deriveKey(
-            inputKeyMaterial: SymmetricKey(data: groupSecret),
-            salt: salt,
+            inputKeyMaterial: SymmetricKey(data: ikm),
+            salt: Data("sep-msg-key-v1".utf8),
             info: Data("traffic".utf8),
             outputByteCount: 32
         )

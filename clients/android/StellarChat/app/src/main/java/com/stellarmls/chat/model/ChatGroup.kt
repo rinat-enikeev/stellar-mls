@@ -28,7 +28,7 @@ data class ChatGroup(
     /** Group ID as raw bytes (hex string → ByteArray). */
     val groupIDData: ByteArray get() = id.hexToBytes()
     val topicTag: String get() = GroupCrypto.hiddenGroupTopic(groupSecret)
-    val encryptionKey: ByteArray get() = GroupCrypto.deriveMessageKey(groupSecret)
+    val encryptionKey: ByteArray get() = GroupCrypto.deriveMessageKey(groupSecret, epoch, salt)
 
     /** Recompute Merkle root and commitment from current member list. */
     fun recomputeCommitment() {

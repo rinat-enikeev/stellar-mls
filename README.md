@@ -273,6 +273,14 @@ The relayer never sees member identities — it just pays fees on behalf of clie
 - Response: same as Soroban RPC response
 - Optional: `Authorization: Bearer <token>` header
 
+**Relayer payload validation (required):**
+The relayer MUST validate payloads before submitting to prevent abuse as a fee-paying proxy for arbitrary transactions:
+- **Whitelist contract address**: Only accept invocations targeting the specific SEP contract ID
+- **Whitelist function names**: Only allow `create_group`, `update_commitment`, `verify_membership`, `deactivate_group`
+- **Validate proof structure**: Verify the proof field is exactly 384 bytes (96 + 192 + 96) before submission
+- **Rate limiting**: Limit requests per bearer token and per IP address
+- **Payload size cap**: Reject payloads exceeding a reasonable size threshold (e.g., 8 KB)
+
 Both mobile SDKs have built-in relayer transport (`SEPRelayerTransport` on iOS, `OkHttpRelayerTransport` on Android). Configure the relayer URL in the app settings and all contract operations route through it transparently.
 
 ### Step 4: Set up Nostr relays

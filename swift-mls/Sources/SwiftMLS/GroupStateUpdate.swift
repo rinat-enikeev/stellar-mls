@@ -124,9 +124,14 @@ public struct SEPProtocolMessage: Codable, Sendable {
 public struct SEPRelayerConfig: Codable, Equatable, Sendable {
     public let relayerURL: URL
     public let authToken: String?
+    /// SHA-256 hashes of the relayer's TLS certificate public keys (base64-encoded).
+    /// When non-empty, the transport will reject connections whose server certificate
+    /// does not match any of the pinned hashes (H-14: TLS certificate pinning).
+    public let pinnedCertificateHashes: [String]
 
-    public init(relayerURL: URL, authToken: String? = nil) {
+    public init(relayerURL: URL, authToken: String? = nil, pinnedCertificateHashes: [String] = []) {
         self.relayerURL = relayerURL
         self.authToken = authToken
+        self.pinnedCertificateHashes = pinnedCertificateHashes
     }
 }

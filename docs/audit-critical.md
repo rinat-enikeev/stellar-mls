@@ -245,3 +245,77 @@ All components build successfully after the fixes:
 | F-3 | Medium | Contract | Added canonical roundtrip check for commitment Fr | +4 |
 | F-4 | Medium | Swift SDK | Added SHA-256 hash to `computeBindingMessage()` | ~3 |
 | F-5 | Low | iOS README | Updated tag references from `sep_topic` to `t` | 2 |
+
+---
+
+## High Severity Findings — Remediation
+
+### H-1: Instance Storage TTL for Admin Key
+**Status:** Already addressed. `bump_group()` already calls `env.storage().instance().extend_ttl(LEDGER_THRESHOLD, LEDGER_BUMP)` (line 560-563). Instance storage is bumped on every group operation.
+
+### H-2: No Epoch Freshness Check in Contract
+**Status:** Already addressed. `update_commitment` requires `new_epoch == current.epoch + 1` (line 346), which prevents both rollback and epoch skipping.
+
+### H-3: Swift SHA-256 Commitment Reimplemented Locally
+**Fix:** Replaced the pure-Swift SHA-256 reimplementation in `SEPCommitmentBuilder.computeSHA256Commitment()` with delegation to `RustBridge.computeSHA256Commitment()`, routing all commitment computation through the Rust core to eliminate divergence risk.
+**File:** `swift-mls/Sources/SwiftMLS/CommitmentBuilder.swift`
+
+### H-4: No Message Authentication on Nostr Group Messages
+**Fix:** Messages now include the sender's compressed BLS public key (`senderBlsPubkey`) in the encrypted content. On receipt, the receiver verifies the BLS pubkey is present in the group's member list before processing. Messages without a valid member BLS key are rejected. Legacy unverified messages are still accepted for backward compatibility.
+**Files:** iOS `NostrMessageTransport.swift`, Android `NostrMessageTransport.kt`
+
+### H-5: No Rate Limiting on Salt Requests
+**Fix:** Both platforms now track `(senderPubkey, epoch)` pairs for which a salt response has already been sent. Duplicate salt requests from the same sender for the same epoch are ignored.
+**Files:** iOS `ChatViewModel.swift`, Android `GroupListViewModel.kt`
+
+### H-6: Encryption Key Derived Without Epoch Binding
+**Fix:** Changed `deriveMessageKey` to include epoch (big-endian) and salt in the HKDF input key material: `HKDF(groupSecret || epoch_BE || salt, salt="sep-msg-key-v1", info="traffic")`. The encryption key now rotates on every membership change, preventing removed members from decrypting new messages.
+**Files:** iOS `GroupCrypto.swift` + `ChatGroup.swift`, Android `GroupCrypto.kt` + `ChatGroup.kt`
+
+### H-7: No Replay Protection on Protocol Messages
+**Fix:** Both platforms now track processed Nostr event IDs for protocol messages. Duplicate events (from relay replay) are skipped. State updates already had epoch-based freshness checks in `applyStateUpdate()`.
+**Files:** iOS `ChatViewModel.swift`, Android `GroupListViewModel.kt`
+
+### H-8: Salt History Unbounded in Memory
+**Fix:** Salt history is now capped to a rolling window of 64 epochs per group on both platforms. When the cap is exceeded, the oldest entries are evicted.
+**Files:** iOS `StellarChatApp.swift`, Android `GroupListViewModel.kt`
+
+### H-9: Proof-to-Contract Format Bridge Not Validated
+**Status:** Already addressed. The Rust core uses arkworks `CanonicalDeserialize::deserialize_compressed` for proof deserialization, which validates points are on the BLS12-381 curve and in the correct subgroup. All proof decompression goes through Rust FFI.
+
+### H-10: BIP39 Mnemonic Not Implemented Despite Documentation Claims
+**Fix:** Added a "Status: Not yet implemented" notice to the relay design doc's BIP39 section. The README and phase-4.md do not claim BIP39 is implemented. The relay-design-doc references are correctly labeled as design targets.
+**File:** `docs/relay-design-doc.md`
+
+### H-11: Relayer Has No Payload Validation
+**Fix:** Added relayer payload validation requirements to the README: whitelist contract address, whitelist function names, validate proof structure (384 bytes), rate limiting, payload size cap.
+**File:** `README.md`
+
+### H-12: Android Nostr Subscription Does Not Filter by Timestamp
+**Fix:** Added `"since"` timestamp to the Android Nostr subscription filter (5 minutes before subscription time), preventing historical event flood on connect.
+**File:** Android `NostrMessageTransport.kt`
+
+### H-13: iOS Nostr Subscription Uses Custom Tag Names
+**Status:** Already fixed in C-4. iOS now uses the standard `t` tag.
+
+### H-14: No TLS Certificate Pinning for Relayer Communication
+**Fix:** Added optional TLS certificate pinning to both platforms' relayer transports. `SEPRelayerConfig` now accepts `pinnedCertificateHashes` (SHA-256 hashes of server public keys). When configured, connections to relayers whose certificate doesn't match are rejected.
+- iOS: `SEPCertificatePinningDelegate` (URLSession delegate) in `ContractClient.swift`
+- Android: OkHttp `CertificatePinner` in `SEPContractClient.kt`
+
+| Finding | Severity | Component | Fix Strategy | Lines Changed |
+|---------|----------|-----------|-------------|---------------|
+| H-1 | High | Contract | Already had instance TTL bump | 0 |
+| H-2 | High | Contract | Already had `new_epoch == current.epoch + 1` check | 0 |
+| H-3 | High | Swift SDK | Delegated SHA-256 commitment to Rust FFI | ~8 |
+| H-4 | High | iOS + Android Transport | Added BLS pubkey in messages, membership check on receive | ~40 |
+| H-5 | High | iOS + Android Protocol | Rate-limit salt responses per (sender, epoch) | ~10 |
+| H-6 | High | iOS + Android Crypto | Epoch+salt bound HKDF key derivation | ~15 |
+| H-7 | High | iOS + Android Protocol | Event ID dedup for protocol messages | ~10 |
+| H-8 | High | iOS + Android State | Salt history capped to 64 epochs | ~10 |
+| H-9 | High | Rust FFI | Already uses arkworks validated deserialization | 0 |
+| H-10 | High | Documentation | Added "not yet implemented" notice for BIP39 | ~3 |
+| H-11 | High | Documentation | Added relayer validation requirements to README | ~7 |
+| H-12 | High | Android Transport | Added `since` timestamp to subscription filter | ~3 |
+| H-13 | High | iOS Transport | Already fixed in C-4 | 0 |
+| H-14 | High | iOS + Android | TLS cert pinning for relayer transports | ~50 |

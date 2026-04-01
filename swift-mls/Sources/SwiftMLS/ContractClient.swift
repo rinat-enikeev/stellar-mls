@@ -1,4 +1,6 @@
+import CryptoKit
 import Foundation
+import Security
 
 public struct SEPContractInvocation<Payload: Encodable & Sendable>: Encodable, Sendable {
     public let contractID: String
@@ -132,15 +134,24 @@ public struct SEPRelayerTransport: SEPContractTransport {
 
     public init(
         config: SEPRelayerConfig,
-        session: URLSession = .shared,
+        session: URLSession? = nil,
         encoder: JSONEncoder = JSONEncoder(),
         decoder: JSONDecoder = JSONDecoder()
     ) {
         self.relayerURL = config.relayerURL
         self.authToken = config.authToken
-        self.session = session
         self.encoder = encoder
         self.decoder = decoder
+
+        // If certificate pinning hashes are provided, create a pinned session (H-14)
+        if let session {
+            self.session = session
+        } else if !config.pinnedCertificateHashes.isEmpty {
+            let delegate = SEPCertificatePinningDelegate(pinnedHashes: config.pinnedCertificateHashes)
+            self.session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+        } else {
+            self.session = .shared
+        }
     }
 
     public func invoke<Payload: Encodable & Sendable, Response: Decodable & Sendable>(
@@ -164,5 +175,46 @@ public struct SEPRelayerTransport: SEPContractTransport {
         }
 
         return try decoder.decode(Response.self, from: data)
+    }
+}
+
+// MARK: - TLS Certificate Pinning (H-14)
+
+/// URLSession delegate that validates the server's TLS certificate public key
+/// against a set of pinned SHA-256 hashes. Rejects connections to relayers
+/// whose certificate doesn't match, preventing MITM interception of proofs.
+final class SEPCertificatePinningDelegate: NSObject, URLSessionDelegate {
+    private let pinnedHashes: Set<String>
+
+    init(pinnedHashes: [String]) {
+        self.pinnedHashes = Set(pinnedHashes)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge
+    ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let serverTrust = challenge.protectionSpace.serverTrust,
+              let chain = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate],
+              let certificate = chain.first
+        else {
+            return (.cancelAuthenticationChallenge, nil)
+        }
+
+        guard let publicKey = SecCertificateCopyKey(certificate),
+              let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, nil) as? Data
+        else {
+            return (.cancelAuthenticationChallenge, nil)
+        }
+
+        let hash = SHA256.hash(data: publicKeyData)
+        let hashBase64 = Data(hash).base64EncodedString()
+
+        if pinnedHashes.contains(hashBase64) {
+            return (.useCredential, URLCredential(trust: serverTrust))
+        } else {
+            return (.cancelAuthenticationChallenge, nil)
+        }
     }
 }

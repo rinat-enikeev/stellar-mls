@@ -13,6 +13,10 @@ final class ChatViewModel {
     private let store: PersistenceStore
     private weak var appState: AppState?
     private var seenIDs: Set<String> = []
+    /// Tracks processed protocol event IDs to prevent replay (H-7).
+    private var processedProtocolEventIDs: Set<String> = []
+    /// Tracks (senderPubkey, epoch) pairs for salt request rate limiting (H-5).
+    private var saltRequestsResponded: Set<String> = []
 
     init(group: ChatGroup, transport: NostrMessageTransport, keyManager: KeyManager, store: PersistenceStore, appState: AppState? = nil) {
         self.group = group
@@ -52,6 +56,10 @@ final class ChatViewModel {
                   let data = json.data(using: .utf8) else { return }
 
             Task { @MainActor in
+                // Replay protection: skip already-processed protocol events (H-7)
+                guard !self.processedProtocolEventIDs.contains(event.id) else { return }
+                self.processedProtocolEventIDs.insert(event.id)
+
                 let decoder = JSONDecoder()
                 let msgType = SEPProtocolMessage.parse(json)
 
@@ -61,15 +69,21 @@ final class ChatViewModel {
                         appState.applyStateUpdate(update, to: group.id)
                     }
                 case SEPSaltRequest.messageType:
-                    if let request = try? decoder.decode(SEPSaltRequest.self, from: data),
-                       let salt = appState.getSalt(groupID: group.id, epoch: request.epoch) {
-                        let response = SEPSaltResponse(epoch: request.epoch, salt: salt)
-                        try? await self.transport.sendProtocolMessage(
-                            response,
-                            topic: group.topicTag,
-                            key: group.encryptionKey,
-                            keyManager: self.keyManager
-                        )
+                    // Rate-limit: respond only once per (sender, epoch) pair (H-5)
+                    if let request = try? decoder.decode(SEPSaltRequest.self, from: data) {
+                        let rateKey = "\(event.pubkey):\(request.epoch)"
+                        guard !self.saltRequestsResponded.contains(rateKey) else { break }
+                        self.saltRequestsResponded.insert(rateKey)
+
+                        if let salt = appState.getSalt(groupID: group.id, epoch: request.epoch) {
+                            let response = SEPSaltResponse(epoch: request.epoch, salt: salt)
+                            try? await self.transport.sendProtocolMessage(
+                                response,
+                                topic: group.topicTag,
+                                key: group.encryptionKey,
+                                keyManager: self.keyManager
+                            )
+                        }
                     }
                 case SEPSaltResponse.messageType:
                     if let response = try? decoder.decode(SEPSaltResponse.self, from: data) {
@@ -90,6 +104,7 @@ final class ChatViewModel {
 
     func startListening(relayURLs: [URL]) async {
         await transport.connect(to: relayURLs)
+        transport.currentMembers = group.members
         transport.subscribe(
             topic: group.topicTag,
             groupID: group.id,

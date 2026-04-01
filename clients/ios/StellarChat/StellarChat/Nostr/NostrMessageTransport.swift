@@ -9,11 +9,15 @@ final class NostrMessageTransport {
     private var activeSubscriptions: [String: Task<Void, Never>] = [:]
 
     /// Callback for received and decrypted plain-text chat messages.
+    /// Parameters: (plaintext, event, senderVerified: true if BLS pubkey is in member list)
     var onMessage: ((String, NostrEvent) -> Void)?
     /// Callback for received protocol messages (state updates, salt requests/responses).
     var onProtocolMessage: ((String, NostrEvent) -> Void)?
     /// Callback for transport-level errors (decryption, relay, encoding).
     var onError: ((String) -> Void)?
+
+    /// Current group members used for sender authentication (H-4).
+    var currentMembers: [SEPGroupMemberLeaf] = []
 
     func connect(to urls: [URL]) async {
         for url in urls {
@@ -68,7 +72,23 @@ final class NostrMessageTransport {
                         if SEPProtocolMessage.parse(plaintext) != nil {
                             self.onProtocolMessage?(plaintext, event)
                         } else {
-                            self.onMessage?(plaintext, event)
+                            // Sender authentication (H-4): verify BLS pubkey is in member list
+                            if let data = plaintext.data(using: .utf8),
+                               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                               let blsPubkeyB64 = json["senderBlsPubkey"] as? String,
+                               let blsPubkey = Data(base64Encoded: blsPubkeyB64),
+                               let text = json["text"] as? String {
+                                // Check membership
+                                let isMember = self.currentMembers.contains { $0.publicKeyCompressed == blsPubkey }
+                                if isMember {
+                                    self.onMessage?(text, event)
+                                } else {
+                                    self.onError?("Message from non-member BLS key — rejected")
+                                }
+                            } else {
+                                // Legacy unverified message (backward compat)
+                                self.onMessage?(plaintext, event)
+                            }
                         }
                     } catch {
                         self.onError?("Decryption failed: \(error.localizedDescription)")
@@ -113,7 +133,23 @@ final class NostrMessageTransport {
         key: SymmetricKey,
         keyManager: KeyManager
     ) async throws {
-        let envelope = try GroupCrypto.encrypt(text, key: key)
+        // Wrap text with sender BLS pubkey for receiver-side membership verification (H-4)
+        let authenticatedText: String
+        if let blsPubkey = try? keyManager.blsPublicKey {
+            let wrapper: [String: Any] = [
+                "text": text,
+                "senderBlsPubkey": blsPubkey.base64EncodedString()
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: wrapper),
+               let json = String(data: data, encoding: .utf8) {
+                authenticatedText = json
+            } else {
+                authenticatedText = text
+            }
+        } else {
+            authenticatedText = text
+        }
+        let envelope = try GroupCrypto.encrypt(authenticatedText, key: key)
         let envelopeData = try JSONEncoder().encode(envelope)
         let content = envelopeData.base64EncodedString()
 

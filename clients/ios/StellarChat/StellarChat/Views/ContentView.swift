@@ -28,6 +28,7 @@ private struct DeepLinkJoinGroupView: View {
     let code: String
     @State private var errorMessage: String?
     @State private var joined = false
+    @State private var isSyncing = false
 
     var body: some View {
         NavigationStack {
@@ -44,7 +45,15 @@ private struct DeepLinkJoinGroupView: View {
                             .foregroundStyle(.red)
                     }
                 }
-                if joined {
+                if isSyncing {
+                    Section {
+                        HStack {
+                            ProgressView()
+                            Text("Syncing with group members…")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } else if joined {
                     Section {
                         Label("Joined successfully!", systemImage: "checkmark.circle")
                             .foregroundStyle(.green)
@@ -55,16 +64,20 @@ private struct DeepLinkJoinGroupView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    if !isSyncing {
+                        Button("Cancel") { dismiss() }
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     if joined {
                         Button("Done") { dismiss() }
                     } else {
                         Button("Join") { joinGroup() }
+                            .disabled(isSyncing)
                     }
                 }
             }
+            .interactiveDismissDisabled(isSyncing)
         }
     }
 
@@ -78,20 +91,31 @@ private struct DeepLinkJoinGroupView: View {
             }
             let codeRelays = invite.relayHints.compactMap(URL.init(string:))
             let mergedRelays = Array(Set(appState.relayURLs + codeRelays))
+            // Add ourselves to the member list so our own messages pass BLS auth
+            var members = invite.members
+            let myLeaf = try appState.keyManager.memberLeaf
+            if !members.contains(where: { $0.publicKeyCompressed == myLeaf.publicKeyCompressed }) {
+                members.append(myLeaf)
+            }
+
             let group = ChatGroup(
                 id: groupIDHex,
                 name: invite.name,
                 groupSecret: invite.groupSecret,
                 createdAt: Date(),
                 relayHints: mergedRelays.isEmpty ? appState.relayURLs : mergedRelays,
-                members: invite.members,
+                members: members,
                 epoch: invite.epoch,
                 salt: invite.salt,
                 commitment: invite.commitment
             )
             appState.addGroup(group)
-            joined = true
-            Task { await appState.announceMemberJoined(group: group) }
+            isSyncing = true
+            Task {
+                await appState.announceMemberJoined(group: group)
+                isSyncing = false
+                joined = true
+            }
         } catch {
             errorMessage = error.localizedDescription
         }

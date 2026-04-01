@@ -36,6 +36,21 @@ final class AppState {
     var deepLinkInviteCode: String?
     let invitationTransport = InvitationTransport()
     var pendingInvitations: [PendingInvitation] = []
+
+    // MARK: - Persistent Chat & Protocol Transport
+
+    /// Single transport for ALL group communication (chat + protocol).
+    /// Lives for the entire app session, independent of any chat screen.
+    private let chatTransport = NostrMessageTransport()
+    /// Chat messages keyed by group ID — always in memory, persisted to store.
+    var chatMessages: [String: [ChatMessage]] = [:]
+    /// Dedup set for chat message event IDs, keyed by group ID.
+    private var seenMessageIDs: [String: Set<String>] = [:]
+    /// Tracks processed protocol event IDs to prevent replay (H-7).
+    private var processedProtocolEventIDs: Set<String> = []
+    /// Tracks (senderPubkey, epoch) pairs for salt request rate limiting (H-5).
+    private var saltRequestsResponded: Set<String> = []
+    private static let maxDedupSetSize = 10_000
     var relayURLs: [URL] {
         didSet { Self.persistRelayURLs(relayURLs) }
     }
@@ -112,29 +127,93 @@ final class AppState {
         for group in groups {
             storeSalt(groupID: group.id, epoch: group.epoch, salt: group.salt)
         }
+
+        // Load persisted chat messages for all groups
+        for group in groups {
+            let msgs = store.loadMessages(groupID: group.id)
+            chatMessages[group.id] = msgs
+            seenMessageIDs[group.id] = Set(msgs.map(\.id))
+        }
+
+        // Set up persistent transport: handles both chat messages and protocol
+        // messages for ALL groups, alive for the entire app session.
+        chatTransport.currentMembers = groups.flatMap(\.members)
+        setupChatHandler()
+        setupProtocolHandler()
+        Task { await connectAndSubscribeAllGroups() }
     }
 
     func addGroup(_ group: ChatGroup) {
         groups.append(group)
         store.saveGroup(group)
+        chatMessages[group.id] = []
+        seenMessageIDs[group.id] = []
+        // Subscribe new group on persistent transport
+        subscribeGroup( group)
     }
 
-    /// Announce ourselves as a new member to the group over the Nostr transport.
-    func announceMemberJoined(group: ChatGroup) async {
+    /// Announce ourselves as a new member and wait for the creator's `SEPGroupStateUpdate`.
+    /// Returns once the state update is received and applied, or after timeout.
+    func announceMemberJoined(group: ChatGroup, timeout: TimeInterval = 30) async {
         do {
             let myLeaf = try keyManager.memberLeaf
+            let myBlsPubkey = myLeaf.publicKeyCompressed
             let announcement = SEPMemberJoined(member: myLeaf)
             let transport = NostrMessageTransport()
             await transport.connect(to: group.relayHints)
-            try await transport.sendProtocolMessage(
-                announcement,
-                topic: group.topicTag,
-                key: group.encryptionKey,
-                keyManager: keyManager
-            )
+
+            // Listen for the state update that includes us
+            let confirmed = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                var resumed = false
+
+                transport.onProtocolMessage = { [weak self] json, _ in
+                    guard let self, !resumed else { return }
+                    guard let data = json.data(using: .utf8),
+                          let update = try? JSONDecoder().decode(SEPGroupStateUpdate.self, from: data),
+                          update.addedMembers.contains(where: { $0.publicKeyCompressed == myBlsPubkey })
+                    else { return }
+
+                    // Apply the state update so we have the new epoch/salt/key
+                    // when opening the chat.
+                    self.applyStateUpdate(update, to: group.id)
+                    resumed = true
+                    continuation.resume(returning: true)
+                }
+
+                transport.subscribe(
+                    topic: group.topicTag,
+                    groupID: group.id,
+                    key: group.encryptionKey
+                )
+
+                // Send announcement after subscribing so we don't miss the response
+                Task {
+                    try? await transport.sendProtocolMessage(
+                        announcement,
+                        topic: group.topicTag,
+                        key: group.encryptionKey,
+                        keyManager: self.keyManager
+                    )
+                }
+
+                // Timeout fallback
+                Task {
+                    try? await Task.sleep(for: .seconds(timeout))
+                    guard !resumed else { return }
+                    resumed = true
+                    continuation.resume(returning: false)
+                }
+            }
+
             await transport.disconnect()
+
+            if !confirmed {
+                // Timed out — group creator may be offline. We can still chat
+                // since we added ourselves locally; creator will process our
+                // announcement when they come online.
+            }
         } catch {
-            // Best-effort announcement — existing members will see us when we send a message
+            // Best-effort — existing members will see us when we send a message
         }
     }
 
@@ -155,6 +234,8 @@ final class AppState {
     func removeGroup(id: String) {
         groups.removeAll { $0.id == id }
         store.deleteGroup(id: id)
+        chatMessages.removeValue(forKey: id)
+        seenMessageIDs.removeValue(forKey: id)
     }
 
     func removePendingInvitation(id: String) {
@@ -467,18 +548,171 @@ final class AppState {
         store.saveGroup(updated)
     }
 
+    // MARK: - Persistent Chat & Protocol Transport
+
+    /// Set up the chat message handler on the persistent transport (runs once at init).
+    private func setupChatHandler() {
+        chatTransport.onMessage = { [weak self] plaintext, event in
+            guard let self else { return }
+            Task { @MainActor in
+                // Find which group by topic tag
+                let topicTag = event.tags.first(where: { $0.first == "t" }).flatMap { $0.dropFirst().first }
+                guard let group = self.groups.first(where: { $0.topicTag == topicTag }) else { return }
+                let groupID = group.id
+
+                guard !(self.seenMessageIDs[groupID]?.contains(event.id) ?? false) else { return }
+                self.seenMessageIDs[groupID, default: []].insert(event.id)
+
+                let msg = ChatMessage(
+                    id: event.id,
+                    groupID: groupID,
+                    senderPubkey: event.pubkey,
+                    text: plaintext,
+                    timestamp: Date(timeIntervalSince1970: TimeInterval(event.createdAt)),
+                    isMine: event.pubkey == self.keyManager.publicKeyHex
+                )
+                self.chatMessages[groupID, default: []].append(msg)
+                self.chatMessages[groupID]?.sort { $0.timestamp < $1.timestamp }
+                self.store.saveMessage(msg)
+
+                if event.createdAt > group.lastEventTimestamp {
+                    self.updateLastEventTimestamp(groupID: groupID, timestamp: event.createdAt)
+                }
+            }
+        }
+
+        chatTransport.onError = { _ in
+            // Transport errors are non-fatal for background operation
+        }
+    }
+
+    /// Send a chat message in a group.
+    func sendMessage(text: String, groupID: String) async throws {
+        guard let group = groups.first(where: { $0.id == groupID }) else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        try await chatTransport.send(
+            text: trimmed,
+            topic: group.topicTag,
+            key: group.encryptionKey,
+            keyManager: keyManager
+        )
+
+        let msg = ChatMessage(
+            id: UUID().uuidString,
+            groupID: groupID,
+            senderPubkey: keyManager.publicKeyHex,
+            text: trimmed,
+            timestamp: Date(),
+            isMine: true
+        )
+        chatMessages[groupID, default: []].append(msg)
+        seenMessageIDs[groupID, default: []].insert(msg.id)
+        store.saveMessage(msg)
+    }
+
+    /// Set up the protocol message handler (runs once at init).
+    private func setupProtocolHandler() {
+        chatTransport.onProtocolMessage = { [weak self] json, event in
+            guard let self,
+                  let data = json.data(using: .utf8) else { return }
+
+            Task { @MainActor in
+                // Replay protection (H-7)
+                guard !self.processedProtocolEventIDs.contains(event.id) else { return }
+                if self.processedProtocolEventIDs.count >= Self.maxDedupSetSize {
+                    self.processedProtocolEventIDs.removeFirst()
+                }
+                self.processedProtocolEventIDs.insert(event.id)
+
+                let decoder = JSONDecoder()
+                let msgType = SEPProtocolMessage.parse(json)
+
+                // Find which group this event belongs to (by matching topic tag)
+                let topicTag = event.tags.first(where: { $0.first == "t" }).flatMap { $0.dropFirst().first }
+                guard let groupID = self.groups.first(where: { $0.topicTag == topicTag })?.id else { return }
+
+                switch msgType {
+                case SEPMemberJoined.messageType:
+                    if let joined = try? decoder.decode(SEPMemberJoined.self, from: data) {
+                        await self.handleMemberJoined(joined, groupID: groupID)
+                        // Resubscribe with new key after epoch change
+                        if let updated = self.groups.first(where: { $0.id == groupID }) {
+                            self.chatTransport.currentMembers = updated.members
+                            self.subscribeGroup( updated)
+                        }
+                    }
+                case SEPGroupStateUpdate.messageType:
+                    if let update = try? decoder.decode(SEPGroupStateUpdate.self, from: data) {
+                        self.applyStateUpdate(update, to: groupID)
+                        if let updated = self.groups.first(where: { $0.id == groupID }) {
+                            self.chatTransport.currentMembers = updated.members
+                            self.subscribeGroup( updated)
+                        }
+                    }
+                case SEPSaltRequest.messageType:
+                    if let request = try? decoder.decode(SEPSaltRequest.self, from: data) {
+                        let rateKey = "\(event.pubkey):\(request.epoch)"
+                        guard !self.saltRequestsResponded.contains(rateKey) else { break }
+                        self.saltRequestsResponded.insert(rateKey)
+                        if let group = self.groups.first(where: { $0.id == groupID }),
+                           let salt = self.getSalt(groupID: groupID, epoch: request.epoch) {
+                            let response = SEPSaltResponse(epoch: request.epoch, salt: salt)
+                            try? await self.chatTransport.sendProtocolMessage(
+                                response, topic: group.topicTag, key: group.encryptionKey, keyManager: self.keyManager)
+                        }
+                    }
+                case SEPSaltResponse.messageType:
+                    if let response = try? decoder.decode(SEPSaltResponse.self, from: data) {
+                        self.storeSalt(groupID: groupID, epoch: response.epoch, salt: response.salt)
+                    }
+                case SEPGroupRenamed.messageType:
+                    if let renamed = try? decoder.decode(SEPGroupRenamed.self, from: data) {
+                        self.applyGroupRenamed(renamed, to: groupID)
+                    }
+                default:
+                    break
+                }
+            }
+        }
+
+        chatTransport.onError = { _ in
+            // Protocol transport errors are non-fatal; chat transport shows errors to user
+        }
+    }
+
+    /// Connect to relays and subscribe all persisted groups for chat + protocol messages.
+    private func connectAndSubscribeAllGroups() async {
+        await chatTransport.connect(to: relayURLs)
+        for group in groups {
+            subscribeGroup(group)
+        }
+    }
+
+    /// Subscribe a single group on the persistent transport (chat + protocol).
+    private func subscribeGroup(_ group: ChatGroup) {
+        chatTransport.currentMembers = groups.flatMap(\.members)
+        chatTransport.subscribe(
+            topic: group.topicTag,
+            groupID: group.id,
+            key: group.encryptionKey,
+            sinceTimestamp: group.lastEventTimestamp > 0 ? group.lastEventTimestamp : nil
+        )
+    }
+
     /// Handle a member_joined announcement: add the joiner and broadcast updated state.
-    func handleMemberJoined(
-        _ joined: SEPMemberJoined,
-        groupID: String,
-        transport: NostrMessageTransport,
-        keyManager: KeyManager
-    ) async {
+    private func handleMemberJoined(_ joined: SEPMemberJoined, groupID: String) async {
         guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
         var group = groups[index]
 
         // Skip if already a member
         guard !group.members.contains(where: { $0.publicKeyCompressed == joined.member.publicKeyCompressed }) else { return }
+
+        // Capture old encryption key BEFORE bumping epoch/salt.
+        // The state update must be encrypted with the current key so all
+        // existing members (including the joiner) can decrypt it.
+        let previousKey = group.encryptionKey
 
         // Add the joiner
         group.members.append(joined.member)
@@ -491,17 +725,21 @@ final class AppState {
         store.saveGroup(group)
         storeSalt(groupID: groupID, epoch: group.epoch, salt: group.salt)
 
-        // Broadcast state update so all members (including the joiner) converge
+        // Sync transport member list so BLS authentication accepts the new member
+        chatTransport.currentMembers = group.members
+
+        // Broadcast state update so all members (including the joiner) converge.
+        // Encrypted with the PREVIOUS key so everyone can read it.
         let update = SEPGroupStateUpdate(
             epoch: group.epoch,
             salt: group.salt,
             addedMembers: [joined.member],
             commitment: group.commitment
         )
-        try? await transport.sendProtocolMessage(
+        try? await chatTransport.sendProtocolMessage(
             update,
             topic: group.topicTag,
-            key: group.encryptionKey,
+            key: previousKey,
             keyManager: keyManager
         )
     }

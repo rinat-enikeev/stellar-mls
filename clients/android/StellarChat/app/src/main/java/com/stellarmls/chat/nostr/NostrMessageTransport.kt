@@ -71,14 +71,12 @@ class NostrMessageTransport(
     fun send(group: ChatGroup, text: String) {
         val key = group.encryptionKey
         // Wrap text with sender BLS pubkey for receiver-side membership verification (H-4)
-        val authenticatedText = try {
-            val wrapper = JSONObject().apply {
-                put("text", text)
-                put("senderBlsPubkey", android.util.Base64.encodeToString(
-                    keyManager.blsPublicKey(), android.util.Base64.NO_WRAP))
-            }
-            wrapper.toString()
-        } catch (_: Exception) { text }
+        val wrapper = JSONObject().apply {
+            put("text", text)
+            put("senderBlsPubkey", android.util.Base64.encodeToString(
+                keyManager.blsPublicKey(), android.util.Base64.NO_WRAP))
+        }
+        val authenticatedText = wrapper.toString()
         val envelope = GroupCrypto.encrypt(authenticatedText, key)
 
         val tags = listOf(
@@ -98,9 +96,15 @@ class NostrMessageTransport(
     }
 
     /** Send a protocol message (state update, salt request/response) to a group. */
-    fun sendProtocolMessage(group: ChatGroup, json: String) {
-        val key = group.encryptionKey
-        val envelope = GroupCrypto.encrypt(json, key)
+    fun sendProtocolMessage(group: ChatGroup, json: String, overrideKey: ByteArray? = null) {
+        val key = overrideKey ?: group.encryptionKey
+        // Wrap with BLS auth like chat messages — receiver unwraps all messages uniformly
+        val wrapper = JSONObject().apply {
+            put("text", json)
+            put("senderBlsPubkey", android.util.Base64.encodeToString(
+                keyManager.blsPublicKey(), android.util.Base64.NO_WRAP))
+        }
+        val envelope = GroupCrypto.encrypt(wrapper.toString(), key)
 
         val tags = listOf(
             listOf("t", group.topicTag)
@@ -123,33 +127,30 @@ class NostrMessageTransport(
             val key = group.encryptionKey
             val plaintext = GroupCrypto.decrypt(event.content, key)
 
-            // Distinguish protocol messages from plain-text chat
-            if (isProtocolMessage(plaintext)) {
-                onProtocolMessage?.invoke(group.id, plaintext, event.id, event.pubkey)
+            // All messages are BLS-wrapped: {"text":"...", "senderBlsPubkey":"..."}
+            // Unwrap first, then check inner text for protocol vs chat.
+            val wrapper = try { JSONObject(plaintext) } catch (_: Exception) { null }
+            val innerText = wrapper?.optString("text")
+            val blsPubkeyB64 = wrapper?.optString("senderBlsPubkey")
+
+            if (innerText.isNullOrEmpty() || blsPubkeyB64.isNullOrEmpty()) {
+                // N-6: Reject messages without BLS sender authentication.
+                com.stellarmls.chat.SecurityLog.nonMemberMessageRejected(group.id)
+                return
+            }
+
+            // Check inner text for protocol messages (state updates, salt, etc.)
+            if (isProtocolMessage(innerText)) {
+                onProtocolMessage?.invoke(group.id, innerText, event.id, event.pubkey)
             } else {
-                // Sender authentication (H-4): verify BLS pubkey is in member list
-                try {
-                    val obj = JSONObject(plaintext)
-                    if (obj.has("text") && obj.has("senderBlsPubkey")) {
-                        val blsPubkey = android.util.Base64.decode(
-                            obj.getString("senderBlsPubkey"), android.util.Base64.NO_WRAP)
-                        val isMember = group.members.any { it.publicKeyCompressed.contentEquals(blsPubkey) }
-                        if (isMember) {
-                            onMessage?.invoke(group.id, event.pubkey, obj.getString("text"),
-                                event.id, event.createdAt)
-                        }
-                        if (!isMember) {
-                            com.stellarmls.chat.SecurityLog.nonMemberMessageRejected(group.id)
-                        }
-                        // Non-member messages are silently dropped
-                        return
-                    }
-                } catch (_: Exception) {
-                    // N-6: Reject messages without BLS sender authentication.
-                    // Legacy unverified messages are no longer accepted to prevent
-                    // bypass of H-4 sender authentication.
+                // Chat message — verify BLS pubkey is in member list (H-4)
+                val blsPubkey = android.util.Base64.decode(blsPubkeyB64, android.util.Base64.NO_WRAP)
+                val isMember = group.members.any { it.publicKeyCompressed.contentEquals(blsPubkey) }
+                if (isMember) {
+                    onMessage?.invoke(group.id, event.pubkey, innerText,
+                        event.id, event.createdAt)
+                } else {
                     com.stellarmls.chat.SecurityLog.nonMemberMessageRejected(group.id)
-                    return
                 }
             }
         } catch (_: Exception) {
@@ -157,7 +158,7 @@ class NostrMessageTransport(
         }
     }
 
-    /** Check if decrypted text is a protocol message (has a "type" field). */
+    /** Check if text is a protocol message (has a "type" field). */
     private fun isProtocolMessage(text: String): Boolean {
         return try {
             val obj = JSONObject(text)

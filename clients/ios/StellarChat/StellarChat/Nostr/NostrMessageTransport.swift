@@ -7,6 +7,9 @@ import SwiftMLS
 final class NostrMessageTransport {
     private var connections: [URL: NostrRelayConnection] = [:]
     private var activeSubscriptions: [String: Task<Void, Never>] = [:]
+    /// Counter to generate unique relay subscription IDs, preventing race
+    /// conditions where an old stream's onTermination CLOSE kills a new REQ.
+    private var subscriptionGeneration: UInt64 = 0
 
     /// Callback for received and decrypted plain-text chat messages.
     /// Parameters: (plaintext, event, senderVerified: true if BLS pubkey is in member list)
@@ -44,75 +47,114 @@ final class NostrMessageTransport {
     /// Subscribe to messages for a group topic on all connected relays.
     /// - Parameter sinceTimestamp: Unix timestamp for catch-up. Defaults to 5 minutes ago.
     func subscribe(topic: String, groupID: String, key: SymmetricKey, sinceTimestamp: Int64? = nil) {
-        let subID = "chat-\(topic)"
+        let topicKey = "chat-\(topic)"
 
-        // Cancel existing subscription for this topic
-        activeSubscriptions[subID]?.cancel()
+        // Cancel existing subscription task for this topic
+        activeSubscriptions[topicKey]?.cancel()
+
+        // Unique relay subscription ID prevents old stream's onTermination
+        // CLOSE from killing the new subscription on the relay.
+        subscriptionGeneration += 1
+        let subID = "chat-\(topic)-\(subscriptionGeneration)"
 
         let since = sinceTimestamp ?? (Int64(Date().timeIntervalSince1970) - 300)
 
+        let conns = Array(connections.values)
         let task = Task { [weak self] in
             guard let self else { return }
-            for (_, conn) in self.connections {
-                let filter: [String: Any] = [
-                    "kinds": [24114],
-                    "#t": [topic],
-                    "since": since,
-                ]
-                let stream = await conn.subscribe(subscriptionID: subID, filter: filter)
-                for await event in stream {
-                    guard !Task.isCancelled else { break }
-
-                    guard let envelopeData = Data(base64Encoded: event.content) else {
-                        self.onError?("Failed to decode base64 event content")
-                        continue
-                    }
-                    guard let envelope = try? JSONDecoder().decode(SealedEnvelope.self, from: envelopeData) else {
-                        self.onError?("Failed to decode sealed envelope")
-                        continue
-                    }
-                    do {
-                        let plaintext = try GroupCrypto.decrypt(envelope, key: key)
-                        // Distinguish protocol messages from plain-text chat
-                        if SEPProtocolMessage.parse(plaintext) != nil {
-                            self.onProtocolMessage?(plaintext, event)
-                        } else {
-                            // Sender authentication (H-4): verify BLS pubkey is in member list
-                            if let data = plaintext.data(using: .utf8),
-                               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                               let blsPubkeyB64 = json["senderBlsPubkey"] as? String,
-                               let blsPubkey = Data(base64Encoded: blsPubkeyB64),
-                               let text = json["text"] as? String {
-                                // Check membership
-                                let isMember = self.currentMembers.contains { $0.publicKeyCompressed == blsPubkey }
-                                if isMember {
-                                    self.onMessage?(text, event)
-                                } else {
-                                    SecurityLog.nonMemberMessageRejected(groupID: groupID)
-                                self.onError?("Message from non-member BLS key — rejected")
-                                }
-                            } else {
-                                // N-6: Reject messages without BLS sender authentication.
-                                // Legacy unverified messages are no longer accepted to prevent
-                                // bypass of H-4 sender authentication.
-                                SecurityLog.nonMemberMessageRejected(groupID: groupID)
-                                self.onError?("Message rejected: missing sender authentication")
-                            }
+            await withTaskGroup(of: Void.self) { taskGroup in
+                for conn in conns {
+                    taskGroup.addTask { [weak self] in
+                        let filter: [String: Any] = [
+                            "kinds": [24114],
+                            "#t": [topic],
+                            "since": since,
+                        ]
+                        let stream = await conn.subscribe(subscriptionID: subID, filter: filter)
+                        for await event in stream {
+                            guard !Task.isCancelled else { break }
+                            guard let self else { break }
+                            self.handleIncomingEvent(event, groupID: groupID, key: key)
                         }
-                    } catch {
-                        SecurityLog.decryptionFailed(context: "group message")
-                        self.onError?("Decryption failed: \(error.localizedDescription)")
                     }
                 }
             }
         }
-        activeSubscriptions[subID] = task
+        activeSubscriptions[topicKey] = task
+    }
+
+    /// Process a single incoming Nostr event: decrypt, unwrap BLS, route to chat or protocol handler.
+    private func handleIncomingEvent(_ event: NostrEvent, groupID: String, key: SymmetricKey) {
+        guard let envelopeData = Data(base64Encoded: event.content) else {
+            onError?("Failed to decode base64 event content")
+            return
+        }
+        guard let envelope = try? JSONDecoder().decode(SealedEnvelope.self, from: envelopeData) else {
+            onError?("Failed to decode sealed envelope")
+            return
+        }
+        do {
+            let plaintext = try GroupCrypto.decrypt(envelope, key: key)
+            guard let wrapperData = plaintext.data(using: .utf8),
+                  let wrapperJSON = try? JSONSerialization.jsonObject(with: wrapperData) as? [String: Any],
+                  let innerText = wrapperJSON["text"] as? String,
+                  let blsPubkeyB64 = wrapperJSON["senderBlsPubkey"] as? String,
+                  let blsPubkey = Data(base64Encoded: blsPubkeyB64)
+            else {
+                SecurityLog.nonMemberMessageRejected(groupID: groupID)
+                onError?("Message rejected: missing sender authentication")
+                return
+            }
+
+            if SEPProtocolMessage.parse(innerText) != nil {
+                applyMemberChanges(from: innerText)
+                onProtocolMessage?(innerText, event)
+            } else {
+                let isMember = currentMembers.contains { $0.publicKeyCompressed == blsPubkey }
+                if isMember {
+                    onMessage?(innerText, event)
+                } else {
+                    SecurityLog.nonMemberMessageRejected(groupID: groupID)
+                    onError?("Message from non-member BLS key — rejected")
+                }
+            }
+        } catch {
+            SecurityLog.decryptionFailed(context: "group message")
+            onError?("Decryption failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Synchronously update currentMembers from protocol messages so the BLS check
+    /// for subsequent chat messages uses the latest member list without waiting for
+    /// the async AppState callback to complete.
+    private func applyMemberChanges(from json: String) {
+        guard let data = json.data(using: .utf8) else { return }
+        let decoder = JSONDecoder()
+
+        // SEPMemberJoined — add the new member
+        if let joined = try? decoder.decode(SEPMemberJoined.self, from: data) {
+            if !currentMembers.contains(where: { $0.publicKeyCompressed == joined.member.publicKeyCompressed }) {
+                currentMembers.append(joined.member)
+            }
+        }
+
+        // SEPGroupStateUpdate — apply added/removed members
+        if let update = try? decoder.decode(SEPGroupStateUpdate.self, from: data) {
+            for removed in update.removedMemberKeys {
+                currentMembers.removeAll { $0.publicKeyCompressed == removed }
+            }
+            for added in update.addedMembers {
+                if !currentMembers.contains(where: { $0.publicKeyCompressed == added.publicKeyCompressed }) {
+                    currentMembers.append(added)
+                }
+            }
+        }
     }
 
     func unsubscribe(topic: String) {
-        let subID = "chat-\(topic)"
-        activeSubscriptions[subID]?.cancel()
-        activeSubscriptions.removeValue(forKey: subID)
+        let topicKey = "chat-\(topic)"
+        activeSubscriptions[topicKey]?.cancel()
+        activeSubscriptions.removeValue(forKey: topicKey)
     }
 
     /// Send an encrypted message to a group.
@@ -144,21 +186,13 @@ final class NostrMessageTransport {
         keyManager: KeyManager
     ) async throws {
         // Wrap text with sender BLS pubkey for receiver-side membership verification (H-4)
-        let authenticatedText: String
-        if let blsPubkey = try? keyManager.blsPublicKey {
-            let wrapper: [String: Any] = [
-                "text": text,
-                "senderBlsPubkey": blsPubkey.base64EncodedString()
-            ]
-            if let data = try? JSONSerialization.data(withJSONObject: wrapper),
-               let json = String(data: data, encoding: .utf8) {
-                authenticatedText = json
-            } else {
-                authenticatedText = text
-            }
-        } else {
-            authenticatedText = text
-        }
+        let blsPubkey = try keyManager.blsPublicKey
+        let wrapper: [String: Any] = [
+            "text": text,
+            "senderBlsPubkey": blsPubkey.base64EncodedString()
+        ]
+        let wrapperData = try JSONSerialization.data(withJSONObject: wrapper)
+        let authenticatedText = String(data: wrapperData, encoding: .utf8)!
         let envelope = try GroupCrypto.encrypt(authenticatedText, key: key)
         let envelopeData = try JSONEncoder().encode(envelope)
         let content = envelopeData.base64EncodedString()

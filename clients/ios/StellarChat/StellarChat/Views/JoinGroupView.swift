@@ -6,6 +6,7 @@ struct JoinGroupView: View {
     @State private var codeText = ""
     @State private var errorMessage: String?
     @State private var joined = false
+    @State private var isSyncing = false
     @State private var showScanner = false
 
     var body: some View {
@@ -37,7 +38,15 @@ struct JoinGroupView: View {
                     }
                 }
 
-                if joined {
+                if isSyncing {
+                    Section {
+                        HStack {
+                            ProgressView()
+                            Text("Syncing with group members…")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } else if joined {
                     Section {
                         Label("Joined successfully!", systemImage: "checkmark.circle")
                             .foregroundStyle(.green)
@@ -48,17 +57,20 @@ struct JoinGroupView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    if !isSyncing {
+                        Button("Cancel") { dismiss() }
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     if joined {
                         Button("Done") { dismiss() }
                     } else {
                         Button("Join") { joinGroup() }
-                            .disabled(codeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .disabled(isSyncing || codeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
             }
+            .interactiveDismissDisabled(isSyncing)
             .sheet(isPresented: $showScanner) {
                 QRScannerView { scannedCode in
                     codeText = scannedCode
@@ -84,23 +96,32 @@ struct JoinGroupView: View {
             // Merge invite code relays with user's relays (union) for maximum overlap
             let mergedRelays = Array(Set(appState.relayURLs + codeRelays))
 
+            // Add ourselves to the member list so our own messages pass BLS auth
+            var members = code.members
+            let myLeaf = try appState.keyManager.memberLeaf
+            if !members.contains(where: { $0.publicKeyCompressed == myLeaf.publicKeyCompressed }) {
+                members.append(myLeaf)
+            }
+
             let group = ChatGroup(
                 id: groupIDHex,
                 name: code.name,
                 groupSecret: code.groupSecret,
                 createdAt: Date(),
                 relayHints: mergedRelays.isEmpty ? appState.relayURLs : mergedRelays,
-                members: code.members,
+                members: members,
                 epoch: code.epoch,
                 salt: code.salt,
                 commitment: code.commitment
             )
             appState.addGroup(group)
-            joined = true
+            isSyncing = true
 
             // Announce ourselves to existing members so they add us
             Task {
                 await appState.announceMemberJoined(group: group)
+                isSyncing = false
+                joined = true
             }
         } catch {
             errorMessage = error.localizedDescription

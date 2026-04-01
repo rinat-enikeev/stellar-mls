@@ -8,6 +8,7 @@ use jni::sys::jbyteArray;
 use jni::JNIEnv;
 
 use ark_bls12_381::{Bls12_381, Fr};
+use ark_ff::PrimeField;
 use ark_groth16::ProvingKey;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use k256::schnorr::{signature::hazmat::PrehashSigner, Signature, SigningKey, VerifyingKey};
@@ -78,6 +79,19 @@ fn parse_fr(bytes: &[u8]) -> Result<Fr, String> {
         .try_into()
         .map_err(|_| "field element conversion failed".to_string())?;
     bytes_be_to_field_checked::<Fr>(&array)
+}
+
+/// Parse a secret key as a field element, allowing non-canonical values.
+/// See `read_fr_secret_key` in ffi.rs for rationale.
+fn parse_fr_secret_key(bytes: &[u8]) -> Result<Fr, String> {
+    if bytes.len() != FR_BYTES {
+        return Err(format!(
+            "secret key must be {} bytes, got {}",
+            FR_BYTES,
+            bytes.len()
+        ));
+    }
+    Ok(Fr::from_be_bytes_mod_order(bytes))
 }
 
 fn parse_members(
@@ -157,7 +171,7 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_computeLeafHash(
 ) -> jbyteArray {
     let sk = get_bytes(&mut env, &secret_key);
     run_jni(&mut env, move || {
-        let fr = parse_fr(&sk)?;
+        let fr = parse_fr_secret_key(&sk)?;
         let leaf = prover::compute_leaf_hash(&fr);
         Ok(field_to_bytes_be(&leaf).to_vec())
     })
@@ -171,7 +185,7 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_computePublicKey(
 ) -> jbyteArray {
     let sk = get_bytes(&mut env, &secret_key);
     run_jni(&mut env, move || {
-        let fr = parse_fr(&sk)?;
+        let fr = parse_fr_secret_key(&sk)?;
         Ok(compressed_public_key_bytes(&fr).to_vec())
     })
 }
@@ -365,7 +379,7 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_generateMembershipProo
         let proving_key_obj = ProvingKey::<Bls12_381>::deserialize_compressed(&pk_key_bytes[..])
             .map_err(|e| e.to_string())?;
         let members = parse_members(&pk_bytes, &lh_bytes)?;
-        let secret_key_fr = parse_fr(&sk_bytes)?;
+        let secret_key_fr = parse_fr_secret_key(&sk_bytes)?;
         if salt_bytes.len() != SALT_LEN {
             return Err(format!("salt must be {} bytes", SALT_LEN));
         }

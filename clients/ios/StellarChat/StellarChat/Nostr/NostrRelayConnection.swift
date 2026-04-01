@@ -118,10 +118,12 @@ actor NostrRelayConnection {
                 handleMessage(text)
             } catch {
                 // Connection lost — reconnect with exponential backoff (M-8)
-                isConnected = false
-                webSocketTask = nil
+                // Cancel heartbeat first to prevent pings on a dead task.
                 pingTask?.cancel()
                 pingTask = nil
+                isConnected = false
+                webSocketTask?.cancel(with: .abnormalClosure, reason: nil)
+                webSocketTask = nil
                 reconnectAttempts += 1
                 let delay = min(
                     Self.maxReconnectDelay,
@@ -134,14 +136,24 @@ actor NostrRelayConnection {
         }
     }
 
-    /// Periodic WebSocket ping to detect stale connections (M-8).
+    /// Periodic heartbeat to detect stale connections (M-8).
+    ///
+    /// Uses a no-op Nostr CLOSE frame instead of `sendPing` because
+    /// `URLSessionWebSocketTask.sendPing` has a CFNetwork bug: the pong
+    /// handler fires on CFNetwork's internal dispatch queue after the
+    /// task is cancelled, dereferencing a nil `nw_connection` (SEGFAULT).
+    /// A regular `.send()` doesn't have this issue — if the connection
+    /// is dead, the send throws and the receive loop handles reconnection.
     private func startHeartbeat() {
         pingTask?.cancel()
         pingTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(Self.pingInterval))
                 guard !Task.isCancelled else { break }
-                try? await self?.webSocketTask?.sendPing(pongReceiveHandler: { _ in })
+                guard let task = await self?.webSocketTask,
+                      task.state == .running else { break }
+                // CLOSE for a non-existent subscription is a harmless no-op on any relay.
+                try? await task.send(.string("[\"CLOSE\",\"__hb\"]"))
             }
         }
     }

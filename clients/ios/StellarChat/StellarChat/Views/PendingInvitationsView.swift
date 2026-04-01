@@ -5,6 +5,8 @@ struct PendingInvitationsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var verificationResults: [String: OnChainVerificationResult] = [:]
     @State private var verifyingIDs: Set<String> = []
+    @State private var syncingID: String?
+    @State private var syncedID: String?
 
     var body: some View {
         NavigationStack {
@@ -51,21 +53,39 @@ struct PendingInvitationsView: View {
                                     }
                                 }
 
-                                HStack(spacing: 12) {
-                                    Button("Accept") {
-                                        acceptInvitation(invitation)
+                                if syncingID == invitation.id {
+                                    HStack(spacing: 8) {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                        Text("Syncing with group members…")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
                                     }
-                                    .buttonStyle(.borderedProminent)
-                                    .controlSize(.small)
+                                    .padding(.top, 4)
+                                } else if syncedID == invitation.id {
+                                    Label("Joined successfully!", systemImage: "checkmark.circle")
+                                        .font(.caption)
+                                        .foregroundStyle(.green)
+                                        .padding(.top, 4)
+                                } else {
+                                    HStack(spacing: 12) {
+                                        Button("Accept") {
+                                            acceptInvitation(invitation)
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .controlSize(.small)
+                                        .disabled(syncingID != nil)
 
-                                    Button("Decline") {
-                                        declineInvitation(invitation)
+                                        Button("Decline") {
+                                            declineInvitation(invitation)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                        .tint(.red)
+                                        .disabled(syncingID != nil)
                                     }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
-                                    .tint(.red)
+                                    .padding(.top, 4)
                                 }
-                                .padding(.top, 4)
                             }
                             .padding(.vertical, 4)
                             .task {
@@ -80,8 +100,10 @@ struct PendingInvitationsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .disabled(syncingID != nil)
                 }
             }
+            .interactiveDismissDisabled(syncingID != nil)
         }
     }
 
@@ -154,8 +176,22 @@ struct PendingInvitationsView: View {
             group.isPublishedOnChain = true
         }
 
+        // Add ourselves to the member list so our messages pass BLS auth
+        if let myLeaf = try? appState.keyManager.memberLeaf,
+           !group.members.contains(where: { $0.publicKeyCompressed == myLeaf.publicKeyCompressed }) {
+            group.members.append(myLeaf)
+        }
+
         appState.addGroup(group)
-        appState.removePendingInvitation(id: invitation.id)
+        syncingID = invitation.id
+
+        // Announce and wait for state update confirmation
+        Task {
+            await appState.announceMemberJoined(group: group)
+            syncingID = nil
+            syncedID = invitation.id
+            appState.removePendingInvitation(id: invitation.id)
+        }
     }
 
     private func declineInvitation(_ invitation: PendingInvitation) {

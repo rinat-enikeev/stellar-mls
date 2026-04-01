@@ -4,6 +4,7 @@ use std::ptr;
 use std::slice;
 
 use ark_bls12_381::{Bls12_381, Fr};
+use ark_ff::PrimeField;
 use ark_groth16::ProvingKey;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use k256::schnorr::{signature::hazmat::PrehashSigner, Signature, SigningKey, VerifyingKey};
@@ -107,6 +108,17 @@ fn read_fr(bytes: &[u8]) -> Result<Fr, String> {
     bytes_be_to_field_checked::<Fr>(&array)
 }
 
+/// Read a secret key as a field element, allowing non-canonical values.
+///
+/// Secret keys are private witnesses — any valid scalar works. Unlike public
+/// inputs (roots, commitments), there is no security benefit to rejecting
+/// non-canonical secret keys. This avoids failures when the client generates
+/// random 32-byte keys that happen to be >= the field modulus (~50% chance).
+fn read_fr_secret_key(bytes: &[u8]) -> Result<Fr, String> {
+    require_len("secret key", bytes.len(), FR_BYTES)?;
+    Ok(Fr::from_be_bytes_mod_order(bytes))
+}
+
 fn read_array_32(bytes: &[u8], label: &str) -> Result<[u8; 32], String> {
     require_len(label, bytes.len(), 32)?;
     bytes
@@ -201,7 +213,7 @@ pub extern "C" fn sep_compute_leaf_hash(
 ) -> bool {
     run_ffi(out_error, || {
         let secret_key_bytes = read_bytes(secret_key_ptr, secret_key_len, "secret key")?;
-        let secret_key = read_fr(secret_key_bytes)?;
+        let secret_key = read_fr_secret_key(secret_key_bytes)?;
         let leaf = prover::compute_leaf_hash(&secret_key);
         write_buffer(out_leaf_hash, field_to_bytes_be(&leaf).to_vec())
     })
@@ -216,7 +228,7 @@ pub extern "C" fn sep_compute_public_key(
 ) -> bool {
     run_ffi(out_error, || {
         let secret_key_bytes = read_bytes(secret_key_ptr, secret_key_len, "secret key")?;
-        let secret_key = read_fr(secret_key_bytes)?;
+        let secret_key = read_fr_secret_key(secret_key_bytes)?;
         let public_key = compressed_public_key_bytes(&secret_key);
         write_buffer(out_public_key, public_key.to_vec())
     })
@@ -442,7 +454,7 @@ pub extern "C" fn sep_generate_membership_proof(
         let public_keys = read_public_key_vector(public_key_bytes)?;
         let leaf_hashes = read_field_vector(leaf_hash_bytes)?;
         let members = build_members(public_keys, leaf_hashes)?;
-        let secret_key = read_fr(secret_key_bytes)?;
+        let secret_key = read_fr_secret_key(secret_key_bytes)?;
         let salt = read_salt(salt_bytes)?;
 
         let input = ProverInput {

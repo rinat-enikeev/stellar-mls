@@ -2,7 +2,6 @@ import SwiftUI
 
 struct ChatView: View {
     @Bindable var viewModel: ChatViewModel
-    @Environment(AppState.self) private var appState
 
     var body: some View {
         VStack(spacing: 0) {
@@ -47,14 +46,8 @@ struct ChatView: View {
             }
             .padding()
         }
-        .navigationTitle(viewModel.group.name)
+        .navigationTitle(viewModel.group?.name ?? "Chat")
         .navigationBarTitleDisplayMode(.inline)
-        .task {
-            await viewModel.startListening(relayURLs: appState.relayURLs)
-        }
-        .onDisappear {
-            Task { await viewModel.stopListening() }
-        }
         .alert("Error", isPresented: Binding(
             get: { viewModel.errorMessage != nil },
             set: { if !$0 { viewModel.dismissError() } }

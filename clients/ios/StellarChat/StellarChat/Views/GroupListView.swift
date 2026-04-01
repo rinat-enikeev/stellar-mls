@@ -71,13 +71,11 @@ struct GroupListView: View {
         }
         .navigationTitle("Stellar Chat")
         .navigationDestination(for: String.self) { groupID in
-            if let group = appState.groups.first(where: { $0.id == groupID }) {
+            if appState.groups.contains(where: { $0.id == groupID }) {
                 ChatView(
                     viewModel: ChatViewModel(
-                        group: group,
-                        transport: NostrMessageTransport(),
-                        keyManager: appState.keyManager,
-                        store: appState.store
+                        groupID: groupID,
+                        appState: appState
                     )
                 )
             }

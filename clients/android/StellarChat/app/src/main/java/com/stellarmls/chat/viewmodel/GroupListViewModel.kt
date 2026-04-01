@@ -453,9 +453,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /** Broadcast a state update to all members via the encrypted group channel. */
-    fun broadcastStateUpdate(group: ChatGroup, update: SEPGroupStateUpdate) {
+    fun broadcastStateUpdate(group: ChatGroup, update: SEPGroupStateUpdate, overrideKey: ByteArray? = null) {
         val json = stateUpdateToJson(update)
-        transport.sendProtocolMessage(group, json)
+        transport.sendProtocolMessage(group, json, overrideKey)
     }
 
     /** Apply a received state update to a local group. */
@@ -521,7 +521,12 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         // Skip if already a member
         if (group.members.any { it.publicKeyCompressed.contentEquals(member.publicKeyCompressed) }) return
 
-        // Add the joiner
+        // Capture old encryption key BEFORE bumping epoch/salt.
+        // The state update must be encrypted with the current key so all
+        // existing members (including the joiner) can decrypt it.
+        val previousKey = group.encryptionKey
+
+        // Add the joiner (bumps epoch and salt internally)
         group.addMember(member)
 
         groups[index] = group
@@ -530,14 +535,14 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             try { store.saveGroup(group) } catch (_: Exception) { }
         }
 
-        // Broadcast state update so all members (including the joiner) converge
+        // Broadcast state update encrypted with the PREVIOUS key so everyone can read it
         val update = SEPGroupStateUpdate(
             epoch = group.epoch,
             salt = group.salt,
             addedMembers = listOf(member),
             commitment = group.commitment
         )
-        broadcastStateUpdate(group, update)
+        broadcastStateUpdate(group, update, overrideKey = previousKey)
     }
 
     /** Apply a group rename received via protocol message. */

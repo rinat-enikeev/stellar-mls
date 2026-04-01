@@ -14,9 +14,10 @@ struct BootstrapPayload: Codable, Equatable {
     let tierRawValue: Int
     let commitment: Data?
     let senderNostrPubkey: String
+    let senderAttestation: KeyAttestation?
 
-    /// Build a bootstrap payload from a ChatGroup.
-    static func from(group: ChatGroup, senderPubkey: String) -> BootstrapPayload {
+    /// Build a bootstrap payload from a ChatGroup, including the sender's key attestation.
+    static func from(group: ChatGroup, senderPubkey: String, attestation: KeyAttestation? = nil) -> BootstrapPayload {
         BootstrapPayload(
             groupID: Data(hexString: group.id),
             groupSecret: group.groupSecret,
@@ -27,7 +28,8 @@ struct BootstrapPayload: Codable, Equatable {
             salt: group.salt,
             tierRawValue: group.tier.rawValue,
             commitment: group.commitment,
-            senderNostrPubkey: senderPubkey
+            senderNostrPubkey: senderPubkey,
+            senderAttestation: attestation
         )
     }
 

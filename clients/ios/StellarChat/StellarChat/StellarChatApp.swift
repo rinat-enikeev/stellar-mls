@@ -38,6 +38,23 @@ final class AppState {
     }
     var isContractConfigured: Bool { onChainService != nil }
 
+    // MARK: - Relayer (Fee Decoupling)
+
+    var relayerURL: String {
+        didSet { UserDefaults.standard.set(relayerURL, forKey: Self.relayerURLKey) }
+    }
+    var relayerAuthToken: String {
+        didSet { UserDefaults.standard.set(relayerAuthToken, forKey: Self.relayerAuthTokenKey) }
+    }
+    var isRelayerConfigured: Bool {
+        !relayerURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    // MARK: - Salt History (for offline recovery)
+
+    /// Per-group salt history keyed by group ID, mapping epoch → salt.
+    private var saltHistory: [String: [UInt64: Data]] = [:]
+
     private static let defaultRelays: [URL] = [
         URL(string: "wss://relay.damus.io")!,
         URL(string: "wss://nos.lol")!,
@@ -50,7 +67,14 @@ final class AppState {
         self.relayURLs = Self.loadRelayURLs()
         self.contractEndpoint = UserDefaults.standard.string(forKey: Self.contractEndpointKey) ?? ""
         self.contractID = UserDefaults.standard.string(forKey: Self.contractIDKey) ?? ""
+        self.relayerURL = UserDefaults.standard.string(forKey: Self.relayerURLKey) ?? ""
+        self.relayerAuthToken = UserDefaults.standard.string(forKey: Self.relayerAuthTokenKey) ?? ""
         configureContractIfReady()
+
+        // Initialize salt history from current groups
+        for group in groups {
+            storeSalt(groupID: group.id, epoch: group.epoch, salt: group.salt)
+        }
     }
 
     func addGroup(_ group: ChatGroup) {
@@ -200,10 +224,119 @@ final class AppState {
         )
     }
 
+    // MARK: - Group Deactivation
+
+    /// Deactivate a group on-chain. Any member with a valid proof can deactivate.
+    func deactivateGroupOnChain(_ group: ChatGroup) async throws {
+        guard let service = onChainService else {
+            throw ChatError.contractNotConfigured
+        }
+
+        let response = try await service.deactivateGroup(
+            groupIDData: group.groupIDData,
+            members: group.members,
+            blsSecretKey: keyManager.blsSecretKey,
+            epoch: group.epoch,
+            salt: group.salt,
+            tier: group.tier
+        )
+
+        if !response.accepted {
+            throw ChatError.onChainPublishFailed(response.message ?? "Deactivation rejected")
+        }
+    }
+
+    // MARK: - Salt Distribution
+
+    /// Store a salt in the per-group history for offline recovery.
+    func storeSalt(groupID: String, epoch: UInt64, salt: Data) {
+        if saltHistory[groupID] == nil {
+            saltHistory[groupID] = [:]
+        }
+        saltHistory[groupID]?[epoch] = salt
+    }
+
+    /// Retrieve a salt for a specific epoch from the local history.
+    func getSalt(groupID: String, epoch: UInt64) -> Data? {
+        saltHistory[groupID]?[epoch]
+    }
+
+    /// Build a state update message for broadcasting after a membership change.
+    func buildStateUpdate(
+        group: ChatGroup,
+        addedMembers: [SEPGroupMemberLeaf] = [],
+        removedMemberKeys: [Data] = []
+    ) -> SEPGroupStateUpdate {
+        let attestation: SEPKeyAttestationPayload?
+        if let att = try? keyManager.createAttestation() {
+            attestation = SEPKeyAttestationPayload(
+                blsPubkey: att.blsPubkey,
+                ed25519Pubkey: att.ed25519Pubkey,
+                signature: att.signature
+            )
+        } else {
+            attestation = nil
+        }
+
+        return SEPGroupStateUpdate(
+            epoch: group.epoch,
+            salt: group.salt,
+            addedMembers: addedMembers,
+            removedMemberKeys: removedMemberKeys,
+            commitment: group.commitment,
+            senderAttestation: attestation
+        )
+    }
+
+    /// Apply a received state update to a local group.
+    func applyStateUpdate(_ update: SEPGroupStateUpdate, to groupID: String) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        var group = groups[index]
+
+        // Only apply if the update is newer
+        guard update.epoch > group.epoch else { return }
+
+        // Apply member changes
+        for removed in update.removedMemberKeys {
+            group.members.removeAll { $0.publicKeyCompressed == removed }
+        }
+        for added in update.addedMembers {
+            if !group.members.contains(where: { $0.publicKeyCompressed == added.publicKeyCompressed }) {
+                group.members.append(added)
+            }
+        }
+        group.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
+
+        group.epoch = update.epoch
+        group.salt = update.salt
+        if let commitment = update.commitment {
+            group.commitment = commitment
+        }
+
+        // Verify sender attestation if present
+        if let att = update.senderAttestation {
+            let attestation = KeyAttestation(
+                blsPubkey: att.blsPubkey,
+                ed25519Pubkey: att.ed25519Pubkey,
+                signature: att.signature
+            )
+            if !KeyManager.verifyAttestation(attestation) {
+                // Attestation invalid — skip this update
+                return
+            }
+        }
+
+        groups[index] = group
+        store.saveGroup(group)
+        storeSalt(groupID: groupID, epoch: update.epoch, salt: update.salt)
+    }
+
     // MARK: - Contract Configuration
 
     private static let contractEndpointKey = "com.stellarmls.chat.contractEndpoint"
     private static let contractIDKey = "com.stellarmls.chat.contractID"
+    private static let relayerURLKey = "com.stellarmls.chat.relayerURL"
+    private static let relayerAuthTokenKey = "com.stellarmls.chat.relayerAuthToken"
 
     func configureContract() {
         configureContractIfReady()
@@ -221,7 +354,13 @@ final class AppState {
             return
         }
 
-        onChainService = OnChainService(contractID: id, endpoint: url)
+        if isRelayerConfigured, let relayerURL = URL(string: relayerURL.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            let token = relayerAuthToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            let config = SEPRelayerConfig(relayerURL: relayerURL, authToken: token.isEmpty ? nil : token)
+            onChainService = OnChainService(contractID: id, relayerConfig: config)
+        } else {
+            onChainService = OnChainService(contractID: id, endpoint: url)
+        }
     }
 
     // MARK: - Invitation Listener

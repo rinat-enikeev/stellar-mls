@@ -43,6 +43,12 @@ actor OnChainService {
         self.contractClient = SEPContractClient(contractID: contractID, transport: transport)
     }
 
+    /// Initialize with a relayer transport for fee-decoupled submission.
+    init(contractID: String, relayerConfig: SEPRelayerConfig) {
+        let transport = SEPRelayerTransport(config: relayerConfig)
+        self.contractClient = SEPContractClient(contractID: contractID, transport: transport)
+    }
+
     // MARK: - Proving Key Management
 
     /// Generate or return a cached proving key for the given tier.
@@ -225,6 +231,36 @@ actor OnChainService {
             }
             return .error(message)
         }
+    }
+
+    /// Deactivate a group on-chain. Requires a valid ZK proof of membership.
+    ///
+    /// Any authorized member can deactivate. The contract sets `active = false`,
+    /// preventing further commitment updates.
+    func deactivateGroup(
+        groupIDData: Data,
+        members: [SEPGroupMemberLeaf],
+        blsSecretKey: Data,
+        epoch: UInt64,
+        salt: Data,
+        tier: SEPTier
+    ) async throws -> SEPSubmissionResponse {
+        let proofBundle = try generateProof(
+            members: members,
+            blsSecretKey: blsSecretKey,
+            epoch: epoch,
+            salt: salt,
+            tier: tier
+        )
+
+        let uncompressedProof = try proofForContract(proofBundle.proof)
+
+        let request = SEPDeactivateGroupRequest(
+            groupID: groupIDData,
+            proof: uncompressedProof,
+            publicInputs: proofBundle.publicInputs
+        )
+        return try await contractClient.deactivateGroup(request)
     }
 
     /// Verify membership via the on-chain contract (read-only).

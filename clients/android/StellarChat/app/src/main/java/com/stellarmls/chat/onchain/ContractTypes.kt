@@ -101,6 +101,21 @@ fun buildVerifyMembershipPayload(
     })
 }
 
+/** JSON builder for deactivate_group request payload. */
+fun buildDeactivateGroupPayload(
+    groupID: ByteArray,
+    proof: ByteArray,
+    commitment: ByteArray,
+    epoch: Long
+): JSONObject = JSONObject().apply {
+    put("groupID", groupID.toBase64())
+    put("proof", proof.toBase64())
+    put("publicInputs", JSONObject().apply {
+        put("commitment", commitment.toBase64())
+        put("epoch", epoch)
+    })
+}
+
 /** JSON builder for get_state request payload. */
 fun buildGetStatePayload(groupID: ByteArray): JSONObject = JSONObject().apply {
     put("groupID", groupID.toBase64())

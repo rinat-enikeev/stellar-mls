@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import SwiftMLS
 
 /// Sends and receives encrypted group messages over Nostr relays.
 @Observable
@@ -7,8 +8,10 @@ final class NostrMessageTransport {
     private var connections: [URL: NostrRelayConnection] = [:]
     private var activeSubscriptions: [String: Task<Void, Never>] = [:]
 
-    /// Callback for received and decrypted messages.
+    /// Callback for received and decrypted plain-text chat messages.
     var onMessage: ((String, NostrEvent) -> Void)?
+    /// Callback for received protocol messages (state updates, salt requests/responses).
+    var onProtocolMessage: ((String, NostrEvent) -> Void)?
     /// Callback for transport-level errors (decryption, relay, encoding).
     var onError: ((String) -> Void)?
 
@@ -61,7 +64,12 @@ final class NostrMessageTransport {
                     }
                     do {
                         let plaintext = try GroupCrypto.decrypt(envelope, key: key)
-                        self.onMessage?(plaintext, event)
+                        // Distinguish protocol messages from plain-text chat
+                        if SEPProtocolMessage.parse(plaintext) != nil {
+                            self.onProtocolMessage?(plaintext, event)
+                        } else {
+                            self.onMessage?(plaintext, event)
+                        }
                     } catch {
                         self.onError?("Decryption failed: \(error.localizedDescription)")
                     }
@@ -80,6 +88,27 @@ final class NostrMessageTransport {
     /// Send an encrypted message to a group.
     func send(
         text: String,
+        topic: String,
+        key: SymmetricKey,
+        keyManager: KeyManager
+    ) async throws {
+        try await sendRaw(text, topic: topic, key: key, keyManager: keyManager)
+    }
+
+    /// Send a protocol message (state update, salt request/response) to a group.
+    func sendProtocolMessage<T: Encodable>(
+        _ message: T,
+        topic: String,
+        key: SymmetricKey,
+        keyManager: KeyManager
+    ) async throws {
+        let json = try JSONEncoder().encode(message)
+        let text = String(data: json, encoding: .utf8)!
+        try await sendRaw(text, topic: topic, key: key, keyManager: keyManager)
+    }
+
+    private func sendRaw(
+        _ text: String,
         topic: String,
         key: SymmetricKey,
         keyManager: KeyManager

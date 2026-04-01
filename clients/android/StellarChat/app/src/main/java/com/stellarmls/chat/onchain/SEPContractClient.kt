@@ -90,9 +90,59 @@ class SEPContractClient(
         return SEPVerifyMembershipResponse.fromJson(json)
     }
 
+    fun deactivateGroup(
+        groupID: ByteArray,
+        proof: ByteArray,
+        commitment: ByteArray,
+        epoch: Long
+    ): SEPSubmissionResponse {
+        val payload = buildDeactivateGroupPayload(groupID, proof, commitment, epoch)
+        val json = transport.invoke(contractID, "deactivate_group", payload)
+        return SEPSubmissionResponse.fromJson(json)
+    }
+
     fun getState(groupID: ByteArray): SEPCommitmentEntry {
         val payload = buildGetStatePayload(groupID)
         val json = transport.invoke(contractID, "get_state", payload)
         return SEPCommitmentEntry.fromJson(json)
+    }
+}
+
+/**
+ * Relayer transport that routes contract invocations through a fee-paying relayer.
+ * The relayer wraps the payload in a Stellar transaction signed with its own keypair,
+ * preventing identity leakage through the transaction signer address (SEP-XXXX §4.1).
+ */
+class OkHttpRelayerTransport(
+    private val relayerURL: String,
+    private val authToken: String? = null,
+    private val client: OkHttpClient = OkHttpClient()
+) : SEPContractTransport {
+
+    private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+
+    override fun invoke(contractID: String, function: String, payload: JSONObject): JSONObject {
+        val invocation = JSONObject().apply {
+            put("contractID", contractID)
+            put("function", function)
+            put("payload", payload)
+        }
+
+        val builder = Request.Builder()
+            .url(relayerURL)
+            .post(invocation.toString().toRequestBody(jsonMediaType))
+
+        if (!authToken.isNullOrBlank()) {
+            builder.addHeader("Authorization", "Bearer $authToken")
+        }
+
+        val response = client.newCall(builder.build()).execute()
+        val responseBody = response.body?.string() ?: ""
+
+        if (!response.isSuccessful) {
+            throw IOException("Relayer call failed: ${response.code} $responseBody")
+        }
+
+        return JSONObject(responseBody)
     }
 }

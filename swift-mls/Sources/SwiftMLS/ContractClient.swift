@@ -114,3 +114,55 @@ public struct SEPContractClient {
         )
     }
 }
+
+// MARK: - Relayer Transport (Fee Decoupling)
+
+/// A transport that routes contract invocations through a fee-paying relayer.
+///
+/// The relayer receives the same JSON payload as a direct Soroban RPC call,
+/// but wraps it in a Stellar transaction signed with its own keypair.
+/// This prevents identity leakage through the transaction signer address
+/// (SEP-XXXX §4.1: fee decoupling).
+public struct SEPRelayerTransport: SEPContractTransport {
+    public let relayerURL: URL
+    public let authToken: String?
+    public let session: URLSession
+    public let encoder: JSONEncoder
+    public let decoder: JSONDecoder
+
+    public init(
+        config: SEPRelayerConfig,
+        session: URLSession = .shared,
+        encoder: JSONEncoder = JSONEncoder(),
+        decoder: JSONDecoder = JSONDecoder()
+    ) {
+        self.relayerURL = config.relayerURL
+        self.authToken = config.authToken
+        self.session = session
+        self.encoder = encoder
+        self.decoder = decoder
+    }
+
+    public func invoke<Payload: Encodable & Sendable, Response: Decodable & Sendable>(
+        _ invocation: SEPContractInvocation<Payload>,
+        responseType: Response.Type
+    ) async throws -> Response {
+        var request = URLRequest(url: relayerURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try encoder.encode(invocation)
+
+        let (data, response) = try await session.data(for: request)
+        let httpResponse = response as? HTTPURLResponse
+        let statusCode = httpResponse?.statusCode ?? -1
+        guard (200 ..< 300).contains(statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? "<non-UTF8 body>"
+            throw SEPError.invalidResponse(statusCode: statusCode, body: body)
+        }
+
+        return try decoder.decode(Response.self, from: data)
+    }
+}

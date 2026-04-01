@@ -12,11 +12,21 @@ import com.stellarmls.mls.SEPTier
  * Uses [SEPContractClient] for HTTP-based contract invocations and
  * [SEPProofGenerator] for Groth16 proof generation.
  */
-class OnChainService(contractID: String, endpoint: String) {
+class OnChainService(contractID: String, transport: SEPContractTransport) {
 
     val contractClient = SEPContractClient(
         contractID = contractID,
-        transport = OkHttpSEPContractTransport(endpoint)
+        transport = transport
+    )
+
+    /** Direct endpoint constructor. */
+    constructor(contractID: String, endpoint: String) : this(
+        contractID, OkHttpSEPContractTransport(endpoint)
+    )
+
+    /** Relayer transport constructor for fee-decoupled submission. */
+    constructor(contractID: String, relayerURL: String, authToken: String?) : this(
+        contractID, OkHttpRelayerTransport(relayerURL, authToken)
     )
 
     /** Cached proving keys per tier (generated on first use). */
@@ -180,6 +190,29 @@ class OnChainService(contractID: String, endpoint: String) {
                 OnChainVerificationResult.Error(message)
             }
         }
+    }
+
+    /**
+     * Deactivate a group on-chain. Requires a valid ZK proof of membership.
+     * Any authorized member can deactivate. The contract sets active = false.
+     */
+    fun deactivateGroup(
+        groupIDData: ByteArray,
+        members: List<SEPGroupMemberLeaf>,
+        blsSecretKey: ByteArray,
+        epoch: Long,
+        salt: ByteArray,
+        tier: SEPTier
+    ): SEPSubmissionResponse {
+        val proofBundle = generateProof(members, blsSecretKey, epoch, salt, tier)
+        val uncompressedProof = proofForContract(proofBundle.proof)
+
+        return contractClient.deactivateGroup(
+            groupID = groupIDData,
+            proof = uncompressedProof,
+            commitment = proofBundle.publicInputs.commitment,
+            epoch = epoch
+        )
     }
 
     /**

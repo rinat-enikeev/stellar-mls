@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.stellarmls.chat.crypto.KeyAttestation
 import com.stellarmls.chat.crypto.KeyManager
 import com.stellarmls.chat.model.BootstrapPayload
 import com.stellarmls.chat.model.ChatError
@@ -21,9 +22,16 @@ import com.stellarmls.chat.onchain.OnChainService
 import com.stellarmls.chat.onchain.OnChainVerificationResult
 import com.stellarmls.chat.persistence.PersistenceStore
 import com.stellarmls.mls.SEPCommitmentBuilder
+import com.stellarmls.mls.SEPGroupMemberLeaf
+import com.stellarmls.mls.SEPGroupStateUpdate
+import com.stellarmls.mls.SEPKeyAttestationPayload
+import com.stellarmls.mls.SEPSaltRequest
+import com.stellarmls.mls.SEPSaltResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.security.SecureRandom
 
 class GroupListViewModel(application: Application) : AndroidViewModel(application) {
@@ -44,9 +52,20 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         private set
     private val contractPrefs = application.getSharedPreferences("stellar_contract", Context.MODE_PRIVATE)
 
+    // Relayer configuration (fee decoupling)
+    var relayerURL by mutableStateOf("")
+        private set
+    var relayerAuthToken by mutableStateOf("")
+        private set
+    val isRelayerConfigured: Boolean
+        get() = relayerURL.isNotBlank()
+
     // On-chain
     var onChainService: OnChainService? = null
         private set
+
+    // Salt history for offline recovery: groupID → (epoch → salt)
+    private val saltHistory = mutableMapOf<String, MutableMap<Long, ByteArray>>()
 
     // Transports
     lateinit var transport: NostrMessageTransport
@@ -65,9 +84,11 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             relayURLs.addAll(listOf("wss://relay.damus.io", "wss://nos.lol"))
         }
 
-        // Load contract config
+        // Load contract + relayer config
         contractEndpoint = contractPrefs.getString("endpoint", "") ?: ""
         contractID = contractPrefs.getString("contract_id", "") ?: ""
+        relayerURL = contractPrefs.getString("relayer_url", "") ?: ""
+        relayerAuthToken = contractPrefs.getString("relayer_auth_token", "") ?: ""
 
         // Initialize transports
         transport = NostrMessageTransport(keyManager, relayURLs.toList())
@@ -76,11 +97,14 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         // Initialize on-chain service if configured
         configureContract()
 
-        // Load persisted groups
+        // Load persisted groups and initialize salt history
         viewModelScope.launch {
             try {
                 val loaded = store.loadGroups()
                 groups.addAll(loaded)
+                for (group in loaded) {
+                    storeSalt(group.id, group.epoch, group.salt)
+                }
             } catch (_: Exception) { }
         }
     }
@@ -90,6 +114,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             transport.connect()
             invitationTransport.connect(relayURLs.toList())
             startInboxListener()
+            setupProtocolMessageHandler()
             connected = true
 
             // Subscribe to existing groups
@@ -226,10 +251,29 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     val isContractConfigured: Boolean
         get() = contractEndpoint.isNotBlank() && contractID.isNotBlank()
 
+    /** Save relayer configuration. */
+    fun saveRelayerConfig(url: String, authToken: String) {
+        relayerURL = url.trim()
+        relayerAuthToken = authToken.trim()
+        contractPrefs.edit()
+            .putString("relayer_url", relayerURL)
+            .putString("relayer_auth_token", relayerAuthToken)
+            .apply()
+        configureContract()
+    }
+
     /** Reconfigure the on-chain service when contract settings change. */
     fun configureContract() {
         if (isContractConfigured) {
-            onChainService = OnChainService(contractID, contractEndpoint)
+            onChainService = if (isRelayerConfigured) {
+                OnChainService(
+                    contractID,
+                    relayerURL,
+                    relayerAuthToken.ifBlank { null }
+                )
+            } else {
+                OnChainService(contractID, contractEndpoint)
+            }
         } else {
             onChainService = null
         }
@@ -316,6 +360,250 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 onResult(Result.failure(e))
             }
         }
+    }
+
+    // -- Salt History --
+
+    fun storeSalt(groupID: String, epoch: Long, salt: ByteArray) {
+        saltHistory.getOrPut(groupID) { mutableMapOf() }[epoch] = salt
+    }
+
+    fun getSalt(groupID: String, epoch: Long): ByteArray? {
+        return saltHistory[groupID]?.get(epoch)
+    }
+
+    // -- State Update Protocol --
+
+    /** Build a state update message for broadcasting after a membership change. */
+    fun buildStateUpdate(
+        group: ChatGroup,
+        addedMembers: List<SEPGroupMemberLeaf> = emptyList(),
+        removedMemberKeys: List<ByteArray> = emptyList()
+    ): SEPGroupStateUpdate {
+        val attestation = try {
+            val att = keyManager.createAttestation()
+            SEPKeyAttestationPayload(
+                blsPubkey = att.blsPubkey,
+                ed25519Pubkey = att.ed25519Pubkey,
+                signature = att.signature
+            )
+        } catch (_: Exception) { null }
+
+        return SEPGroupStateUpdate(
+            epoch = group.epoch,
+            salt = group.salt,
+            addedMembers = addedMembers,
+            removedMemberKeys = removedMemberKeys,
+            commitment = group.commitment,
+            senderAttestation = attestation
+        )
+    }
+
+    /** Broadcast a state update to all members via the encrypted group channel. */
+    fun broadcastStateUpdate(group: ChatGroup, update: SEPGroupStateUpdate) {
+        val json = stateUpdateToJson(update)
+        transport.sendProtocolMessage(group, json)
+    }
+
+    /** Apply a received state update to a local group. */
+    fun applyStateUpdate(update: SEPGroupStateUpdate, groupID: String) {
+        val index = groups.indexOfFirst { it.id == groupID }
+        if (index < 0) return
+        val group = groups[index]
+
+        // Only apply if newer
+        if (update.epoch <= group.epoch) return
+
+        // Apply member changes
+        for (removed in update.removedMemberKeys) {
+            group.members.removeAll { it.publicKeyCompressed.contentEquals(removed) }
+        }
+        for (added in update.addedMembers) {
+            if (group.members.none { it.publicKeyCompressed.contentEquals(added.publicKeyCompressed) }) {
+                group.members.add(added)
+            }
+        }
+        group.members.sortWith { a, b ->
+            val aKey = a.publicKeyCompressed
+            val bKey = b.publicKeyCompressed
+            for (i in 0 until minOf(aKey.size, bKey.size)) {
+                val cmp = (aKey[i].toInt() and 0xFF) - (bKey[i].toInt() and 0xFF)
+                if (cmp != 0) return@sortWith cmp
+            }
+            aKey.size - bKey.size
+        }
+
+        group.epoch = update.epoch
+        group.salt = update.salt
+        if (update.commitment != null) {
+            group.commitment = update.commitment
+        }
+
+        // Verify sender attestation if present
+        val senderAtt = update.senderAttestation
+        if (senderAtt != null) {
+            val att = KeyAttestation(
+                blsPubkey = senderAtt.blsPubkey,
+                ed25519Pubkey = senderAtt.ed25519Pubkey,
+                signature = senderAtt.signature
+            )
+            if (!KeyAttestation.verify(att)) {
+                return // Invalid attestation — discard update
+            }
+        }
+
+        groups[index] = group
+        storeSalt(groupID, update.epoch, update.salt)
+        viewModelScope.launch {
+            try { store.saveGroup(group) } catch (_: Exception) { }
+        }
+    }
+
+    /** Set up handler for protocol messages received on the group channel. */
+    private fun setupProtocolMessageHandler() {
+        transport.onProtocolMessage = { groupID, json ->
+            try {
+                val obj = JSONObject(json)
+                when (obj.optString("type")) {
+                    SEPGroupStateUpdate.MESSAGE_TYPE -> {
+                        val update = parseStateUpdate(obj)
+                        applyStateUpdate(update, groupID)
+                    }
+                    SEPSaltRequest.MESSAGE_TYPE -> {
+                        val epoch = obj.getLong("epoch")
+                        val salt = getSalt(groupID, epoch)
+                        if (salt != null) {
+                            val group = groups.find { it.id == groupID }
+                            if (group != null) {
+                                val response = SEPSaltResponse(epoch = epoch, salt = salt)
+                                transport.sendProtocolMessage(group, saltResponseToJson(response))
+                            }
+                        }
+                    }
+                    SEPSaltResponse.MESSAGE_TYPE -> {
+                        val epoch = obj.getLong("epoch")
+                        val saltB64 = obj.getString("salt")
+                        val salt = android.util.Base64.decode(saltB64, android.util.Base64.NO_WRAP)
+                        storeSalt(groupID, epoch, salt)
+                    }
+                }
+            } catch (_: Exception) { }
+        }
+    }
+
+    // -- Group Deactivation --
+
+    /** Deactivate a group on-chain. Any member with a valid proof can deactivate. */
+    fun deactivateGroupOnChain(group: ChatGroup, onResult: (Result<Unit>) -> Unit) {
+        val service = onChainService
+        if (service == null) {
+            onResult(Result.failure(ChatError.ContractNotConfigured))
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val response = withContext(Dispatchers.IO) {
+                    service.deactivateGroup(
+                        groupIDData = group.groupIDData,
+                        members = group.members,
+                        blsSecretKey = keyManager.blsSecretKey,
+                        epoch = group.epoch,
+                        salt = group.salt,
+                        tier = group.tier
+                    )
+                }
+                if (response.accepted) {
+                    onResult(Result.success(Unit))
+                } else {
+                    onResult(Result.failure(
+                        ChatError.OnChainPublishFailed(response.message ?: "Deactivation rejected")
+                    ))
+                }
+            } catch (e: Exception) {
+                onResult(Result.failure(
+                    ChatError.OnChainPublishFailed(e.message ?: "Unknown error")
+                ))
+            }
+        }
+    }
+
+    // -- JSON Helpers --
+
+    private fun stateUpdateToJson(update: SEPGroupStateUpdate): String {
+        val obj = JSONObject()
+        obj.put("type", SEPGroupStateUpdate.MESSAGE_TYPE)
+        obj.put("epoch", update.epoch)
+        obj.put("salt", android.util.Base64.encodeToString(update.salt, android.util.Base64.NO_WRAP))
+        val added = JSONArray()
+        for (m in update.addedMembers) {
+            added.put(JSONObject().apply {
+                put("publicKeyCompressed", android.util.Base64.encodeToString(m.publicKeyCompressed, android.util.Base64.NO_WRAP))
+                put("leafHash", android.util.Base64.encodeToString(m.leafHash, android.util.Base64.NO_WRAP))
+            })
+        }
+        obj.put("addedMembers", added)
+        val removed = JSONArray()
+        for (k in update.removedMemberKeys) {
+            removed.put(android.util.Base64.encodeToString(k, android.util.Base64.NO_WRAP))
+        }
+        obj.put("removedMemberKeys", removed)
+        val commitmentBytes = update.commitment
+        if (commitmentBytes != null) {
+            obj.put("commitment", android.util.Base64.encodeToString(commitmentBytes, android.util.Base64.NO_WRAP))
+        }
+        val att = update.senderAttestation
+        if (att != null) {
+            obj.put("senderAttestation", JSONObject().apply {
+                put("blsPubkey", android.util.Base64.encodeToString(att.blsPubkey, android.util.Base64.NO_WRAP))
+                put("ed25519Pubkey", android.util.Base64.encodeToString(att.ed25519Pubkey, android.util.Base64.NO_WRAP))
+                put("signature", android.util.Base64.encodeToString(att.signature, android.util.Base64.NO_WRAP))
+            })
+        }
+        return obj.toString()
+    }
+
+    private fun saltResponseToJson(response: SEPSaltResponse): String {
+        return JSONObject().apply {
+            put("type", SEPSaltResponse.MESSAGE_TYPE)
+            put("epoch", response.epoch)
+            put("salt", android.util.Base64.encodeToString(response.salt, android.util.Base64.NO_WRAP))
+        }.toString()
+    }
+
+    private fun parseStateUpdate(obj: JSONObject): SEPGroupStateUpdate {
+        val salt = android.util.Base64.decode(obj.getString("salt"), android.util.Base64.NO_WRAP)
+        val addedArr = obj.optJSONArray("addedMembers") ?: JSONArray()
+        val addedMembers = (0 until addedArr.length()).map { i ->
+            val m = addedArr.getJSONObject(i)
+            SEPGroupMemberLeaf(
+                publicKeyCompressed = android.util.Base64.decode(m.getString("publicKeyCompressed"), android.util.Base64.NO_WRAP),
+                leafHash = android.util.Base64.decode(m.getString("leafHash"), android.util.Base64.NO_WRAP)
+            )
+        }
+        val removedArr = obj.optJSONArray("removedMemberKeys") ?: JSONArray()
+        val removedKeys = (0 until removedArr.length()).map { i ->
+            android.util.Base64.decode(removedArr.getString(i), android.util.Base64.NO_WRAP)
+        }
+        val commitment = if (obj.has("commitment")) {
+            android.util.Base64.decode(obj.getString("commitment"), android.util.Base64.NO_WRAP)
+        } else null
+        val attestation = if (obj.has("senderAttestation")) {
+            val att = obj.getJSONObject("senderAttestation")
+            SEPKeyAttestationPayload(
+                blsPubkey = android.util.Base64.decode(att.getString("blsPubkey"), android.util.Base64.NO_WRAP),
+                ed25519Pubkey = android.util.Base64.decode(att.getString("ed25519Pubkey"), android.util.Base64.NO_WRAP),
+                signature = android.util.Base64.decode(att.getString("signature"), android.util.Base64.NO_WRAP)
+            )
+        } else null
+
+        return SEPGroupStateUpdate(
+            epoch = obj.getLong("epoch"),
+            salt = salt,
+            addedMembers = addedMembers,
+            removedMemberKeys = removedKeys,
+            commitment = commitment,
+            senderAttestation = attestation
+        )
     }
 
     override fun onCleared() {

@@ -27,6 +27,8 @@ class NostrMessageTransport(
     private val scope = CoroutineScope(Dispatchers.IO)
 
     var onMessage: ((groupID: String, senderPubkey: String, text: String, eventID: String, timestamp: Long) -> Unit)? = null
+    /** Called when a decrypted message is a protocol message (state update, salt request/response). */
+    var onProtocolMessage: ((groupID: String, json: String) -> Unit)? = null
 
     fun connect() {
         for (url in relayURLs) {
@@ -79,19 +81,56 @@ class NostrMessageTransport(
         }
     }
 
+    /** Send a protocol message (state update, salt request/response) to a group. */
+    fun sendProtocolMessage(group: ChatGroup, json: String) {
+        val key = group.encryptionKey
+        val envelope = GroupCrypto.encrypt(json, key)
+
+        val tags = listOf(
+            listOf("t", group.topicTag)
+        )
+
+        val event = NostrEventBuilder.build(
+            kind = 24114,
+            tags = tags,
+            content = envelope,
+            keyManager = keyManager
+        )
+
+        for (conn in connections) {
+            conn.publish(event)
+        }
+    }
+
     private fun handleEvent(event: NostrEvent, group: ChatGroup) {
         try {
             val key = group.encryptionKey
             val plaintext = GroupCrypto.decrypt(event.content, key)
-            onMessage?.invoke(
-                group.id,
-                event.pubkey,
-                plaintext,
-                event.id,
-                event.createdAt
-            )
+
+            // Distinguish protocol messages from plain-text chat
+            if (isProtocolMessage(plaintext)) {
+                onProtocolMessage?.invoke(group.id, plaintext)
+            } else {
+                onMessage?.invoke(
+                    group.id,
+                    event.pubkey,
+                    plaintext,
+                    event.id,
+                    event.createdAt
+                )
+            }
         } catch (_: Exception) {
             // Decryption failed — event not for this group or corrupted
+        }
+    }
+
+    /** Check if decrypted text is a protocol message (has a "type" field). */
+    private fun isProtocolMessage(text: String): Boolean {
+        return try {
+            val obj = JSONObject(text)
+            obj.has("type")
+        } catch (_: Exception) {
+            false
         }
     }
 }

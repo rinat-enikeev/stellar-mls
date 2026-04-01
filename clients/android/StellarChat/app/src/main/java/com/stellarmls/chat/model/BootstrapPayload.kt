@@ -1,5 +1,6 @@
 package com.stellarmls.chat.model
 
+import com.stellarmls.chat.crypto.KeyAttestation
 import com.stellarmls.mls.SEPCommitmentBuilder
 import com.stellarmls.mls.SEPGroupMemberLeaf
 import com.stellarmls.mls.SEPTier
@@ -21,7 +22,8 @@ data class BootstrapPayload(
     val salt: ByteArray,              // 32 bytes
     val tierRawValue: Int,
     val commitment: ByteArray?,
-    val senderNostrPubkey: String
+    val senderNostrPubkey: String,
+    val senderAttestation: KeyAttestation? = null
 ) {
     /** Convert to a ChatGroup for local storage.
      *  Members are re-sorted by compressed G1 key per SEP-XXXX §2.1
@@ -73,12 +75,19 @@ data class BootstrapPayload(
             membersArr.put(mObj)
         }
         obj.put("members", membersArr)
+        if (senderAttestation != null) {
+            val attObj = JSONObject()
+            attObj.put("blsPubkey", android.util.Base64.encodeToString(senderAttestation.blsPubkey, android.util.Base64.NO_WRAP))
+            attObj.put("ed25519Pubkey", android.util.Base64.encodeToString(senderAttestation.ed25519Pubkey, android.util.Base64.NO_WRAP))
+            attObj.put("signature", android.util.Base64.encodeToString(senderAttestation.signature, android.util.Base64.NO_WRAP))
+            obj.put("senderAttestation", attObj)
+        }
         return obj.toString()
     }
 
     companion object {
-        /** Build a bootstrap payload from a ChatGroup. */
-        fun from(group: ChatGroup, senderPubkey: String): BootstrapPayload {
+        /** Build a bootstrap payload from a ChatGroup, optionally including attestation. */
+        fun from(group: ChatGroup, senderPubkey: String, attestation: KeyAttestation? = null): BootstrapPayload {
             return BootstrapPayload(
                 groupID = group.groupIDData,
                 groupSecret = group.groupSecret,
@@ -89,7 +98,8 @@ data class BootstrapPayload(
                 salt = group.salt,
                 tierRawValue = group.tier.id,
                 commitment = group.commitment,
-                senderNostrPubkey = senderPubkey
+                senderNostrPubkey = senderPubkey,
+                senderAttestation = attestation
             )
         }
 
@@ -110,6 +120,15 @@ data class BootstrapPayload(
                 android.util.Base64.decode(commitmentStr, android.util.Base64.NO_WRAP)
             } else null
 
+            val attestation = if (obj.has("senderAttestation")) {
+                val attObj = obj.getJSONObject("senderAttestation")
+                KeyAttestation(
+                    blsPubkey = android.util.Base64.decode(attObj.getString("blsPubkey"), android.util.Base64.NO_WRAP),
+                    ed25519Pubkey = android.util.Base64.decode(attObj.getString("ed25519Pubkey"), android.util.Base64.NO_WRAP),
+                    signature = android.util.Base64.decode(attObj.getString("signature"), android.util.Base64.NO_WRAP)
+                )
+            } else null
+
             return BootstrapPayload(
                 groupID = android.util.Base64.decode(obj.getString("groupID"), android.util.Base64.NO_WRAP),
                 groupSecret = android.util.Base64.decode(obj.getString("groupSecret"), android.util.Base64.NO_WRAP),
@@ -120,7 +139,8 @@ data class BootstrapPayload(
                 salt = android.util.Base64.decode(obj.getString("salt"), android.util.Base64.NO_WRAP),
                 tierRawValue = obj.getInt("tierRawValue"),
                 commitment = commitment,
-                senderNostrPubkey = obj.getString("senderNostrPubkey")
+                senderNostrPubkey = obj.getString("senderNostrPubkey"),
+                senderAttestation = attestation
             )
         }
     }

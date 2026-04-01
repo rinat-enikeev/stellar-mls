@@ -26,7 +26,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,19 +40,11 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
-    groupName: String,
     viewModel: ChatViewModel,
     onBack: () -> Unit
 ) {
+    val groupName = viewModel.groupName
     val listState = rememberLazyListState()
-
-    LaunchedEffect(Unit) {
-        viewModel.startListening()
-    }
-
-    DisposableEffect(Unit) {
-        onDispose { viewModel.stopListening() }
-    }
 
     // Auto-scroll when new messages arrive
     LaunchedEffect(viewModel.messages.size) {

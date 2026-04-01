@@ -79,19 +79,16 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
             arguments = listOf(navArgument("groupId") { type = NavType.StringType })
         ) { backStackEntry ->
             val groupId = backStackEntry.arguments?.getString("groupId") ?: return@composable
-            val group = groupListViewModel.groups.find { it.id == groupId } ?: return@composable
+            if (groupListViewModel.groups.none { it.id == groupId }) return@composable
 
             val chatViewModel = remember(groupId) {
                 ChatViewModel(
-                    group = group,
-                    transport = groupListViewModel.transport,
-                    myPubkey = groupListViewModel.keyManager.publicKeyHex,
-                    store = groupListViewModel.store
+                    groupID = groupId,
+                    groupListViewModel = groupListViewModel
                 )
             }
 
             ChatScreen(
-                groupName = group.name,
                 viewModel = chatViewModel,
                 onBack = { navController.popBackStack() }
             )

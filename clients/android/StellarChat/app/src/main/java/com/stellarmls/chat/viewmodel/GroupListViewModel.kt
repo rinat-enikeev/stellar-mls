@@ -13,6 +13,7 @@ import com.stellarmls.chat.crypto.KeyManager
 import com.stellarmls.chat.model.BootstrapPayload
 import com.stellarmls.chat.model.ChatError
 import com.stellarmls.chat.model.ChatGroup
+import com.stellarmls.chat.model.ChatMessage
 import com.stellarmls.chat.model.InviteCode
 import com.stellarmls.chat.model.PendingInvitation
 import com.stellarmls.chat.model.toHex
@@ -35,11 +36,17 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.SecureRandom
+import java.util.Date
 
 class GroupListViewModel(application: Application) : AndroidViewModel(application) {
     val keyManager = KeyManager.create(application)
     val groups = mutableStateListOf<ChatGroup>()
     val pendingInvitations = mutableStateListOf<PendingInvitation>()
+
+    // Persistent chat message storage — keyed by group ID, alive for entire app session.
+    // Uses SnapshotStateMap so Compose recomposes when messages change.
+    val chatMessages = androidx.compose.runtime.mutableStateMapOf<String, List<ChatMessage>>()
+    private val seenMessageIDs = mutableMapOf<String, MutableSet<String>>()
 
     val store = PersistenceStore(application)
 
@@ -115,13 +122,19 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         // Initialize on-chain service if configured
         configureContract()
 
-        // Load persisted groups and initialize salt history
+        // Load persisted groups, messages, and initialize salt history
         viewModelScope.launch {
             try {
                 val loaded = store.loadGroups()
                 groups.addAll(loaded)
+                // Populate currentMembers from all persisted groups
+                transport.currentMembers.addAll(loaded.flatMap { it.members })
                 for (group in loaded) {
                     storeSalt(group.id, group.epoch, group.salt)
+                    // Load persisted chat messages
+                    val msgs = store.loadMessages(group.id)
+                    chatMessages[group.id] = msgs
+                    seenMessageIDs[group.id] = msgs.map { it.id }.toMutableSet()
                 }
             } catch (_: Exception) { }
         }
@@ -132,10 +145,11 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             transport.connect()
             invitationTransport.connect(relayURLs.toList())
             startInboxListener()
+            setupChatMessageHandler()
             setupProtocolMessageHandler()
             connected = true
 
-            // Subscribe to existing groups
+            // Subscribe all persisted groups for chat + protocol messages
             for (group in groups) {
                 transport.subscribe(group)
             }
@@ -147,6 +161,11 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     fun addGroup(group: ChatGroup) {
         if (groups.none { it.id == group.id }) {
             groups.add(group)
+            chatMessages[group.id] = emptyList()
+            seenMessageIDs[group.id] = mutableSetOf()
+            // Update transport members
+            transport.currentMembers.clear()
+            transport.currentMembers.addAll(groups.flatMap { it.members })
             connectIfNeeded()
             transport.subscribe(group)
             viewModelScope.launch {
@@ -167,6 +186,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun removeGroup(id: String) {
         groups.removeAll { it.id == id }
+        chatMessages.remove(id)
+        seenMessageIDs.remove(id)
         viewModelScope.launch {
             try { store.deleteGroup(id) } catch (_: Exception) { }
         }
@@ -507,6 +528,12 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
         groups[index] = group
         storeSalt(groupID, update.epoch, update.salt)
+
+        // Refresh transport member list and resubscribe with new key
+        transport.currentMembers.clear()
+        transport.currentMembers.addAll(groups.flatMap { it.members })
+        transport.subscribe(group)
+
         viewModelScope.launch {
             try { store.saveGroup(group) } catch (_: Exception) { }
         }
@@ -535,6 +562,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             try { store.saveGroup(group) } catch (_: Exception) { }
         }
 
+        // Refresh transport member list
+        transport.currentMembers.clear()
+        transport.currentMembers.addAll(groups.flatMap { it.members })
+
         // Broadcast state update encrypted with the PREVIOUS key so everyone can read it
         val update = SEPGroupStateUpdate(
             epoch = group.epoch,
@@ -543,6 +574,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             commitment = group.commitment
         )
         broadcastStateUpdate(group, update, overrideKey = previousKey)
+
+        // Resubscribe with new key after epoch change
+        transport.subscribe(group)
     }
 
     /** Apply a group rename received via protocol message. */
@@ -569,6 +603,62 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             })
         }.toString()
         transport.sendProtocolMessage(group, json)
+    }
+
+    /** Set up handler for incoming chat messages — stores in chatMessages, persists to store. */
+    private fun setupChatMessageHandler() {
+        transport.onMessage = { groupID, senderPubkey, text, eventID, timestamp ->
+            val seen = seenMessageIDs.getOrPut(groupID) { mutableSetOf() }
+            if (seen.add(eventID)) {
+                val msg = ChatMessage(
+                    id = eventID,
+                    groupID = groupID,
+                    senderPubkey = senderPubkey,
+                    text = text,
+                    timestamp = Date(timestamp * 1000),
+                    isMine = senderPubkey == keyManager.publicKeyHex
+                )
+                // Replace the list to trigger Compose recomposition
+                val current = (chatMessages[groupID] ?: emptyList()) + msg
+                chatMessages[groupID] = current.sortedBy { it.timestamp }
+                viewModelScope.launch {
+                    try { store.saveMessage(msg) } catch (_: Exception) { }
+                }
+                // Update lastEventTimestamp
+                val group = groups.find { it.id == groupID }
+                if (group != null && timestamp > group.lastEventTimestamp) {
+                    group.lastEventTimestamp = timestamp
+                    viewModelScope.launch {
+                        try { store.saveGroup(group) } catch (_: Exception) { }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Send a chat message in a group. */
+    fun sendMessage(groupID: String, text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        val group = groups.find { it.id == groupID } ?: return
+
+        transport.send(group, trimmed)
+
+        val localID = "local-${System.currentTimeMillis()}"
+        val msg = ChatMessage(
+            id = localID,
+            groupID = groupID,
+            senderPubkey = keyManager.publicKeyHex,
+            text = trimmed,
+            timestamp = Date(),
+            isMine = true
+        )
+        // Replace the list to trigger Compose recomposition
+        chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
+        seenMessageIDs.getOrPut(groupID) { mutableSetOf() }.add(localID)
+        viewModelScope.launch {
+            try { store.saveMessage(msg) } catch (_: Exception) { }
+        }
     }
 
     /** Set up handler for protocol messages received on the group channel. */

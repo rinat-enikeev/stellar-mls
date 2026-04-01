@@ -1,6 +1,8 @@
 package com.stellarmls.chat.ui.screens
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -40,7 +42,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.stellarmls.chat.model.ChatGroup
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun GroupListScreen(
     groups: List<ChatGroup>,
@@ -54,6 +56,7 @@ fun GroupListScreen(
     onDeleteGroup: (String) -> Unit
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
+    var groupToDelete by remember { mutableStateOf<ChatGroup?>(null) }
 
     Scaffold(
         topBar = {
@@ -116,7 +119,10 @@ fun GroupListScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 4.dp)
-                            .clickable { onGroupClick(group) }
+                            .combinedClickable(
+                                onClick = { onGroupClick(group) },
+                                onLongClick = { groupToDelete = group }
+                            )
                     ) {
                         Row(
                             modifier = Modifier.padding(16.dp),
@@ -147,12 +153,38 @@ fun GroupListScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                Text(
+                                    "Topic: ${group.topicTag}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                )
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    groupToDelete?.let { group ->
+        AlertDialog(
+            onDismissRequest = { groupToDelete = null },
+            title = { Text("Delete Group") },
+            text = { Text("Delete \"${group.name}\"? This cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeleteGroup(group.id)
+                    groupToDelete = null
+                }) {
+                    Text("Delete", color = Color.Red)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { groupToDelete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     if (showAddDialog) {

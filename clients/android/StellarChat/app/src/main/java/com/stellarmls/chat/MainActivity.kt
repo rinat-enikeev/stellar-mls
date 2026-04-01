@@ -90,7 +90,8 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
 
             ChatScreen(
                 viewModel = chatViewModel,
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onInvite = { navController.navigate("invite/$groupId") }
             )
         }
 
@@ -103,7 +104,6 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                 onBack = { navController.popBackStack() },
                 onGroupCreated = { group ->
                     groupListViewModel.addGroup(group)
-                    navController.popBackStack()
                 }
             )
         }
@@ -168,6 +168,7 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                         group.members.add(myLeaf)
                     }
                     groupListViewModel.addGroup(group)
+                    groupListViewModel.announceMemberJoined(group)
                     groupListViewModel.removePendingInvitation(invitation.id)
                     navController.popBackStack()
                 },

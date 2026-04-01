@@ -115,13 +115,11 @@ struct JoinGroupView: View {
                 commitment: code.commitment
             )
             appState.addGroup(group)
-            isSyncing = true
+            joined = true
 
-            // Announce ourselves to existing members so they add us
+            // Announce ourselves to existing members so they add us (fire-and-forget)
             Task {
                 await appState.announceMemberJoined(group: group)
-                isSyncing = false
-                joined = true
             }
         } catch {
             errorMessage = error.localizedDescription

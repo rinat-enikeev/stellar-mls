@@ -66,10 +66,10 @@ data class ChatGroup(
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is ChatGroup) return false
-        return id == other.id
+        return id == other.id && epoch == other.epoch && members.size == other.members.size && name == other.name
     }
 
-    override fun hashCode(): Int = id.hashCode()
+    override fun hashCode(): Int = 31 * id.hashCode() + epoch.hashCode()
 }
 
 data class ChatMessage(

@@ -77,6 +77,7 @@ class NostrMessageTransport(
 
         val key = group.encryptionKey
         val groupID = group.id
+        android.util.Log.d("MsgTransport", "subscribe group=${groupID.take(8)} epoch=${group.epoch} key=${android.util.Base64.encodeToString(key.take(6).toByteArray(), android.util.Base64.NO_WRAP)} salt=${android.util.Base64.encodeToString(group.salt.take(6).toByteArray(), android.util.Base64.NO_WRAP)}")
 
         // Subscribe to ALL connections concurrently (each gets its own coroutine)
         for (conn in connections) {
@@ -96,7 +97,9 @@ class NostrMessageTransport(
                 keyManager.blsPublicKey(), android.util.Base64.NO_WRAP))
         }
         val authenticatedText = wrapper.toString()
-        val envelope = GroupCrypto.encrypt(authenticatedText, key)
+        val envelopeJson = GroupCrypto.encrypt(authenticatedText, key)
+        val content = android.util.Base64.encodeToString(
+            envelopeJson.toByteArray(), android.util.Base64.NO_WRAP)
 
         val tags = listOf(
             listOf("t", group.topicTag)
@@ -105,7 +108,7 @@ class NostrMessageTransport(
         val event = NostrEventBuilder.build(
             kind = 24114,
             tags = tags,
-            content = envelope,
+            content = content,
             keyManager = keyManager
         )
 
@@ -123,7 +126,9 @@ class NostrMessageTransport(
             put("senderBlsPubkey", android.util.Base64.encodeToString(
                 keyManager.blsPublicKey(), android.util.Base64.NO_WRAP))
         }
-        val envelope = GroupCrypto.encrypt(wrapper.toString(), key)
+        val envelopeJson = GroupCrypto.encrypt(wrapper.toString(), key)
+        val content = android.util.Base64.encodeToString(
+            envelopeJson.toByteArray(), android.util.Base64.NO_WRAP)
 
         val tags = listOf(
             listOf("t", group.topicTag)
@@ -132,10 +137,11 @@ class NostrMessageTransport(
         val event = NostrEventBuilder.build(
             kind = 24114,
             tags = tags,
-            content = envelope,
+            content = content,
             keyManager = keyManager
         )
 
+        android.util.Log.d("MsgTransport", "sendProtocol to ${connections.size} relays eventId=${event.id.take(12)}")
         for (conn in connections) {
             conn.publish(event)
         }
@@ -144,7 +150,9 @@ class NostrMessageTransport(
     /** Process a single incoming Nostr event: decrypt, unwrap BLS, route to chat or protocol handler. */
     private fun handleIncomingEvent(event: NostrEvent, groupID: String, key: ByteArray) {
         try {
-            val plaintext = GroupCrypto.decrypt(event.content, key)
+            val envelopeJson = String(
+                android.util.Base64.decode(event.content, android.util.Base64.NO_WRAP))
+            val plaintext = GroupCrypto.decrypt(envelopeJson, key)
 
             // All messages are BLS-wrapped: {"text":"...", "senderBlsPubkey":"..."}
             val wrapper = try { JSONObject(plaintext) } catch (_: Exception) { null }
@@ -153,9 +161,12 @@ class NostrMessageTransport(
 
             if (innerText.isNullOrEmpty() || blsPubkeyB64.isNullOrEmpty()) {
                 // N-6: Reject messages without BLS sender authentication.
+                android.util.Log.w("MsgTransport", "Rejected: missing BLS auth. plaintext_start=${plaintext.take(80)}")
                 com.stellarmls.chat.SecurityLog.nonMemberMessageRejected(groupID)
                 return
             }
+
+            android.util.Log.d("MsgTransport", "Decrypted OK group=$groupID isProtocol=${isProtocolMessage(innerText)} members=${currentMembers.size}")
 
             // Check inner text for protocol messages (state updates, salt, etc.)
             if (isProtocolMessage(innerText)) {
@@ -171,10 +182,12 @@ class NostrMessageTransport(
                     onMessage?.invoke(groupID, event.pubkey, innerText,
                         event.id, event.createdAt)
                 } else {
+                    android.util.Log.w("MsgTransport", "BLS rejected: pubkey=${blsPubkeyB64.take(20)} members=${currentMembers.size}")
                     com.stellarmls.chat.SecurityLog.nonMemberMessageRejected(groupID)
                 }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.e("MsgTransport", "Decrypt failed group=$groupID err=${e.message} content_start=${event.content.take(60)}")
             com.stellarmls.chat.SecurityLog.decryptionFailed("group message")
         }
     }

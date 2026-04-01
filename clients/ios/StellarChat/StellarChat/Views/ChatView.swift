@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ChatView: View {
     @Bindable var viewModel: ChatViewModel
+    @Environment(AppState.self) private var appState
+    @State private var showInvite = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -48,6 +50,20 @@ struct ChatView: View {
         }
         .navigationTitle(viewModel.group?.name ?? "Chat")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showInvite = true
+                } label: {
+                    Image(systemName: "person.badge.plus")
+                }
+            }
+        }
+        .sheet(isPresented: $showInvite) {
+            if let group = viewModel.group {
+                InviteMemberView(group: group)
+            }
+        }
         .alert("Error", isPresented: Binding(
             get: { viewModel.errorMessage != nil },
             set: { if !$0 { viewModel.dismissError() } }

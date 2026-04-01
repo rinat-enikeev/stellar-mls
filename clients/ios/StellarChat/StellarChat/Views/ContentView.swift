@@ -110,11 +110,9 @@ private struct DeepLinkJoinGroupView: View {
                 commitment: invite.commitment
             )
             appState.addGroup(group)
-            isSyncing = true
+            joined = true
             Task {
                 await appState.announceMemberJoined(group: group)
-                isSyncing = false
-                joined = true
             }
         } catch {
             errorMessage = error.localizedDescription

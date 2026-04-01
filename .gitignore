@@ -35,3 +35,5 @@ xcuserdata/
 *.apk
 *.aab
 local.properties
+.kotlin/
+.gradle/

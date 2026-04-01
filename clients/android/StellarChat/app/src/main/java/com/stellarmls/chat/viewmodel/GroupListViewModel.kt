@@ -100,7 +100,13 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         if (savedRelays != null) {
             relayURLs.addAll(savedRelays.split(",").filter { it.isNotBlank() })
         } else {
-            relayURLs.addAll(listOf("wss://relay.damus.io", "wss://nos.lol"))
+            relayURLs.addAll(listOf(
+                "wss://relay.damus.io",
+                "wss://nos.lol",
+                "wss://relay.nostr.band",
+                "wss://relay.snort.social",
+                "wss://nostr.wine"
+            ))
         }
 
         // Load contract + relayer config
@@ -541,12 +547,19 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Handle a member_joined announcement: add the joiner and broadcast updated state. */
     private fun handleMemberJoined(member: SEPGroupMemberLeaf, groupID: String) {
+        android.util.Log.d("GroupListVM", "handleMemberJoined group=${groupID.take(8)} memberKey=${android.util.Base64.encodeToString(member.publicKeyCompressed.take(6).toByteArray(), android.util.Base64.NO_WRAP)}")
         val index = groups.indexOfFirst { it.id == groupID }
-        if (index < 0) return
+        if (index < 0) {
+            android.util.Log.w("GroupListVM", "handleMemberJoined: group not found")
+            return
+        }
         val group = groups[index]
 
         // Skip if already a member
-        if (group.members.any { it.publicKeyCompressed.contentEquals(member.publicKeyCompressed) }) return
+        if (group.members.any { it.publicKeyCompressed.contentEquals(member.publicKeyCompressed) }) {
+            android.util.Log.d("GroupListVM", "handleMemberJoined: already a member, skipping")
+            return
+        }
 
         // Capture old encryption key BEFORE bumping epoch/salt.
         // The state update must be encrypted with the current key so all
@@ -574,6 +587,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             commitment = group.commitment
         )
         broadcastStateUpdate(group, update, overrideKey = previousKey)
+        android.util.Log.d("GroupListVM", "broadcastStateUpdate SENT group=${groupID.take(8)} epoch=${group.epoch} members=${group.members.size}")
 
         // Resubscribe with new key after epoch change
         transport.subscribe(group)
@@ -676,7 +690,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             if (isNew) {
                 try {
                     val obj = JSONObject(json)
-                    when (obj.optString("type")) {
+                    val msgType = obj.optString("type")
+                    android.util.Log.d("GroupListVM", "Protocol msg type=$msgType group=${groupID.take(8)}")
+                    when (msgType) {
                         SEPMemberJoined.MESSAGE_TYPE -> {
                             val memberObj = obj.getJSONObject("member")
                             val member = SEPGroupMemberLeaf(

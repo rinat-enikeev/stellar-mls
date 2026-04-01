@@ -89,6 +89,7 @@ fun CreateGroupScreen(
                     viewModel.groupName = sanitized
                     viewModel.createGroup(keyManager)
                     viewModel.createdGroup?.let { group ->
+                        // Add group immediately but stay on screen so user can share QR/invite code
                         onGroupCreated(group)
                         // Auto-publish on-chain if configured
                         if (groupListViewModel?.isContractConfigured == true) {
@@ -103,7 +104,7 @@ fun CreateGroupScreen(
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = viewModel.groupName.isNotBlank()
+                enabled = viewModel.groupName.isNotBlank() && viewModel.createdGroup == null
             ) {
                 Text("Create Group")
             }

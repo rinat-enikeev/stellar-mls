@@ -152,68 +152,24 @@ final class AppState {
         subscribeGroup( group)
     }
 
-    /// Announce ourselves as a new member and wait for the creator's `SEPGroupStateUpdate`.
-    /// Returns once the state update is received and applied, or after timeout.
-    func announceMemberJoined(group: ChatGroup, timeout: TimeInterval = 30) async {
+    /// Announce ourselves as a new member via the persistent chatTransport.
+    /// The creator's `SEPGroupStateUpdate` response will be handled by the
+    /// existing `setupProtocolHandler` callback — no need to wait here.
+    func announceMemberJoined(group: ChatGroup) async {
         do {
             let myLeaf = try keyManager.memberLeaf
-            let myBlsPubkey = myLeaf.publicKeyCompressed
             let announcement = SEPMemberJoined(member: myLeaf)
-            let transport = NostrMessageTransport()
-            await transport.connect(to: group.relayHints)
 
-            // Listen for the state update that includes us
-            let confirmed = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-                var resumed = false
-
-                transport.onProtocolMessage = { [weak self] json, _ in
-                    guard let self, !resumed else { return }
-                    guard let data = json.data(using: .utf8),
-                          let update = try? JSONDecoder().decode(SEPGroupStateUpdate.self, from: data),
-                          update.addedMembers.contains(where: { $0.publicKeyCompressed == myBlsPubkey })
-                    else { return }
-
-                    // Apply the state update so we have the new epoch/salt/key
-                    // when opening the chat.
-                    self.applyStateUpdate(update, to: group.id)
-                    resumed = true
-                    continuation.resume(returning: true)
-                }
-
-                transport.subscribe(
-                    topic: group.topicTag,
-                    groupID: group.id,
-                    key: group.encryptionKey
-                )
-
-                // Send announcement after subscribing so we don't miss the response
-                Task {
-                    try? await transport.sendProtocolMessage(
-                        announcement,
-                        topic: group.topicTag,
-                        key: group.encryptionKey,
-                        keyManager: self.keyManager
-                    )
-                }
-
-                // Timeout fallback
-                Task {
-                    try? await Task.sleep(for: .seconds(timeout))
-                    guard !resumed else { return }
-                    resumed = true
-                    continuation.resume(returning: false)
-                }
-            }
-
-            await transport.disconnect()
-
-            if !confirmed {
-                // Timed out — group creator may be offline. We can still chat
-                // since we added ourselves locally; creator will process our
-                // announcement when they come online.
-            }
+            // Send via the already-connected chatTransport
+            try await chatTransport.sendProtocolMessage(
+                announcement,
+                topic: group.topicTag,
+                key: group.encryptionKey,
+                keyManager: keyManager
+            )
+            print("[AppState] announceMemberJoined sent for group=\(group.id.prefix(8))")
         } catch {
-            // Best-effort — existing members will see us when we send a message
+            print("[AppState] announceMemberJoined failed: \(error)")
         }
     }
 
@@ -523,6 +479,9 @@ final class AppState {
         groups[index] = group
         store.saveGroup(group)
         storeSalt(groupID: groupID, epoch: update.epoch, salt: update.salt)
+
+        // Resubscribe with the new encryption key so future messages decrypt correctly
+        subscribeGroup(group)
     }
 
     /// Apply a group rename received from the protocol channel.
@@ -631,7 +590,11 @@ final class AppState {
 
                 // Find which group this event belongs to (by matching topic tag)
                 let topicTag = event.tags.first(where: { $0.first == "t" }).flatMap { $0.dropFirst().first }
-                guard let groupID = self.groups.first(where: { $0.topicTag == topicTag })?.id else { return }
+                guard let groupID = self.groups.first(where: { $0.topicTag == topicTag })?.id else {
+                    print("[AppState] Protocol msg type=\(msgType ?? "nil") no group for topic=\(topicTag ?? "nil")")
+                    return
+                }
+                print("[AppState] Protocol msg type=\(msgType ?? "nil") group=\(groupID.prefix(8))")
 
                 switch msgType {
                 case SEPMemberJoined.messageType:
@@ -644,12 +607,16 @@ final class AppState {
                         }
                     }
                 case SEPGroupStateUpdate.messageType:
-                    if let update = try? decoder.decode(SEPGroupStateUpdate.self, from: data) {
+                    do {
+                        let update = try decoder.decode(SEPGroupStateUpdate.self, from: data)
+                        print("[AppState] Received state update epoch=\(update.epoch) for group=\(groupID.prefix(8))")
                         self.applyStateUpdate(update, to: groupID)
                         if let updated = self.groups.first(where: { $0.id == groupID }) {
                             self.chatTransport.currentMembers = updated.members
                             self.subscribeGroup( updated)
                         }
+                    } catch {
+                        print("[AppState] FAILED to decode state update: \(error) json=\(json.prefix(200))")
                     }
                 case SEPSaltRequest.messageType:
                     if let request = try? decoder.decode(SEPSaltRequest.self, from: data) {
@@ -693,6 +660,8 @@ final class AppState {
     /// Subscribe a single group on the persistent transport (chat + protocol).
     private func subscribeGroup(_ group: ChatGroup) {
         chatTransport.currentMembers = groups.flatMap(\.members)
+        let keyData = group.encryptionKey.withUnsafeBytes { Data($0) }
+        print("[AppState] subscribeGroup id=\(group.id.prefix(8)) epoch=\(group.epoch) key=\(keyData.prefix(6).base64EncodedString()) salt=\(group.salt.prefix(6).base64EncodedString())")
         chatTransport.subscribe(
             topic: group.topicTag,
             groupID: group.id,
@@ -742,6 +711,9 @@ final class AppState {
             key: previousKey,
             keyManager: keyManager
         )
+
+        // Resubscribe with the new encryption key after epoch change
+        subscribeGroup(group)
     }
 
     // MARK: - Contract Configuration

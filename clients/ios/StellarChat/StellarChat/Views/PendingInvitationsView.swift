@@ -183,14 +183,12 @@ struct PendingInvitationsView: View {
         }
 
         appState.addGroup(group)
-        syncingID = invitation.id
+        syncedID = invitation.id
+        appState.removePendingInvitation(id: invitation.id)
 
-        // Announce and wait for state update confirmation
+        // Announce ourselves to existing members (fire-and-forget)
         Task {
             await appState.announceMemberJoined(group: group)
-            syncingID = nil
-            syncedID = invitation.id
-            appState.removePendingInvitation(id: invitation.id)
         }
     }
 

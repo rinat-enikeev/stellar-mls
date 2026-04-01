@@ -26,9 +26,12 @@ struct GroupListView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(group.name)
                                     .font(.headline)
-                                Text("Topic: \(group.topicTag)")
+                                Text("\(group.members.count) members | Epoch \(group.epoch)")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                Text("Topic: \(group.topicTag)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
                             }
                             Spacer()
                             if group.isPublishedOnChain {

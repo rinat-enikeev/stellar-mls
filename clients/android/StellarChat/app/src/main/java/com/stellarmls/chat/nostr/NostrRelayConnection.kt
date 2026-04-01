@@ -114,7 +114,16 @@ class NostrRelayConnection(
                         subscriptionCallbacks[subID]?.invoke(event)
                     }
                 }
-                "EOSE", "OK", "NOTICE" -> { /* ignored */ }
+                "EOSE" -> { /* end of stored events */ }
+                "OK" -> {
+                    if (array.length() >= 3) {
+                        val eventId = array.getString(1)
+                        val accepted = array.getBoolean(2)
+                        val reason = if (array.length() >= 4) array.optString(3, "") else ""
+                        android.util.Log.d("Relay", "OK from $url eventId=${eventId.take(12)} accepted=$accepted reason=$reason")
+                    }
+                }
+                "NOTICE" -> { /* relay notice */ }
             }
         } catch (e: Exception) {
             // N-19: Log malformed message parsing errors for debugging and security monitoring

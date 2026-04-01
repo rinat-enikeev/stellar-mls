@@ -12,6 +12,8 @@ final class KeyManager: Codable {
     private let signer: RustBackedNostrSigner
     /// Ed25519 private key for Stellar, derived from nostrSecretKey via HKDF.
     private let stellarPrivateKey: Curve25519.Signing.PrivateKey
+    /// X25519 private key for invitation ECDH, derived from nostrSecretKey via HKDF.
+    private let keyAgreementKey: Curve25519.KeyAgreement.PrivateKey
 
     init() {
         // Load or generate Nostr key (preserves existing identity)
@@ -33,6 +35,7 @@ final class KeyManager: Codable {
         self.signer = try! RustBackedNostrSigner(secretKey: self.nostrSecretKey)
         self.publicKey = try! signer.publicKey()
         self.stellarPrivateKey = Self.deriveStellarKey(from: self.nostrSecretKey)
+        self.keyAgreementKey = Self.deriveKeyAgreementKey(from: self.nostrSecretKey)
     }
 
     var publicKeyHex: String {
@@ -67,6 +70,39 @@ final class KeyManager: Codable {
         )
         let seed = derived.withUnsafeBytes { Data($0) }
         return try! Curve25519.Signing.PrivateKey(rawRepresentation: seed)
+    }
+
+    // MARK: - X25519 Key Agreement (Invitation Encryption)
+
+    /// X25519 public key (32 bytes) used as the inbox key for receiving invitations.
+    var keyAgreementPublicKey: Data {
+        Data(keyAgreementKey.publicKey.rawRepresentation)
+    }
+
+    var keyAgreementPublicKeyHex: String {
+        keyAgreementPublicKey.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Hidden inbox tag derived from the X25519 key agreement public key.
+    var inboxTag: String {
+        GroupCrypto.hiddenInboxTag(recipientPublicKey: keyAgreementPublicKey)
+    }
+
+    /// The X25519 private key for decrypting incoming invitations.
+    var keyAgreementPrivateKey: Curve25519.KeyAgreement.PrivateKey {
+        keyAgreementKey
+    }
+
+    /// Derive a deterministic X25519 key agreement key from the Nostr secret via HKDF.
+    private static func deriveKeyAgreementKey(from nostrSecret: Data) -> Curve25519.KeyAgreement.PrivateKey {
+        let derived = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: nostrSecret),
+            salt: Data("com.stellarmls.chat".utf8),
+            info: Data("x25519-key-agreement-v1".utf8),
+            outputByteCount: 32
+        )
+        let seed = derived.withUnsafeBytes { Data($0) }
+        return try! Curve25519.KeyAgreement.PrivateKey(rawRepresentation: seed)
     }
 
     // MARK: - BLS12-381 (Group Membership)
@@ -144,6 +180,7 @@ final class KeyManager: Codable {
         self.publicKey = try container.decode(Data.self, forKey: .publicKey)
         self.signer = try RustBackedNostrSigner(secretKey: self.nostrSecretKey)
         self.stellarPrivateKey = Self.deriveStellarKey(from: self.nostrSecretKey)
+        self.keyAgreementKey = Self.deriveKeyAgreementKey(from: self.nostrSecretKey)
     }
 
     func encode(to encoder: Encoder) throws {

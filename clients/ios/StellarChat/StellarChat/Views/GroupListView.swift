@@ -5,6 +5,8 @@ struct GroupListView: View {
     @State private var showCreateGroup = false
     @State private var showJoinGroup = false
     @State private var showSettings = false
+    @State private var showInvitations = false
+    @State private var inviteMemberGroup: ChatGroup?
 
     var body: some View {
         List {
@@ -26,10 +28,20 @@ struct GroupListView: View {
                         }
                         .padding(.vertical, 4)
                     }
-                }
-                .onDelete { indices in
-                    for index in indices {
-                        appState.removeGroup(id: appState.groups[index].id)
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            appState.removeGroup(id: group.id)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+                    .swipeActions(edge: .leading) {
+                        Button {
+                            inviteMemberGroup = group
+                        } label: {
+                            Label("Invite", systemImage: "person.badge.plus")
+                        }
+                        .tint(.blue)
                     }
                 }
             }
@@ -57,11 +69,28 @@ struct GroupListView: View {
                         showJoinGroup = true
                     }
                     Divider()
+                    Button {
+                        showInvitations = true
+                    } label: {
+                        Label(
+                            "Invitations\(appState.pendingInvitations.isEmpty ? "" : " (\(appState.pendingInvitations.count))")",
+                            systemImage: "envelope"
+                        )
+                    }
+                    Divider()
                     Button("Settings", systemImage: "gear") {
                         showSettings = true
                     }
                 } label: {
-                    Image(systemName: "plus")
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: "plus")
+                        if !appState.pendingInvitations.isEmpty {
+                            Circle()
+                                .fill(.red)
+                                .frame(width: 8, height: 8)
+                                .offset(x: 4, y: -4)
+                        }
+                    }
                 }
             }
         }
@@ -73,6 +102,12 @@ struct GroupListView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
+        }
+        .sheet(isPresented: $showInvitations) {
+            PendingInvitationsView()
+        }
+        .sheet(item: $inviteMemberGroup) { group in
+            InviteMemberView(group: group)
         }
     }
 }

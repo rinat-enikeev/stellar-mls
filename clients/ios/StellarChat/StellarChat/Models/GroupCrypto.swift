@@ -50,6 +50,66 @@ enum GroupCrypto {
         )
     }
 
+    // MARK: - Invitation Encryption (X25519 ECDH + AES-256-GCM)
+
+    /// Encrypt a bootstrap payload to a specific recipient using ephemeral X25519 ECDH.
+    /// The sealed envelope carries the ephemeral public key so the recipient can derive the shared secret.
+    static func encryptInvitation(_ payload: Data, recipientKeyAgreementPubkey: Data) throws -> SealedEnvelope {
+        let ephemeral = Curve25519.KeyAgreement.PrivateKey()
+        let recipientPubkey = try Curve25519.KeyAgreement.PublicKey(
+            rawRepresentation: recipientKeyAgreementPubkey
+        )
+
+        let sharedSecret = try ephemeral.sharedSecretFromKeyAgreement(with: recipientPubkey)
+        let key = sharedSecret.hkdfDerivedSymmetricKey(
+            using: SHA256.self,
+            salt: Data("sep-invitation-v1".utf8),
+            sharedInfo: Data("aes-256-gcm".utf8),
+            outputByteCount: 32
+        )
+
+        let nonce = AES.GCM.Nonce()
+        let sealed = try AES.GCM.seal(payload, using: key, nonce: nonce)
+
+        return SealedEnvelope(
+            version: 1,
+            scheme: "x25519-aes-256-gcm-v1",
+            ephemeralPublicKey: Data(ephemeral.publicKey.rawRepresentation),
+            nonce: Data(nonce),
+            ciphertext: sealed.ciphertext,
+            authenticationTag: sealed.tag
+        )
+    }
+
+    /// Decrypt an invitation sealed envelope using the recipient's X25519 private key.
+    static func decryptInvitation(
+        _ envelope: SealedEnvelope,
+        privateKey: Curve25519.KeyAgreement.PrivateKey
+    ) throws -> Data {
+        guard envelope.scheme == "x25519-aes-256-gcm-v1" else {
+            throw ChatError.decryptionFailed
+        }
+        guard let ephPubData = envelope.ephemeralPublicKey,
+              let nonceData = envelope.nonce,
+              let tag = envelope.authenticationTag
+        else { throw ChatError.decryptionFailed }
+
+        let ephPub = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: ephPubData)
+        let sharedSecret = try privateKey.sharedSecretFromKeyAgreement(with: ephPub)
+        let key = sharedSecret.hkdfDerivedSymmetricKey(
+            using: SHA256.self,
+            salt: Data("sep-invitation-v1".utf8),
+            sharedInfo: Data("aes-256-gcm".utf8),
+            outputByteCount: 32
+        )
+
+        let nonce = try AES.GCM.Nonce(data: nonceData)
+        let box = try AES.GCM.SealedBox(nonce: nonce, ciphertext: envelope.ciphertext, tag: tag)
+        return try AES.GCM.open(box, using: key)
+    }
+
+    // MARK: - Group Message Encryption
+
     /// Decrypt a sealed envelope using the group key.
     static func decrypt(_ envelope: SealedEnvelope, key: SymmetricKey) throws -> String {
         guard envelope.scheme == "aes-256-gcm-v1" else {

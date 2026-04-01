@@ -86,26 +86,31 @@ StellarChat/
 └── StellarChat/
     ├── StellarChatApp.swift      # @main entry, AppState, group creation
     ├── Models/
-    │   ├── KeyManager.swift      # Dual-key Keychain storage, Rust-backed signing
-    │   ├── KeyAttestation.swift  # BLS ↔ Nostr key binding (SEP-XXXX §1.1)
-    │   ├── ChatGroup.swift       # Group model, SEP membership, InviteCode
-    │   ├── GroupCrypto.swift       # AES-256-GCM, HKDF, topic derivation
+    │   ├── KeyManager.swift        # Triple-key Keychain (secp256k1 + BLS + Ed25519 + X25519)
+    │   ├── KeyAttestation.swift    # BLS ↔ Stellar Ed25519 binding (SEP-XXXX §1.1)
+    │   ├── ChatGroup.swift         # Group model, SEP membership, InviteCode
+    │   ├── BootstrapPayload.swift  # NIP-XX invitation payload + PendingInvitation
+    │   ├── GroupCrypto.swift       # AES-256-GCM, HKDF, X25519 ECDH invitation crypto
+    │   ├── StellarStrKey.swift     # Stellar StrKey encoding (G... account IDs)
     │   ├── StorageEncryption.swift # HKDF-derived AES-256-GCM field encryption
     │   ├── PersistedModels.swift   # SwiftData @Model classes (encrypted fields)
     │   └── PersistenceStore.swift  # SwiftData store with FileProtectionType.complete
     ├── Nostr/
-    │   ├── NostrEvent.swift      # NIP-01 event builder with Schnorr signing
+    │   ├── NostrEvent.swift            # NIP-01 event builder with Schnorr signing
     │   ├── NostrRelayConnection.swift  # WebSocket relay (actor)
-    │   └── NostrMessageTransport.swift # Multi-relay orchestration
+    │   ├── NostrMessageTransport.swift # Multi-relay message orchestration
+    │   └── InvitationTransport.swift   # Kind 24113 invitation send/receive
     ├── ViewModels/
     │   └── ChatViewModel.swift   # Per-group message state, deduplication
     └── Views/
         ├── ContentView.swift
-        ├── GroupListView.swift
+        ├── GroupListView.swift        # Group list + invitation badge
         ├── ChatView.swift
         ├── CreateGroupView.swift
         ├── JoinGroupView.swift
-        └── SettingsView.swift
+        ├── InviteMemberView.swift     # Send invitation via Nostr
+        ├── PendingInvitationsView.swift # View/accept incoming invitations
+        └── SettingsView.swift         # Keys, relay management, attestation
 ```
 
 ## Protocol Alignment with Specifications
@@ -139,12 +144,17 @@ StellarChat/
 | Group persistence (SwiftData + field-level AES-256-GCM) | App-level | Implemented |
 | At-rest file protection (`FileProtectionType.complete`) | App-level | Implemented |
 | Error surfacing (encryption, relay, decryption failures) | App-level | Implemented |
+| Kind 24113 invitation events with `sep_inbox` hidden tag | NIP-XX | Implemented |
+| Bootstrap payload (group state, members, epoch, salt in invitation) | NIP-XX | Implemented |
+| X25519 ECDH + AES-256-GCM invitation encryption | NIP-XX | Implemented |
+| Inbox key derivation (X25519 from Nostr key via HKDF) | NIP-XX | Implemented |
+| Inbox subscription (auto-listen for incoming invitations) | NIP-XX | Implemented |
+| Relay management UI (add, remove, reorder, persist) | App-level | Implemented |
 
 ### What's Not Yet Implemented
 
 | Feature | Spec | Notes |
 |---------|------|-------|
-| Kind 24113 invitation events | NIP-XX | Invitations are shared via clipboard/out-of-band, not over Nostr relays |
 | Soroban contract interaction | SEP-XXXX | No on-chain commitment publishing or verification against ledger state |
 | Groth16 ZK proof generation | SEP-XXXX | Rust FFI supports it (`SEPProofGenerator`), but not wired into the app flow |
 | Groth16 proof verification | SEP-XXXX | No on-device or on-chain verification of membership proofs |
@@ -169,6 +179,8 @@ This app is wire-compatible with the Android StellarChat app. Both use identical
 - Hidden topic derivation (`SHA256("sep-topic-v1" || secret).hex().prefix(16)`)
 - AES-256-GCM encryption with HKDF-SHA256 key derivation
 - Invite code format (base64 JSON with `groupID`, `groupSecret`, `name`, `relayHints`)
+- Kind 24113 invitation events with `sep_inbox` hidden tag and X25519 ECDH envelope encryption
+- Hidden inbox derivation (`SHA256("sep-inbox-v1" || x25519_pubkey).hex().prefix(16)`)
 - secp256k1 Schnorr signing via the same Rust FFI library
 - BLS12-381 and Poseidon commitment computation via the same Rust circuits
 
@@ -181,11 +193,11 @@ This app is wire-compatible with the Android StellarChat app. Both use identical
 - ~~**Separate key derivation**: Independent secp256k1 and BLS12-381 keypairs with `KeyAttestation`~~
 - ~~**Error handling**: Errors surfaced as alerts in ChatView, relay publish failures reported~~
 
-### Phase 2: Nostr Protocol Completion
+### Phase 2: Nostr Protocol Completion (completed)
 
-- **Kind 24113 invitations**: Send and receive invitations over Nostr relays using the `sep_inbox` hidden tag, instead of clipboard-only sharing
-- **Bootstrap payload**: Include `group_id`, `group_secret`, `epoch`, `members`, and `relay_hints` in the encrypted invitation payload per NIP-XX
-- **Relay management UI**: Allow users to add, remove, and prioritize relay URLs
+- ~~**Kind 24113 invitations**: Send and receive invitations over Nostr relays using the `sep_inbox` hidden tag, with X25519 ECDH + AES-256-GCM encryption~~
+- ~~**Bootstrap payload**: Full NIP-XX payload including `group_id`, `group_secret`, `epoch`, `members`, `salt`, `commitment`, and `relay_hints`~~
+- ~~**Relay management UI**: Add, remove, and reorder relay URLs with UserDefaults persistence~~
 
 ### Phase 3: On-Chain Integration
 

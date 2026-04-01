@@ -4,6 +4,8 @@ struct SettingsView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
     @State private var attestationStatus: String?
+    @State private var newRelayURL = ""
+    @State private var relayError: String?
 
     var body: some View {
         NavigationStack {
@@ -18,6 +20,22 @@ struct SettingsView: View {
                     Button("Copy Nostr Public Key") {
                         UIPasteboard.general.string = appState.keyManager.publicKeyHex
                     }
+                }
+
+                Section("Inbox Key (X25519)") {
+                    LabeledContent("Inbox Key") {
+                        Text(appState.keyManager.keyAgreementPublicKeyHex.prefix(16) + "...")
+                            .font(.caption)
+                            .monospaced()
+                    }
+
+                    Button("Copy Inbox Key") {
+                        UIPasteboard.general.string = appState.keyManager.keyAgreementPublicKeyHex
+                    }
+
+                    Text("Share this key with others so they can send you group invitations over Nostr.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Stellar Identity (Ed25519)") {
@@ -62,22 +80,13 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Section("Relays") {
-                    ForEach(appState.relayURLs, id: \.absoluteString) { url in
-                        HStack {
-                            Image(systemName: "antenna.radiowaves.left.and.right")
-                                .foregroundStyle(.green)
-                            Text(url.absoluteString)
-                                .font(.caption)
-                                .monospaced()
-                        }
-                    }
-                }
+                relayManagementSection
 
                 Section("Protocol") {
                     LabeledContent("Invitation Kind") { Text("24113") }
                     LabeledContent("Message Kind") { Text("24114") }
                     LabeledContent("Encryption") { Text("AES-256-GCM") }
+                    LabeledContent("Invitation Encryption") { Text("X25519 ECDH + AES-256-GCM") }
                     LabeledContent("Key Derivation") { Text("HKDF-SHA256") }
                     LabeledContent("Topic Derivation") { Text("SHA256(secret)") }
                     LabeledContent("Nostr Signing") { Text("secp256k1 Schnorr") }
@@ -103,13 +112,58 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Relay Management
+
+    @ViewBuilder
+    private var relayManagementSection: some View {
+        Section("Relays") {
+            ForEach(appState.relayURLs, id: \.absoluteString) { url in
+                HStack {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .foregroundStyle(.green)
+                    Text(url.absoluteString)
+                        .font(.caption)
+                        .monospaced()
+                }
+            }
+            .onDelete { offsets in
+                appState.removeRelay(at: offsets)
+            }
+            .onMove { source, destination in
+                appState.moveRelay(from: source, to: destination)
+            }
+
+            HStack {
+                TextField("wss://relay.example.com", text: $newRelayURL)
+                    .font(.caption)
+                    .monospaced()
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+
+                Button("Add") {
+                    addRelay()
+                }
+                .disabled(newRelayURL.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+
+            if let error = relayError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            Text("Drag to reorder. Swipe to remove. First relay has highest priority.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - Actions
+
     private func createAttestation() {
         do {
             let attestation = try appState.keyManager.createAttestation()
-
-            // Verify it immediately to prove round-trip correctness
             let valid = KeyManager.verifyAttestation(attestation)
-
             let blsHex = attestation.blsPubkey.prefix(8)
                 .map { String(format: "%02x", $0) }.joined()
             let ed25519Hex = attestation.ed25519Pubkey.prefix(8)
@@ -117,6 +171,16 @@ struct SettingsView: View {
             attestationStatus = "Bound BLS \(blsHex)... to Stellar \(ed25519Hex)... (\(valid ? "verified" : "INVALID"))"
         } catch {
             attestationStatus = "Error: \(error.localizedDescription)"
+        }
+    }
+
+    private func addRelay() {
+        relayError = nil
+        let urlString = newRelayURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if appState.addRelay(urlString: urlString) {
+            newRelayURL = ""
+        } else {
+            relayError = "Invalid URL. Must be ws:// or wss:// and not already added."
         }
     }
 }

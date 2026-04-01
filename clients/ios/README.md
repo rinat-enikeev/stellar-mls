@@ -86,32 +86,35 @@ StellarChat/
 └── StellarChat/
     ├── StellarChatApp.swift      # @main entry, AppState, group creation
     ├── Models/
-    │   ├── KeyManager.swift        # Triple-key Keychain (secp256k1 + BLS + Ed25519 + X25519)
+    │   ├── KeyManager.swift        # Quad-key Keychain (secp256k1 + BLS + Ed25519 + X25519)
     │   ├── KeyAttestation.swift    # BLS ↔ Stellar Ed25519 binding (SEP-XXXX §1.1)
     │   ├── ChatGroup.swift         # Group model, SEP membership, InviteCode
     │   ├── BootstrapPayload.swift  # NIP-XX invitation payload + PendingInvitation
     │   ├── GroupCrypto.swift       # AES-256-GCM, HKDF, X25519 ECDH invitation crypto
-    │   ├── OnChainService.swift    # ZK proof generation + Soroban contract client
+    │   ├── OnChainService.swift    # ZK proof generation + Soroban contract client + relayer
     │   ├── StellarStrKey.swift     # Stellar StrKey encoding (G... account IDs)
     │   ├── StorageEncryption.swift # HKDF-derived AES-256-GCM field encryption
+    │   ├── SecurityLog.swift       # Structured audit logging (os.log, M-19)
     │   ├── PersistedModels.swift   # SwiftData @Model classes (encrypted fields)
     │   └── PersistenceStore.swift  # SwiftData store with FileProtectionType.complete
     ├── Nostr/
     │   ├── NostrEvent.swift            # NIP-01 event builder with Schnorr signing
-    │   ├── NostrRelayConnection.swift  # WebSocket relay (actor)
-    │   ├── NostrMessageTransport.swift # Multi-relay message orchestration
+    │   ├── NostrRelayConnection.swift  # WebSocket relay (actor, M-8 backoff + heartbeat)
+    │   ├── NostrMessageTransport.swift # Multi-relay message orchestration + BLS auth (H-4)
     │   └── InvitationTransport.swift   # Kind 24113 invitation send/receive
     ├── ViewModels/
     │   └── ChatViewModel.swift   # Per-group message state, deduplication
     └── Views/
         ├── ContentView.swift
-        ├── GroupListView.swift        # Group list + on-chain status badges
+        ├── GroupListView.swift        # Group list + member count, epoch, topic display
         ├── ChatView.swift
         ├── CreateGroupView.swift      # Group creation + on-chain publishing
         ├── JoinGroupView.swift
         ├── InviteMemberView.swift     # Send invitation via Nostr
         ├── PendingInvitationsView.swift # View/accept with on-chain verification
-        └── SettingsView.swift         # Keys, relay, contract configuration
+        ├── SettingsView.swift         # Keys, relay, contract, relayer configuration
+        ├── QRCodeView.swift           # QR code display for invite codes
+        └── QRScannerView.swift        # Camera-based QR code scanning
 ```
 
 ## Protocol Alignment with Specifications
@@ -160,15 +163,29 @@ StellarChat/
 | On-chain membership proof verification (`verify_membership`) | SEP-XXXX | Implemented |
 | Invitation acceptance with on-chain verification | NIP-XX + SEP-XXXX | Implemented |
 | Contract configuration UI (endpoint, contract ID) | App-level | Implemented |
+| Fee decoupling / relayer transport (`SEPRelayerTransport`) | SEP-XXXX | Implemented |
+| Relayer auth token stored in Keychain (N-5) | SEP-XXXX | Implemented |
+| Salt distribution via protocol messages (`SEPSaltRequest`/`SEPSaltResponse`) | SEP-XXXX | Implemented |
+| Salt history and offline recovery (last 64 epochs) | SEP-XXXX | Implemented |
+| Salt request rate limiting (H-5) | SEP-XXXX | Implemented |
+| Group deactivation with ZK proof authorization (M-18) | SEP-XXXX | Implemented |
+| Key attestation creation and verification | SEP-XXXX §1.1 | Implemented |
+| Sender attestation embedded in state updates | SEP-XXXX | Implemented |
+| BLS sender authentication on all messages (H-4) | NIP-XX | Implemented |
+| Non-member message rejection (N-6) | NIP-XX | Implemented |
+| Replay protection for protocol events (H-7) | NIP-XX | Implemented |
+| Event ID verification before processing (N-7) | NIP-01 | Implemented |
+| Oversized message rejection (N-18, 1 MB limit) | NIP-XX | Implemented |
+| Structured security audit logging (`SecurityLog`, M-19) | App-level | Implemented |
+| Debug-only logging (`#if DEBUG` guards, zero release output) | App-level | Implemented |
+| Exponential backoff reconnection with heartbeat ping (M-8) | App-level | Implemented |
+| Group rename protocol (`SEPGroupRenamed`) | NIP-XX | Implemented |
+| QR code display and scanning for invite codes | App-level | Implemented |
 
 ### What's Not Yet Implemented
 
 | Feature | Spec | Notes |
 |---------|------|-------|
-| Fee decoupling / relayer pattern | SEP-XXXX | Transaction submitter identity is visible on-chain |
-| Salt distribution and recovery | SEP-XXXX | Salt generated locally but not shared with other members |
-| Group deactivation | SEP-XXXX | No mechanism to deactivate or archive groups |
-| Key attestation distribution | SEP-XXXX | Attestations created locally but not shared with group |
 | Push notifications | App-level | No background notification support |
 | Multi-device sync | App-level | Keys and state are device-local |
 
@@ -178,22 +195,24 @@ StellarChat/
 
 2. **Derived Stellar key**: The Ed25519 Stellar key is deterministically derived from the Nostr secp256k1 secret via HKDF (`info: "stellar-ed25519-v1"`). This means Nostr key compromise implies Stellar key compromise. Acceptable for group state anchoring; for production with significant on-chain value, use an independent master seed.
 
-3. **Contract transport**: The Soroban contract client uses HTTP transport (`URLSessionSEPContractTransport`). For production, direct Soroban RPC or a fee-decoupled relayer pattern should be used.
+3. **Contract transport**: The Soroban contract client supports both direct HTTP transport (`URLSessionSEPContractTransport`) and fee-decoupled relayer transport (`SEPRelayerTransport`). Configure the relayer URL and optional bearer token in Settings.
 
 ## Interoperability
 
 This app is wire-compatible with the Android StellarChat app. Both use identical:
 
-- Event kinds (24113, 24114)
+- Event kinds (24113 invitations, 24114 messages)
 - Tag structure (`t` NIP hashtag tag)
 - Sealed envelope JSON format (`version`, `scheme`, `ephemeral_public_key`, `nonce`, `ciphertext`, `authentication_tag`)
 - Hidden topic derivation (`SHA256("sep-topic-v1" || secret).hex().prefix(16)`)
-- AES-256-GCM encryption with HKDF-SHA256 key derivation
-- Invite code format (base64 JSON with `groupID`, `groupSecret`, `name`, `relayHints`)
-- Kind 24113 invitation events with `sep_inbox` hidden tag and X25519 ECDH envelope encryption
 - Hidden inbox derivation (`SHA256("sep-inbox-v1" || x25519_pubkey).hex().prefix(16)`)
+- AES-256-GCM encryption with HKDF-SHA256 key derivation
+- Invite code format (base64 JSON with `groupID`, `groupSecret`, `name`, `relayHints`, `members`, `epoch`, `salt`, `commitment`)
+- Kind 24113 invitation events with `sep_inbox` hidden tag and X25519 ECDH envelope encryption
 - secp256k1 Schnorr signing via the same Rust FFI library
 - BLS12-381 and Poseidon commitment computation via the same Rust circuits
+- BLS sender authentication envelope (`text` + `senderBlsPubkey`)
+- Protocol message format (SEPMemberJoined, SEPGroupStateUpdate, SEPSaltRequest/Response, SEPGroupRenamed)
 
 ## Next Steps
 
@@ -218,11 +237,14 @@ This app is wire-compatible with the Android StellarChat app. Both use identical
 - ~~**ZK proof generation**: Groth16 proofs via `SEPProofGenerator` with cached proving keys, auto-published on group creation~~
 - ~~**Proof verification**: On-chain `verify_membership` via contract, commitment update proofs against current state~~
 
-### Phase 4: Production Readiness
+### Phase 4: Production Readiness (completed)
 
-- **Fee decoupling**: Implement the relayer pattern so the Stellar account paying transaction fees is not the group member
-- **Salt distribution**: Distribute the per-epoch salt to all group members via the encrypted channel, and implement salt recovery for members who were offline
-- **Key attestation distribution**: Share `KeyAttestation` with group members via encrypted channel; verify attestations on member join
-- **Group deactivation**: Allow authorized members to deactivate groups (with ZK-proof authorization as defined in SEP-XXXX)
+- ~~**Fee decoupling**: Relayer transport (`SEPRelayerTransport`) with bearer token auth, so the Stellar account paying fees is not the group member~~
+- ~~**Salt distribution**: Per-epoch salt distributed via `SEPSaltRequest`/`SEPSaltResponse` protocol messages, with rate limiting (H-5) and offline recovery (last 64 epochs)~~
+- ~~**Key attestation distribution**: `KeyAttestation` embedded in `SEPGroupStateUpdate` messages as `senderAttestation`, verified on receive~~
+- ~~**Group deactivation**: Any member with a valid ZK proof can permanently freeze a group (M-18 confirmation required)~~
+
+### Phase 5: Future
+
 - **Push notifications**: Notify users of new messages when the app is backgrounded
 - **Multi-device support**: Sync group state and keys across devices

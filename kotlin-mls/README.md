@@ -1,0 +1,46 @@
+# kotlin-mls
+
+Kotlin SDK for Android — JNI bridge to the Rust ZK core, providing:
+
+- **`RustBridge`** — JNI bindings to `libsep_xxxx_circuits.so` (BLS key generation, Poseidon hashing, Groth16 proving, proof format conversion)
+- **`SEPCommitmentBuilder`** — Merkle root, leaf hash, commitment computation, salt generation
+- **`SEPProofGenerator`** — Groth16 membership proof generation with testing proving key support
+- **`RustBackedNostrSigner`** — secp256k1 Schnorr signing (BIP-340) for Nostr events via Rust FFI
+- **`Types`** — `SEPGroupMemberLeaf`, `SEPTier`, `SEPMemberJoined`, `SEPSaltRequest/Response`, `SEPGroupRenamed`, `SEPKeyAttestationPayload`
+- **`GroupStateUpdate`** — `SEPGroupStateUpdate` model for epoch/membership changes with sender attestation
+
+## Build
+
+The module depends on pre-built native `.so` libraries in `src/main/jniLibs/` (arm64-v8a and x86_64).
+
+To rebuild from Rust source:
+
+```bash
+# From repo root — requires Android NDK 27+ and Rust targets
+rustup target add aarch64-linux-android x86_64-linux-android
+./scripts/build-android.sh
+
+# Copy into this module
+cp -r build/android/jniLibs/ kotlin-mls/src/main/jniLibs/
+```
+
+## Integration
+
+Add as a Gradle module dependency:
+
+```kotlin
+// settings.gradle.kts
+include(":kotlin-mls")
+project(":kotlin-mls").projectDir = file("../../kotlin-mls")
+
+// app/build.gradle.kts
+dependencies {
+    implementation(project(":kotlin-mls"))
+}
+```
+
+## Notes
+
+- `SEPProofGenerator.generateTestingProvingKey` is for local testing only. Production apps should load proving keys from a multi-party trusted setup ceremony.
+- `RustBridge.proofToContractFormat` decompresses 192-byte compressed proofs into 384-byte uncompressed components (G1 96B + G2 192B + G1 96B) matching the Soroban contract format.
+- `RustBackedNostrSigner.sign` uses `sign_prehash` for NIP-01 Schnorr signatures — the event ID is pre-hashed before signing.

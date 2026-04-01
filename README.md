@@ -12,10 +12,10 @@ Members prove they belong to a group without revealing who they are. The blockch
 | `contracts/sep-xxxx/` | Rust (Soroban) | On-chain group state, BLS12-381 proof verification via host functions |
 | `swift-mls/` | Swift | SDK for iOS/macOS — proof generation, contract client, Nostr transport |
 | `kotlin-mls/` | Kotlin | SDK for Android — JNI bridge, proof generation, commitment builder |
-| `clients/ios/` | Swift (SwiftUI) | Reference chat app with group creation, invitations, on-chain verification |
-| `clients/android/` | Kotlin (Compose) | Reference chat app — feature-parity with iOS |
+| `clients/ios/` | Swift (SwiftUI) | Reference chat app with group creation, invitations, on-chain verification, encrypted persistence |
+| `clients/android/` | Kotlin (Compose) | Reference chat app — feature-parity with iOS, Room persistence, EncryptedSharedPreferences |
 | `scripts/` | Shell | Build automation (XCFramework, Android NDK, testnet deployment) |
-| `docs/` | Markdown | SEP specification, design docs, phase implementation guides |
+| `docs/` | Markdown | SEP specification, design docs, phase implementation guides, security audit reports |
 
 ## Architecture
 
@@ -64,20 +64,20 @@ stellar-mls/
 │   ├── jni_ffi.rs             JNI bridge (7 methods for Android)
 │   └── bin/                   Fixture generators
 ├── contracts/sep-xxxx/
-│   └── src/lib.rs             Soroban contract (~500 lines)
+│   └── src/lib.rs             Soroban contract (~990 lines)
 ├── swift-mls/
 │   ├── Package.swift
-│   └── Sources/SwiftMLS/      11 Swift modules (~1,260 lines)
+│   └── Sources/SwiftMLS/      11 Swift modules (~1,360 lines)
 ├── kotlin-mls/
-│   └── src/main/java/         6 Kotlin classes (~340 lines)
+│   └── src/main/java/         6 Kotlin classes (~370 lines)
 ├── clients/
-│   ├── ios/StellarChat/       iOS app (17 Swift files, ~3,700 lines)
-│   └── android/StellarChat/   Android app (37 Kotlin files, ~5,200 lines)
+│   ├── ios/StellarChat/       iOS app (27 Swift files, ~4,460 lines)
+│   └── android/StellarChat/   Android app (40 Kotlin files, ~5,270 lines)
 ├── scripts/
 │   ├── build-xcframework.sh   Apple targets → XCFramework
 │   ├── build-android.sh       Android NDK cross-compilation
 │   └── deploy_sep_xxxx_testnet.sh  Contract deployment + integration test
-└── docs/                      9 documents (~3,000 lines)
+└── docs/                      15 documents (spec, design, audit reports)
 ```
 
 ## Contract ABI
@@ -130,7 +130,7 @@ Key attestations bind BLS to Ed25519: `Ed25519_sign(SHA-256("SEP-XXXX:key-bindin
 
 - Rust 1.75+ with `cargo`
 - Xcode 15+ (for iOS/macOS)
-- Android Studio with NDK 28+ (for Android)
+- Android Studio with NDK 27+ (for Android)
 - `stellar` CLI (for contract deployment)
 
 ### Rust core
@@ -201,7 +201,7 @@ cp -r ../../build/android/jniLibs/ app/src/main/jniLibs/
 
 ```bash
 # Everything
-cargo test                                    # Rust core (102 tests)
+cargo test                                    # Rust core (109 tests)
 cd contracts/sep-xxxx && cargo test           # Contract
 cd swift-mls && swift test                    # Swift SDK
 cd clients/android/StellarChat && \
@@ -462,11 +462,17 @@ val result = onChainService.verifyCommitment(
 | [`docs/design-doc.md`](docs/design-doc.md) | Architecture overview and phase roadmap |
 | [`docs/phase-1.md`](docs/phase-1.md) | Groth16 circuits and Poseidon hashing |
 | [`docs/phase-2.md`](docs/phase-2.md) | Trusted setup ceremony |
+| [`docs/phase-2-mpc-integration.md`](docs/phase2-mpc-integration.md) | MPC ceremony integration guide |
 | [`docs/phase-3.md`](docs/phase-3.md) | Soroban contract design |
 | [`docs/phase-4.md`](docs/phase-4.md) | Production readiness (fee decoupling, salt distribution, attestation, deactivation) |
 | [`docs/relay-design-doc.md`](docs/relay-design-doc.md) | Relay architecture and confidentiality |
 | [`docs/nip-private-group-transport.md`](docs/nip-private-group-transport.md) | NIP proposal for Nostr group transport |
 | [`docs/testnet-deployment.md`](docs/testnet-deployment.md) | Testnet deployment guide |
+| [`docs/real-world-gap-analysis.md`](docs/real-world-gap-analysis.md) | Gap analysis for production deployment |
+| [`docs/audit-report.md`](docs/audit-report.md) | Security audit report |
+| [`docs/audit-report-v2.md`](docs/audit-report-v2.md) | Security audit report (round 2) |
+| [`docs/audit-critical.md`](docs/audit-critical.md) | Critical audit findings and resolutions |
+| [`docs/audit-c1-c9-findings.md`](docs/audit-c1-c9-findings.md) | Detailed C1–C9 findings |
 
 ## License
 

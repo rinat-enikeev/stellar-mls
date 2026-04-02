@@ -14,7 +14,8 @@ Members prove they belong to a group without revealing who they are. The blockch
 | `kotlin-mls/` | Kotlin | SDK for Android — JNI bridge, proof generation, commitment builder |
 | `clients/ios/` | Swift (SwiftUI) | Reference chat app with group creation, invitations, on-chain verification, encrypted persistence |
 | `clients/android/` | Kotlin (Compose) | Reference chat app — feature-parity with iOS, Room persistence, EncryptedSharedPreferences |
-| `scripts/` | Shell | Build automation (XCFramework, Android NDK, testnet deployment) |
+| `relayer/` | Rust | Fee-decoupling HTTP relayer — signs and submits transactions so users don't need funded accounts |
+| `scripts/` | Shell | Build automation (XCFramework, Android NDK, testnet/mainnet deployment) |
 | `docs/` | Markdown | SEP specification, design docs, phase implementation guides, security audit reports |
 
 ## Architecture
@@ -73,9 +74,11 @@ stellar-mls/
 ├── clients/
 │   ├── ios/StellarChat/       iOS app (27 Swift files, ~4,460 lines)
 │   └── android/StellarChat/   Android app (40 Kotlin files, ~5,270 lines)
+├── relayer/                   Fee-decoupling HTTP relayer (axum + stellar CLI)
 ├── scripts/
 │   ├── build-xcframework.sh   Apple targets → XCFramework
 │   ├── build-android.sh       Android NDK cross-compilation
+│   ├── deploy-mainnet.sh      One-command mainnet/testnet contract deployment
 │   └── deploy_sep_xxxx_testnet.sh  Contract deployment + integration test
 └── docs/                      15 documents (spec, design, audit reports)
 ```
@@ -468,6 +471,7 @@ val result = onChainService.verifyCommitment(
 | [`docs/relay-design-doc.md`](docs/relay-design-doc.md) | Relay architecture and confidentiality |
 | [`docs/nip-private-group-transport.md`](docs/nip-private-group-transport.md) | NIP proposal for Nostr group transport |
 | [`docs/testnet-deployment.md`](docs/testnet-deployment.md) | Testnet deployment guide |
+| [`docs/mainnet-deployment.md`](docs/mainnet-deployment.md) | **Mainnet deployment guide** (contract + relayer + app config) |
 | [`docs/real-world-gap-analysis.md`](docs/real-world-gap-analysis.md) | Gap analysis for production deployment |
 | [`docs/audit-report.md`](docs/audit-report.md) | Security audit report |
 | [`docs/audit-report-v2.md`](docs/audit-report-v2.md) | Security audit report (round 2) |

@@ -37,3 +37,6 @@ xcuserdata/
 local.properties
 .kotlin/
 .gradle/
+
+# Relayer secrets
+relayer/.env

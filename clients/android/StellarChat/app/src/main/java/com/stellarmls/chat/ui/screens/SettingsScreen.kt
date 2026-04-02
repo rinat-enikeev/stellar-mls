@@ -331,7 +331,7 @@ fun SettingsScreen(
                             SettingsRow("Signing", "secp256k1 Schnorr")
                             SettingsRow("Stellar Signing", "Ed25519")
                             SettingsRow("ZK Backend", "Groth16 / BLS12-381")
-                            SettingsRow("Commitment", "Poseidon Merkle + SHA256")
+                            SettingsRow("Commitment", "Poseidon-only")
                         }
                     }
                 }

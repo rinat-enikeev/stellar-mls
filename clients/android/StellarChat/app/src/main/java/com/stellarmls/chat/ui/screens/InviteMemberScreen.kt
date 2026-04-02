@@ -2,6 +2,7 @@ package com.stellarmls.chat.ui.screens
 
 import android.content.ClipboardManager
 import android.content.Context
+import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -31,11 +32,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.stellarmls.chat.BuildConfig
 import com.stellarmls.chat.model.BootstrapPayload
 import com.stellarmls.chat.model.ChatGroup
 import com.stellarmls.chat.model.hexToBytes
 import com.stellarmls.chat.nostr.InvitationTransport
 import com.stellarmls.chat.ui.components.QRScannerView
+import com.stellarmls.mls.SEPCommitmentBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -138,6 +141,21 @@ fun InviteMemberScreen(
                             val pubkeyBytes = recipientKey.trim().hexToBytes()
                             require(pubkeyBytes.size == 32) { "Key must be 32 bytes (64 hex chars)" }
                             val payload = BootstrapPayload.from(group, keyManager.publicKeyHex)
+                            if (BuildConfig.DEBUG) {
+                                val root = SEPCommitmentBuilder.computeMerkleRoot(group.members, group.tier)
+                                val poseidon = SEPCommitmentBuilder.computePoseidonCommitment(root, group.epoch, group.salt)
+                                val firstMember = group.members.firstOrNull()
+                                Log.d(
+                                    "InviteMember",
+                                    "sendInvitation group=${group.groupIDData.debugHexPrefix(12)} " +
+                                        "epoch=${group.epoch} tier=${group.tier.id} members=${group.members.size} " +
+                                        "salt=${group.salt.debugHexPrefix(12)} " +
+                                        "payloadCommitment=${payload.commitment?.debugHexPrefix(12) ?: "none"} " +
+                                        "poseidon=${poseidon.debugHexPrefix(12)} " +
+                                        "firstPk=${firstMember?.publicKeyCompressed?.debugHexPrefix(12) ?: "none"} " +
+                                        "firstLeaf=${firstMember?.leafHash?.debugHexPrefix(12) ?: "none"}"
+                                )
+                            }
                             withContext(Dispatchers.IO) {
                                 invitationTransport.sendInvitation(payload, pubkeyBytes, keyManager)
                             }
@@ -167,4 +185,9 @@ fun InviteMemberScreen(
             }
         }
     }
+}
+
+private fun ByteArray.debugHexPrefix(bytes: Int = 8): String {
+    val count = minOf(bytes, size)
+    return take(count).joinToString("") { "%02x".format(it) }
 }

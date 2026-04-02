@@ -134,8 +134,9 @@ fn success_response(function: &str, output: String) -> Result<Response, String> 
             Ok((StatusCode::OK, Json(json!({ "valid": valid }))).into_response())
         }
         "get_state" | "get_history" => {
-            let value: Value = serde_json::from_str(&output)
+            let mut value: Value = serde_json::from_str(&output)
                 .map_err(|e| format!("failed to parse stellar CLI JSON output: {e}; output={output}"))?;
+            normalize_commitment_fields(&mut value)?;
             Ok((StatusCode::OK, Json(value)).into_response())
         }
         other => Err(format!("unsupported function: {other}")),
@@ -152,6 +153,39 @@ fn parse_bool_output(output: &str) -> Result<bool, String> {
     }
     serde_json::from_str::<bool>(trimmed)
         .map_err(|e| format!("failed to parse boolean output: {e}; output={trimmed}"))
+}
+
+fn normalize_commitment_fields(value: &mut Value) -> Result<(), String> {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if key == "commitment" {
+                    if let Some(s) = child.as_str() {
+                        *child = Value::String(hex_to_base64_if_needed(s)?);
+                    }
+                } else {
+                    normalize_commitment_fields(child)?;
+                }
+            }
+            Ok(())
+        }
+        Value::Array(items) => {
+            for item in items.iter_mut() {
+                normalize_commitment_fields(item)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn hex_to_base64_if_needed(s: &str) -> Result<String, String> {
+    if s.len() % 2 == 0 && s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        let bytes = hex::decode(s).map_err(|e| format!("invalid hex commitment: {e}"))?;
+        Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+    } else {
+        Ok(s.to_string())
+    }
 }
 
 /// Invoke the Soroban contract via the `stellar` CLI.

@@ -13,7 +13,7 @@ public struct SEPGroupStateUpdate: Codable, Equatable, Sendable {
     public let salt: Data
     public let addedMembers: [SEPGroupMemberLeaf]
     public let removedMemberKeys: [Data]   // compressed G1 pubkeys of removed members
-    public let commitment: Data?           // new SHA-256 commitment (optional)
+    public let commitment: Data?           // new Poseidon commitment (optional)
     public let senderAttestation: SEPKeyAttestationPayload?
 
     public init(

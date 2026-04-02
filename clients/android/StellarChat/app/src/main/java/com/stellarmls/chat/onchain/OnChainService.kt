@@ -1,5 +1,7 @@
 package com.stellarmls.chat.onchain
 
+import android.util.Log
+import com.stellarmls.chat.BuildConfig
 import com.stellarmls.mls.SEPCommitmentBuilder
 import com.stellarmls.mls.SEPGroupMemberLeaf
 import com.stellarmls.mls.SEPMembershipProofBundle
@@ -37,6 +39,7 @@ class OnChainService(contractID: String, transport: SEPContractTransport) {
     private val provingKeys = mutableMapOf<SEPTier, ByteArray>()
 
     companion object {
+        private const val TAG = "OnChainService"
         private const val MAX_RETRIES = 3
         private const val BASE_RETRY_DELAY_MS = 1000L
     }
@@ -117,6 +120,18 @@ class OnChainService(contractID: String, transport: SEPContractTransport) {
     ): SEPSubmissionResponse {
         val proofBundle = generateProof(members, blsSecretKey, epoch, salt, tier)
         val uncompressedProof = proofForContract(proofBundle.proof)
+        val firstMember = members.firstOrNull()
+
+        if (BuildConfig.DEBUG) {
+            Log.d(
+                TAG,
+                "publishGroupCreation group=${groupIDData.debugHexPrefix()} epoch=$epoch tier=${tier.id} " +
+                    "members=${members.size} salt=${salt.debugHexPrefix(12)} " +
+                    "proofCommitment=${proofBundle.publicInputs.commitment.debugHexPrefix(12)} " +
+                    "firstPk=${firstMember?.publicKeyCompressed?.debugHexPrefix(12) ?: "none"} " +
+                    "firstLeaf=${firstMember?.leafHash?.debugHexPrefix(12) ?: "none"}"
+            )
+        }
 
         return withRetry {
             contractClient.createGroup(
@@ -205,6 +220,19 @@ class OnChainService(contractID: String, transport: SEPContractTransport) {
             val localPoseidonCommitment = SEPCommitmentBuilder.computePoseidonCommitment(
                 root, epoch, salt
             )
+            val firstMember = members.firstOrNull()
+
+            if (BuildConfig.DEBUG) {
+                Log.d(
+                    TAG,
+                    "verifyCommitment group=${groupIDData.debugHexPrefix()} epoch=$epoch onChainEpoch=${entry.epoch} " +
+                        "tier=${tier.id} members=${members.size} salt=${salt.debugHexPrefix(12)} " +
+                        "localPoseidon=${localPoseidonCommitment.debugHexPrefix(12)} " +
+                        "onChainCommitment=${entry.commitment.debugHexPrefix(12)} " +
+                        "firstPk=${firstMember?.publicKeyCompressed?.debugHexPrefix(12) ?: "none"} " +
+                        "firstLeaf=${firstMember?.leafHash?.debugHexPrefix(12) ?: "none"}"
+                )
+            }
 
             if (localPoseidonCommitment.contentEquals(entry.commitment)) {
                 OnChainVerificationResult.Verified
@@ -221,6 +249,11 @@ class OnChainService(contractID: String, transport: SEPContractTransport) {
                 OnChainVerificationResult.Error(message)
             }
         }
+    }
+
+    private fun ByteArray.debugHexPrefix(bytes: Int = 8): String {
+        val take = minOf(bytes, size)
+        return take(take).joinToString("") { "%02x".format(it) }
     }
 
     /**

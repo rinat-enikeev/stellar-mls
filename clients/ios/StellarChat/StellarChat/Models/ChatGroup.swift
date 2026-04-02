@@ -13,7 +13,7 @@ struct ChatGroup: Identifiable, Codable {
     var members: [SEPGroupMemberLeaf] = []
     var epoch: UInt64 = 0
     var salt: Data = SEPCommitmentBuilder.generateSalt()
-    var commitment: Data?   // latest verified commitment (SHA-256 variant)
+    var commitment: Data?   // latest verified commitment (Poseidon variant)
     var tier: SEPTier = .small
     var isPublishedOnChain: Bool = false
     /// Unix timestamp of the last received event, used for offline catch-up.
@@ -40,10 +40,10 @@ struct ChatGroup: Identifiable, Codable {
         return Data(bytes)
     }
 
-    /// Recompute Merkle root and commitment from current member list.
+    /// Recompute Merkle root and Poseidon commitment from current member list.
     mutating func recomputeCommitment() throws {
         let root = try SEPCommitmentBuilder.computeMerkleRoot(members: members, tier: tier)
-        let newCommitment = try SEPCommitmentBuilder.computeSHA256Commitment(
+        let newCommitment = try SEPCommitmentBuilder.computePoseidonCommitment(
             poseidonRoot: root,
             epoch: epoch,
             salt: salt

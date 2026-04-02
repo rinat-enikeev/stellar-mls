@@ -114,7 +114,7 @@ struct SettingsView: View {
                         LabeledContent("Nostr Signing") { Text("secp256k1 Schnorr") }
                         LabeledContent("Stellar Signing") { Text("Ed25519") }
                         LabeledContent("ZK Backend") { Text("Groth16 / BLS12-381") }
-                        LabeledContent("Commitment") { Text("Poseidon Merkle + SHA256") }
+                        LabeledContent("Commitment") { Text("Poseidon-only") }
                     }
                 }
 

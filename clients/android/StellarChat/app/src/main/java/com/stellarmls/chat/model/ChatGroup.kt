@@ -38,10 +38,10 @@ data class ChatGroup(
     val topicTag: String get() = GroupCrypto.hiddenGroupTopic(groupSecret)
     val encryptionKey: ByteArray get() = GroupCrypto.deriveMessageKey(groupSecret, epoch, salt)
 
-    /** Recompute Merkle root and commitment from current member list. */
+    /** Recompute Merkle root and Poseidon commitment from current member list. */
     fun recomputeCommitment() {
         val root = SEPCommitmentBuilder.computeMerkleRoot(members, tier)
-        commitment = SEPCommitmentBuilder.computeSHA256Commitment(root, epoch, salt)
+        commitment = SEPCommitmentBuilder.computePoseidonCommitment(root, epoch, salt)
     }
 
     /** Add a member and recompute the commitment.

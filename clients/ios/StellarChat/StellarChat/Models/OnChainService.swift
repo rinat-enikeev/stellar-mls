@@ -181,7 +181,15 @@ actor OnChainService {
             tier: UInt32(tier.rawValue)
         )
         #if DEBUG
-        print("[OnChainService] publishGroupCreation invoke caller=\(callerAddress.prefix(8)) groupIDBytes=\(groupIDData.count)")
+        let firstMember = members.first
+        print(
+            "[OnChainService] publishGroupCreation invoke caller=\(callerAddress.prefix(8)) " +
+            "group=\(groupIDData.debugHexPrefix(12)) epoch=\(epoch) tier=\(tier.rawValue) " +
+            "members=\(members.count) salt=\(salt.debugHexPrefix(12)) " +
+            "proofCommitment=\(proofBundle.publicInputs.commitment.debugHexPrefix(12)) " +
+            "firstPk=\(firstMember?.publicKeyCompressed.debugHexPrefix(12) ?? "none") " +
+            "firstLeaf=\(firstMember?.leafHash.debugHexPrefix(12) ?? "none")"
+        )
         #endif
         return try await withRetry { try await self.contractClient.createGroup(request) }
     }
@@ -268,6 +276,18 @@ actor OnChainService {
                 epoch: epoch,
                 salt: salt
             )
+            #if DEBUG
+            let firstMember = members.first
+            print(
+                "[OnChainService] verifyCommitment group=\(groupIDData.debugHexPrefix(12)) " +
+                "epoch=\(epoch) onChainEpoch=\(entry.epoch) tier=\(tier.rawValue) " +
+                "members=\(members.count) salt=\(salt.debugHexPrefix(12)) " +
+                "localPoseidon=\(localPoseidonCommitment.debugHexPrefix(12)) " +
+                "onChainCommitment=\(entry.commitment.debugHexPrefix(12)) " +
+                "firstPk=\(firstMember?.publicKeyCompressed.debugHexPrefix(12) ?? "none") " +
+                "firstLeaf=\(firstMember?.leafHash.debugHexPrefix(12) ?? "none")"
+            )
+            #endif
 
             if localPoseidonCommitment == entry.commitment {
                 return .verified
@@ -347,3 +367,11 @@ actor OnChainService {
         return response.valid
     }
 }
+
+#if DEBUG
+private extension Data {
+    func debugHexPrefix(_ bytes: Int = 8) -> String {
+        prefix(bytes).map { String(format: "%02x", $0) }.joined()
+    }
+}
+#endif

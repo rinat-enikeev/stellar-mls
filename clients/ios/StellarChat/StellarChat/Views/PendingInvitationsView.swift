@@ -155,6 +155,17 @@ struct PendingInvitationsView: View {
 
         let payload = invitation.payload
         let tempGroup = payload.toChatGroup()
+        #if DEBUG
+        let firstMember = tempGroup.members.first
+        print(
+            "[InviteVerify] id=\(invitation.id.prefix(8)) group=\(tempGroup.id.prefix(12)) " +
+            "epoch=\(tempGroup.epoch) tier=\(tempGroup.tier.rawValue) members=\(tempGroup.members.count) " +
+            "salt=\(tempGroup.salt.debugHexPrefix(12)) " +
+            "payloadCommitment=\(payload.commitment?.debugHexPrefix(12) ?? "none") " +
+            "firstPk=\(firstMember?.publicKeyCompressed.debugHexPrefix(12) ?? "none") " +
+            "firstLeaf=\(firstMember?.leafHash.debugHexPrefix(12) ?? "none")"
+        )
+        #endif
         let result = await appState.verifyGroupOnChain(tempGroup)
 
         verificationResults[invitation.id] = result
@@ -196,3 +207,11 @@ struct PendingInvitationsView: View {
         appState.removePendingInvitation(id: invitation.id)
     }
 }
+
+#if DEBUG
+private extension Data {
+    func debugHexPrefix(_ bytes: Int = 8) -> String {
+        prefix(bytes).map { String(format: "%02x", $0) }.joined()
+    }
+}
+#endif

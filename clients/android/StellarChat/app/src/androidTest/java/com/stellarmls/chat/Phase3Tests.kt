@@ -4,6 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.stellarmls.chat.model.ChatGroup
 import com.stellarmls.chat.model.ChatError
 import com.stellarmls.chat.model.BootstrapPayload
+import com.stellarmls.chat.model.InviteCode
 import com.stellarmls.chat.model.hexToBytes
 import com.stellarmls.chat.model.toHex
 import com.stellarmls.chat.onchain.OnChainVerificationResult
@@ -542,7 +543,122 @@ class Phase3Tests {
     }
 
     // -----------------------------------------------------------------------
-    // 11. Salt Generation
+    // 11. Cross-Platform Interoperability Test Vectors
+    //     (must match docs/cross-platform-test-vectors.json and iOS Phase3Tests)
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun crossPlatform_topicDerivationMatchesCanonicalVectors() {
+        val vectors = listOf(
+            "0000000000000000000000000000000000000000000000000000000000000000" to "0c6ce887ec3881f3",
+            "4242424242424242424242424242424242424242424242424242424242424242" to "aa263d222a1f2e1f",
+            "ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00" to "7df84225883879ff",
+        )
+        for ((secretHex, expected) in vectors) {
+            val topic = com.stellarmls.chat.crypto.GroupCrypto.hiddenGroupTopic(secretHex.hexToBytes())
+            assertEquals(expected, topic, "Topic mismatch for secret ${secretHex.take(16)}...")
+        }
+    }
+
+    @Test
+    fun crossPlatform_inboxDerivationMatchesCanonicalVectors() {
+        val vectors = listOf(
+            "0000000000000000000000000000000000000000000000000000000000000000" to "f434d35e24e86124",
+            "4242424242424242424242424242424242424242424242424242424242424242" to "c9bcafedc73f4289",
+        )
+        for ((pubkeyHex, expected) in vectors) {
+            val tag = com.stellarmls.chat.crypto.GroupCrypto.hiddenInboxTag(pubkeyHex.hexToBytes())
+            assertEquals(expected, tag, "Inbox tag mismatch for pubkey ${pubkeyHex.take(16)}...")
+        }
+    }
+
+    @Test
+    fun crossPlatform_hkdfMessageKeyMatchesCanonicalVectors() {
+        data class Vector(val secretHex: String, val epoch: Long, val saltHex: String, val expectedHex: String)
+        val vectors = listOf(
+            Vector(
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                0,
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "e7b6e0341ab181313e1325602763c196b8113f1f8accf570674e797863bd6acd"
+            ),
+            Vector(
+                "4242424242424242424242424242424242424242424242424242424242424242",
+                5,
+                "0707070707070707070707070707070707070707070707070707070707070707",
+                "68346c282ce344b6ff7f6c7138737873438a2d7fd28c89573899d73ee6a9d52e"
+            ),
+        )
+        for (v in vectors) {
+            val key = com.stellarmls.chat.crypto.GroupCrypto.deriveMessageKey(
+                v.secretHex.hexToBytes(), v.epoch, v.saltHex.hexToBytes()
+            )
+            assertEquals(v.expectedHex, key.toHex(), "HKDF key mismatch for epoch ${v.epoch}")
+        }
+    }
+
+    @Test
+    fun crossPlatform_blsKeyDerivationConsistentSizes() {
+        val secrets = listOf(
+            "4242424242424242424242424242424242424242424242424242424242424242",
+            "0101010101010101010101010101010101010101010101010101010101010101",
+        )
+        for (secretHex in secrets) {
+            val sk = secretHex.hexToBytes()
+            val pk = SEPCommitmentBuilder.computePublicKey(sk)
+            val lh = SEPCommitmentBuilder.computeLeafHash(sk)
+            assertEquals(48, pk.size, "BLS public key must be 48 bytes")
+            assertEquals(32, lh.size, "Leaf hash must be 32 bytes")
+        }
+    }
+
+    @Test
+    fun crossPlatform_blsKeyDerivationDeterministic() {
+        val sk = "4242424242424242424242424242424242424242424242424242424242424242".hexToBytes()
+        val pk1 = SEPCommitmentBuilder.computePublicKey(sk)
+        val pk2 = SEPCommitmentBuilder.computePublicKey(sk)
+        val lh1 = SEPCommitmentBuilder.computeLeafHash(sk)
+        val lh2 = SEPCommitmentBuilder.computeLeafHash(sk)
+        assertArrayEquals(pk1, pk2)
+        assertArrayEquals(lh1, lh2)
+    }
+
+    @Test
+    fun crossPlatform_inviteCodeRoundtrip() {
+        val members = listOf(
+            SEPGroupMemberLeaf(
+                publicKeyCompressed = ByteArray(48) { 0x01 },
+                leafHash = ByteArray(32) { 0xAA.toByte() }
+            )
+        )
+        val code = InviteCode(
+            groupID = ByteArray(32) { 0x42 },
+            groupSecret = ByteArray(32) { 0x07 },
+            name = "test-group",
+            relayHints = listOf("wss://relay.damus.io"),
+            members = members,
+            epoch = 3,
+            salt = ByteArray(32) { 0x0B },
+            commitment = ByteArray(32) { 0xFF.toByte() }
+        )
+
+        val encoded = code.encode()
+        val decoded = InviteCode.decode(encoded)
+
+        assertArrayEquals(code.groupID, decoded.groupID)
+        assertArrayEquals(code.groupSecret, decoded.groupSecret)
+        assertEquals(code.name, decoded.name)
+        assertEquals(code.relayHints, decoded.relayHints)
+        assertEquals(code.epoch, decoded.epoch)
+        assertArrayEquals(code.salt, decoded.salt)
+        assertArrayEquals(code.commitment, decoded.commitment)
+        assertEquals(1, decoded.members.size)
+        assertArrayEquals(members[0].publicKeyCompressed, decoded.members[0].publicKeyCompressed)
+        assertArrayEquals(members[0].leafHash, decoded.members[0].leafHash)
+    }
+
+    // -----------------------------------------------------------------------
+    // 12. Salt Generation
     // -----------------------------------------------------------------------
 
     @Test

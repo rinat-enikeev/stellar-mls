@@ -15,6 +15,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.stellarmls.chat.ui.screens.ChatScreen
 import com.stellarmls.chat.ui.screens.CreateGroupScreen
+import com.stellarmls.chat.ui.screens.GroupInfoScreen
 import com.stellarmls.chat.ui.screens.GroupListScreen
 import com.stellarmls.chat.ui.screens.InviteMemberScreen
 import com.stellarmls.chat.ui.screens.JoinGroupScreen
@@ -94,7 +95,8 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
             ChatScreen(
                 viewModel = chatViewModel,
                 onBack = { navController.popBackStack() },
-                onInvite = { navController.navigate("invite/$groupId") }
+                onInvite = { navController.navigate("invite/$groupId") },
+                onGroupInfo = { navController.navigate("groupinfo/$groupId") }
             )
         }
 
@@ -151,6 +153,26 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                 group = group,
                 invitationTransport = groupListViewModel.invitationTransport,
                 keyManager = groupListViewModel.keyManager,
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            "groupinfo/{groupId}",
+            arguments = listOf(navArgument("groupId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val groupId = backStackEntry.arguments?.getString("groupId") ?: return@composable
+            val group = groupListViewModel.groups.find { it.id == groupId } ?: return@composable
+
+            GroupInfoScreen(
+                group = group,
+                myBlsPubkey = groupListViewModel.keyManager.blsPublicKey(),
+                onRemoveMember = { blsPubkey ->
+                    groupListViewModel.removeMember(blsPubkey, groupId)
+                },
+                onRotateKey = {
+                    groupListViewModel.rotateGroupKey(groupId)
+                },
                 onBack = { navController.popBackStack() }
             )
         }

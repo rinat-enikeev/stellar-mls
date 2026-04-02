@@ -1,0 +1,96 @@
+{
+  "description": "Canonical test vectors for cross-platform (iOS/Android) interoperability. Both platforms MUST produce identical outputs for the given inputs. Generated from the SEP-XXXX specification.",
+
+  "topic_derivation": {
+    "description": "SHA-256('sep-topic-v1' || groupSecret)[0..8] as hex string",
+    "vectors": [
+      {
+        "group_secret_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+        "expected_topic": "0c6ce887ec3881f3"
+      },
+      {
+        "group_secret_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+        "expected_topic": "aa263d222a1f2e1f"
+      },
+      {
+        "group_secret_hex": "ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00",
+        "expected_topic": "7df84225883879ff"
+      }
+    ]
+  },
+
+  "inbox_derivation": {
+    "description": "SHA-256('sep-inbox-v1' || recipientPubkey)[0..8] as hex string",
+    "vectors": [
+      {
+        "recipient_pubkey_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+        "expected_inbox_tag": "f434d35e24e86124"
+      },
+      {
+        "recipient_pubkey_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+        "expected_inbox_tag": "c9bcafedc73f4289"
+      }
+    ]
+  },
+
+  "hkdf_message_key": {
+    "description": "HKDF-SHA256(IKM=groupSecret||epoch_BE||salt, salt='sep-msg-key-v1', info='traffic', len=32)",
+    "vectors": [
+      {
+        "group_secret_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+        "epoch": 0,
+        "salt_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+        "expected_key_hex": "e7b6e0341ab181313e1325602763c196b8113f1f8accf570674e797863bd6acd"
+      },
+      {
+        "group_secret_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+        "epoch": 5,
+        "salt_hex": "0707070707070707070707070707070707070707070707070707070707070707",
+        "expected_key_hex": "68346c282ce344b6ff7f6c7138737873438a2d7fd28c89573899d73ee6a9d52e"
+      }
+    ]
+  },
+
+  "bls_key_derivation": {
+    "description": "BLS12-381 public key (48 bytes compressed G1) and leaf hash (32 bytes) from 32-byte secret. Values must match across iOS FFI and Android JNI.",
+    "vectors": [
+      {
+        "secret_key_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+        "expected_public_key_length": 48,
+        "expected_leaf_hash_length": 32
+      },
+      {
+        "secret_key_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+        "expected_public_key_length": 48,
+        "expected_leaf_hash_length": 32
+      }
+    ]
+  },
+
+  "sealed_envelope_format": {
+    "description": "Sealed envelope JSON field names and base64 encoding for AES-256-GCM group messages",
+    "required_fields": {
+      "version": "integer, must be 1",
+      "scheme": "string, must be 'aes-256-gcm-v1' for group messages",
+      "nonce": "base64 NO_WRAP, 12 bytes",
+      "ciphertext": "base64 NO_WRAP, variable length",
+      "authentication_tag": "base64 NO_WRAP, 16 bytes"
+    },
+    "optional_fields": {
+      "ephemeral_public_key": "base64 NO_WRAP, 32 bytes (X25519, invitations only)",
+      "ephemeral_key_signature": "base64 NO_WRAP, 64 bytes (Ed25519, invitations only)",
+      "sender_ed25519_public_key": "base64 NO_WRAP, 32 bytes (invitations only)"
+    }
+  },
+
+  "invite_code_format": {
+    "description": "InviteCode is base64(JSON). Binary fields use base64 NO_WRAP encoding.",
+    "required_fields": ["groupID", "groupSecret", "name", "relayHints", "members", "epoch", "salt"],
+    "optional_fields": ["commitment"],
+    "binary_encoding": "base64 NO_WRAP on both platforms",
+    "members_format": {
+      "publicKeyCompressed": "base64 NO_WRAP, 48 bytes",
+      "leafHash": "base64 NO_WRAP, 32 bytes"
+    }
+  }
+}

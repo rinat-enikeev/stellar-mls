@@ -48,7 +48,11 @@ struct SettingsView: View {
                             UIPasteboard.general.string = appState.keyManager.keyAgreementPublicKeyHex
                         }
 
-                        Text("Share this key with others so they can send you group invitations over Nostr.")
+                        QRCodeView(appState.keyManager.keyAgreementPublicKeyHex, size: 160)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.vertical, 4)
+
+                        Text("Share this QR code so others can scan it to send you group invitations.")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
 

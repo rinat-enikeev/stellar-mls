@@ -7,7 +7,7 @@ This repository includes a repeatable script for deploying the SEP-XXXX Soroban 
 The script:
 
 1. builds the Soroban contract WASM
-2. generates deterministic test-only Groth16 verification keys and proofs
+2. generates deterministic test-only Groth16 verification keys and distinct proofs for each state-changing step
 3. creates a fresh Stellar identity in an isolated CLI config directory
 4. funds that identity on testnet through the CLI's Friendbot-backed funding flow
 5. deploys the contract
@@ -51,7 +51,9 @@ cargo run --bin generate_contract_testnet_fixtures -- --out-dir <dir>
 That helper writes:
 
 - `vk-small.json`, `vk-medium.json`, `vk-large.json` — verification keys (uncompressed BLS12-381 points)
-- `proof-epoch-0.json`, `proof-epoch-1.json` — Groth16 proofs (uncompressed `{a, b, c}` components)
+- `proof-epoch-0-create.json` — epoch-0 Groth16 proof for `create_group`
+- `proof-epoch-0-update.json` — distinct epoch-0 Groth16 proof for `update_commitment`
+- `proof-epoch-1.json` — epoch-1 Groth16 proof for membership verification and deactivation
 - `public-inputs-epoch-0.json`, `public-inputs-epoch-1.json` — `{commitment, epoch}` for each epoch
 - `group-id.hex`, `commitment-epoch-0.hex`, `commitment-epoch-1.hex` — hex-encoded 32-byte values
 - `tier.txt` — circuit tier (0 = Small)

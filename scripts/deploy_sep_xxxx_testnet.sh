@@ -104,10 +104,11 @@ stellar contract invoke \
     --id "$CONTRACT_ID" \
     --source-account "$IDENTITY" \
     -- create_group \
+    --caller "$DEPLOYER_ADDRESS" \
     --group-id "$GROUP_ID" \
     --commitment "$COMMITMENT_0" \
     --tier "$TIER" \
-    --proof-file-path "$FIXTURE_DIR/proof-epoch-0.json" \
+    --proof-file-path "$FIXTURE_DIR/proof-epoch-0-create.json" \
     --public-inputs-file-path "$FIXTURE_DIR/public-inputs-epoch-0.json" >/dev/null
 
 echo "==> verify_membership at epoch 0"
@@ -120,7 +121,7 @@ VERIFY_0="$(
         --send no \
         -- verify_membership \
         --group-id "$GROUP_ID" \
-        --proof-file-path "$FIXTURE_DIR/proof-epoch-0.json" \
+        --proof-file-path "$FIXTURE_DIR/proof-epoch-0-create.json" \
         --public-inputs-file-path "$FIXTURE_DIR/public-inputs-epoch-0.json"
 )"
 VERIFY_0_COMPACT="$(printf '%s' "$VERIFY_0" | tr -d '[:space:]')"
@@ -136,7 +137,7 @@ stellar contract invoke \
     --group-id "$GROUP_ID" \
     --new-commitment "$COMMITMENT_1" \
     --new-epoch 1 \
-    --proof-file-path "$FIXTURE_DIR/proof-epoch-0.json" \
+    --proof-file-path "$FIXTURE_DIR/proof-epoch-0-update.json" \
     --public-inputs-file-path "$FIXTURE_DIR/public-inputs-epoch-0.json" >/dev/null
 
 echo "==> get_state after update"

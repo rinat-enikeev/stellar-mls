@@ -42,7 +42,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         salt: salt_epoch_0,
         depth: 5,
     };
-    let (proof_epoch_0, public_inputs_epoch_0) =
+    let (proof_epoch_0_create, public_inputs_epoch_0) =
+        prover::prove(&small_setup.proving_key, &input_epoch_0, &mut prove_rng)?;
+    let (proof_epoch_0_update, public_inputs_epoch_0_update) =
         prover::prove(&small_setup.proving_key, &input_epoch_0, &mut prove_rng)?;
 
     let input_epoch_1 = ProverInput {
@@ -85,8 +87,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &verification_key_json(&large_setup.verifying_key),
     )?;
     write_string(
-        &out_dir.join("proof-epoch-0.json"),
-        &proof_json(&proof_epoch_0),
+        &out_dir.join("proof-epoch-0-create.json"),
+        &proof_json(&proof_epoch_0_create),
+    )?;
+    write_string(
+        &out_dir.join("proof-epoch-0-update.json"),
+        &proof_json(&proof_epoch_0_update),
     )?;
     write_string(
         &out_dir.join("proof-epoch-1.json"),
@@ -94,6 +100,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // Public inputs for each epoch (commitment + epoch as expected by the contract's PublicInputs type)
+    assert_eq!(
+        field_to_bytes_be(&public_inputs_epoch_0.commitment),
+        field_to_bytes_be(&public_inputs_epoch_0_update.commitment),
+        "epoch-0 commitments should match across distinct proofs"
+    );
+
     write_string(
         &out_dir.join("public-inputs-epoch-0.json"),
         &public_inputs_json(
@@ -120,7 +132,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "    \"vk_small\": \"vk-small.json\",\n",
             "    \"vk_medium\": \"vk-medium.json\",\n",
             "    \"vk_large\": \"vk-large.json\",\n",
-            "    \"proof_epoch_0\": \"proof-epoch-0.json\",\n",
+            "    \"proof_epoch_0_create\": \"proof-epoch-0-create.json\",\n",
+            "    \"proof_epoch_0_update\": \"proof-epoch-0-update.json\",\n",
             "    \"proof_epoch_1\": \"proof-epoch-1.json\",\n",
             "    \"public_inputs_epoch_0\": \"public-inputs-epoch-0.json\",\n",
             "    \"public_inputs_epoch_1\": \"public-inputs-epoch-1.json\"\n",

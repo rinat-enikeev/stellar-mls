@@ -117,6 +117,8 @@ async fn invoke_contract(config: &Config, request: &RelayerRequest) -> Result<St
     let mut cmd = Command::new("stellar");
     cmd.arg("contract")
         .arg("invoke")
+        .arg("--rpc-url")
+        .arg(&config.rpc_url)
         .arg("--network")
         .arg(&config.network)
         .arg("--id")

@@ -5,6 +5,7 @@ struct ChatView: View {
     @Bindable var viewModel: ChatViewModel
     @Environment(AppState.self) private var appState
     @State private var showInvite = false
+    @State private var showGroupInfo = false
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var scrollTask: Task<Void, Never>?
     /// Tracks whether the user is scrolled near the bottom of the chat.
@@ -133,16 +134,28 @@ struct ChatView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showInvite = true
-                } label: {
-                    Image(systemName: "person.badge.plus")
+                HStack(spacing: 12) {
+                    Button {
+                        showGroupInfo = true
+                    } label: {
+                        Image(systemName: "person.3")
+                    }
+                    Button {
+                        showInvite = true
+                    } label: {
+                        Image(systemName: "person.badge.plus")
+                    }
                 }
             }
         }
         .sheet(isPresented: $showInvite) {
             if let group = viewModel.group {
                 InviteMemberView(group: group)
+            }
+        }
+        .sheet(isPresented: $showGroupInfo) {
+            if let group = viewModel.group {
+                GroupInfoView(group: group)
             }
         }
         .onDisappear {
@@ -288,6 +301,10 @@ struct MessageBubble: View {
             Image(systemName: "checkmark")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+        case .delivered:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.caption2)
+                .foregroundStyle(.blue)
         case .failed:
             Image(systemName: "exclamationmark.circle.fill")
                 .font(.caption2)

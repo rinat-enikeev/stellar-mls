@@ -124,6 +124,20 @@ public struct SEPGroupRenamed: Codable, Equatable, Sendable {
     }
 }
 
+/// Delivery acknowledgment sent when a member receives and decrypts a message.
+/// Each device sends at most one ACK per original event ID.
+public struct SEPMessageAck: Codable, Equatable, Sendable {
+    public static let messageType = "sep_message_ack"
+
+    public let type: String
+    public let eventID: String   // the original Nostr event ID that was delivered
+
+    public init(eventID: String) {
+        self.type = Self.messageType
+        self.eventID = eventID
+    }
+}
+
 // MARK: - Protocol Message Envelope
 
 /// Wrapper for protocol messages sent over the encrypted group channel.

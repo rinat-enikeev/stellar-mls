@@ -11,8 +11,11 @@
 		01083F180D3E8311A7E002C6 /* CreateGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF781055530F3AF0953DE842 /* CreateGroupView.swift */; };
 		09EC25786F839A9A840E509A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E292A37C859D6BE12BE2376 /* ContentView.swift */; };
 		16ADABAE1C78B394179DD74B /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76C1E6E24CEC0349F3C9A60A /* ChatViewModel.swift */; };
+		1AA0059A3C3D6B195FB5615C /* SecurityLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C987955167382BF0E0E251C /* SecurityLog.swift */; };
 		1F2DC6C7FF3C465CBD31ABA9 /* PendingInvitationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6867C765FBB9480D9E0D9FC /* PendingInvitationsView.swift */; };
 		276E482D1A8B67CFB9B7ADF1 /* InvitationTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C958564E515954D41E226897 /* InvitationTransport.swift */; };
+		3EC81E8DA76069452870626F /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68F22F3B02C2C003269BA135 /* QRScannerView.swift */; };
+		459BB52914DCD2B789CA689C /* MediaCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBAE6FF501ED7880C298C7FC /* MediaCrypto.swift */; };
 		4CF5F8CBF1B249B01EC14D1C /* PersistenceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E25D14293AC1BC6E3FB1E28 /* PersistenceStore.swift */; };
 		4E0468C0A25E658173F4E628 /* ChatGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8FD22552EBCF23A89DB7700 /* ChatGroup.swift */; };
 		4FC9AB234CCA9BFAA0B112F1 /* StellarChatApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62FB83C87F9348F97EEDE0C8 /* StellarChatApp.swift */; };
@@ -20,27 +23,25 @@
 		69502F4BED8DAE5BB7CDC5A6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */; };
 		76E39A66EA185E3741BB902B /* Phase3Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30F3176E6A6E2A7C75F9CB47 /* Phase3Tests.swift */; };
 		7C027F9FEC64BC2471784A58 /* InviteMemberView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8D38B6A8AA5A166074EA951 /* InviteMemberView.swift */; };
+		833FF1A77449454BF4ADC801 /* GroupInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7446E889E7A95E042201A70D /* GroupInfoView.swift */; };
 		8403CC60E770407C27CF89ED /* SwiftMLS in Frameworks */ = {isa = PBXBuildFile; productRef = 93FDE6A85EACB5AD144480F3 /* SwiftMLS */; };
-		85BAFF5F52AB24C5B4E46A2F /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31A504FAA66B9F485188E88A /* QRScannerView.swift */; };
 		865234AA099329B7E4D41789 /* JoinGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 005C04E920D6B0FC3423EE24 /* JoinGroupView.swift */; };
 		95489626E5CAD02D3CDB0207 /* StellarStrKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */; };
-		98E0E1488EF63CAE84806541 /* SecurityLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 631C5C92A161F28DACAA5D8B /* SecurityLog.swift */; };
+		A49A5C6B2401EEB1847229DE /* QRCodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C2E0A174CC0B050D6BADB3 /* QRCodeView.swift */; };
+		AE25761903B1EA84D9AFADD2 /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8ACE473C3096412015326C52 /* ImageCache.swift */; };
 		B5836D3E7760359CFB8C42AC /* GroupCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8210CED65D67082D16673F07 /* GroupCrypto.swift */; };
-		C73D65565738DBB2B62D4E00 /* QRCodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CA5DBDD1AE6A4B8EA0AD395 /* QRCodeView.swift */; };
 		CF17A18CDF1209DC9F6CA369 /* OnChainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06014BB7573399F26644F9F6 /* OnChainService.swift */; };
 		D2E5C4CF0957DFE21E162979 /* SwiftMLS in Frameworks */ = {isa = PBXBuildFile; productRef = 48F22356AB515994AECC167E /* SwiftMLS */; };
 		D6847B5213B8820FA30819D7 /* StorageEncryption.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD61B2440CA5ED81C983DA87 /* StorageEncryption.swift */; };
 		D6C3C9E90F39CCA80D2DD029 /* GroupListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C2B0F0A2A137DC1BE419CC3 /* GroupListView.swift */; };
 		D80AA787557EC39AC88FF3F3 /* KeyAttestation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37304476C52093C0D34ECB92 /* KeyAttestation.swift */; };
+		E10FD8A2E1B0D8169A2BEB15 /* BlossomClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FCDBA22391412C6D05BB99E /* BlossomClient.swift */; };
 		E54951E56532C7FBD90317DE /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70C111DF10AF94B4F95C4742 /* ChatView.swift */; };
 		EDF053D5AE1660633B823B48 /* NostrEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 703A9C8CDE76DF5C28608301 /* NostrEvent.swift */; };
 		EFB9DF389A99555142550086 /* NostrMessageTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEE93134C2D32A03E89226B8 /* NostrMessageTransport.swift */; };
 		F5E26B4C634D5DFCC4ECBD28 /* NostrRelayConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0884F32E9A807B2566DD234 /* NostrRelayConnection.swift */; };
 		F7159773858364D2C8D16FE1 /* KeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5EB556EBD80A9DC1A99F1F4 /* KeyManager.swift */; };
 		FE754451C690FD52A395B8B2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */; };
-		B79A63D549149B460DD156BE /* MediaCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE16A15F7B2F3F4B51AF6D75 /* MediaCrypto.swift */; };
-		578BF531352E75E4C61B2B5C /* BlossomClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C5D88DDBACD6965E41049B /* BlossomClient.swift */; };
-		9DB7E4E43DFF680C0C8C056A /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 697AD4227E1110D9C97B2D7C /* ImageCache.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -58,21 +59,23 @@
 		03DDE39E8A2DC3CBF08D400C /* StellarChatTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = StellarChatTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		06014BB7573399F26644F9F6 /* OnChainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnChainService.swift; sourceTree = "<group>"; };
 		0E25D14293AC1BC6E3FB1E28 /* PersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStore.swift; sourceTree = "<group>"; };
+		1C987955167382BF0E0E251C /* SecurityLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityLog.swift; sourceTree = "<group>"; };
 		211AE30EB5115E4BB85D9084 /* swift-mls */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "swift-mls"; path = "../../../swift-mls"; sourceTree = SOURCE_ROOT; };
-		2CA5DBDD1AE6A4B8EA0AD395 /* QRCodeView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = QRCodeView.swift; sourceTree = "<group>"; };
 		30F3176E6A6E2A7C75F9CB47 /* Phase3Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Phase3Tests.swift; sourceTree = "<group>"; };
-		31A504FAA66B9F485188E88A /* QRScannerView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
 		37304476C52093C0D34ECB92 /* KeyAttestation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyAttestation.swift; sourceTree = "<group>"; };
 		3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StellarStrKey.swift; sourceTree = "<group>"; };
 		4705F8234AA6022CD782348E /* PersistedModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistedModels.swift; sourceTree = "<group>"; };
+		4FCDBA22391412C6D05BB99E /* BlossomClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlossomClient.swift; sourceTree = "<group>"; };
 		62FB83C87F9348F97EEDE0C8 /* StellarChatApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StellarChatApp.swift; sourceTree = "<group>"; };
-		631C5C92A161F28DACAA5D8B /* SecurityLog.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SecurityLog.swift; sourceTree = "<group>"; };
+		68F22F3B02C2C003269BA135 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
 		6E292A37C859D6BE12BE2376 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		703A9C8CDE76DF5C28608301 /* NostrEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrEvent.swift; sourceTree = "<group>"; };
 		70C111DF10AF94B4F95C4742 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		7446E889E7A95E042201A70D /* GroupInfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupInfoView.swift; sourceTree = "<group>"; };
 		76C1E6E24CEC0349F3C9A60A /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
 		7C2B0F0A2A137DC1BE419CC3 /* GroupListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupListView.swift; sourceTree = "<group>"; };
 		8210CED65D67082D16673F07 /* GroupCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupCrypto.swift; sourceTree = "<group>"; };
+		8ACE473C3096412015326C52 /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCache.swift; sourceTree = "<group>"; };
 		8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		B0884F32E9A807B2566DD234 /* NostrRelayConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrRelayConnection.swift; sourceTree = "<group>"; };
@@ -81,14 +84,14 @@
 		C958564E515954D41E226897 /* InvitationTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InvitationTransport.swift; sourceTree = "<group>"; };
 		CEE93134C2D32A03E89226B8 /* NostrMessageTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrMessageTransport.swift; sourceTree = "<group>"; };
 		E8D38B6A8AA5A166074EA951 /* InviteMemberView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InviteMemberView.swift; sourceTree = "<group>"; };
+		F0C2E0A174CC0B050D6BADB3 /* QRCodeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeView.swift; sourceTree = "<group>"; };
+		F0F0E18BDAE3BFB365657BA8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		F406EABD519847834878AA47 /* StellarChat.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = StellarChat.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F5EB556EBD80A9DC1A99F1F4 /* KeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyManager.swift; sourceTree = "<group>"; };
 		F8FD22552EBCF23A89DB7700 /* ChatGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGroup.swift; sourceTree = "<group>"; };
 		FA96977038D2F9F4EC31EF3D /* BootstrapPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BootstrapPayload.swift; sourceTree = "<group>"; };
+		FBAE6FF501ED7880C298C7FC /* MediaCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaCrypto.swift; sourceTree = "<group>"; };
 		FD61B2440CA5ED81C983DA87 /* StorageEncryption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageEncryption.swift; sourceTree = "<group>"; };
-		DE16A15F7B2F3F4B51AF6D75 /* MediaCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaCrypto.swift; sourceTree = "<group>"; };
-		27C5D88DDBACD6965E41049B /* BlossomClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlossomClient.swift; sourceTree = "<group>"; };
-		697AD4227E1110D9C97B2D7C /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCache.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -117,13 +120,14 @@
 				70C111DF10AF94B4F95C4742 /* ChatView.swift */,
 				6E292A37C859D6BE12BE2376 /* ContentView.swift */,
 				BF781055530F3AF0953DE842 /* CreateGroupView.swift */,
+				7446E889E7A95E042201A70D /* GroupInfoView.swift */,
 				7C2B0F0A2A137DC1BE419CC3 /* GroupListView.swift */,
 				E8D38B6A8AA5A166074EA951 /* InviteMemberView.swift */,
 				005C04E920D6B0FC3423EE24 /* JoinGroupView.swift */,
 				C6867C765FBB9480D9E0D9FC /* PendingInvitationsView.swift */,
+				F0C2E0A174CC0B050D6BADB3 /* QRCodeView.swift */,
+				68F22F3B02C2C003269BA135 /* QRScannerView.swift */,
 				A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */,
-				2CA5DBDD1AE6A4B8EA0AD395 /* QRCodeView.swift */,
-				31A504FAA66B9F485188E88A /* QRScannerView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -141,20 +145,20 @@
 		23A47303C279700BCE7F944A /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				4FCDBA22391412C6D05BB99E /* BlossomClient.swift */,
 				FA96977038D2F9F4EC31EF3D /* BootstrapPayload.swift */,
 				F8FD22552EBCF23A89DB7700 /* ChatGroup.swift */,
 				8210CED65D67082D16673F07 /* GroupCrypto.swift */,
-				697AD4227E1110D9C97B2D7C /* ImageCache.swift */,
-				27C5D88DDBACD6965E41049B /* BlossomClient.swift */,
-				DE16A15F7B2F3F4B51AF6D75 /* MediaCrypto.swift */,
+				8ACE473C3096412015326C52 /* ImageCache.swift */,
 				37304476C52093C0D34ECB92 /* KeyAttestation.swift */,
 				F5EB556EBD80A9DC1A99F1F4 /* KeyManager.swift */,
+				FBAE6FF501ED7880C298C7FC /* MediaCrypto.swift */,
 				06014BB7573399F26644F9F6 /* OnChainService.swift */,
 				4705F8234AA6022CD782348E /* PersistedModels.swift */,
 				0E25D14293AC1BC6E3FB1E28 /* PersistenceStore.swift */,
+				1C987955167382BF0E0E251C /* SecurityLog.swift */,
 				3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */,
 				FD61B2440CA5ED81C983DA87 /* StorageEncryption.swift */,
-				631C5C92A161F28DACAA5D8B /* SecurityLog.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -163,6 +167,7 @@
 			isa = PBXGroup;
 			children = (
 				8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */,
+				F0F0E18BDAE3BFB365657BA8 /* Info.plist */,
 				62FB83C87F9348F97EEDE0C8 /* StellarChatApp.swift */,
 				23A47303C279700BCE7F944A /* Models */,
 				F04F98010B05CF98606768DC /* Nostr */,
@@ -324,6 +329,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E10FD8A2E1B0D8169A2BEB15 /* BlossomClient.swift in Sources */,
 				0029F253BA68E6B4CA11E864 /* BootstrapPayload.swift in Sources */,
 				4E0468C0A25E658173F4E628 /* ChatGroup.swift in Sources */,
 				E54951E56532C7FBD90317DE /* ChatView.swift in Sources */,
@@ -331,15 +337,15 @@
 				09EC25786F839A9A840E509A /* ContentView.swift in Sources */,
 				01083F180D3E8311A7E002C6 /* CreateGroupView.swift in Sources */,
 				B5836D3E7760359CFB8C42AC /* GroupCrypto.swift in Sources */,
-				9DB7E4E43DFF680C0C8C056A /* ImageCache.swift in Sources */,
-				578BF531352E75E4C61B2B5C /* BlossomClient.swift in Sources */,
-				B79A63D549149B460DD156BE /* MediaCrypto.swift in Sources */,
+				833FF1A77449454BF4ADC801 /* GroupInfoView.swift in Sources */,
 				D6C3C9E90F39CCA80D2DD029 /* GroupListView.swift in Sources */,
+				AE25761903B1EA84D9AFADD2 /* ImageCache.swift in Sources */,
 				276E482D1A8B67CFB9B7ADF1 /* InvitationTransport.swift in Sources */,
 				7C027F9FEC64BC2471784A58 /* InviteMemberView.swift in Sources */,
 				865234AA099329B7E4D41789 /* JoinGroupView.swift in Sources */,
 				D80AA787557EC39AC88FF3F3 /* KeyAttestation.swift in Sources */,
 				F7159773858364D2C8D16FE1 /* KeyManager.swift in Sources */,
+				459BB52914DCD2B789CA689C /* MediaCrypto.swift in Sources */,
 				EDF053D5AE1660633B823B48 /* NostrEvent.swift in Sources */,
 				EFB9DF389A99555142550086 /* NostrMessageTransport.swift in Sources */,
 				F5E26B4C634D5DFCC4ECBD28 /* NostrRelayConnection.swift in Sources */,
@@ -347,13 +353,13 @@
 				1F2DC6C7FF3C465CBD31ABA9 /* PendingInvitationsView.swift in Sources */,
 				661B24EC80C52FD32C0DB020 /* PersistedModels.swift in Sources */,
 				4CF5F8CBF1B249B01EC14D1C /* PersistenceStore.swift in Sources */,
+				A49A5C6B2401EEB1847229DE /* QRCodeView.swift in Sources */,
+				3EC81E8DA76069452870626F /* QRScannerView.swift in Sources */,
+				1AA0059A3C3D6B195FB5615C /* SecurityLog.swift in Sources */,
 				69502F4BED8DAE5BB7CDC5A6 /* SettingsView.swift in Sources */,
 				4FC9AB234CCA9BFAA0B112F1 /* StellarChatApp.swift in Sources */,
 				95489626E5CAD02D3CDB0207 /* StellarStrKey.swift in Sources */,
 				D6847B5213B8820FA30819D7 /* StorageEncryption.swift in Sources */,
-				98E0E1488EF63CAE84806541 /* SecurityLog.swift in Sources */,
-				C73D65565738DBB2B62D4E00 /* QRCodeView.swift in Sources */,
-				85BAFF5F52AB24C5B4E46A2F /* QRScannerView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

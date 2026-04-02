@@ -102,6 +102,19 @@ data class SEPKeyAttestationPayload(
 }
 
 /**
+ * Delivery acknowledgment sent when a member receives and decrypts a message.
+ * Each device sends at most one ACK per original event ID.
+ */
+data class SEPMessageAck(
+    val type: String = MESSAGE_TYPE,
+    val eventID: String
+) {
+    companion object {
+        const val MESSAGE_TYPE = "sep_message_ack"
+    }
+}
+
+/**
  * Broadcast when a member renames the group.
  */
 data class SEPGroupRenamed(

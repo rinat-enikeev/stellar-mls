@@ -32,7 +32,9 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Schedule
@@ -85,7 +87,8 @@ import java.util.concurrent.TimeUnit
 fun ChatScreen(
     viewModel: ChatViewModel,
     onBack: () -> Unit,
-    onInvite: () -> Unit
+    onInvite: () -> Unit,
+    onGroupInfo: () -> Unit = {}
 ) {
     val groupName = viewModel.groupName
     val listState = rememberLazyListState()
@@ -116,6 +119,9 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onGroupInfo) {
+                        Icon(Icons.Filled.Group, contentDescription = "Group Info")
+                    }
                     IconButton(onClick = onInvite) {
                         Icon(Icons.Filled.PersonAdd, contentDescription = "Invite Member")
                     }
@@ -588,6 +594,12 @@ private fun MessageStatusIcon(status: MessageStatus, isMine: Boolean) {
             contentDescription = "Sent",
             modifier = Modifier.size(12.dp),
             tint = tint
+        )
+        MessageStatus.DELIVERED -> Icon(
+            Icons.Filled.DoneAll,
+            contentDescription = "Delivered",
+            modifier = Modifier.size(12.dp),
+            tint = if (isMine) Color.White else MaterialTheme.colorScheme.primary
         )
         MessageStatus.FAILED -> Icon(
             Icons.Filled.Error,

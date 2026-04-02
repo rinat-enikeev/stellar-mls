@@ -7,6 +7,7 @@ struct InviteMemberView: View {
     @State private var recipientInboxKey = ""
     @State private var status: String?
     @State private var isSending = false
+    @State private var showScanner = false
 
     var body: some View {
         NavigationStack {
@@ -29,7 +30,13 @@ struct InviteMemberView: View {
                         }
                     }
 
-                    Text("The recipient can find their inbox key in Settings.")
+                    Button {
+                        showScanner = true
+                    } label: {
+                        Label("Scan Inbox Key QR", systemImage: "qrcode.viewfinder")
+                    }
+
+                    Text("The recipient can find their inbox key QR code in Settings → Advanced.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -55,6 +62,15 @@ struct InviteMemberView: View {
                         Button("Send") { sendInvitation() }
                             .disabled(recipientInboxKey.count != 64 || isSending)
                     }
+                }
+            }
+            .sheet(isPresented: $showScanner) {
+                QRScannerView { scannedCode in
+                    let trimmed = scannedCode.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.count == 64, trimmed.allSatisfy({ $0.isHexDigit }) {
+                        recipientInboxKey = trimmed
+                    }
+                    showScanner = false
                 }
             }
         }

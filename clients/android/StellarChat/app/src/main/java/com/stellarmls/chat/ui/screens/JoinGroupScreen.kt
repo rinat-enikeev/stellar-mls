@@ -22,6 +22,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +43,22 @@ fun JoinGroupScreen(
 ) {
     val context = LocalContext.current
     var showScanner by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        if (viewModel.inviteText.isBlank()) {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = clipboard.primaryClip
+            if (clip != null && clip.itemCount > 0) {
+                val text = clip.getItemAt(0).text?.toString()?.trim() ?: ""
+                if (text.length > 100) {
+                    try {
+                        android.util.Base64.decode(text, android.util.Base64.NO_WRAP)
+                        viewModel.inviteText = text
+                    } catch (_: Exception) { }
+                }
+            }
+        }
+    }
 
     if (showScanner) {
         Box(modifier = Modifier.fillMaxSize()) {

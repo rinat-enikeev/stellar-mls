@@ -36,13 +36,15 @@ async fn main() {
         }
     };
 
-    // Import the secret key into stellar CLI as a named identity
-    eprintln!("Importing relayer identity into stellar CLI...");
-    let import_output = Command::new("stellar")
+    // Add the secret key into stellar CLI as a named identity.
+    // Current CLI versions use `keys add --secret-key` instead of `keys import`.
+    eprintln!("Adding relayer identity to stellar CLI...");
+    let add_output = Command::new("stellar")
         .arg("keys")
-        .arg("import")
-        .arg("--secret-key")
+        .arg("add")
         .arg(&config.identity_name)
+        .arg("--secret-key")
+        .arg("--overwrite")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -51,21 +53,22 @@ async fn main() {
             use std::io::Write;
             if let Some(ref mut stdin) = child.stdin {
                 stdin.write_all(config.secret_key.as_bytes())?;
+                stdin.write_all(b"\n")?;
             }
             child.wait_with_output()
         });
 
-    match import_output {
+    match add_output {
         Ok(o) if o.status.success() => {}
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
-            // "already exists" is fine — we just overwrite
+            // "already exists" is fine — we asked for overwrite
             if !stderr.contains("already exists") {
-                eprintln!("Warning: stellar keys import: {stderr}");
+                eprintln!("Warning: stellar keys add: {stderr}");
             }
         }
         Err(e) => {
-            eprintln!("Failed to run 'stellar keys import': {e}");
+            eprintln!("Failed to run 'stellar keys add --secret-key': {e}");
             eprintln!("Make sure the 'stellar' CLI is installed and in PATH.");
             std::process::exit(1);
         }

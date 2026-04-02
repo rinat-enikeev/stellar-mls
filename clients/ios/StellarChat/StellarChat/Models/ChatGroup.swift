@@ -66,6 +66,7 @@ struct ChatGroup: Identifiable, Codable {
 enum MessageStatus: String, Codable {
     case sending
     case sent
+    case delivered
     case failed
 }
 

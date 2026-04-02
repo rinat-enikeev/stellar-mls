@@ -278,6 +278,14 @@ final class AppState {
                event.createdAt > group.lastEventTimestamp {
                 updateLastEventTimestamp(groupID: groupID, timestamp: event.createdAt)
             }
+            // Send delivery ACK for non-mine messages (fire-and-forget)
+            if !msg.isMine, let group = groups.first(where: { $0.id == groupID }) {
+                let ack = SEPMessageAck(eventID: event.id)
+                Task {
+                    try? await chatTransport.sendProtocolMessage(
+                        ack, topic: group.topicTag, key: group.encryptionKey, keyManager: keyManager)
+                }
+            }
         }
         unreadCounts = localUnread
     }
@@ -534,12 +542,16 @@ final class AppState {
     }
 
     /// Apply a received state update to a local group.
+    /// Handles three cases:
+    /// - update.epoch > local: straightforward apply (normal case)
+    /// - update.epoch == local: epoch fork — deterministic merge to resolve conflict
+    /// - update.epoch < local: stale update, ignored
     func applyStateUpdate(_ update: SEPGroupStateUpdate, to groupID: String) {
         guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
         var group = groups[index]
 
-        // Only apply if the update is newer
-        guard update.epoch > group.epoch else { return }
+        // Stale update — ignore
+        guard update.epoch >= group.epoch else { return }
 
         // Verify sender attestation BEFORE mutating state
         if let att = update.senderAttestation {
@@ -554,29 +566,128 @@ final class AppState {
             }
         }
 
-        // Apply member changes
-        for removed in update.removedMemberKeys {
-            group.members.removeAll { $0.publicKeyCompressed == removed }
-        }
-        for added in update.addedMembers {
-            if !group.members.contains(where: { $0.publicKeyCompressed == added.publicKeyCompressed }) {
-                group.members.append(added)
+        if update.epoch == group.epoch {
+            // Same epoch + same salt = our own update echoed back from the relay — ignore.
+            if update.salt == group.salt {
+                #if DEBUG
+                print("[AppState] Ignoring own echo at epoch=\(update.epoch) for group=\(groupID.prefix(8))")
+                #endif
+                return
             }
-        }
-        group.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
 
-        group.epoch = update.epoch
-        group.salt = update.salt
-        if let commitment = update.commitment {
-            group.commitment = commitment
+            // Epoch fork: two members made concurrent changes at the same epoch.
+            // Deterministic merge: union members, lexicographic-smaller salt wins.
+            let remoteSalt = update.salt
+            let localSalt = group.salt
+
+            // Merge: add remote's added members, remove remote's removed members
+            for removed in update.removedMemberKeys {
+                group.members.removeAll { $0.publicKeyCompressed == removed }
+            }
+            for added in update.addedMembers {
+                if !group.members.contains(where: { $0.publicKeyCompressed == added.publicKeyCompressed }) {
+                    group.members.append(added)
+                }
+            }
+            group.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
+
+            // Deterministic salt selection: lexicographically smaller wins
+            let useRemoteSalt = remoteSalt.lexicographicallyPrecedes(localSalt)
+            group.epoch += 1
+            group.salt = useRemoteSalt ? remoteSalt : localSalt
+            try? group.recomputeCommitment()
+
+            groups[index] = group
+            store.saveGroup(group)
+            storeSalt(groupID: groupID, epoch: group.epoch, salt: group.salt)
+            subscribeGroup(group)
+
+            // Broadcast the merged state so all members converge
+            let mergedUpdate = buildStateUpdate(group: group)
+            Task {
+                try? await chatTransport.sendProtocolMessage(
+                    mergedUpdate, topic: group.topicTag, key: group.encryptionKey, keyManager: keyManager)
+            }
+            #if DEBUG
+            print("[AppState] Epoch fork resolved: merged to epoch=\(group.epoch) for group=\(groupID.prefix(8))")
+            #endif
+        } else {
+            // Normal case: update.epoch > group.epoch
+            for removed in update.removedMemberKeys {
+                group.members.removeAll { $0.publicKeyCompressed == removed }
+            }
+            for added in update.addedMembers {
+                if !group.members.contains(where: { $0.publicKeyCompressed == added.publicKeyCompressed }) {
+                    group.members.append(added)
+                }
+            }
+            group.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
+
+            group.epoch = update.epoch
+            group.salt = update.salt
+            if let commitment = update.commitment {
+                group.commitment = commitment
+            }
+
+            groups[index] = group
+            store.saveGroup(group)
+            storeSalt(groupID: groupID, epoch: update.epoch, salt: update.salt)
+            subscribeGroup(group)
         }
+    }
+
+    /// Rotate the group key without membership changes. Provides forward secrecy against compromised keys.
+    func rotateGroupKey(groupID: String) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        var group = groups[index]
+
+        let previousKey = group.encryptionKey
+
+        group.epoch += 1
+        group.salt = SEPCommitmentBuilder.generateSalt()
+        try? group.recomputeCommitment()
 
         groups[index] = group
         store.saveGroup(group)
-        storeSalt(groupID: groupID, epoch: update.epoch, salt: update.salt)
-
-        // Resubscribe with the new encryption key so future messages decrypt correctly
+        storeSalt(groupID: groupID, epoch: group.epoch, salt: group.salt)
         subscribeGroup(group)
+
+        // Broadcast to peers in the background — don't block the UI
+        let update = buildStateUpdate(group: group)
+        Task {
+            try? await chatTransport.sendProtocolMessage(
+                update, topic: group.topicTag, key: previousKey, keyManager: keyManager)
+        }
+    }
+
+    /// Remove a member from a group, broadcast the state update, and optionally update on-chain.
+    func removeMember(blsPubkey: Data, from groupID: String) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        var group = groups[index]
+
+        // Must be a current member
+        guard group.members.contains(where: { $0.publicKeyCompressed == blsPubkey }) else { return }
+
+        // Capture old key for broadcasting state update
+        let previousKey = group.encryptionKey
+
+        group.members.removeAll { $0.publicKeyCompressed == blsPubkey }
+        group.epoch += 1
+        group.salt = SEPCommitmentBuilder.generateSalt()
+        try? group.recomputeCommitment()
+
+        groups[index] = group
+        store.saveGroup(group)
+        storeSalt(groupID: groupID, epoch: group.epoch, salt: group.salt)
+        chatTransport.currentMembers = group.members
+        subscribeGroup(group)
+
+        // Broadcast removal state update in the background — don't block the UI
+        let update = buildStateUpdate(group: group, removedMemberKeys: [blsPubkey])
+        Task {
+            try? await chatTransport.sendProtocolMessage(
+                update, topic: group.topicTag, key: previousKey, keyManager: keyManager)
+        }
     }
 
     /// Apply a group rename received from the protocol channel.
@@ -891,6 +1002,13 @@ final class AppState {
                 case SEPGroupRenamed.messageType:
                     if let renamed = try? decoder.decode(SEPGroupRenamed.self, from: data) {
                         self.applyGroupRenamed(renamed, to: groupID)
+                    }
+                case SEPMessageAck.messageType:
+                    if let ack = try? decoder.decode(SEPMessageAck.self, from: data) {
+                        // Update message status to .delivered if we sent it
+                        if let idx = self.chatMessages[groupID]?.firstIndex(where: { $0.id == ack.eventID && $0.isMine }) {
+                            self.chatMessages[groupID]?[idx].status = .delivered
+                        }
                     }
                 default:
                     break

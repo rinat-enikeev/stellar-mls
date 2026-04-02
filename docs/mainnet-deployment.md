@@ -140,7 +140,7 @@ RELAYER_RATE_LIMIT=30
 cd relayer
 
 # Development
-cargo run --release
+sh ./run.sh --release
 
 # Or build and run
 cargo build --release

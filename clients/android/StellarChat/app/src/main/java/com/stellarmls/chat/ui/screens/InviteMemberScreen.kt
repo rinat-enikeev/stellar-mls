@@ -35,6 +35,7 @@ import com.stellarmls.chat.model.BootstrapPayload
 import com.stellarmls.chat.model.ChatGroup
 import com.stellarmls.chat.model.hexToBytes
 import com.stellarmls.chat.nostr.InvitationTransport
+import com.stellarmls.chat.ui.components.QRScannerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -52,6 +53,20 @@ fun InviteMemberScreen(
     var recipientKey by remember { mutableStateOf("") }
     var status by remember { mutableStateOf<String?>(null) }
     var isSending by remember { mutableStateOf(false) }
+    var showScanner by remember { mutableStateOf(false) }
+
+    if (showScanner) {
+        androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxSize()) {
+            QRScannerView { scannedCode ->
+                val trimmed = scannedCode.trim()
+                if (trimmed.length == 64 && trimmed.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
+                    recipientKey = trimmed
+                }
+                showScanner = false
+            }
+        }
+        return
+    }
 
     Scaffold(
         topBar = {
@@ -101,6 +116,15 @@ fun InviteMemberScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Paste from Clipboard")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = { showScanner = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Scan Inbox Key QR")
             }
 
             Spacer(modifier = Modifier.height(16.dp))

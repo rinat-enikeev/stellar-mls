@@ -634,6 +634,138 @@ struct EndToEndTests {
     }
 }
 
+// MARK: - Cross-Platform Test Vectors
+
+@Suite("Cross-Platform Interoperability")
+struct CrossPlatformTests {
+    // Test vectors from docs/cross-platform-test-vectors.json.
+    // Both iOS and Android MUST produce identical outputs for these inputs.
+
+    @Test("Topic derivation matches canonical vectors")
+    func topicDerivation() {
+        let vectors: [(secretHex: String, expected: String)] = [
+            ("0000000000000000000000000000000000000000000000000000000000000000", "0c6ce887ec3881f3"),
+            ("4242424242424242424242424242424242424242424242424242424242424242", "aa263d222a1f2e1f"),
+            ("ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00", "7df84225883879ff"),
+        ]
+        for v in vectors {
+            let secret = hexToData(v.secretHex)!
+            let topic = GroupCrypto.hiddenGroupTopic(groupSecret: secret)
+            #expect(topic == v.expected, "Topic mismatch for secret \(v.secretHex.prefix(16))...")
+        }
+    }
+
+    @Test("Inbox tag derivation matches canonical vectors")
+    func inboxDerivation() {
+        let vectors: [(pubkeyHex: String, expected: String)] = [
+            ("0000000000000000000000000000000000000000000000000000000000000000", "f434d35e24e86124"),
+            ("4242424242424242424242424242424242424242424242424242424242424242", "c9bcafedc73f4289"),
+        ]
+        for v in vectors {
+            let pubkey = hexToData(v.pubkeyHex)!
+            let tag = GroupCrypto.hiddenInboxTag(recipientPublicKey: pubkey)
+            #expect(tag == v.expected, "Inbox tag mismatch for pubkey \(v.pubkeyHex.prefix(16))...")
+        }
+    }
+
+    @Test("HKDF message key derivation matches canonical vectors")
+    func hkdfMessageKey() {
+        let vectors: [(secretHex: String, epoch: UInt64, saltHex: String, expectedHex: String)] = [
+            (
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                0,
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "e7b6e0341ab181313e1325602763c196b8113f1f8accf570674e797863bd6acd"
+            ),
+            (
+                "4242424242424242424242424242424242424242424242424242424242424242",
+                5,
+                "0707070707070707070707070707070707070707070707070707070707070707",
+                "68346c282ce344b6ff7f6c7138737873438a2d7fd28c89573899d73ee6a9d52e"
+            ),
+        ]
+        for v in vectors {
+            let secret = hexToData(v.secretHex)!
+            let salt = hexToData(v.saltHex)!
+            let key = GroupCrypto.deriveMessageKey(groupSecret: secret, epoch: v.epoch, salt: salt)
+            let keyHex = key.withUnsafeBytes { buf in
+                Data(buf).map { String(format: "%02x", $0) }.joined()
+            }
+            #expect(keyHex == v.expectedHex, "HKDF key mismatch for epoch \(v.epoch)")
+        }
+    }
+
+    @Test("BLS key derivation produces consistent sizes across platforms")
+    func blsKeyDerivation() throws {
+        let secrets = [
+            "4242424242424242424242424242424242424242424242424242424242424242",
+            "0101010101010101010101010101010101010101010101010101010101010101",
+        ]
+        for secretHex in secrets {
+            let sk = hexToData(secretHex)!
+            let pk = try SEPCommitmentBuilder.computePublicKey(secretKey: sk)
+            let lh = try SEPCommitmentBuilder.computeLeafHash(secretKey: sk)
+            #expect(pk.count == 48, "BLS public key must be 48 bytes")
+            #expect(lh.count == 32, "Leaf hash must be 32 bytes")
+        }
+    }
+
+    @Test("BLS key derivation is deterministic (cross-platform invariant)")
+    func blsKeyDeterministic() throws {
+        let sk = hexToData("4242424242424242424242424242424242424242424242424242424242424242")!
+        let pk1 = try SEPCommitmentBuilder.computePublicKey(secretKey: sk)
+        let pk2 = try SEPCommitmentBuilder.computePublicKey(secretKey: sk)
+        let lh1 = try SEPCommitmentBuilder.computeLeafHash(secretKey: sk)
+        let lh2 = try SEPCommitmentBuilder.computeLeafHash(secretKey: sk)
+        #expect(pk1 == pk2)
+        #expect(lh1 == lh2)
+    }
+
+    @Test("InviteCode round-trip: encode → decode preserves all fields")
+    func inviteCodeRoundtrip() {
+        let members = [
+            SEPGroupMemberLeaf(
+                publicKeyCompressed: Data(repeating: 0x01, count: 48),
+                leafHash: Data(repeating: 0xAA, count: 32)
+            )
+        ]
+        let code = InviteCode(
+            groupID: Data(repeating: 0x42, count: 32),
+            groupSecret: Data(repeating: 0x07, count: 32),
+            name: "test-group",
+            relayHints: ["wss://relay.damus.io"],
+            members: members,
+            epoch: 3,
+            salt: Data(repeating: 0x0B, count: 32),
+            commitment: Data(repeating: 0xFF, count: 32)
+        )
+
+        let encoded = code.encode()
+        let decoded = try! InviteCode.decode(from: encoded)
+
+        #expect(decoded.groupID == code.groupID)
+        #expect(decoded.groupSecret == code.groupSecret)
+        #expect(decoded.name == code.name)
+        #expect(decoded.relayHints == code.relayHints)
+        #expect(decoded.epoch == code.epoch)
+        #expect(decoded.salt == code.salt)
+        #expect(decoded.commitment == code.commitment)
+        #expect(decoded.members.count == 1)
+        #expect(decoded.members[0].publicKeyCompressed == members[0].publicKeyCompressed)
+        #expect(decoded.members[0].leafHash == members[0].leafHash)
+    }
+
+    private func hexToData(_ hex: String) -> Data? {
+        let bytes = stride(from: 0, to: hex.count, by: 2).compactMap { i -> UInt8? in
+            let start = hex.index(hex.startIndex, offsetBy: i)
+            let end = hex.index(start, offsetBy: 2)
+            return UInt8(hex[start..<end], radix: 16)
+        }
+        guard bytes.count == hex.count / 2 else { return nil }
+        return Data(bytes)
+    }
+}
+
 // MARK: - Salt Generation
 
 @Suite("Salt Generation")

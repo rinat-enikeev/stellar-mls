@@ -73,7 +73,7 @@ data class ChatGroup(
 }
 
 enum class MessageStatus {
-    SENDING, SENT, FAILED
+    SENDING, SENT, DELIVERED, FAILED
 }
 
 data class ChatMessage(

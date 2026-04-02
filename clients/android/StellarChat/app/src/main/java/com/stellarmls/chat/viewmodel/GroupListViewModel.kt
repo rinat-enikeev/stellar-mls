@@ -2,6 +2,7 @@ package com.stellarmls.chat.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.util.Log
 import com.stellarmls.chat.BuildConfig
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -35,6 +36,7 @@ import com.stellarmls.mls.SEPGroupRenamed
 import com.stellarmls.mls.SEPGroupStateUpdate
 import com.stellarmls.mls.SEPKeyAttestationPayload
 import com.stellarmls.mls.SEPMemberJoined
+import com.stellarmls.mls.SEPMessageAck
 import com.stellarmls.mls.SEPSaltRequest
 import com.stellarmls.mls.SEPSaltResponse
 import kotlinx.coroutines.Dispatchers
@@ -541,14 +543,20 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         transport.sendProtocolMessage(group, json, overrideKey)
     }
 
-    /** Apply a received state update to a local group. */
+    /**
+     * Apply a received state update to a local group.
+     * Handles three cases:
+     * - update.epoch > local: straightforward apply (normal case)
+     * - update.epoch == local: epoch fork — deterministic merge to resolve conflict
+     * - update.epoch < local: stale update, ignored
+     */
     fun applyStateUpdate(update: SEPGroupStateUpdate, groupID: String) {
         val index = groups.indexOfFirst { it.id == groupID }
         if (index < 0) return
         val group = groups[index]
 
-        // Only apply if newer
-        if (update.epoch <= group.epoch) return
+        // Stale update — ignore
+        if (update.epoch < group.epoch) return
 
         // Verify sender attestation BEFORE mutating state
         val senderAtt = update.senderAttestation
@@ -563,15 +571,143 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             }
         }
 
-        // Apply member changes
-        for (removed in update.removedMemberKeys) {
-            group.members.removeAll { it.publicKeyCompressed.contentEquals(removed) }
-        }
-        for (added in update.addedMembers) {
-            if (group.members.none { it.publicKeyCompressed.contentEquals(added.publicKeyCompressed) }) {
-                group.members.add(added)
+        if (update.epoch == group.epoch) {
+            // Same epoch + same salt = our own update echoed back from the relay — ignore.
+            if (update.salt.contentEquals(group.salt)) {
+                if (BuildConfig.DEBUG) {
+                    Log.d("GroupListVM", "Ignoring own echo at epoch=${update.epoch} for group=${groupID.take(8)}")
+                }
+                return
+            }
+
+            // Epoch fork: two members made concurrent changes at the same epoch.
+            // Deterministic merge: union members, lexicographic-smaller salt wins.
+            val remoteSalt = update.salt
+            val localSalt = group.salt
+
+            // Merge: add remote's added members, remove remote's removed members
+            for (removed in update.removedMemberKeys) {
+                group.members.removeAll { it.publicKeyCompressed.contentEquals(removed) }
+            }
+            for (added in update.addedMembers) {
+                if (group.members.none { it.publicKeyCompressed.contentEquals(added.publicKeyCompressed) }) {
+                    group.members.add(added)
+                }
+            }
+            sortMembers(group)
+
+            // Deterministic salt selection: lexicographically smaller wins
+            val useRemoteSalt = lexCompare(remoteSalt, localSalt) < 0
+            group.epoch += 1
+            group.salt = if (useRemoteSalt) remoteSalt else localSalt
+            group.recomputeCommitment()
+
+            groups[index] = group
+            storeSalt(groupID, group.epoch, group.salt)
+
+            transport.currentMembers.clear()
+            transport.currentMembers.addAll(groups.flatMap { it.members })
+            transport.subscribe(group)
+
+            viewModelScope.launch {
+                try { store.saveGroup(group) } catch (_: Exception) { }
+            }
+
+            // Broadcast the merged state so all members converge
+            val mergedUpdate = buildStateUpdate(group)
+            broadcastStateUpdate(group, mergedUpdate)
+        } else {
+            // Normal case: update.epoch > group.epoch
+            for (removed in update.removedMemberKeys) {
+                group.members.removeAll { it.publicKeyCompressed.contentEquals(removed) }
+            }
+            for (added in update.addedMembers) {
+                if (group.members.none { it.publicKeyCompressed.contentEquals(added.publicKeyCompressed) }) {
+                    group.members.add(added)
+                }
+            }
+            sortMembers(group)
+
+            group.epoch = update.epoch
+            group.salt = update.salt
+            if (update.commitment != null) {
+                group.commitment = update.commitment
+            }
+
+            groups[index] = group
+            storeSalt(groupID, update.epoch, update.salt)
+
+            transport.currentMembers.clear()
+            transport.currentMembers.addAll(groups.flatMap { it.members })
+            transport.subscribe(group)
+
+            viewModelScope.launch {
+                try { store.saveGroup(group) } catch (_: Exception) { }
             }
         }
+    }
+
+    /** Rotate the group key without membership changes. Provides forward secrecy. */
+    fun rotateGroupKey(groupID: String) {
+        val index = groups.indexOfFirst { it.id == groupID }
+        if (index < 0) return
+        val group = groups[index]
+
+        val previousKey = group.encryptionKey
+
+        group.epoch++
+        group.salt = SEPCommitmentBuilder.generateSalt()
+        group.recomputeCommitment()
+
+        groups[index] = group
+        storeSalt(groupID, group.epoch, group.salt)
+
+        val update = buildStateUpdate(group)
+        broadcastStateUpdate(group, update, overrideKey = previousKey)
+
+        transport.currentMembers.clear()
+        transport.currentMembers.addAll(groups.flatMap { it.members })
+        transport.subscribe(group)
+
+        viewModelScope.launch {
+            try { store.saveGroup(group) } catch (_: Exception) { }
+        }
+    }
+
+    /** Remove a member from a group, broadcast state update, and rotate keys. */
+    fun removeMember(blsPubkey: ByteArray, groupID: String) {
+        val index = groups.indexOfFirst { it.id == groupID }
+        if (index < 0) return
+        val group = groups[index]
+
+        if (group.members.none { it.publicKeyCompressed.contentEquals(blsPubkey) }) return
+
+        // Capture old key for broadcasting
+        val previousKey = group.encryptionKey
+
+        group.members.removeAll { it.publicKeyCompressed.contentEquals(blsPubkey) }
+        group.epoch++
+        group.salt = SEPCommitmentBuilder.generateSalt()
+        group.recomputeCommitment()
+
+        groups[index] = group
+        storeSalt(groupID, group.epoch, group.salt)
+
+        transport.currentMembers.clear()
+        transport.currentMembers.addAll(groups.flatMap { it.members })
+
+        // Broadcast removal encrypted with the PREVIOUS key
+        val update = buildStateUpdate(group, removedMemberKeys = listOf(blsPubkey))
+        broadcastStateUpdate(group, update, overrideKey = previousKey)
+
+        transport.subscribe(group)
+
+        viewModelScope.launch {
+            try { store.saveGroup(group) } catch (_: Exception) { }
+        }
+    }
+
+    private fun sortMembers(group: ChatGroup) {
         group.members.sortWith { a, b ->
             val aKey = a.publicKeyCompressed
             val bKey = b.publicKeyCompressed
@@ -581,24 +717,14 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             }
             aKey.size - bKey.size
         }
+    }
 
-        group.epoch = update.epoch
-        group.salt = update.salt
-        if (update.commitment != null) {
-            group.commitment = update.commitment
+    private fun lexCompare(a: ByteArray, b: ByteArray): Int {
+        for (i in 0 until minOf(a.size, b.size)) {
+            val cmp = (a[i].toInt() and 0xFF) - (b[i].toInt() and 0xFF)
+            if (cmp != 0) return cmp
         }
-
-        groups[index] = group
-        storeSalt(groupID, update.epoch, update.salt)
-
-        // Refresh transport member list and resubscribe with new key
-        transport.currentMembers.clear()
-        transport.currentMembers.addAll(groups.flatMap { it.members })
-        transport.subscribe(group)
-
-        viewModelScope.launch {
-            try { store.saveGroup(group) } catch (_: Exception) { }
-        }
+        return a.size - b.size
     }
 
     /** Handle a member_joined announcement: add the joiner and broadcast updated state. */
@@ -698,6 +824,17 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 if (!msg.isMine && activeGroupID != groupID) {
                     unreadCounts[groupID] = (unreadCounts[groupID] ?: 0) + 1
                 }
+                // Send delivery ACK for non-mine messages (fire-and-forget)
+                if (!msg.isMine) {
+                    val group = groups.find { it.id == groupID }
+                    if (group != null) {
+                        val ackJson = JSONObject().apply {
+                            put("type", SEPMessageAck.MESSAGE_TYPE)
+                            put("eventID", eventID)
+                        }.toString()
+                        transport.sendProtocolMessage(group, ackJson)
+                    }
+                }
                 // Update lastEventTimestamp
                 val group = groups.find { it.id == groupID }
                 if (group != null && timestamp > group.lastEventTimestamp) {
@@ -731,6 +868,17 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 if (!msg.isMine && activeGroupID != groupID) {
                     unreadCounts[groupID] = (unreadCounts[groupID] ?: 0) + 1
+                }
+                // Send delivery ACK for non-mine image messages (fire-and-forget)
+                if (!msg.isMine) {
+                    val group = groups.find { it.id == groupID }
+                    if (group != null) {
+                        val ackJson = JSONObject().apply {
+                            put("type", SEPMessageAck.MESSAGE_TYPE)
+                            put("eventID", eventID)
+                        }.toString()
+                        transport.sendProtocolMessage(group, ackJson)
+                    }
                 }
                 val group = groups.find { it.id == groupID }
                 if (group != null && timestamp > group.lastEventTimestamp) {
@@ -937,6 +1085,19 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                         SEPGroupRenamed.MESSAGE_TYPE -> {
                             val newName = obj.getString("name")
                             applyGroupRenamed(newName, groupID)
+                        }
+                        SEPMessageAck.MESSAGE_TYPE -> {
+                            val ackEventID = obj.getString("eventID")
+                            // Update message status to DELIVERED if we sent it
+                            val messages = chatMessages[groupID]
+                            if (messages != null) {
+                                val idx = messages.indexOfFirst { it.id == ackEventID && it.isMine }
+                                if (idx >= 0) {
+                                    chatMessages[groupID] = messages.toMutableList().also {
+                                        it[idx] = it[idx].copy(status = MessageStatus.DELIVERED)
+                                    }
+                                }
+                            }
                         }
                     }
                 } catch (_: Exception) { }

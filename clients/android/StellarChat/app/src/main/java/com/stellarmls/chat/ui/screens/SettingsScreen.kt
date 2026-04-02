@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import com.stellarmls.chat.crypto.KeyAttestation
 import com.stellarmls.chat.crypto.KeyManager
 import com.stellarmls.chat.model.toHex
+import com.stellarmls.chat.ui.components.QRCodeImage
 import com.stellarmls.chat.viewmodel.GroupListViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -242,8 +243,10 @@ fun SettingsScreen(
                             Text("Inbox Key (X25519)", style = MaterialTheme.typography.titleSmall)
                             Spacer(modifier = Modifier.height(4.dp))
                             CopyableField("Inbox Key", km.keyAgreementPublicKeyHex, context)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            QRCodeImage(text = km.keyAgreementPublicKeyHex, size = 160.dp)
                             Text(
-                                "Share this key so others can send you invitations",
+                                "Share this QR code so others can scan it to send you invitations",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(top = 4.dp)

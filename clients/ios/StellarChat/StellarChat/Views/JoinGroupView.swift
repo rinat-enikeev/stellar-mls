@@ -8,6 +8,7 @@ struct JoinGroupView: View {
     @State private var joined = false
     @State private var isSyncing = false
     @State private var showScanner = false
+    @State private var clipboardDetected = false
 
     var body: some View {
         NavigationStack {
@@ -76,6 +77,15 @@ struct JoinGroupView: View {
                     codeText = scannedCode
                     showScanner = false
                 }
+            }
+            .onAppear {
+                guard codeText.isEmpty, !clipboardDetected,
+                      let text = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      text.count > 100,
+                      Data(base64Encoded: text) != nil
+                else { return }
+                clipboardDetected = true
+                codeText = text
             }
         }
     }

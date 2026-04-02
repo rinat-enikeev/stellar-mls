@@ -7,8 +7,8 @@ Author: @rinat-enikeev
 Track: Standard
 Status: Draft
 Created: 2026-03-30
-Updated: 2026-03-31
-Version: 0.0.4
+Updated: 2026-04-02
+Version: 0.0.5
 Discussion: https://github.com/orgs/stellar/discussions/1903
 ```
 
@@ -51,7 +51,7 @@ After a contract implementing this standard is deployed:
 
 | Term | Meaning |
 |------|---------|
-| `group_id` | An opaque byte string identifying a group. Recommended derivation: `SHA-256(application_namespace \|\| creator_pubkey \|\| nonce)`. |
+| `group_id` | A 32-byte opaque identifier for a group. Recommended derivation: `SHA-256(application_namespace \|\| creator_pubkey \|\| nonce)`. |
 | `members` | The set of member identity public keys for a given epoch. Each key is a BLS12-381 G1 point (48 bytes compressed). See Section 1.1. |
 | `epoch` | A `u64` counter, starting at 0, incremented by exactly 1 on every membership change. |
 | `salt` | 32 uniformly random bytes, generated fresh for each epoch by the Commit initiator. Never stored on-chain. |
@@ -313,7 +313,7 @@ Variant B is ~14x smaller than Variant A. The circuit scales logarithmically wit
 
 ```
 ProofSubmission {
-    group_id:   Bytes       -- identifies the group
+    group_id:   BytesN<32>  -- identifies the group
     epoch:      u64         -- must match stored epoch
     proof:      Bytes(192)  -- Groth16 proof: π_A (G1) || π_B (G2) || π_C (G1)
     public_inputs: {
@@ -327,7 +327,7 @@ ProofSubmission {
 
 ```
 ProofSubmission {
-    group_id:   Bytes       -- identifies the group
+    group_id:   BytesN<32>  -- identifies the group
     epoch:      u64         -- must match stored epoch
     proof:      Bytes(192)  -- Groth16 proof: π_A (G1) || π_B (G2) || π_C (G1)
     public_inputs: {
@@ -375,28 +375,50 @@ The constant verification cost is a core property. A 2,048-member group is indis
 
 Implementations of this SEP MUST expose the following interface. The normative specification is the interface and its invariants; implementation language is non-normative.
 
-#### `create_group`
+#### `initialize`
 
-Registers a new group with its epoch-0 commitment, the circuit verification key, and the circuit tier.
+Initializes the contract with an admin address and the Groth16 verification keys for the three standard tiers.
 
 Parameters:
 
 | Name | Type | Description |
 |------|------|-------------|
-| `group_id` | `Bytes` | Application-defined group identifier |
+| `admin` | `Address` | Deployment admin authorized to manage verification keys and operational flags |
+| `vk_small` | `VerificationKeyData` | Verification key for tier 0 (Small) |
+| `vk_medium` | `VerificationKeyData` | Verification key for tier 1 (Medium) |
+| `vk_large` | `VerificationKeyData` | Verification key for tier 2 (Large) |
+
+Invariants:
+- MUST be callable exactly once
+- `admin` MUST authorize the invocation
+- Each verification key MUST contain exactly 3 input-commitment points (`IC[0]`, `IC[1]`, `IC[2]`) for the 2 public inputs (`commitment`, `epoch`)
+- After successful initialization, proof-verifying group operations become available
+
+#### `create_group`
+
+Registers a new group with its epoch-0 commitment and circuit tier.
+
+Parameters:
+
+| Name | Type | Description |
+|------|------|-------------|
+| `caller` | `Address` | Fee-paying caller for the create transaction |
+| `group_id` | `BytesN<32>` | Application-defined 32-byte group identifier |
 | `commitment` | `BytesN<32>` | Commitment for epoch 0 |
-| `proof` | `Bytes` | ZK proof that the caller knows the preimage of the commitment (see Section 4.1) |
+| `proof` | `Bytes` | ZK proof that the prover knows a valid epoch-0 witness for the submitted commitment (see Section 4.1) |
 | `public_inputs` | `PublicInputs` | `{commitment, epoch: 0}` |
 | `tier` | `u32` | Circuit tier: 0 = Small (32), 1 = Medium (256), 2 = Large (2048) |
 
 Invariants:
+- `caller` MUST authorize the invocation
 - `group_id` MUST NOT already exist in storage
 - Proof MUST verify against the verification key for the specified tier
+- `group_id` MUST be exactly 32 bytes; applications with larger internal identifiers MUST hash or otherwise canonicalize them before contract submission
 - Emits a `GroupCreated` event
 
 ##### 4.1 Semantics of the epoch-0 proof
 
-At epoch 0, no prior group state exists. The ZK proof submitted with `create_group` proves the following: the caller knows a secret key `sk` and a salt `s` such that `Poseidon(sk)` is a leaf in the Poseidon Merkle tree whose root, combined with epoch 0 and salt `s`, produces the submitted commitment. This is the same circuit and statement used for all subsequent epochs — the creator is proving they are a member of the set they are committing, not that the set existed before.
+At epoch 0, no prior group state exists. The ZK proof submitted with `create_group` proves the following: the prover knows a secret key `sk` and a salt `s` such that `Poseidon(sk)` is a leaf in the Poseidon Merkle tree whose root, combined with epoch 0 and salt `s`, produces the submitted commitment. This is the same circuit and statement used for all subsequent epochs — the creator is proving they are a member of the set they are committing, not that the set existed before.
 
 This means the creator cannot register a group containing only other people's keys without also including their own. Any party who knows the salt and a valid member key can create the group; the contract does not privilege the creator in any way after creation.
 
@@ -408,7 +430,7 @@ Parameters:
 
 | Name | Type | Description |
 |------|------|-------------|
-| `group_id` | `Bytes` | Identifies the group |
+| `group_id` | `BytesN<32>` | Identifies the group |
 | `new_commitment` | `BytesN<32>` | Commitment for the new epoch |
 | `new_epoch` | `u64` | MUST equal `stored_epoch + 1` |
 | `proof` | `Bytes` | ZK proof that the caller is a member of the **current** epoch's committed set |
@@ -418,6 +440,7 @@ Invariants:
 - `group_id` MUST exist
 - `new_epoch == stored_epoch + 1` — strict monotonicity enforced
 - Proof is verified against the **current** commitment, not the new one. This proves the updater is a legitimate member before the transition.
+- No address-based authorization is required beyond a valid proof. The contract authorizes the state transition by proof validity and public-input equality only.
 - Emits a `CommitmentUpdated` event
 
 #### `verify_membership`
@@ -428,13 +451,13 @@ Parameters:
 
 | Name | Type | Description |
 |------|------|-------------|
-| `group_id` | `Bytes` | Identifies the group |
+| `group_id` | `BytesN<32>` | Identifies the group |
 | `proof` | `Bytes` | ZK proof |
 | `public_inputs` | `PublicInputs` | `{commitment, epoch}` |
 
 Returns: `bool`
 
-This function is a pure verification — no state change, no XLM cost when called via `simulateTransaction`.
+This function is a pure verification — no state change, no XLM cost when called via `simulateTransaction`. Implementations SHOULD NOT consume or blacklist the proof when used through `verify_membership`; the same proof may later be presented to a state-changing operation.
 
 #### `deactivate_group`
 
@@ -444,13 +467,14 @@ Parameters:
 
 | Name | Type | Description |
 |------|------|-------------|
-| `group_id` | `Bytes` | Identifies the group |
+| `group_id` | `BytesN<32>` | Identifies the group |
 | `proof` | `Bytes` | ZK proof that the caller is a member of the current epoch's committed set |
 | `public_inputs` | `PublicInputs` | `{commitment: current_commitment, epoch: current_epoch}` |
 
 Invariants:
 - `group_id` MUST exist and MUST NOT already be deactivated
 - Proof MUST verify against the current commitment
+- No address-based authorization is required beyond a valid proof
 - After deactivation, `update_commitment` calls for this `group_id` MUST be rejected
 - `verify_membership` and `get_state` remain functional (the last committed state is preserved)
 - Emits a `GroupDeactivated` event
@@ -480,12 +504,26 @@ Parameters:
 
 | Name | Type | Description |
 |------|------|-------------|
-| `group_id` | `Bytes` | Identifies the group |
+| `group_id` | `BytesN<32>` | Identifies the group |
 | `max_entries` | `u32` | Maximum number of entries to return, capped at `history_window` |
 
 The contract SHOULD maintain a rolling window of the last `history_window` entries (default: 64). Older entries are pruned from persistent storage on each `update_commitment` call. Applications that need full history MUST reconstruct it from `CommitmentUpdated` events emitted by the contract.
 
 **Rationale.** An unbounded append-only history in contract storage accumulates rent indefinitely and exposes the complete temporal fingerprint of a group's activity. A rolling window bounds storage cost while preserving enough state for recent dispute resolution. Events provide the complete audit trail for applications that need it.
+
+#### Operational extensions
+
+Implementations MAY expose deployment-management operations in addition to the interoperable interface above. The current reference contract exposes:
+
+- `update_vk(tier, new_vk)` — admin-authorized verification-key rotation for a tier
+- `set_restricted_mode(restricted)` — admin-authorized toggle that limits `create_group` to the admin
+- `bump_group_ttl(group_id)` — maintenance operation that extends Soroban persistent-storage TTL for a group without changing its state
+
+These operations do not affect proof format or client interoperability, but they are operationally useful for production deployments.
+
+#### Proof replay hardening
+
+Implementations SHOULD reject any state-changing operation (`create_group`, `update_commitment`, `deactivate_group`) that reuses an identical serialized proof previously accepted by the contract. This prevents exact-proof replay across groups and functions. A proof presented only to `verify_membership` SHOULD remain reusable because that call is read-only.
 
 ---
 
@@ -845,7 +883,15 @@ Strict monotonicity provides a simple, auditable invariant: the history is a lin
 
 ### 12. Reference Implementation
 
-The reference implementation is written in Rust using the arkworks library ecosystem (v0.4):
+The reference implementation spans the full repository:
+
+- `src/` — Rust cryptographic core written on arkworks (v0.4)
+- `contracts/sep-xxxx/` — Soroban contract for on-chain verification and state management
+- `relayer/` — fee-decoupling HTTP relayer
+- `swift-mls/` and `kotlin-mls/` — mobile/client SDKs
+- `clients/ios/` and `clients/android/` — reference applications integrating transport, attestation, salt recovery, and on-chain submission
+
+The Rust cryptographic core uses:
 
 - `ark-groth16` — Groth16 prover and verifier
 - `ark-bls12-381` — BLS12-381 curve and field implementations
@@ -873,8 +919,11 @@ The reference implementation is written in Rust using the arkworks library ecosy
 4. **Member sorting is enforced by the implementation.** The Merkle tree builder accepts member records containing `{compressed G1 public key, Poseidon(sk)}` and sorts them internally by compressed G1 bytes. Duplicate public keys are rejected so the commitment remains a canonical encoding of a set.
 5. **Pre-computed leaf hashes.** The `merkle` module supports building trees from `{compressed G1 public key, Poseidon(sk)}` member records (via `build_from_members`), enabling the production workflow where members share canonical sort keys and leaf hashes during registration without revealing secret keys.
 6. **Ceremony API stops at public Phase 1 output.** The `ceremony` module implements Powers of Tau initialization, sequential contributions with pairing-based verification, SRS consistency checks, transcript verification, and circuit identification. The public `run_ceremony` function returns only the final SRS, transcript, and `circuit_id`; the old scalar-based Groth16 key derivation remains test-only because it does not preserve the 1-of-N trust guarantee.
-7. **Unit tests** cover all modules: Poseidon hash properties, canonical Merkle tree construction and proof verification, duplicate-member rejection, commitment computation and serialization, circuit satisfiability and rejection, full Groth16 pipeline including epoch transitions, wrong-key rejection, proof serialization roundtrips, ceremony contribution verification, SRS tampering rejection, strengthened transcript verification, and circuit identifier behavior.
-8. **Proof size confirmed at 192 bytes** (48 + 96 + 48 compressed BLS12-381 points).
+7. **Contract boundary uses uncompressed proofs.** The SDKs and FFI/JNI bridges convert the prover's 192-byte compressed Groth16 proof into the contract's 384-byte uncompressed `(A, B, C)` format before submission, avoiding decompression work on-chain.
+8. **The deployed contract fixes `group_id` at 32 bytes.** Applications derive a canonical 32-byte identifier off-chain and submit that value consistently to the contract, relayer, and SDKs.
+9. **State-changing proofs are replay-tracked.** The Soroban contract records a SHA-256 hash of each accepted `(A, B, C)` proof and rejects exact reuse for create, update, and deactivate operations.
+10. **Operational hooks are part of the implementation.** The contract includes one-time initialization, admin-controlled verification-key rotation, restricted create mode, and TTL bump maintenance in addition to the interoperable group operations.
+11. **Proof size confirmed at 192 bytes** (48 + 96 + 48 compressed BLS12-381 points).
 
 ---
 
@@ -886,3 +935,4 @@ The reference implementation is written in Rust using the arkworks library ecosy
 | 0.0.2 | 2026-03-31 | Added Poseidon-only commitment binding variant (Variant B) based on Phase 1 reference implementation; added measured constraint counts; documented Poseidon parameter generation; added reference implementation section; updated circuit tiers table with both variant counts |
 | 0.0.3 | 2026-03-31 | Key ownership changed from `sk · G1` to `Poseidon(sk)` preimage proof; reduced public inputs from 3 to 2 (`commitment`, `epoch`); updated Poseidon seed to include all parameters; updated formal relations for both variants; updated constraint tables with measured values; documented salt verification for both variants; updated reference implementation section to reflect 67 tests and current API |
 | 0.0.4 | 2026-03-31 | Added Phase 2: Powers of Tau ceremony implementation; expanded Section 8.2 with ceremony protocol details (SRS structure, contribution verification via pairing checks, transcript format, deterministic key derivation); added `ceremony` module to reference implementation; 93 tests total |
+| 0.0.5 | 2026-04-02 | Aligned Section 4 with the implemented Soroban ABI: added `initialize`, documented operational extensions (`update_vk`, restricted mode, TTL bump), fixed `group_id` to `BytesN<32>`, clarified proof-based authorization and proof-replay hardening, and expanded the reference-implementation section to cover the contract, relayer, SDKs, and reference apps |

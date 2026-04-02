@@ -6,8 +6,12 @@ import com.stellarmls.chat.crypto.NostrEvent
 import com.stellarmls.chat.crypto.NostrEventBuilder
 import com.stellarmls.chat.model.ChatGroup
 import com.stellarmls.mls.SEPGroupMemberLeaf
+import com.stellarmls.mls.SEPGroupRenamed
 import com.stellarmls.mls.SEPGroupStateUpdate
 import com.stellarmls.mls.SEPMemberJoined
+import com.stellarmls.mls.SEPMessageAck
+import com.stellarmls.mls.SEPSaltRequest
+import com.stellarmls.mls.SEPSaltResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -287,7 +291,14 @@ class NostrMessageTransport(
         return try {
             val obj = JSONObject(text)
             val type = obj.optString("type", "")
-            type in setOf("member_joined", "group_state_update", "salt_request", "salt_response", "group_renamed")
+            type in setOf(
+                SEPMemberJoined.MESSAGE_TYPE,
+                SEPGroupStateUpdate.MESSAGE_TYPE,
+                SEPSaltRequest.MESSAGE_TYPE,
+                SEPSaltResponse.MESSAGE_TYPE,
+                SEPGroupRenamed.MESSAGE_TYPE,
+                SEPMessageAck.MESSAGE_TYPE
+            )
         } catch (_: Exception) {
             false
         }

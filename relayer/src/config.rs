@@ -11,6 +11,8 @@ pub struct Config {
     pub contract_id: String,
     /// Soroban RPC endpoint URL.
     pub rpc_url: String,
+    /// Network passphrase used when invoking via explicit RPC URL.
+    pub network_passphrase: String,
     /// Stellar network name (mainnet, testnet).
     pub network: String,
     /// HTTP bind address.
@@ -31,6 +33,14 @@ impl Config {
         let contract_id = require_env("RELAYER_CONTRACT_ID")?;
         let rpc_url = env::var("RELAYER_RPC_URL")
             .unwrap_or_else(|_| "https://soroban.stellar.org".to_string());
+        let network_passphrase = env::var("RELAYER_NETWORK_PASSPHRASE").unwrap_or_else(|_| {
+            match env::var("RELAYER_NETWORK").unwrap_or_else(|_| "mainnet".to_string()).as_str() {
+                "testnet" => "Test SDF Network ; September 2015".to_string(),
+                "futurenet" => "Test SDF Future Network ; October 2022".to_string(),
+                "mainnet" => "Public Global Stellar Network ; September 2015".to_string(),
+                _ => String::new(),
+            }
+        });
         let network = env::var("RELAYER_NETWORK").unwrap_or_else(|_| "mainnet".to_string());
         let bind_address =
             env::var("RELAYER_BIND").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
@@ -54,6 +64,7 @@ impl Config {
             public_address: String::new(), // resolved at startup
             contract_id,
             rpc_url,
+            network_passphrase,
             network,
             bind_address,
             auth_tokens,

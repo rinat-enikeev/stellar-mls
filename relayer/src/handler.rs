@@ -4,9 +4,10 @@ use std::sync::Arc;
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Json;
+use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::config::Config;
 use crate::validation::{self, RateLimiter, READ_ONLY_FUNCTIONS};
@@ -21,6 +22,7 @@ pub struct AppState {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RelayerRequest {
+    #[serde(alias = "contractID")]
     pub contract_id: String,
     pub function: String,
     pub payload: Value,
@@ -43,7 +45,7 @@ pub async fn handle_invoke(
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Json(request): Json<RelayerRequest>,
-) -> (StatusCode, Json<RelayerResponse>) {
+) -> Response {
     let ip = addr.ip().to_string();
 
     // Auth check
@@ -58,7 +60,8 @@ pub async fn handle_invoke(
                 transaction_hash: None,
                 message: Some(e),
             }),
-        );
+        )
+            .into_response();
     }
 
     // Rate limit check
@@ -70,7 +73,8 @@ pub async fn handle_invoke(
                 transaction_hash: None,
                 message: Some(e),
             }),
-        );
+        )
+            .into_response();
     }
 
     // Validate request
@@ -84,19 +88,24 @@ pub async fn handle_invoke(
                 transaction_hash: None,
                 message: Some(e),
             }),
-        );
+        )
+            .into_response();
     }
 
     // Build and execute the stellar CLI invocation
     match invoke_contract(&state.config, &request).await {
-        Ok(output) => (
-            StatusCode::OK,
-            Json(RelayerResponse {
-                accepted: true,
-                transaction_hash: None,
-                message: Some(output),
-            }),
-        ),
+        Ok(output) => match success_response(&request.function, output) {
+            Ok(response) => response,
+            Err(e) => (
+                StatusCode::BAD_GATEWAY,
+                Json(RelayerResponse {
+                    accepted: false,
+                    transaction_hash: None,
+                    message: Some(e),
+                }),
+            )
+                .into_response(),
+        },
         Err(e) => (
             StatusCode::BAD_GATEWAY,
             Json(RelayerResponse {
@@ -104,8 +113,45 @@ pub async fn handle_invoke(
                 transaction_hash: None,
                 message: Some(e),
             }),
-        ),
+        )
+            .into_response(),
     }
+}
+
+fn success_response(function: &str, output: String) -> Result<Response, String> {
+    match function {
+        "create_group" | "update_commitment" | "deactivate_group" => Ok((
+            StatusCode::OK,
+            Json(RelayerResponse {
+                accepted: true,
+                transaction_hash: None,
+                message: if output.is_empty() { None } else { Some(output) },
+            }),
+        )
+            .into_response()),
+        "verify_membership" => {
+            let valid = parse_bool_output(&output)?;
+            Ok((StatusCode::OK, Json(json!({ "valid": valid }))).into_response())
+        }
+        "get_state" | "get_history" => {
+            let value: Value = serde_json::from_str(&output)
+                .map_err(|e| format!("failed to parse stellar CLI JSON output: {e}; output={output}"))?;
+            Ok((StatusCode::OK, Json(value)).into_response())
+        }
+        other => Err(format!("unsupported function: {other}")),
+    }
+}
+
+fn parse_bool_output(output: &str) -> Result<bool, String> {
+    let trimmed = output.trim();
+    if trimmed.eq_ignore_ascii_case("true") {
+        return Ok(true);
+    }
+    if trimmed.eq_ignore_ascii_case("false") {
+        return Ok(false);
+    }
+    serde_json::from_str::<bool>(trimmed)
+        .map_err(|e| format!("failed to parse boolean output: {e}; output={trimmed}"))
 }
 
 /// Invoke the Soroban contract via the `stellar` CLI.
@@ -119,6 +165,8 @@ async fn invoke_contract(config: &Config, request: &RelayerRequest) -> Result<St
         .arg("invoke")
         .arg("--rpc-url")
         .arg(&config.rpc_url)
+        .arg("--network-passphrase")
+        .arg(&config.network_passphrase)
         .arg("--network")
         .arg(&config.network)
         .arg("--id")

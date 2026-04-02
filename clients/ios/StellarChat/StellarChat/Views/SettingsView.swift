@@ -8,6 +8,8 @@ struct SettingsView: View {
     @State private var relayError: String?
     @State private var contractEndpoint = ""
     @State private var contractIDInput = ""
+    @State private var relayerURLInput = ""
+    @State private var relayerAuthTokenInput = ""
     @State private var contractSaveStatus: String?
     @State private var showAdvanced = false
     @State private var newBlossomURL = ""
@@ -247,6 +249,17 @@ struct SettingsView: View {
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
 
+            TextField("Relayer URL (optional)", text: $relayerURLInput)
+                .font(.caption)
+                .monospaced()
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+
+            TextField("Relayer Auth Token (optional)", text: $relayerAuthTokenInput)
+                .font(.caption)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+
             Button("Save Contract Configuration") {
                 saveContractConfig()
             }
@@ -261,13 +274,15 @@ struct SettingsView: View {
                     .foregroundStyle(status.hasPrefix("Error") ? .red : .green)
             }
 
-            Text("Enter the Soroban RPC endpoint and deployed SEP-XXXX contract address for testnet.")
+            Text("Enter the Soroban RPC endpoint and deployed SEP-XXXX contract address. If a relayer URL is set, on-chain requests are sent through the relayer instead of directly to Soroban RPC.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
         .onAppear {
             contractEndpoint = appState.contractEndpoint
             contractIDInput = appState.contractID
+            relayerURLInput = appState.relayerURL
+            relayerAuthTokenInput = appState.relayerAuthToken
         }
     }
 
@@ -303,6 +318,8 @@ struct SettingsView: View {
     private func saveContractConfig() {
         appState.contractEndpoint = contractEndpoint
         appState.contractID = contractIDInput
+        appState.relayerURL = relayerURLInput
+        appState.relayerAuthToken = relayerAuthTokenInput
         appState.configureContract()
         contractSaveStatus = appState.isContractConfigured
             ? "Configured successfully"

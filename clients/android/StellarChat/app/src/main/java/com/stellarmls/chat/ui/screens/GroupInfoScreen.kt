@@ -1,5 +1,7 @@
 package com.stellarmls.chat.ui.screens
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -7,10 +9,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PersonRemove
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -41,10 +45,13 @@ fun GroupInfoScreen(
     myBlsPubkey: ByteArray,
     onRemoveMember: (ByteArray) -> Unit,
     onRotateKey: () -> Unit = {},
+    onRenameGroup: (String) -> Unit = {},
     onBack: () -> Unit
 ) {
     var memberToRemove by remember { mutableStateOf<SEPGroupMemberLeaf?>(null) }
     var removalStatus by remember { mutableStateOf<String?>(null) }
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var newGroupName by remember { mutableStateOf(group.name) }
 
     Scaffold(
         topBar = {
@@ -69,7 +76,24 @@ fun GroupInfoScreen(
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("Group", style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(8.dp))
-                    InfoRow("Name", group.name)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                newGroupName = group.name
+                                showRenameDialog = true
+                            },
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        InfoRow("Name", group.name)
+                        Icon(
+                            Icons.Filled.Edit,
+                            contentDescription = "Rename",
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     InfoRow("Epoch", group.epoch.toString())
                     InfoRow("Members", group.members.size.toString())
                     InfoRow("Tier", group.tier.displayName)
@@ -172,6 +196,35 @@ fun GroupInfoScreen(
             },
             dismissButton = {
                 TextButton(onClick = { memberToRemove = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showRenameDialog) {
+        AlertDialog(
+            onDismissRequest = { showRenameDialog = false },
+            title = { Text("Rename Group") },
+            text = {
+                androidx.compose.material3.OutlinedTextField(
+                    value = newGroupName,
+                    onValueChange = { newGroupName = it },
+                    label = { Text("Group name") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onRenameGroup(newGroupName)
+                    removalStatus = "Group renamed."
+                    showRenameDialog = false
+                }) {
+                    Text("Rename")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRenameDialog = false }) {
                     Text("Cancel")
                 }
             }

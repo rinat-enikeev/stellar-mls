@@ -11,6 +11,16 @@ final class NostrMessageTransport {
     /// conditions where an old stream's onTermination CLOSE kills a new REQ.
     private var subscriptionGeneration: UInt64 = 0
 
+    /// Whether at least one relay connection is active.
+    var isAnyRelayConnected: Bool {
+        get async {
+            for conn in connections.values {
+                if await conn.isConnected { return true }
+            }
+            return false
+        }
+    }
+
     /// Callback for received and decrypted plain-text chat messages.
     /// Parameters: (plaintext, event, senderVerified: true if BLS pubkey is in member list)
     var onMessage: ((String, NostrEvent) -> Void)?

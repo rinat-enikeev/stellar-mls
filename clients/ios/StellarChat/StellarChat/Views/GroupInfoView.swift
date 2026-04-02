@@ -8,12 +8,27 @@ struct GroupInfoView: View {
     @State private var memberToRemove: SEPGroupMemberLeaf?
     @State private var showRemoveConfirmation = false
     @State private var removalStatus: String?
+    @State private var showRenameAlert = false
+    @State private var newGroupName = ""
 
     var body: some View {
         NavigationStack {
             List {
                 Section("Group") {
-                    LabeledContent("Name") { Text(group.name) }
+                    Button {
+                        newGroupName = group.name
+                        showRenameAlert = true
+                    } label: {
+                        LabeledContent("Name") {
+                            HStack(spacing: 4) {
+                                Text(group.name)
+                                Image(systemName: "pencil")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .foregroundStyle(.primary)
                     LabeledContent("Epoch") { Text("\(group.epoch)") }
                     LabeledContent("Members") { Text("\(group.members.count)") }
                     LabeledContent("Tier") { Text(group.tier.displayName) }
@@ -94,6 +109,14 @@ struct GroupInfoView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("The member will be removed and the group key will be rotated. They will not be able to decrypt future messages.")
+            }
+            .alert("Rename Group", isPresented: $showRenameAlert) {
+                TextField("Group name", text: $newGroupName)
+                Button("Rename") {
+                    appState.renameGroup(groupID: group.id, newName: newGroupName)
+                    removalStatus = "Group renamed."
+                }
+                Button("Cancel", role: .cancel) {}
             }
         }
     }

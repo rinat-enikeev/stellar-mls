@@ -37,6 +37,10 @@ class NostrMessageTransport(
     private val subscriptionJobs = ConcurrentHashMap<String, Job>()
     private val scope = CoroutineScope(Dispatchers.IO)
 
+    /** Whether at least one relay connection is active. */
+    val isAnyRelayConnected: Boolean
+        get() = connections.any { it.isConnected }
+
     var onMessage: ((groupID: String, senderPubkey: String, text: String, eventID: String, timestamp: Long) -> Unit)? = null
     /** Called when a decrypted message is a protocol message (state update, salt request/response). */
     var onProtocolMessage: ((groupID: String, json: String, eventID: String, senderPubkey: String) -> Unit)? = null

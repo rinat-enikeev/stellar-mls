@@ -27,6 +27,7 @@ async fn main() {
             eprintln!();
             eprintln!("Optional:");
             eprintln!("  RELAYER_RPC_URL        Soroban RPC (default: https://soroban.stellar.org)");
+            eprintln!("  RELAYER_NETWORK_PASSPHRASE  Network passphrase for the RPC endpoint");
             eprintln!("  RELAYER_NETWORK        Network name (default: mainnet)");
             eprintln!("  RELAYER_BIND           Listen address (default: 0.0.0.0:8080)");
             eprintln!("  RELAYER_AUTH_TOKENS    Comma-separated bearer tokens (default: none)");

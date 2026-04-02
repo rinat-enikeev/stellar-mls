@@ -56,6 +56,26 @@ struct GroupListView: View {
             }
         }
         .navigationTitle("Stellar Chat")
+        .toolbarTitleMenu {
+            if !appState.isRelayConnected {
+                Label("Disconnected", systemImage: "bolt.slash.fill")
+                    .foregroundStyle(.red)
+            }
+        }
+        .safeAreaInset(edge: .top) {
+            if !appState.isRelayConnected {
+                HStack(spacing: 6) {
+                    Image(systemName: "bolt.slash.fill")
+                        .font(.caption2)
+                    Text("No relay connection")
+                        .font(.caption2)
+                }
+                .foregroundStyle(.white)
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity)
+                .background(.red.opacity(0.85))
+            }
+        }
         .refreshable {
             await appState.reconnectRelays()
         }

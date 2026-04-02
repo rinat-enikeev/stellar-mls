@@ -52,6 +52,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     val groups = mutableStateListOf<ChatGroup>()
     val pendingInvitations = mutableStateListOf<PendingInvitation>()
 
+    /** Whether at least one relay is connected. */
+    val isRelayConnected: Boolean
+        get() = transport.isAnyRelayConnected
+
     // Persistent chat message storage — keyed by group ID, alive for entire app session.
     // Uses SnapshotStateMap so Compose recomposes when messages change.
     val chatMessages = androidx.compose.runtime.mutableStateMapOf<String, List<ChatMessage>>()
@@ -786,6 +790,21 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /** Rename a group and broadcast the change to all members. */
+    fun renameGroup(groupID: String, newName: String) {
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty()) return
+        val group = groups.find { it.id == groupID } ?: return
+
+        applyGroupRenamed(trimmed, groupID)
+
+        val json = JSONObject().apply {
+            put("type", SEPGroupRenamed.MESSAGE_TYPE)
+            put("name", trimmed)
+        }
+        transport.sendProtocolMessage(group, json.toString())
+    }
+
     /** Announce ourselves as a new member to the group over the Nostr transport. */
     fun announceMemberJoined(group: ChatGroup) {
         val member = keyManager.memberLeaf()
@@ -932,6 +951,28 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         seenMessageIDs.getOrPut(groupID) { mutableSetOf() }.add(event.id)
         viewModelScope.launch {
             try { store.saveMessage(msg) } catch (_: Exception) { }
+        }
+    }
+
+    /** Retry a failed message by re-encrypting and re-publishing. */
+    fun retryMessage(groupID: String, messageID: String) {
+        val group = groups.find { it.id == groupID } ?: return
+        val messages = chatMessages[groupID] ?: return
+        val idx = messages.indexOfFirst { it.id == messageID && it.status == MessageStatus.FAILED }
+        if (idx < 0) return
+
+        val failedMsg = messages[idx]
+        val updated = messages.toMutableList()
+        updated[idx] = failedMsg.copy(status = MessageStatus.SENDING)
+        chatMessages[groupID] = updated
+
+        val event = transport.send(group, failedMsg.text)
+        // Update the message ID to the new event and mark as SENDING (OK handler will set SENT/FAILED)
+        val current = chatMessages[groupID]?.toMutableList() ?: return
+        val i = current.indexOfFirst { it.id == messageID }
+        if (i >= 0) {
+            current[i] = current[i].copy(id = event.id, status = MessageStatus.SENDING)
+            chatMessages[groupID] = current
         }
     }
 

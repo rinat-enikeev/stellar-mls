@@ -169,12 +169,26 @@ public struct SEPRelayerTransport: SEPContractTransport {
         let (data, response) = try await session.data(for: request)
         let httpResponse = response as? HTTPURLResponse
         let statusCode = httpResponse?.statusCode ?? -1
+        #if DEBUG
+        let responseBody = String(data: data, encoding: .utf8) ?? "<non-UTF8 body>"
+        print("[SEPRelayer] function=\(invocation.function) url=\(relayerURL.absoluteString) status=\(statusCode)")
+        print("[SEPRelayer] body=\(responseBody)")
+        #endif
         guard (200 ..< 300).contains(statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? "<non-UTF8 body>"
             throw SEPError.invalidResponse(statusCode: statusCode, body: body)
         }
 
-        return try decoder.decode(Response.self, from: data)
+        do {
+            return try decoder.decode(Response.self, from: data)
+        } catch {
+            #if DEBUG
+            let body = String(data: data, encoding: .utf8) ?? "<non-UTF8 body>"
+            print("[SEPRelayer] decode failure for \(Response.self): \(error)")
+            print("[SEPRelayer] undecodable body=\(body)")
+            #endif
+            throw error
+        }
     }
 }
 

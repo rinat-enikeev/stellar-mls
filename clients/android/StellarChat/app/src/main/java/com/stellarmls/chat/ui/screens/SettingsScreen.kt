@@ -59,6 +59,8 @@ fun SettingsScreen(
     var newRelayUrl by remember { mutableStateOf("") }
     var contractEndpointInput by remember { mutableStateOf(viewModel.contractEndpoint) }
     var contractIDInput by remember { mutableStateOf(viewModel.contractID) }
+    var relayerURLInput by remember { mutableStateOf(viewModel.relayerURL) }
+    var relayerAuthTokenInput by remember { mutableStateOf(viewModel.relayerAuthToken) }
     var contractSaveStatus by remember { mutableStateOf<String?>(null) }
     var attestationStatus by remember { mutableStateOf<String?>(null) }
     var advancedExpanded by remember { mutableStateOf(false) }
@@ -190,10 +192,27 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = relayerURLInput,
+                    onValueChange = { relayerURLInput = it },
+                    label = { Text("Relayer URL (optional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = relayerAuthTokenInput,
+                    onValueChange = { relayerAuthTokenInput = it },
+                    label = { Text("Relayer Auth Token (optional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
                 Spacer(modifier = Modifier.height(8.dp))
                 Button(
                     onClick = {
                         viewModel.saveContractConfig(contractEndpointInput, contractIDInput)
+                        viewModel.saveRelayerConfig(relayerURLInput, relayerAuthTokenInput)
                         contractSaveStatus = "Saved"
                     },
                     modifier = Modifier.fillMaxWidth()
@@ -203,6 +222,12 @@ fun SettingsScreen(
                 contractSaveStatus?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 }
+                Text(
+                    "Set a Soroban HTTPS endpoint and contract ID. If a relayer URL is provided, contract calls are routed through the relayer instead of direct RPC.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
             }
 
             Spacer(modifier = Modifier.height(12.dp))

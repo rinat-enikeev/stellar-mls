@@ -66,6 +66,9 @@ final class AppState {
         didSet { Self.persistBlossomServerURLs(blossomServerURLs) }
     }
 
+    /// Whether at least one relay is connected. Updated periodically.
+    var isRelayConnected = true
+
     // MARK: - On-Chain Integration
 
     var onChainService: OnChainService?
@@ -347,8 +350,15 @@ final class AppState {
     /// Publish a newly created group's commitment on-chain.
     func publishGroupOnChain(_ group: ChatGroup) async throws {
         guard let service = onChainService else {
+            #if DEBUG
+            print("[OnChain] publishGroupOnChain skipped: service is nil")
+            #endif
             throw ChatError.contractNotConfigured
         }
+
+        #if DEBUG
+        print("[OnChain] publishGroupOnChain start group=\(group.id.prefix(8)) epoch=\(group.epoch) members=\(group.members.count)")
+        #endif
 
         let response = try await service.publishGroupCreation(
             groupIDData: group.groupIDData,
@@ -364,7 +374,13 @@ final class AppState {
             var updated = group
             updated.isPublishedOnChain = true
             updateGroup(updated)
+            #if DEBUG
+            print("[OnChain] publishGroupOnChain accepted group=\(group.id.prefix(8))")
+            #endif
         } else {
+            #if DEBUG
+            print("[OnChain] publishGroupOnChain rejected: \(response.message ?? "<no message>")")
+            #endif
             throw ChatError.onChainPublishFailed(response.message ?? "Contract rejected submission")
         }
     }
@@ -713,6 +729,24 @@ final class AppState {
         store.saveGroup(updated)
     }
 
+    /// Rename a group and broadcast the change to all members.
+    func renameGroup(groupID: String, newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        let group = groups[index]
+
+        // Apply locally (name is let, so reconstruct)
+        applyGroupRenamed(SEPGroupRenamed(name: trimmed), to: groupID)
+
+        // Broadcast to peers
+        let renamed = SEPGroupRenamed(name: trimmed)
+        Task {
+            try? await chatTransport.sendProtocolMessage(
+                renamed, topic: group.topicTag, key: group.encryptionKey, keyManager: keyManager)
+        }
+    }
+
     // MARK: - Persistent Chat & Protocol Transport
 
     /// Set up the chat message handler on the persistent transport (runs once at init).
@@ -826,6 +860,53 @@ final class AppState {
                 await MainActor.run {
                     if let idx = self.chatMessages[groupID]?.firstIndex(where: { $0.id == event.id }) {
                         self.chatMessages[groupID]?[idx].status = .failed
+                    }
+                }
+            }
+        }
+    }
+
+    /// Retry a failed message by re-encrypting and re-publishing.
+    func retryMessage(groupID: String, messageID: String) {
+        guard let group = groups.first(where: { $0.id == groupID }),
+              let idx = chatMessages[groupID]?.firstIndex(where: { $0.id == messageID }),
+              chatMessages[groupID]?[idx].status == .failed
+        else { return }
+
+        let text = chatMessages[groupID]![idx].text
+        chatMessages[groupID]?[idx].status = .sending
+
+        Task {
+            do {
+                let blsPubkey = try keyManager.blsPublicKey
+                let ts = Int64(Date().timeIntervalSince1970)
+                let wrapper: [String: Any] = [
+                    "v": 2, "type": "chat", "text": text,
+                    "senderBlsPubkey": blsPubkey.base64EncodedString(), "ts": ts
+                ]
+                let wrapperData = try JSONSerialization.data(withJSONObject: wrapper)
+                let authenticatedText = String(data: wrapperData, encoding: .utf8)!
+                let envelope = try GroupCrypto.encrypt(authenticatedText, key: group.encryptionKey)
+                let envelopeData = try JSONEncoder().encode(envelope)
+                let content = envelopeData.base64EncodedString()
+                let event = try NostrEvent.build(
+                    kind: 44114, tags: [["t", group.topicTag]], content: content, keyManager: keyManager
+                )
+                try await chatTransport.publishToRelays(event)
+                await MainActor.run {
+                    // Replace the message with updated ID and sent status
+                    if let i = self.chatMessages[groupID]?.firstIndex(where: { $0.id == messageID }) {
+                        let old = self.chatMessages[groupID]![i]
+                        self.chatMessages[groupID]?[i] = ChatMessage(
+                            id: event.id, groupID: old.groupID, senderPubkey: old.senderPubkey,
+                            text: old.text, timestamp: old.timestamp, isMine: old.isMine, status: .sent
+                        )
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    if let i = self.chatMessages[groupID]?.firstIndex(where: { $0.id == messageID }) {
+                        self.chatMessages[groupID]?[i].status = .failed
                     }
                 }
             }
@@ -1135,6 +1216,9 @@ final class AppState {
               let url = URL(string: endpoint)
         else {
             onChainService = nil
+            #if DEBUG
+            print("[OnChain] configuration invalid endpoint=\(endpoint) contractID=\(id) relayerURL=\(relayerURL)")
+            #endif
             return
         }
 
@@ -1142,8 +1226,14 @@ final class AppState {
             let token = relayerAuthToken.trimmingCharacters(in: .whitespacesAndNewlines)
             let config = SEPRelayerConfig(relayerURL: relayerURL, authToken: token.isEmpty ? nil : token)
             onChainService = OnChainService(contractID: id, relayerConfig: config)
+            #if DEBUG
+            print("[OnChain] configured relayer transport rpc=\(endpoint) contractID=\(id) relayer=\(relayerURL.absoluteString)")
+            #endif
         } else {
             onChainService = OnChainService(contractID: id, endpoint: url)
+            #if DEBUG
+            print("[OnChain] configured direct transport rpc=\(endpoint) contractID=\(id)")
+            #endif
         }
     }
 
@@ -1171,6 +1261,17 @@ final class AppState {
             inboxTag: keyManager.inboxTag,
             privateKey: keyManager.keyAgreementPrivateKey
         )
+
+        // Periodically check relay connectivity
+        Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                let connected = await chatTransport.isAnyRelayConnected
+                if isRelayConnected != connected {
+                    isRelayConnected = connected
+                }
+            }
+        }
     }
 
     // MARK: - Relay Persistence

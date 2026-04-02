@@ -22,9 +22,18 @@ final class ChatViewModel {
         !(appState?.blossomServerURLs.isEmpty ?? true)
     }
 
+    /// ID of the first unread message when the chat was opened, for showing a separator.
+    var firstUnreadMessageID: String?
+
     init(groupID: String, appState: AppState) {
         self.groupID = groupID
         self.appState = appState
+        // Capture the first unread message before clearing the count
+        let unreadCount = appState.unreadCounts[groupID] ?? 0
+        let msgs = appState.chatMessages[groupID] ?? []
+        if unreadCount > 0 && msgs.count >= unreadCount {
+            firstUnreadMessageID = msgs[msgs.count - unreadCount].id
+        }
         // Mark this group as active and clear unread count
         appState.activeGroupID = groupID
         appState.unreadCounts[groupID] = 0
@@ -54,6 +63,10 @@ final class ChatViewModel {
             print("[Blossom] sendImage failed: \(error)")
             errorMessage = error.localizedDescription
         }
+    }
+
+    func retryMessage(id: String) {
+        appState?.retryMessage(groupID: groupID, messageID: id)
     }
 
     func dismissError() {

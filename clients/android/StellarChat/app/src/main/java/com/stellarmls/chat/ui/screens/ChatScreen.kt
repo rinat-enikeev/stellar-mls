@@ -36,15 +36,18 @@ import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -52,6 +55,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -93,14 +97,24 @@ fun ChatScreen(
     val groupName = viewModel.groupName
     val listState = rememberLazyListState()
 
-    // Auto-scroll when new messages arrive
+    // Track whether user is near the bottom of the list
+    val isNearBottom = remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            lastVisible >= layoutInfo.totalItemsCount - 3
+        }
+    }
+
+    // Auto-scroll only when user is near bottom
     LaunchedEffect(viewModel.messages.size) {
-        if (viewModel.messages.isNotEmpty()) {
+        if (viewModel.messages.isNotEmpty() && isNearBottom.value) {
             listState.animateScrollToItem(viewModel.messages.size - 1)
         }
     }
 
     val context = LocalContext.current
+    val view = androidx.compose.ui.platform.LocalView.current
     val scope = rememberCoroutineScope()
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -165,22 +179,51 @@ fun ChatScreen(
                     )
                 }
             } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    state = listState,
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    itemsIndexed(viewModel.messages, key = { _, msg -> msg.id }) { index, message ->
-                        // Date separator
-                        if (shouldShowDateSeparator(viewModel.messages, index)) {
-                            DateSeparator(message.timestamp)
-                        }
+                Box(modifier = Modifier.weight(1f)) {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 16.dp),
+                        state = listState,
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        itemsIndexed(viewModel.messages, key = { _, msg -> msg.id }) { index, message ->
+                            // Date separator
+                            if (shouldShowDateSeparator(viewModel.messages, index)) {
+                                DateSeparator(message.timestamp)
+                            }
 
-                        val isGrouped = isGroupedWithPrevious(viewModel.messages, index)
-                        MessageBubble(message, isGrouped)
+                            // Unread message separator
+                            if (message.id == viewModel.firstUnreadMessageID) {
+                                UnreadSeparator()
+                            }
+
+                            val isGrouped = isGroupedWithPrevious(viewModel.messages, index)
+                            Box(modifier = Modifier.animateItem()) {
+                                MessageBubble(message, isGrouped, onRetry = {
+                                    viewModel.retryMessage(message.id)
+                                })
+                            }
+                        }
+                    }
+
+                    if (!isNearBottom.value) {
+                        SmallFloatingActionButton(
+                            onClick = {
+                                scope.launch {
+                                    if (viewModel.messages.isNotEmpty()) {
+                                        listState.animateScrollToItem(viewModel.messages.size - 1)
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(end = 16.dp, bottom = 8.dp),
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ) {
+                            Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Scroll to latest")
+                        }
                     }
                 }
             }
@@ -265,7 +308,10 @@ fun ChatScreen(
                     singleLine = true
                 )
                 IconButton(
-                    onClick = { viewModel.sendMessage() },
+                    onClick = {
+                        view.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM)
+                        viewModel.sendMessage()
+                    },
                     enabled = viewModel.inputText.isNotBlank()
                 ) {
                     Icon(
@@ -296,6 +342,25 @@ private fun isGroupedWithPrevious(messages: List<ChatMessage>, index: Int): Bool
     val curr = messages[index]
     return prev.senderPubkey == curr.senderPubkey
         && curr.timestamp.time - prev.timestamp.time < TimeUnit.MINUTES.toMillis(2)
+}
+
+@Composable
+fun UnreadSeparator() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
+        Text(
+            text = "New Messages",
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 8.dp)
+        )
+        HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
+    }
 }
 
 @Composable
@@ -330,7 +395,7 @@ private fun formatDateSeparator(date: Date): String {
 }
 
 @Composable
-fun MessageBubble(message: ChatMessage, isGrouped: Boolean = false) {
+fun MessageBubble(message: ChatMessage, isGrouped: Boolean = false, onRetry: (() -> Unit)? = null) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -393,7 +458,7 @@ fun MessageBubble(message: ChatMessage, isGrouped: Boolean = false) {
                     )
                     if (message.isMine) {
                         Spacer(modifier = Modifier.width(2.dp))
-                        MessageStatusIcon(message.status, message.isMine)
+                        MessageStatusIcon(message.status, message.isMine, onRetry)
                     }
                 }
             }
@@ -426,7 +491,7 @@ fun MessageBubble(message: ChatMessage, isGrouped: Boolean = false) {
                             else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                         )
                         if (message.isMine) {
-                            MessageStatusIcon(message.status, message.isMine)
+                            MessageStatusIcon(message.status, message.isMine, onRetry)
                         }
                     }
                 }
@@ -579,7 +644,7 @@ fun AvatarBadge(pubkey: String) {
 }
 
 @Composable
-private fun MessageStatusIcon(status: MessageStatus, isMine: Boolean) {
+private fun MessageStatusIcon(status: MessageStatus, isMine: Boolean, onRetry: (() -> Unit)? = null) {
     val tint = if (isMine) Color.White.copy(alpha = 0.7f)
     else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
     when (status) {
@@ -603,8 +668,10 @@ private fun MessageStatusIcon(status: MessageStatus, isMine: Boolean) {
         )
         MessageStatus.FAILED -> Icon(
             Icons.Filled.Error,
-            contentDescription = "Failed",
-            modifier = Modifier.size(12.dp),
+            contentDescription = "Tap to retry",
+            modifier = Modifier
+                .size(12.dp)
+                .then(if (onRetry != null) Modifier.clickable { onRetry() } else Modifier),
             tint = Color.Red
         )
     }

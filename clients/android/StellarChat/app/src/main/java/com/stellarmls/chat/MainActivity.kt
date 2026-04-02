@@ -63,6 +63,7 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                 pendingInvitationCount = groupListViewModel.pendingInvitations.size,
                 chatMessages = groupListViewModel.chatMessages,
                 unreadCounts = groupListViewModel.unreadCounts,
+                isRelayConnected = groupListViewModel.isRelayConnected,
                 onGroupClick = { group ->
                     navController.navigate("chat/${group.id}")
                 },
@@ -172,6 +173,9 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                 },
                 onRotateKey = {
                     groupListViewModel.rotateGroupKey(groupId)
+                },
+                onRenameGroup = { newName ->
+                    groupListViewModel.renameGroup(groupId, newName)
                 },
                 onBack = { navController.popBackStack() }
             )

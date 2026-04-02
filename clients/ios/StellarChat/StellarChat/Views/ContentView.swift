@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(AppState.self) private var appState
     @State private var showDeepLinkJoin = false
+    @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
 
     var body: some View {
         NavigationStack {
@@ -17,6 +18,65 @@ struct ContentView: View {
             appState.deepLinkInviteCode = nil
         }) {
             DeepLinkJoinGroupView(code: appState.deepLinkInviteCode ?? "")
+        }
+        .sheet(isPresented: .constant(!hasSeenOnboarding)) {
+            OnboardingView(hasSeenOnboarding: $hasSeenOnboarding)
+                .interactiveDismissDisabled()
+        }
+    }
+}
+
+// MARK: - Onboarding
+
+private struct OnboardingView: View {
+    @Binding var hasSeenOnboarding: Bool
+    @State private var currentPage = 0
+
+    private let pages: [(icon: String, title: String, subtitle: String)] = [
+        ("lock.shield.fill", "End-to-End Encrypted", "Messages are secured with MLS group encryption. Only group members can read them."),
+        ("person.3.fill", "Create & Join Groups", "Start a new group or join one with an invite code. Add members anytime."),
+        ("arrow.triangle.2.circlepath", "Key Rotation", "Group keys rotate automatically when members change, keeping conversations secure.")
+    ]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            TabView(selection: $currentPage) {
+                ForEach(Array(pages.enumerated()), id: \.offset) { index, page in
+                    VStack(spacing: 20) {
+                        Spacer()
+                        Image(systemName: page.icon)
+                            .font(.system(size: 64))
+                            .foregroundStyle(.tint)
+                        Text(page.title)
+                            .font(.title2)
+                            .fontWeight(.bold)
+                        Text(page.subtitle)
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 32)
+                        Spacer()
+                    }
+                    .tag(index)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .always))
+
+            Button {
+                if currentPage < pages.count - 1 {
+                    withAnimation { currentPage += 1 }
+                } else {
+                    hasSeenOnboarding = true
+                }
+            } label: {
+                Text(currentPage < pages.count - 1 ? "Next" : "Get Started")
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .padding(.horizontal, 32)
+            .padding(.bottom, 32)
         }
     }
 }

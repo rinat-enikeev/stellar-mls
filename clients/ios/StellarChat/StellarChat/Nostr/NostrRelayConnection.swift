@@ -9,7 +9,7 @@ actor NostrRelayConnection {
     private var webSocketTask: URLSessionWebSocketTask?
     private let session: URLSession
     private var subscriptions: [String: ([String: Any], (NostrEvent) -> Void)] = [:]
-    private var isConnected = false
+    private(set) var isConnected = false
     private var continuations: [AsyncStream<NostrEvent>.Continuation] = []
     private var reconnectAttempts = 0
     private var pingTask: Task<Void, Never>?

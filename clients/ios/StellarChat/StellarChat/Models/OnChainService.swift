@@ -78,10 +78,19 @@ actor OnChainService {
     /// Proving key generation is expensive; results are cached in memory.
     func ensureProvingKey(tier: SEPTier) throws -> Data {
         if let cached = provingKeys[tier] {
+            #if DEBUG
+            print("[OnChainService] using cached proving key tier=\(tier.rawValue)")
+            #endif
             return cached
         }
+        #if DEBUG
+        print("[OnChainService] generating proving key tier=\(tier.rawValue)")
+        #endif
         let pk = try SEPProofGenerator.generateTestingProvingKey(tier: tier)
         provingKeys[tier] = pk
+        #if DEBUG
+        print("[OnChainService] generated proving key bytes=\(pk.count)")
+        #endif
         return pk
     }
 
@@ -95,8 +104,11 @@ actor OnChainService {
         salt: Data,
         tier: SEPTier
     ) throws -> SEPMembershipProofBundle {
+        #if DEBUG
+        print("[OnChainService] generateProof start epoch=\(epoch) members=\(members.count) tier=\(tier.rawValue)")
+        #endif
         let pk = try ensureProvingKey(tier: tier)
-        return try SEPProofGenerator.generateMembershipProof(
+        let bundle = try SEPProofGenerator.generateMembershipProof(
             provingKey: pk,
             members: members,
             secretKey: blsSecretKey,
@@ -104,6 +116,10 @@ actor OnChainService {
             salt: salt,
             tier: tier
         )
+        #if DEBUG
+        print("[OnChainService] generateProof success proofBytes=\(bundle.proof.count) commitmentBytes=\(bundle.publicInputs.commitment.count)")
+        #endif
+        return bundle
     }
 
     // MARK: - Proof Format Conversion
@@ -112,12 +128,18 @@ actor OnChainService {
     /// contract format (384 bytes = proofA‖proofB‖proofC) expected by the
     /// Soroban contract's `Groth16Proof { a: BytesN<96>, b: BytesN<192>, c: BytesN<96> }`.
     private func proofForContract(_ compressedProof: Data) throws -> Data {
+        #if DEBUG
+        print("[OnChainService] proofForContract start compressedBytes=\(compressedProof.count)")
+        #endif
         let components = try SEPProofGenerator.proofToContractFormat(compressedProof: compressedProof)
         // Concatenate: A (96 bytes) || B (192 bytes) || C (96 bytes) = 384 bytes
         var uncompressed = Data(capacity: 384)
         uncompressed.append(components.proofA)
         uncompressed.append(components.proofB)
         uncompressed.append(components.proofC)
+        #if DEBUG
+        print("[OnChainService] proofForContract success uncompressedBytes=\(uncompressed.count)")
+        #endif
         return uncompressed
     }
 
@@ -137,6 +159,9 @@ actor OnChainService {
         tier: SEPTier,
         callerAddress: String
     ) async throws -> SEPSubmissionResponse {
+        #if DEBUG
+        print("[OnChainService] publishGroupCreation start")
+        #endif
         let proofBundle = try generateProof(
             members: members,
             blsSecretKey: blsSecretKey,
@@ -155,6 +180,9 @@ actor OnChainService {
             publicInputs: proofBundle.publicInputs,
             tier: UInt32(tier.rawValue)
         )
+        #if DEBUG
+        print("[OnChainService] publishGroupCreation invoke caller=\(callerAddress.prefix(8)) groupIDBytes=\(groupIDData.count)")
+        #endif
         return try await withRetry { try await self.contractClient.createGroup(request) }
     }
 

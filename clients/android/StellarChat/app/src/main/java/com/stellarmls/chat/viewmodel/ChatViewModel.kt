@@ -24,7 +24,16 @@ class ChatViewModel(
     val hasBlossomServers: Boolean
         get() = groupListViewModel.blossomServerURLs.isNotEmpty()
 
+    /** ID of the first unread message when the chat was opened. */
+    val firstUnreadMessageID: String?
+
     init {
+        // Capture the first unread message before clearing the count
+        val unreadCount = groupListViewModel.unreadCounts[groupID] ?: 0
+        val msgs = groupListViewModel.chatMessages[groupID] ?: emptyList()
+        firstUnreadMessageID = if (unreadCount > 0 && msgs.size >= unreadCount) {
+            msgs[msgs.size - unreadCount].id
+        } else null
         // Mark this group as active and clear unread count
         groupListViewModel.activeGroupID = groupID
         groupListViewModel.unreadCounts[groupID] = 0
@@ -35,6 +44,10 @@ class ChatViewModel(
         if (text.isEmpty()) return
         groupListViewModel.sendMessage(groupID, text)
         inputText = ""
+    }
+
+    fun retryMessage(messageID: String) {
+        groupListViewModel.retryMessage(groupID, messageID)
     }
 
     fun sendImage(imageData: ByteArray) {

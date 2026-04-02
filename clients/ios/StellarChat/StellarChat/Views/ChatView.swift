@@ -27,28 +27,54 @@ struct ChatView: View {
                 Spacer()
             } else {
                 ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 4) {
-                            ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, message in
-                                // Date separator between messages on different days
-                                if shouldShowDateSeparator(at: index) {
-                                    DateSeparator(date: message.timestamp)
+                    ZStack(alignment: .bottomTrailing) {
+                        ScrollView {
+                            LazyVStack(spacing: 4) {
+                                ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, message in
+                                    // Date separator between messages on different days
+                                    if shouldShowDateSeparator(at: index) {
+                                        DateSeparator(date: message.timestamp)
+                                    }
+
+                                    // Unread message separator
+                                    if message.id == viewModel.firstUnreadMessageID {
+                                        UnreadSeparator()
+                                    }
+
+                                    let isGrouped = isGroupedWithPrevious(at: index)
+                                    MessageBubble(message: message, isGrouped: isGrouped, onRetry: {
+                                        viewModel.retryMessage(id: message.id)
+                                    })
+                                    .id(message.id)
+                                    .transition(.opacity.combined(with: .move(edge: .bottom)))
                                 }
 
-                                let isGrouped = isGroupedWithPrevious(at: index)
-                                MessageBubble(message: message, isGrouped: isGrouped)
-                                    .id(message.id)
+                                // Invisible anchor — its onAppear/onDisappear tells us
+                                // whether the user is scrolled to the bottom.
+                                Color.clear
+                                    .frame(height: 1)
+                                    .id("bottom-anchor")
+                                    .onAppear { isNearBottom = true }
+                                    .onDisappear { isNearBottom = false }
                             }
-
-                            // Invisible anchor — its onAppear/onDisappear tells us
-                            // whether the user is scrolled to the bottom.
-                            Color.clear
-                                .frame(height: 1)
-                                .id("bottom-anchor")
-                                .onAppear { isNearBottom = true }
-                                .onDisappear { isNearBottom = false }
+                            .padding()
                         }
-                        .padding()
+
+                        if !isNearBottom {
+                            Button {
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    proxy.scrollTo("bottom-anchor", anchor: .bottom)
+                                }
+                            } label: {
+                                Image(systemName: "chevron.down.circle.fill")
+                                    .font(.title)
+                                    .foregroundStyle(.white, .blue)
+                                    .shadow(radius: 2)
+                            }
+                            .padding(.trailing, 16)
+                            .padding(.bottom, 8)
+                            .transition(.opacity)
+                        }
                     }
                     .onChange(of: viewModel.messages.count) {
                         guard isNearBottom else { return }
@@ -117,10 +143,12 @@ struct ChatView: View {
                     .padding(.vertical, 8)
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 20))
                     .onSubmit {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
                         Task { await viewModel.sendMessage() }
                     }
 
                 Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     Task { await viewModel.sendMessage() }
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
@@ -193,6 +221,22 @@ struct ChatView: View {
     }
 }
 
+// MARK: - Unread Separator
+
+struct UnreadSeparator: View {
+    var body: some View {
+        HStack {
+            Rectangle().fill(.blue.opacity(0.4)).frame(height: 1)
+            Text("New Messages")
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .foregroundStyle(.blue)
+            Rectangle().fill(.blue.opacity(0.4)).frame(height: 1)
+        }
+        .padding(.vertical, 6)
+    }
+}
+
 // MARK: - Date Separator
 
 struct DateSeparator: View {
@@ -228,6 +272,7 @@ struct DateSeparator: View {
 struct MessageBubble: View {
     let message: ChatMessage
     var isGrouped: Bool = false
+    var onRetry: (() -> Void)?
 
     private static let todayTimeFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -306,9 +351,14 @@ struct MessageBubble: View {
                 .font(.caption2)
                 .foregroundStyle(.blue)
         case .failed:
-            Image(systemName: "exclamationmark.circle.fill")
-                .font(.caption2)
-                .foregroundStyle(.red)
+            Button {
+                onRetry?()
+            } label: {
+                Label("Retry", systemImage: "exclamationmark.circle.fill")
+                    .labelStyle(.iconOnly)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
         }
     }
 

@@ -33,7 +33,8 @@ data class PersistedMessage(
     val senderPubkey: String,         // cleartext
     val encryptedText: ByteArray,
     val timestamp: Long,              // cleartext (needed for sorting)
-    val isMine: Boolean               // cleartext
+    val isMine: Boolean,              // cleartext
+    val encryptedMediaAttachment: ByteArray? = null
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

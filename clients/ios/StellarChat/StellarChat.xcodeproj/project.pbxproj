@@ -38,6 +38,9 @@
 		F5E26B4C634D5DFCC4ECBD28 /* NostrRelayConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0884F32E9A807B2566DD234 /* NostrRelayConnection.swift */; };
 		F7159773858364D2C8D16FE1 /* KeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5EB556EBD80A9DC1A99F1F4 /* KeyManager.swift */; };
 		FE754451C690FD52A395B8B2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */; };
+		B79A63D549149B460DD156BE /* MediaCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE16A15F7B2F3F4B51AF6D75 /* MediaCrypto.swift */; };
+		578BF531352E75E4C61B2B5C /* BlossomClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27C5D88DDBACD6965E41049B /* BlossomClient.swift */; };
+		9DB7E4E43DFF680C0C8C056A /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 697AD4227E1110D9C97B2D7C /* ImageCache.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -83,6 +86,9 @@
 		F8FD22552EBCF23A89DB7700 /* ChatGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGroup.swift; sourceTree = "<group>"; };
 		FA96977038D2F9F4EC31EF3D /* BootstrapPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BootstrapPayload.swift; sourceTree = "<group>"; };
 		FD61B2440CA5ED81C983DA87 /* StorageEncryption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageEncryption.swift; sourceTree = "<group>"; };
+		DE16A15F7B2F3F4B51AF6D75 /* MediaCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaCrypto.swift; sourceTree = "<group>"; };
+		27C5D88DDBACD6965E41049B /* BlossomClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlossomClient.swift; sourceTree = "<group>"; };
+		697AD4227E1110D9C97B2D7C /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCache.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -138,6 +144,9 @@
 				FA96977038D2F9F4EC31EF3D /* BootstrapPayload.swift */,
 				F8FD22552EBCF23A89DB7700 /* ChatGroup.swift */,
 				8210CED65D67082D16673F07 /* GroupCrypto.swift */,
+				697AD4227E1110D9C97B2D7C /* ImageCache.swift */,
+				27C5D88DDBACD6965E41049B /* BlossomClient.swift */,
+				DE16A15F7B2F3F4B51AF6D75 /* MediaCrypto.swift */,
 				37304476C52093C0D34ECB92 /* KeyAttestation.swift */,
 				F5EB556EBD80A9DC1A99F1F4 /* KeyManager.swift */,
 				06014BB7573399F26644F9F6 /* OnChainService.swift */,
@@ -322,6 +331,9 @@
 				09EC25786F839A9A840E509A /* ContentView.swift in Sources */,
 				01083F180D3E8311A7E002C6 /* CreateGroupView.swift in Sources */,
 				B5836D3E7760359CFB8C42AC /* GroupCrypto.swift in Sources */,
+				9DB7E4E43DFF680C0C8C056A /* ImageCache.swift in Sources */,
+				578BF531352E75E4C61B2B5C /* BlossomClient.swift in Sources */,
+				B79A63D549149B460DD156BE /* MediaCrypto.swift in Sources */,
 				D6C3C9E90F39CCA80D2DD029 /* GroupListView.swift in Sources */,
 				276E482D1A8B67CFB9B7ADF1 /* InvitationTransport.swift in Sources */,
 				7C027F9FEC64BC2471784A58 /* InviteMemberView.swift in Sources */,

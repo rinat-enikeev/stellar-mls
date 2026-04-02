@@ -15,5 +15,7 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>StellarChat needs camera access to scan QR codes for joining groups.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>StellarChat needs photo library access to share encrypted images in group chats.</string>
 </dict>
 </plist>

@@ -46,13 +46,24 @@ final class AppState {
     var chatMessages: [String: [ChatMessage]] = [:]
     /// Dedup set for chat message event IDs, keyed by group ID.
     private var seenMessageIDs: [String: Set<String>] = [:]
+    /// Unread message count per group. Reset when the user opens the chat.
+    var unreadCounts: [String: Int] = [:]
+    /// The group ID currently being viewed, used to suppress unread increments.
+    var activeGroupID: String?
     /// Tracks processed protocol event IDs to prevent replay (H-7).
     private var processedProtocolEventIDs: Set<String> = []
     /// Tracks (senderPubkey, epoch) pairs for salt request rate limiting (H-5).
     private var saltRequestsResponded: Set<String> = []
     private static let maxDedupSetSize = 10_000
+    /// Pending incoming messages awaiting batch insertion into chatMessages.
+    private var pendingIncomingMessages: [(msg: ChatMessage, groupID: String, event: NostrEvent)] = []
+    /// Task that flushes pending messages in a single UI update.
+    private var messageFlushTask: Task<Void, Never>?
     var relayURLs: [URL] {
         didSet { Self.persistRelayURLs(relayURLs) }
+    }
+    var blossomServerURLs: [URL] {
+        didSet { Self.persistBlossomServerURLs(blossomServerURLs) }
     }
 
     // MARK: - On-Chain Integration
@@ -109,6 +120,7 @@ final class AppState {
         }
         self.groups = store.loadGroups()
         self.relayURLs = Self.loadRelayURLs()
+        self.blossomServerURLs = Self.loadBlossomServerURLs()
         self.contractEndpoint = UserDefaults.standard.string(forKey: Self.contractEndpointKey) ?? ""
         self.contractID = UserDefaults.standard.string(forKey: Self.contractIDKey) ?? ""
         self.relayerURL = UserDefaults.standard.string(forKey: Self.relayerURLKey) ?? ""
@@ -180,7 +192,7 @@ final class AppState {
     func updateLastEventTimestamp(groupID: String, timestamp: Int64) {
         if let index = groups.firstIndex(where: { $0.id == groupID }) {
             groups[index].lastEventTimestamp = timestamp
-            store.saveGroup(groups[index])
+            store.saveGroupAsync(groups[index])
         }
     }
 
@@ -189,6 +201,85 @@ final class AppState {
             groups[index] = group
         }
         store.saveGroup(group)
+    }
+
+    private static func insertIntoArray(_ messages: inout [ChatMessage], message: ChatMessage) {
+        if let last = messages.last {
+            let isInOrder =
+                last.timestamp < message.timestamp ||
+                (last.timestamp == message.timestamp && last.id < message.id)
+            if isInOrder {
+                messages.append(message)
+            } else {
+                var low = 0
+                var high = messages.count
+                while low < high {
+                    let mid = (low + high) / 2
+                    let existing = messages[mid]
+                    let shouldInsertBefore =
+                        existing.timestamp > message.timestamp ||
+                        (existing.timestamp == message.timestamp && existing.id >= message.id)
+                    if shouldInsertBefore {
+                        high = mid
+                    } else {
+                        low = mid + 1
+                    }
+                }
+                messages.insert(message, at: low)
+            }
+        } else {
+            messages.append(message)
+        }
+    }
+
+    private func insertMessage(_ message: ChatMessage, into groupID: String) {
+        var messages = chatMessages[groupID, default: []]
+        Self.insertIntoArray(&messages, message: message)
+        chatMessages[groupID] = messages
+    }
+
+    /// Queue an incoming message for batch insertion. Multiple messages arriving
+    /// within the same run-loop tick are coalesced into a single `chatMessages`
+    /// update, preventing per-message SwiftUI re-renders.
+    private func queueIncomingMessage(_ msg: ChatMessage, groupID: String, event: NostrEvent) {
+        pendingIncomingMessages.append((msg: msg, groupID: groupID, event: event))
+        guard messageFlushTask == nil else { return }
+        messageFlushTask = Task { @MainActor in
+            // Wait one frame so all concurrent main-actor tasks can queue their messages.
+            // Task.yield() is unreliable (returns immediately when no peers are pending).
+            try? await Task.sleep(for: .milliseconds(16))
+            self.flushPendingMessages()
+        }
+    }
+
+    private func flushPendingMessages() {
+        let batch = pendingIncomingMessages
+        pendingIncomingMessages.removeAll()
+        messageFlushTask = nil
+        guard !batch.isEmpty else { return }
+
+        // Batch-insert all messages into a local copy, then assign once (single observation trigger)
+        var localMessages = chatMessages
+        for (msg, groupID, _) in batch {
+            var arr = localMessages[groupID, default: []]
+            Self.insertIntoArray(&arr, message: msg)
+            localMessages[groupID] = arr
+        }
+        chatMessages = localMessages
+
+        // Persistence, unread counts, timestamps — these don't trigger chat view re-renders
+        var localUnread = unreadCounts
+        for (msg, groupID, event) in batch {
+            store.saveMessageAsync(msg)
+            if !msg.isMine && activeGroupID != groupID {
+                localUnread[groupID, default: 0] += 1
+            }
+            if let group = groups.first(where: { $0.id == groupID }),
+               event.createdAt > group.lastEventTimestamp {
+                updateLastEventTimestamp(groupID: groupID, timestamp: event.createdAt)
+            }
+        }
+        unreadCounts = localUnread
     }
 
     func removeGroup(id: String) {
@@ -518,7 +609,6 @@ final class AppState {
         chatTransport.onMessage = { [weak self] plaintext, event in
             guard let self else { return }
             Task { @MainActor in
-                // Find which group by topic tag
                 let topicTag = event.tags.first(where: { $0.first == "t" }).flatMap { $0.dropFirst().first }
                 guard let group = self.groups.first(where: { $0.topicTag == topicTag }) else { return }
                 let groupID = group.id
@@ -534,18 +624,48 @@ final class AppState {
                     timestamp: Date(timeIntervalSince1970: TimeInterval(event.createdAt)),
                     isMine: event.pubkey == self.keyManager.publicKeyHex
                 )
-                self.chatMessages[groupID, default: []].append(msg)
-                self.chatMessages[groupID]?.sort { $0.timestamp < $1.timestamp }
-                self.store.saveMessage(msg)
+                self.queueIncomingMessage(msg, groupID: groupID, event: event)
+            }
+        }
 
-                if event.createdAt > group.lastEventTimestamp {
-                    self.updateLastEventTimestamp(groupID: groupID, timestamp: event.createdAt)
-                }
+        chatTransport.onImageMessage = { [weak self] plaintext, media, event in
+            guard let self else { return }
+            Task { @MainActor in
+                let topicTag = event.tags.first(where: { $0.first == "t" }).flatMap { $0.dropFirst().first }
+                guard let group = self.groups.first(where: { $0.topicTag == topicTag }) else { return }
+                let groupID = group.id
+
+                guard !(self.seenMessageIDs[groupID]?.contains(event.id) ?? false) else { return }
+                self.seenMessageIDs[groupID, default: []].insert(event.id)
+
+                let msg = ChatMessage(
+                    id: event.id,
+                    groupID: groupID,
+                    senderPubkey: event.pubkey,
+                    text: plaintext,
+                    timestamp: Date(timeIntervalSince1970: TimeInterval(event.createdAt)),
+                    isMine: event.pubkey == self.keyManager.publicKeyHex,
+                    mediaAttachment: media
+                )
+                self.queueIncomingMessage(msg, groupID: groupID, event: event)
             }
         }
 
         chatTransport.onError = { _ in
             // Transport errors are non-fatal for background operation
+        }
+
+        chatTransport.onOK = { [weak self] eventID, accepted in
+            guard let self else { return }
+            Task { @MainActor in
+                // Find and update the message status
+                for (groupID, messages) in self.chatMessages {
+                    if let index = messages.firstIndex(where: { $0.id == eventID }) {
+                        self.chatMessages[groupID]?[index].status = accepted ? .sent : .failed
+                        break
+                    }
+                }
+            }
         }
     }
 
@@ -555,24 +675,149 @@ final class AppState {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        try await chatTransport.send(
-            text: trimmed,
-            topic: group.topicTag,
-            key: group.encryptionKey,
-            keyManager: keyManager
+        // Build the event synchronously so we have its deterministic ID for the local message.
+        let blsPubkey = try keyManager.blsPublicKey
+        let ts = Int64(Date().timeIntervalSince1970)
+        let wrapper: [String: Any] = [
+            "v": 2, "type": "chat", "text": trimmed,
+            "senderBlsPubkey": blsPubkey.base64EncodedString(), "ts": ts
+        ]
+        let wrapperData = try JSONSerialization.data(withJSONObject: wrapper)
+        let authenticatedText = String(data: wrapperData, encoding: .utf8)!
+        let envelope = try GroupCrypto.encrypt(authenticatedText, key: group.encryptionKey)
+        let envelopeData = try JSONEncoder().encode(envelope)
+        let content = envelopeData.base64EncodedString()
+        let event = try NostrEvent.build(
+            kind: 44114, tags: [["t", group.topicTag]], content: content, keyManager: keyManager
         )
 
+        // Optimistic UI: show the message locally BEFORE waiting for relay publish.
         let msg = ChatMessage(
-            id: UUID().uuidString,
+            id: event.id,
             groupID: groupID,
             senderPubkey: keyManager.publicKeyHex,
             text: trimmed,
-            timestamp: Date(),
-            isMine: true
+            timestamp: Date(timeIntervalSince1970: TimeInterval(event.createdAt)),
+            isMine: true,
+            status: .sending
         )
-        chatMessages[groupID, default: []].append(msg)
+        insertMessage(msg, into: groupID)
         seenMessageIDs[groupID, default: []].insert(msg.id)
-        store.saveMessage(msg)
+        store.saveMessageAsync(msg)
+
+        // Publish the same event to relays in the background — UI is already updated.
+        let transport = chatTransport
+        Task {
+            do {
+                try await transport.publishToRelays(event)
+            } catch {
+                // Mark as failed if all relays reject
+                await MainActor.run {
+                    if let idx = self.chatMessages[groupID]?.firstIndex(where: { $0.id == event.id }) {
+                        self.chatMessages[groupID]?[idx].status = .failed
+                    }
+                }
+            }
+        }
+    }
+
+    /// Send an encrypted image in a group via Blossom.
+    func sendImage(imageData: Data, groupID: String) async throws {
+        guard let group = groups.first(where: { $0.id == groupID }) else { return }
+
+        // Compress and extract metadata
+        guard let compressed = MediaCrypto.compressImage(imageData) else { return }
+        guard let dimensions = MediaCrypto.imageDimensions(compressed) else { return }
+        let thumbData = MediaCrypto.generateThumbnail(compressed)
+
+        // Encrypt image with a fresh per-file key
+        let (encryptedBlob, fileKey) = try MediaCrypto.encryptMedia(compressed)
+
+        // Encrypt thumbnail with the same file key
+        let encryptedThumbnail: Data?
+        if let thumbData {
+            encryptedThumbnail = try MediaCrypto.encryptMedia(thumbData, key: fileKey)
+        } else {
+            encryptedThumbnail = nil
+        }
+
+        // Upload encrypted blob to Blossom
+        let blobHash = try await BlossomClient.upload(encryptedBlob, servers: blossomServerURLs, keyManager: keyManager)
+
+        // Build MediaAttachment
+        let media = MediaAttachment(
+            blobHash: blobHash,
+            fileKey: fileKey,
+            mimeType: "image/jpeg",
+            width: dimensions.width,
+            height: dimensions.height,
+            size: encryptedBlob.count,
+            blossomServers: blossomServerURLs.map(\.absoluteString),
+            encryptedThumbnail: encryptedThumbnail
+        )
+
+        // Build v2 wrapper with type "image" and media dict
+        let blsPubkey = try keyManager.blsPublicKey
+        let ts = Int64(Date().timeIntervalSince1970)
+        var mediaDict: [String: Any] = [
+            "blobHash": media.blobHash,
+            "fileKey": media.fileKey.base64EncodedString(),
+            "mimeType": media.mimeType,
+            "width": media.width,
+            "height": media.height,
+            "size": media.size,
+            "blossomServers": media.blossomServers,
+        ]
+        if let encThumb = media.encryptedThumbnail {
+            mediaDict["thumbnail"] = encThumb.base64EncodedString()
+        }
+        let wrapper: [String: Any] = [
+            "v": 2,
+            "type": "image",
+            "text": "Sent an image",
+            "senderBlsPubkey": blsPubkey.base64EncodedString(),
+            "ts": ts,
+            "media": mediaDict,
+        ]
+        let wrapperData = try JSONSerialization.data(withJSONObject: wrapper)
+        let wrapperText = String(data: wrapperData, encoding: .utf8)!
+
+        // Build the Nostr event locally
+        let envelope = try GroupCrypto.encrypt(wrapperText, key: group.encryptionKey)
+        let envelopeData = try JSONEncoder().encode(envelope)
+        let content = envelopeData.base64EncodedString()
+        let event = try NostrEvent.build(
+            kind: 44114, tags: [["t", group.topicTag]], content: content, keyManager: keyManager
+        )
+
+        // Optimistic UI: show locally before relay publish
+        let msg = ChatMessage(
+            id: event.id,
+            groupID: groupID,
+            senderPubkey: keyManager.publicKeyHex,
+            text: "Sent an image",
+            timestamp: Date(timeIntervalSince1970: TimeInterval(event.createdAt)),
+            isMine: true,
+            status: .sending,
+            mediaAttachment: media
+        )
+        insertMessage(msg, into: groupID)
+        seenMessageIDs[groupID, default: []].insert(msg.id)
+        store.saveMessageAsync(msg)
+
+        // Publish to relays in the background
+        let transport = chatTransport
+        Task {
+            do {
+                try await transport.publishToRelays(event)
+            } catch {
+                await MainActor.run {
+                    if let idx = self.chatMessages[groupID]?.firstIndex(where: { $0.id == event.id }) {
+                        self.chatMessages[groupID]?[idx].status = .failed
+                    }
+                }
+            }
+        }
     }
 
     /// Set up the protocol message handler (runs once at init).
@@ -656,6 +901,12 @@ final class AppState {
         chatTransport.onError = { _ in
             // Protocol transport errors are non-fatal; chat transport shows errors to user
         }
+    }
+
+    /// Reconnect to relays and resubscribe all groups (used by pull-to-refresh).
+    func reconnectRelays() async {
+        await chatTransport.disconnect()
+        await connectAndSubscribeAllGroups()
     }
 
     /// Connect to relays and subscribe all persisted groups for chat + protocol messages.
@@ -817,6 +1068,22 @@ final class AppState {
 
     private static func persistRelayURLs(_ urls: [URL]) {
         UserDefaults.standard.set(urls.map(\.absoluteString), forKey: relayURLsKey)
+    }
+
+    // MARK: - Blossom Server Persistence
+
+    private static let blossomServerURLsKey = "com.stellarmls.chat.blossomServerURLs"
+    private static let defaultBlossomServers = [URL(string: "https://nostr.download")!]
+
+    private static func loadBlossomServerURLs() -> [URL] {
+        guard let strings = UserDefaults.standard.stringArray(forKey: blossomServerURLsKey),
+              !strings.isEmpty
+        else { return defaultBlossomServers }
+        return strings.compactMap(URL.init(string:))
+    }
+
+    private static func persistBlossomServerURLs(_ urls: [URL]) {
+        UserDefaults.standard.set(urls.map(\.absoluteString), forKey: blossomServerURLsKey)
     }
 
     // MARK: - Relay Management

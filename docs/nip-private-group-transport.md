@@ -89,8 +89,12 @@ Clients:
 
 This NIP defines two application-specific event kinds:
 
-- `24113`: SEP invitation event
-- `24114`: SEP encrypted group message event
+- `24113`: SEP invitation event (ephemeral range — relays are not expected to store)
+- `44114`: SEP encrypted group message event (regular range — relays SHOULD store)
+
+Group message events use kind `44114` (regular, application-specific) so that relays retain messages for offline catch-up. Invitation events remain ephemeral (`24113`) because they are one-time delivery and should not accumulate.
+
+**Migration note**: Implementations transitioning from the earlier kind `24114` (ephemeral) SHOULD subscribe to both kinds `24114` and `44114` during a transition period, but MUST publish only kind `44114`.
 
 These values are provisional until assigned or replaced by the implementation community.
 
@@ -192,7 +196,7 @@ This NIP does not standardize the derivation function, only the transport role o
 
 ### Kind
 
-Encrypted group message events MUST use kind `24114`.
+Encrypted group message events MUST use kind `44114`.
 
 ### Tags
 
@@ -228,6 +232,69 @@ The decrypted message payload MAY contain:
 - group-specific delivery metadata
 
 Such payloads MUST be encrypted under the current MLS or equivalent group symmetric key.
+
+### Inner Payload Version 2 (Recommended)
+
+Version 2 chat messages SHOULD use the following JSON structure inside the encrypted envelope:
+
+```json
+{
+  "v": 2,
+  "type": "chat",
+  "text": "Hello",
+  "senderBlsPubkey": "<base64>",
+  "msgId": "<NIP-01 event ID hex>",
+  "ts": 1712000000,
+  "replyTo": "<event-id-of-parent-or-null>"
+}
+```
+
+Fields:
+
+- `v` — protocol version. MUST be `2` for this format. Receivers that see no `v` field SHOULD treat the message as version 1 (legacy format: `{"text":"...","senderBlsPubkey":"..."}`).
+- `type` — message type discriminator: `"chat"` for user messages, `"protocol"` for state updates. Replaces the version 1 heuristic of attempting to parse as a protocol message first.
+- `msgId` — the NIP-01 event ID, embedded inside ciphertext for integrity verification.
+- `ts` — sender's Unix timestamp (seconds). Inside ciphertext, immune to relay-side manipulation.
+- `replyTo` — optional NIP-01 event ID of the parent message for threading (mirrors NIP-28 `e` tag pattern but kept inside ciphertext for privacy).
+
+### Media Messages (type: "image")
+
+Messages with `"type": "image"` carry an encrypted media attachment hosted on Blossom (BL-01) servers:
+
+```json
+{
+  "v": 2,
+  "type": "image",
+  "text": "Photo",
+  "senderBlsPubkey": "<base64>",
+  "ts": 1712000000,
+  "media": {
+    "blobHash": "<sha256hex of encrypted blob>",
+    "fileKey": "<base64 of 32-byte AES-256-GCM key>",
+    "mimeType": "image/jpeg",
+    "width": 1200,
+    "height": 900,
+    "size": 184320,
+    "blossomServers": ["https://blossom.example.com"],
+    "thumbnail": "<base64 of combined-format encrypted thumbnail>"
+  }
+}
+```
+
+Fields:
+
+- `media.blobHash` — SHA-256 hex of the encrypted blob stored on Blossom. This is the content address for retrieval: `GET https://server/<blobHash>`.
+- `media.fileKey` — base64-encoded 32-byte AES-256-GCM key, generated randomly per file. Provides cryptographic isolation from the group key.
+- `media.mimeType` — MIME type of the original image (e.g., `"image/jpeg"`).
+- `media.width`, `media.height` — pixel dimensions of the original image.
+- `media.size` — size of the encrypted blob in bytes.
+- `media.blossomServers` — array of Blossom server base URLs where the blob was uploaded. Enables multi-server redundancy.
+- `media.thumbnail` — base64-encoded combined-format (nonce || ciphertext || tag) encrypted JPEG thumbnail for instant preview. Encrypted with the same `fileKey` but a separate nonce.
+- `text` — SHOULD be a human-readable fallback (e.g., `"Photo"`) so clients that do not support media display something meaningful.
+
+The encrypted blob format is: `nonce(12 bytes) || ciphertext || tag(16 bytes)`. The Blossom server stores only encrypted blobs addressed by SHA-256 of the ciphertext — it cannot correlate blobs to groups, users, or content. The decryption key exists exclusively inside the E2EE envelope.
+
+Upload authorization follows Blossom BL-01: a Nostr-signed kind `24242` event with tags `["t", "upload"]`, `["x", "<sha256hex>"]`, and `["expiration", "<unix-timestamp>"]`, sent as an `Authorization: Nostr <base64(event)>` header.
 
 ## Client Processing Rules
 

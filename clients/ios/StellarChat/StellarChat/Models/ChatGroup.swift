@@ -63,6 +63,12 @@ struct ChatGroup: Identifiable, Codable {
     }
 }
 
+enum MessageStatus: String, Codable {
+    case sending
+    case sent
+    case failed
+}
+
 struct ChatMessage: Identifiable, Codable {
     let id: String
     let groupID: String
@@ -70,6 +76,31 @@ struct ChatMessage: Identifiable, Codable {
     let text: String
     let timestamp: Date
     let isMine: Bool
+    var status: MessageStatus
+    let mediaAttachment: MediaAttachment?
+
+    init(id: String, groupID: String, senderPubkey: String, text: String, timestamp: Date, isMine: Bool, status: MessageStatus = .sent, mediaAttachment: MediaAttachment? = nil) {
+        self.id = id
+        self.groupID = groupID
+        self.senderPubkey = senderPubkey
+        self.text = text
+        self.timestamp = timestamp
+        self.isMine = isMine
+        self.status = status
+        self.mediaAttachment = mediaAttachment
+    }
+}
+
+/// Encrypted media attachment metadata, embedded inside E2EE message envelopes.
+struct MediaAttachment: Codable {
+    let blobHash: String           // SHA-256 hex of encrypted blob on Blossom
+    let fileKey: Data              // 32-byte AES-256-GCM per-file key
+    let mimeType: String           // e.g. "image/jpeg"
+    let width: Int
+    let height: Int
+    let size: Int                  // encrypted blob size in bytes
+    let blossomServers: [String]   // server base URLs for retrieval
+    let encryptedThumbnail: Data?  // combined-format encrypted thumbnail
 }
 
 struct InviteCode: Codable {

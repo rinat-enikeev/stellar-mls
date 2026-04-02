@@ -13,6 +13,12 @@ actor NostrRelayConnection {
     private var continuations: [AsyncStream<NostrEvent>.Continuation] = []
     private var reconnectAttempts = 0
     private var pingTask: Task<Void, Never>?
+    /// Callback for relay OK responses: (eventID, accepted).
+    private var onOKCallback: ((String, Bool) -> Void)?
+
+    func setOnOK(_ callback: @escaping (String, Bool) -> Void) {
+        onOKCallback = callback
+    }
 
     /// Maximum reconnect delay in seconds (caps exponential backoff).
     private static let maxReconnectDelay: TimeInterval = 120
@@ -61,12 +67,29 @@ actor NostrRelayConnection {
         reconnectAttempts = 0
     }
 
-    /// Publish an event to the relay.
+    /// Publish timeout in seconds.
+    private static let publishTimeout: TimeInterval = 5
+
+    /// Publish an event to the relay with a timeout.
     func publish(event: NostrEvent) async throws {
         let frame: [Any] = ["EVENT", event.jsonObject]
         let data = try JSONSerialization.data(withJSONObject: frame)
         let string = String(data: data, encoding: .utf8)!
-        try await webSocketTask?.send(.string(string))
+        guard let task = webSocketTask else {
+            throw URLError(.notConnectedToInternet)
+        }
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try await task.send(.string(string))
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(Self.publishTimeout))
+                throw URLError(.timedOut)
+            }
+            // First to finish wins — either send completes or timeout fires
+            try await group.next()
+            group.cancelAll()
+        }
     }
 
     /// Subscribe to events matching a filter. Returns an AsyncStream of events.
@@ -194,7 +217,11 @@ actor NostrRelayConnection {
         case "EOSE":
             break // End of stored events
         case "OK":
-            break // Publish acknowledgement
+            if array.count >= 3,
+               let eventID = array[1] as? String,
+               let accepted = array[2] as? Bool {
+                onOKCallback?(eventID, accepted)
+            }
         case "NOTICE":
             break // Relay notice
         default:

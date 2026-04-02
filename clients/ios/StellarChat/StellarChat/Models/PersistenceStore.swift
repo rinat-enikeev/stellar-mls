@@ -5,6 +5,11 @@ import SwiftMLS
 /// SwiftData-backed persistence with field-level AES-256-GCM encryption
 /// and FileProtectionType.complete on the store directory.
 final class PersistenceStore {
+    private static let writeQueue = DispatchQueue(
+        label: "com.stellarmls.chat.persistence.write",
+        qos: .utility
+    )
+
     let container: ModelContainer
     private let context: ModelContext
 
@@ -114,6 +119,26 @@ final class PersistenceStore {
         try? context.save()
     }
 
+    func saveMessageAsync(_ message: ChatMessage) {
+        let message = message
+        Self.writeQueue.async {
+            autoreleasepool {
+                guard let writer = try? PersistenceStore() else { return }
+                writer.saveMessage(message)
+            }
+        }
+    }
+
+    func saveGroupAsync(_ group: ChatGroup) {
+        let group = group
+        Self.writeQueue.async {
+            autoreleasepool {
+                guard let writer = try? PersistenceStore() else { return }
+                writer.saveGroup(group)
+            }
+        }
+    }
+
     // MARK: - Encryption Helpers
 
     private func encryptGroup(_ group: ChatGroup) -> PersistedGroup? {
@@ -187,25 +212,43 @@ final class PersistenceStore {
 
     private func encryptMessage(_ message: ChatMessage) -> PersistedMessage? {
         guard let encText = try? StorageEncryption.encrypt(message.text) else { return nil }
+        let encMedia: Data?
+        if let media = message.mediaAttachment,
+           let mediaJSON = try? JSONEncoder().encode(media),
+           let encrypted = try? StorageEncryption.encrypt(mediaJSON) {
+            encMedia = encrypted
+        } else {
+            encMedia = nil
+        }
         return PersistedMessage(
             id: message.id,
             groupID: message.groupID,
             senderPubkey: message.senderPubkey,
             encryptedText: encText,
             timestamp: message.timestamp,
-            isMine: message.isMine
+            isMine: message.isMine,
+            encryptedMediaAttachment: encMedia
         )
     }
 
     private func decryptMessage(_ persisted: PersistedMessage) -> ChatMessage? {
         guard let text = try? StorageEncryption.decryptString(persisted.encryptedText) else { return nil }
+        let media: MediaAttachment?
+        if let encMedia = persisted.encryptedMediaAttachment,
+           let mediaJSON = try? StorageEncryption.decrypt(encMedia),
+           let decoded = try? JSONDecoder().decode(MediaAttachment.self, from: mediaJSON) {
+            media = decoded
+        } else {
+            media = nil
+        }
         return ChatMessage(
             id: persisted.id,
             groupID: persisted.groupID,
             senderPubkey: persisted.senderPubkey,
             text: text,
             timestamp: persisted.timestamp,
-            isMine: persisted.isMine
+            isMine: persisted.isMine,
+            mediaAttachment: media
         )
     }
 }

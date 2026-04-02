@@ -1,7 +1,6 @@
 package com.stellarmls.chat.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,11 +8,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Email
@@ -28,42 +29,57 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.stellarmls.chat.model.ChatGroup
+import com.stellarmls.chat.model.ChatMessage
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.util.Calendar
+import java.util.Date
+import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun GroupListScreen(
     groups: List<ChatGroup>,
     pendingInvitationCount: Int = 0,
+    chatMessages: Map<String, List<ChatMessage>> = emptyMap(),
+    unreadCounts: Map<String, Int> = emptyMap(),
     onGroupClick: (ChatGroup) -> Unit,
     onInviteMember: (ChatGroup) -> Unit = {},
     onCreateGroup: () -> Unit,
     onJoinGroup: () -> Unit,
     onSettings: () -> Unit,
     onInvitations: () -> Unit = {},
-    onDeleteGroup: (String) -> Unit
+    onDeleteGroup: (String) -> Unit,
+    onRefresh: () -> Unit = {}
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
     var groupToDelete by remember { mutableStateOf<ChatGroup?>(null) }
+    var isRefreshing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Stellar Chat") },
                 actions = {
-                    // Invitations button with badge
                     IconButton(onClick = onInvitations) {
                         BadgedBox(
                             badge = {
@@ -87,34 +103,47 @@ fun GroupListScreen(
             }
         }
     ) { padding ->
-        if (groups.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        "No groups yet",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        "Tap + to create or join a group",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = {
+                isRefreshing = true
+                onRefresh()
+                scope.launch {
+                    delay(1000)
+                    isRefreshing = false
                 }
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-            ) {
+            },
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            if (groups.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            "No groups yet",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "Tap + to create or join a group",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize()
+                ) {
                 itemsIndexed(groups, key = { _, g -> g.id }) { _, group ->
+                    val lastMessage = chatMessages[group.id]?.lastOrNull()
+                    val unread = unreadCounts[group.id] ?: 0
+
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -144,25 +173,61 @@ fun GroupListScreen(
                             }
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    group.name,
-                                    style = MaterialTheme.typography.titleMedium
-                                )
-                                Text(
-                                    "${group.members.size} members | Epoch ${group.epoch}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    "Topic: ${group.topicTag}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        group.name,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    if (lastMessage != null) {
+                                        Text(
+                                            text = relativeTimestamp(lastMessage.timestamp),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        "${group.members.size} members",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    if (lastMessage != null) {
+                                        Text(
+                                            text = " · ${lastMessage.text}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    } else {
+                                        Spacer(modifier = Modifier.weight(1f))
+                                    }
+                                    if (unread > 0) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color.Red,
+                                            modifier = Modifier.padding(start = 8.dp)
+                                        ) {
+                                            Text(
+                                                text = "$unread",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.White,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
+        }
         }
     }
 
@@ -210,4 +275,21 @@ fun GroupListScreen(
             }
         )
     }
+}
+
+private fun relativeTimestamp(date: Date): String {
+    val seconds = (System.currentTimeMillis() - date.time) / 1000
+    if (seconds < 60) return "Just now"
+    if (seconds < 3600) return "${seconds / 60}m"
+    if (seconds < 86400) return "${seconds / 3600}h"
+
+    val cal = Calendar.getInstance()
+    val today = Calendar.getInstance()
+    cal.time = date
+    if (cal.get(Calendar.YEAR) == today.get(Calendar.YEAR)
+        && cal.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR) - 1
+    ) return "Yesterday"
+
+    val fmt = java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault())
+    return fmt.format(date)
 }

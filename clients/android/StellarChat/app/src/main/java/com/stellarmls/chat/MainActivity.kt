@@ -60,6 +60,8 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
             GroupListScreen(
                 groups = groupListViewModel.groups,
                 pendingInvitationCount = groupListViewModel.pendingInvitations.size,
+                chatMessages = groupListViewModel.chatMessages,
+                unreadCounts = groupListViewModel.unreadCounts,
                 onGroupClick = { group ->
                     navController.navigate("chat/${group.id}")
                 },
@@ -70,7 +72,8 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                 onJoinGroup = { navController.navigate("join") },
                 onSettings = { navController.navigate("settings") },
                 onInvitations = { navController.navigate("invitations") },
-                onDeleteGroup = { id -> groupListViewModel.removeGroup(id) }
+                onDeleteGroup = { id -> groupListViewModel.removeGroup(id) },
+                onRefresh = { groupListViewModel.reconnectRelays() }
             )
         }
 

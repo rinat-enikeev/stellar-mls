@@ -87,24 +87,69 @@ class PersistenceStore(context: Context) {
     }
 
     private fun encryptMessage(message: ChatMessage): PersistedMessage {
+        val encMedia = message.mediaAttachment?.let { media ->
+            val json = serializeMediaAttachment(media)
+            StorageEncryption.encrypt(json.toByteArray())
+        }
         return PersistedMessage(
             id = message.id,
             groupID = message.groupID,
             senderPubkey = message.senderPubkey,
             encryptedText = StorageEncryption.encrypt(message.text),
             timestamp = message.timestamp.time,
-            isMine = message.isMine
+            isMine = message.isMine,
+            encryptedMediaAttachment = encMedia
         )
     }
 
     private fun decryptMessage(persisted: PersistedMessage): ChatMessage {
+        val media = persisted.encryptedMediaAttachment?.let { enc ->
+            try {
+                val json = String(StorageEncryption.decrypt(enc))
+                deserializeMediaAttachment(json)
+            } catch (_: Exception) { null }
+        }
         return ChatMessage(
             id = persisted.id,
             groupID = persisted.groupID,
             senderPubkey = persisted.senderPubkey,
             text = StorageEncryption.decryptString(persisted.encryptedText),
             timestamp = Date(persisted.timestamp),
-            isMine = persisted.isMine
+            isMine = persisted.isMine,
+            mediaAttachment = media
+        )
+    }
+
+    private fun serializeMediaAttachment(media: com.stellarmls.chat.model.MediaAttachment): String {
+        return JSONObject().apply {
+            put("blobHash", media.blobHash)
+            put("fileKey", android.util.Base64.encodeToString(media.fileKey, android.util.Base64.NO_WRAP))
+            put("mimeType", media.mimeType)
+            put("width", media.width)
+            put("height", media.height)
+            put("size", media.size)
+            put("blossomServers", JSONArray(media.blossomServers))
+            media.encryptedThumbnail?.let {
+                put("encryptedThumbnail", android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP))
+            }
+        }.toString()
+    }
+
+    private fun deserializeMediaAttachment(json: String): com.stellarmls.chat.model.MediaAttachment {
+        val obj = JSONObject(json)
+        val servers = obj.getJSONArray("blossomServers").let { arr ->
+            (0 until arr.length()).map { arr.getString(it) }
+        }
+        return com.stellarmls.chat.model.MediaAttachment(
+            blobHash = obj.getString("blobHash"),
+            fileKey = android.util.Base64.decode(obj.getString("fileKey"), android.util.Base64.NO_WRAP),
+            mimeType = obj.getString("mimeType"),
+            width = obj.getInt("width"),
+            height = obj.getInt("height"),
+            size = obj.getInt("size"),
+            blossomServers = servers,
+            encryptedThumbnail = obj.optString("encryptedThumbnail", "").takeIf { it.isNotEmpty() }
+                ?.let { android.util.Base64.decode(it, android.util.Base64.NO_WRAP) }
         )
     }
 

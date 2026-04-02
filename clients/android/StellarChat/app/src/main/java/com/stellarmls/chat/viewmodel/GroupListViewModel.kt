@@ -9,12 +9,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.stellarmls.chat.blossom.BlossomClient
+import com.stellarmls.chat.crypto.GroupCrypto
 import com.stellarmls.chat.crypto.KeyAttestation
 import com.stellarmls.chat.crypto.KeyManager
+import com.stellarmls.chat.crypto.MediaCrypto
+import com.stellarmls.chat.crypto.NostrEventBuilder
 import com.stellarmls.chat.model.BootstrapPayload
 import com.stellarmls.chat.model.ChatError
 import com.stellarmls.chat.model.ChatGroup
 import com.stellarmls.chat.model.ChatMessage
+import com.stellarmls.chat.model.MediaAttachment
+import com.stellarmls.chat.model.MessageStatus
 import com.stellarmls.chat.model.InviteCode
 import com.stellarmls.chat.model.PendingInvitation
 import com.stellarmls.chat.model.toHex
@@ -48,12 +54,18 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     // Uses SnapshotStateMap so Compose recomposes when messages change.
     val chatMessages = androidx.compose.runtime.mutableStateMapOf<String, List<ChatMessage>>()
     private val seenMessageIDs = mutableMapOf<String, MutableSet<String>>()
+    /** Unread message count per group. Reset when the user opens the chat. */
+    val unreadCounts = androidx.compose.runtime.mutableStateMapOf<String, Int>()
+    /** The group ID currently being viewed, used to suppress unread increments. */
+    var activeGroupID: String? = null
 
     val store = PersistenceStore(application)
 
     // Relay management
     val relayURLs = mutableStateListOf<String>()
+    val blossomServerURLs = mutableStateListOf<String>()
     private val relayPrefs = application.getSharedPreferences("stellar_relays", Context.MODE_PRIVATE)
+    private val blossomPrefs = application.getSharedPreferences("stellar_blossom", Context.MODE_PRIVATE)
 
     // Contract configuration
     var contractEndpoint by mutableStateOf("")
@@ -110,6 +122,14 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             ))
         }
 
+        // Load Blossom server URLs
+        val savedBlossom = blossomPrefs.getString("blossom_urls", null)
+        if (savedBlossom != null) {
+            blossomServerURLs.addAll(savedBlossom.split(",").filter { it.isNotBlank() })
+        } else {
+            blossomServerURLs.add("https://nostr.download")
+        }
+
         // Load contract + relayer config
         contractEndpoint = contractPrefs.getString("endpoint", "") ?: ""
         contractID = contractPrefs.getString("contract_id", "") ?: ""
@@ -143,6 +163,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     chatMessages[group.id] = msgs
                     seenMessageIDs[group.id] = msgs.map { it.id }.toMutableSet()
                 }
+                // Connect to relays and subscribe all loaded groups
+                if (loaded.isNotEmpty()) {
+                    connectIfNeeded()
+                }
             } catch (_: Exception) { }
         }
     }
@@ -153,7 +177,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             invitationTransport.connect(relayURLs.toList())
             startInboxListener()
             setupChatMessageHandler()
+            setupImageMessageHandler()
             setupProtocolMessageHandler()
+            setupOKHandler()
             connected = true
 
             // Subscribe all persisted groups for chat + protocol messages
@@ -161,6 +187,13 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 transport.subscribe(group)
             }
         }
+    }
+
+    fun reconnectRelays() {
+        transport.disconnect()
+        invitationTransport.disconnect()
+        connected = false
+        connectIfNeeded()
     }
 
     // -- Group lifecycle --
@@ -284,6 +317,28 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun persistRelays() {
         relayPrefs.edit().putString("relay_urls", relayURLs.joinToString(",")).apply()
+    }
+
+    // -- Blossom server management --
+
+    fun addBlossomServer(urlString: String): Boolean {
+        val trimmed = urlString.trim()
+        if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return false
+        if (blossomServerURLs.contains(trimmed)) return false
+        blossomServerURLs.add(trimmed)
+        persistBlossomServers()
+        return true
+    }
+
+    fun removeBlossomServer(index: Int) {
+        if (index in blossomServerURLs.indices) {
+            blossomServerURLs.removeAt(index)
+            persistBlossomServers()
+        }
+    }
+
+    private fun persistBlossomServers() {
+        blossomPrefs.edit().putString("blossom_urls", blossomServerURLs.joinToString(",")).apply()
     }
 
     // -- Contract configuration --
@@ -635,9 +690,13 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 )
                 // Replace the list to trigger Compose recomposition
                 val current = (chatMessages[groupID] ?: emptyList()) + msg
-                chatMessages[groupID] = current.sortedBy { it.timestamp }
+                chatMessages[groupID] = current.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
                 viewModelScope.launch {
                     try { store.saveMessage(msg) } catch (_: Exception) { }
+                }
+                // Increment unread count if this group isn't currently active
+                if (!msg.isMine && activeGroupID != groupID) {
+                    unreadCounts[groupID] = (unreadCounts[groupID] ?: 0) + 1
                 }
                 // Update lastEventTimestamp
                 val group = groups.find { it.id == groupID }
@@ -651,28 +710,174 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /** Set up handler for incoming image messages — stores in chatMessages with media attachment. */
+    private fun setupImageMessageHandler() {
+        transport.onImageMessage = { groupID, text, media, eventID, senderPubkey, timestamp ->
+            val seen = seenMessageIDs.getOrPut(groupID) { mutableSetOf() }
+            if (seen.add(eventID)) {
+                val msg = ChatMessage(
+                    id = eventID,
+                    groupID = groupID,
+                    senderPubkey = senderPubkey,
+                    text = text,
+                    timestamp = Date(timestamp * 1000),
+                    isMine = senderPubkey == keyManager.publicKeyHex,
+                    mediaAttachment = media
+                )
+                val current = (chatMessages[groupID] ?: emptyList()) + msg
+                chatMessages[groupID] = current.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+                viewModelScope.launch {
+                    try { store.saveMessage(msg) } catch (_: Exception) { }
+                }
+                if (!msg.isMine && activeGroupID != groupID) {
+                    unreadCounts[groupID] = (unreadCounts[groupID] ?: 0) + 1
+                }
+                val group = groups.find { it.id == groupID }
+                if (group != null && timestamp > group.lastEventTimestamp) {
+                    group.lastEventTimestamp = timestamp
+                    viewModelScope.launch {
+                        try { store.saveGroup(group) } catch (_: Exception) { }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Wire relay OK responses to update message delivery status. */
+    private fun setupOKHandler() {
+        transport.onOK = { eventID, accepted ->
+            val newStatus = if (accepted) MessageStatus.SENT else MessageStatus.FAILED
+            for ((groupID, messages) in chatMessages) {
+                val index = messages.indexOfFirst { it.id == eventID }
+                if (index >= 0) {
+                    val updated = messages.toMutableList()
+                    updated[index] = updated[index].copy(status = newStatus)
+                    chatMessages[groupID] = updated
+                    break
+                }
+            }
+        }
+    }
+
     /** Send a chat message in a group. */
     fun sendMessage(groupID: String, text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
         val group = groups.find { it.id == groupID } ?: return
 
-        transport.send(group, trimmed)
+        // Use the deterministic NIP-01 event ID so the relay echo is deduplicated,
+        // and the event's createdAt so timestamp matches what other clients see.
+        val event = transport.send(group, trimmed)
 
-        val localID = "local-${System.currentTimeMillis()}"
         val msg = ChatMessage(
-            id = localID,
+            id = event.id,
             groupID = groupID,
             senderPubkey = keyManager.publicKeyHex,
             text = trimmed,
-            timestamp = Date(),
-            isMine = true
+            timestamp = Date(event.createdAt * 1000),
+            isMine = true,
+            status = MessageStatus.SENDING
         )
         // Replace the list to trigger Compose recomposition
-        chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
-        seenMessageIDs.getOrPut(groupID) { mutableSetOf() }.add(localID)
+        val current = (chatMessages[groupID] ?: emptyList()) + msg
+        chatMessages[groupID] = current.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+        seenMessageIDs.getOrPut(groupID) { mutableSetOf() }.add(event.id)
         viewModelScope.launch {
             try { store.saveMessage(msg) } catch (_: Exception) { }
+        }
+    }
+
+    /** Send an encrypted image in a group via Blossom. */
+    fun sendImage(groupID: String, imageData: ByteArray) {
+        val group = groups.find { it.id == groupID } ?: return
+
+        viewModelScope.launch {
+            try {
+                val compressed = withContext(Dispatchers.Default) {
+                    MediaCrypto.compressImage(imageData)
+                } ?: return@launch
+
+                val dimensions = MediaCrypto.imageDimensions(compressed)
+                val thumbData = withContext(Dispatchers.Default) {
+                    MediaCrypto.generateThumbnail(compressed)
+                }
+
+                val (encryptedBlob, fileKey) = MediaCrypto.encryptMedia(compressed)
+                val encThumb = thumbData?.let { MediaCrypto.encryptMedia(it, fileKey) }
+
+                val blobHash = withContext(Dispatchers.IO) {
+                    BlossomClient.upload(encryptedBlob, blossomServerURLs.toList(), keyManager)
+                }
+
+                val media = MediaAttachment(
+                    blobHash = blobHash,
+                    fileKey = fileKey,
+                    mimeType = "image/jpeg",
+                    width = dimensions?.first ?: 0,
+                    height = dimensions?.second ?: 0,
+                    size = encryptedBlob.size,
+                    blossomServers = blossomServerURLs.toList(),
+                    encryptedThumbnail = encThumb
+                )
+
+                // Build v2 wrapper with image type and media metadata
+                val mediaJson = JSONObject().apply {
+                    put("blobHash", media.blobHash)
+                    put("fileKey", android.util.Base64.encodeToString(media.fileKey, android.util.Base64.NO_WRAP))
+                    put("mimeType", media.mimeType)
+                    put("width", media.width)
+                    put("height", media.height)
+                    put("size", media.size)
+                    put("blossomServers", JSONArray(media.blossomServers))
+                    if (encThumb != null) {
+                        put("thumbnail", android.util.Base64.encodeToString(encThumb, android.util.Base64.NO_WRAP))
+                    }
+                }
+                val wrapper = JSONObject().apply {
+                    put("v", 2)
+                    put("type", "image")
+                    put("text", "\uD83D\uDDBC\uFE0F Image")
+                    put("media", mediaJson)
+                    put("senderBlsPubkey", android.util.Base64.encodeToString(
+                        keyManager.blsPublicKey(), android.util.Base64.NO_WRAP))
+                    put("ts", System.currentTimeMillis() / 1000)
+                }
+
+                val key = group.encryptionKey
+                val envelopeJson = GroupCrypto.encrypt(wrapper.toString(), key)
+                val content = android.util.Base64.encodeToString(
+                    envelopeJson.toByteArray(), android.util.Base64.NO_WRAP)
+
+                val tags = listOf(listOf("t", group.topicTag))
+                val event = NostrEventBuilder.build(
+                    kind = 44114,
+                    tags = tags,
+                    content = content,
+                    keyManager = keyManager
+                )
+
+                // Publish to all relays
+                transport.publish(event)
+
+                val msg = ChatMessage(
+                    id = event.id,
+                    groupID = groupID,
+                    senderPubkey = keyManager.publicKeyHex,
+                    text = "\uD83D\uDDBC\uFE0F Image",
+                    timestamp = Date(event.createdAt * 1000),
+                    isMine = true,
+                    status = MessageStatus.SENDING,
+                    mediaAttachment = media
+                )
+                val current = (chatMessages[groupID] ?: emptyList()) + msg
+                chatMessages[groupID] = current.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+                seenMessageIDs.getOrPut(groupID) { mutableSetOf() }.add(event.id)
+                launch {
+                    try { store.saveMessage(msg) } catch (_: Exception) { }
+                }
+            } catch (e: Exception) {
+                if (BuildConfig.DEBUG) android.util.Log.e("GroupListVM", "sendImage failed: ${e.message}")
+            }
         }
     }
 

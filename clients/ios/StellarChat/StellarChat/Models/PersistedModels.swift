@@ -47,7 +47,7 @@ final class PersistedGroup {
 
 /// Persisted message with encrypted text content.
 /// Cleartext fields: id, groupID, senderPubkey, timestamp, isMine (all visible on relay anyway).
-/// Encrypted fields: text (the actual private message content).
+/// Encrypted fields: text (the actual private message content), mediaAttachment.
 @Model
 final class PersistedMessage {
     var id: String
@@ -56,6 +56,7 @@ final class PersistedMessage {
     var encryptedText: Data
     var timestamp: Date
     var isMine: Bool
+    var encryptedMediaAttachment: Data?
 
     init(
         id: String,
@@ -63,7 +64,8 @@ final class PersistedMessage {
         senderPubkey: String,
         encryptedText: Data,
         timestamp: Date,
-        isMine: Bool
+        isMine: Bool,
+        encryptedMediaAttachment: Data? = nil
     ) {
         self.id = id
         self.groupID = groupID
@@ -71,5 +73,6 @@ final class PersistedMessage {
         self.encryptedText = encryptedText
         self.timestamp = timestamp
         self.isMine = isMine
+        self.encryptedMediaAttachment = encryptedMediaAttachment
     }
 }

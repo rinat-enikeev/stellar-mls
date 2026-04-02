@@ -14,18 +14,30 @@ final class NostrMessageTransport {
     /// Callback for received and decrypted plain-text chat messages.
     /// Parameters: (plaintext, event, senderVerified: true if BLS pubkey is in member list)
     var onMessage: ((String, NostrEvent) -> Void)?
+    /// Callback for received image messages with media attachment metadata.
+    /// Parameters: (text fallback, media attachment, event)
+    var onImageMessage: ((String, MediaAttachment, NostrEvent) -> Void)?
     /// Callback for received protocol messages (state updates, salt requests/responses).
     var onProtocolMessage: ((String, NostrEvent) -> Void)?
     /// Callback for transport-level errors (decryption, relay, encoding).
     var onError: ((String) -> Void)?
+    /// Callback for relay OK responses: (eventID, accepted). Used for delivery status.
+    var onOK: ((String, Bool) -> Void)?
 
     /// Current group members used for sender authentication (H-4).
     var currentMembers: [SEPGroupMemberLeaf] = []
+
+    /// Number of connected relays — observable for connection status UI.
+    var connectedRelayCount: Int { connections.count }
 
     func connect(to urls: [URL]) async {
         for url in urls {
             if connections[url] == nil {
                 let conn = NostrRelayConnection(url: url)
+                await conn.setOnOK { [weak self] eventID, accepted in
+                    guard let self else { return }
+                    self.onOK?(eventID, accepted)
+                }
                 connections[url] = conn
                 await conn.connect()
             }
@@ -57,7 +69,8 @@ final class NostrMessageTransport {
         subscriptionGeneration += 1
         let subID = "chat-\(topic)-\(subscriptionGeneration)"
 
-        let since = sinceTimestamp ?? (Int64(Date().timeIntervalSince1970) - 300)
+        // Use an overlap window of 60 seconds to handle clock skew across relays
+        let since = sinceTimestamp.map { max(0, $0 - 60) } ?? (Int64(Date().timeIntervalSince1970) - 300)
 
         let conns = Array(connections.values)
         let task = Task { [weak self] in
@@ -66,7 +79,7 @@ final class NostrMessageTransport {
                 for conn in conns {
                     taskGroup.addTask { [weak self] in
                         let filter: [String: Any] = [
-                            "kinds": [24114],
+                            "kinds": [44114, 24114],
                             "#t": [topic],
                             "since": since,
                         ]
@@ -74,7 +87,11 @@ final class NostrMessageTransport {
                         for await event in stream {
                             guard !Task.isCancelled else { break }
                             guard let self else { break }
-                            self.handleIncomingEvent(event, groupID: groupID, key: key)
+                            // Spawn a detached task per event so crypto/JSON parsing
+                            // runs concurrently and doesn't block the relay stream.
+                            Task.detached { [weak self] in
+                                self?.handleIncomingEvent(event, groupID: groupID, key: key)
+                            }
                         }
                     }
                 }
@@ -103,7 +120,41 @@ final class NostrMessageTransport {
                 return
             }
 
-            if SEPProtocolMessage.parse(innerText) != nil {
+            let wrapperType = wrapperJSON["type"] as? String
+
+            if wrapperType == "image" {
+                // Parse media attachment from wrapper JSON
+                let isMember = currentMembers.contains { $0.publicKeyCompressed == blsPubkey }
+                if isMember, let mediaDict = wrapperJSON["media"] as? [String: Any],
+                   let blobHash = mediaDict["blobHash"] as? String,
+                   let fileKeyB64 = mediaDict["fileKey"] as? String,
+                   let fileKey = Data(base64Encoded: fileKeyB64),
+                   let mimeType = mediaDict["mimeType"] as? String,
+                   let width = mediaDict["width"] as? Int,
+                   let height = mediaDict["height"] as? Int,
+                   let size = mediaDict["size"] as? Int,
+                   let blossomServers = mediaDict["blossomServers"] as? [String] {
+                    let encryptedThumbnail: Data?
+                    if let thumbB64 = (mediaDict["thumbnail"] as? String) ?? (mediaDict["encryptedThumbnail"] as? String) {
+                        encryptedThumbnail = Data(base64Encoded: thumbB64)
+                    } else {
+                        encryptedThumbnail = nil
+                    }
+                    let media = MediaAttachment(
+                        blobHash: blobHash,
+                        fileKey: fileKey,
+                        mimeType: mimeType,
+                        width: width,
+                        height: height,
+                        size: size,
+                        blossomServers: blossomServers,
+                        encryptedThumbnail: encryptedThumbnail
+                    )
+                    onImageMessage?(innerText, media, event)
+                } else if !isMember {
+                    SecurityLog.nonMemberMessageRejected(groupID: groupID)
+                }
+            } else if SEPProtocolMessage.parse(innerText) != nil {
                 applyMemberChanges(from: innerText)
                 onProtocolMessage?(innerText, event)
             } else {
@@ -152,14 +203,40 @@ final class NostrMessageTransport {
         activeSubscriptions.removeValue(forKey: topicKey)
     }
 
-    /// Send an encrypted message to a group.
+    /// Send an encrypted message to a group. Returns the published NostrEvent (with deterministic NIP-01 ID).
+    @discardableResult
     func send(
         text: String,
         topic: String,
         key: SymmetricKey,
         keyManager: KeyManager
-    ) async throws {
-        try await sendRaw(text, topic: topic, key: key, keyManager: keyManager)
+    ) async throws -> NostrEvent {
+        return try await sendRaw(text, topic: topic, key: key, keyManager: keyManager)
+    }
+
+    /// Send a pre-built wrapper JSON (e.g. image messages with custom fields) encrypted to the group.
+    /// Returns the published NostrEvent.
+    @discardableResult
+    func sendWrapper(
+        _ wrapperJSON: String,
+        topic: String,
+        key: SymmetricKey,
+        keyManager: KeyManager
+    ) async throws -> NostrEvent {
+        let envelope = try GroupCrypto.encrypt(wrapperJSON, key: key)
+        let envelopeData = try JSONEncoder().encode(envelope)
+        let content = envelopeData.base64EncodedString()
+
+        let tags: [[String]] = [["t", topic]]
+        let event = try NostrEvent.build(
+            kind: 44114,
+            tags: tags,
+            content: content,
+            keyManager: keyManager
+        )
+
+        try await publishToRelays(event)
+        return event
     }
 
     /// Send a protocol message (state update, salt request/response) to a group.
@@ -174,17 +251,22 @@ final class NostrMessageTransport {
         try await sendRaw(text, topic: topic, key: key, keyManager: keyManager)
     }
 
+    @discardableResult
     private func sendRaw(
         _ text: String,
         topic: String,
         key: SymmetricKey,
         keyManager: KeyManager
-    ) async throws {
-        // Wrap text with sender BLS pubkey for receiver-side membership verification (H-4)
+    ) async throws -> NostrEvent {
+        // v2 wrapper: includes version, type discriminator, message ID, and sender timestamp
         let blsPubkey = try keyManager.blsPublicKey
+        let ts = Int64(Date().timeIntervalSince1970)
         let wrapper: [String: Any] = [
+            "v": 2,
+            "type": "chat",
             "text": text,
-            "senderBlsPubkey": blsPubkey.base64EncodedString()
+            "senderBlsPubkey": blsPubkey.base64EncodedString(),
+            "ts": ts
         ]
         let wrapperData = try JSONSerialization.data(withJSONObject: wrapper)
         let authenticatedText = String(data: wrapperData, encoding: .utf8)!
@@ -197,23 +279,41 @@ final class NostrMessageTransport {
         ]
 
         let event = try NostrEvent.build(
-            kind: 24114,
+            kind: 44114,
             tags: tags,
             content: content,
             keyManager: keyManager
         )
 
-        var published = false
-        for conn in connections.values {
-            do {
-                try await conn.publish(event: event)
-                published = true
-            } catch {
-                // Relay publish failures are non-fatal; we succeed if any relay accepts
+        try await publishToRelays(event)
+        return event
+    }
+
+    /// Publish a pre-built event to all connected relays concurrently.
+    /// Succeeds if at least one relay accepts. Throws only if all fail.
+    func publishToRelays(_ event: NostrEvent) async throws {
+        let conns = Array(connections.values)
+        guard !conns.isEmpty else { return }
+
+        let published = await withTaskGroup(of: Bool.self) { group in
+            for conn in conns {
+                group.addTask {
+                    do {
+                        try await conn.publish(event: event)
+                        return true
+                    } catch {
+                        return false
+                    }
+                }
             }
+            var anyPublished = false
+            for await result in group {
+                if result { anyPublished = true }
+            }
+            return anyPublished
         }
 
-        if !published && !connections.isEmpty {
+        if !published {
             throw ChatError.relayPublishFailed
         }
     }

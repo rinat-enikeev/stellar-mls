@@ -72,14 +72,39 @@ data class ChatGroup(
     override fun hashCode(): Int = 31 * id.hashCode() + epoch.hashCode()
 }
 
+enum class MessageStatus {
+    SENDING, SENT, FAILED
+}
+
 data class ChatMessage(
     val id: String,
     val groupID: String,
     val senderPubkey: String,
     val text: String,
     val timestamp: Date,
-    val isMine: Boolean
+    val isMine: Boolean,
+    val status: MessageStatus = MessageStatus.SENT,
+    val mediaAttachment: MediaAttachment? = null
 )
+
+/** Encrypted media attachment metadata, embedded inside E2EE message envelopes. */
+data class MediaAttachment(
+    val blobHash: String,           // SHA-256 hex of encrypted blob on Blossom
+    val fileKey: ByteArray,         // 32-byte AES-256-GCM per-file key
+    val mimeType: String,           // e.g. "image/jpeg"
+    val width: Int,
+    val height: Int,
+    val size: Int,                  // encrypted blob size in bytes
+    val blossomServers: List<String>, // server base URLs for retrieval
+    val encryptedThumbnail: ByteArray? // combined-format encrypted thumbnail
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is MediaAttachment) return false
+        return blobHash == other.blobHash
+    }
+    override fun hashCode(): Int = blobHash.hashCode()
+}
 
 data class InviteCode(
     val groupID: ByteArray,

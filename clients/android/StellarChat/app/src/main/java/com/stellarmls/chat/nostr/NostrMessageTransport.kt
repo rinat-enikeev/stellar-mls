@@ -36,6 +36,10 @@ class NostrMessageTransport(
     var onMessage: ((groupID: String, senderPubkey: String, text: String, eventID: String, timestamp: Long) -> Unit)? = null
     /** Called when a decrypted message is a protocol message (state update, salt request/response). */
     var onProtocolMessage: ((groupID: String, json: String, eventID: String, senderPubkey: String) -> Unit)? = null
+    /** Called when a decrypted message is an image message with media attachment. */
+    var onImageMessage: ((groupID: String, text: String, media: com.stellarmls.chat.model.MediaAttachment, eventID: String, senderPubkey: String, timestamp: Long) -> Unit)? = null
+    /** Callback for relay OK responses: (eventID, accepted). Used for delivery status. */
+    var onOK: ((String, Boolean) -> Unit)? = null
 
     /** Current group members used for sender authentication (H-4). */
     val currentMembers = CopyOnWriteArrayList<SEPGroupMemberLeaf>()
@@ -43,6 +47,9 @@ class NostrMessageTransport(
     fun connect() {
         for (url in relayURLs) {
             val conn = NostrRelayConnection(url)
+            conn.onOK = { eventID, accepted ->
+                onOK?.invoke(eventID, accepted)
+            }
             conn.connect()
             connections.add(conn)
         }
@@ -66,11 +73,11 @@ class NostrMessageTransport(
 
         val subID = "grp-${group.id.take(8)}-${UUID.randomUUID().toString().take(8)}"
 
-        // Use the provided timestamp (e.g., last received event time) or default to 5 minutes ago
-        val since = sinceTimestamp ?: ((System.currentTimeMillis() / 1000) - 300)
+        // Use an overlap window of 60 seconds to handle clock skew across relays
+        val since = sinceTimestamp?.let { maxOf(0, it - 60) } ?: ((System.currentTimeMillis() / 1000) - 300)
 
         val filter = JSONObject().apply {
-            put("kinds", JSONArray().put(24114))
+            put("kinds", JSONArray().put(44114).put(24114))
             put("#t", JSONArray().put(group.topicTag))
             put("since", since)
         }
@@ -87,13 +94,17 @@ class NostrMessageTransport(
         }
     }
 
-    fun send(group: ChatGroup, text: String) {
+    /** Send an encrypted chat message. Returns the published NostrEvent (with deterministic NIP-01 ID). */
+    fun send(group: ChatGroup, text: String): NostrEvent {
         val key = group.encryptionKey
-        // Wrap text with sender BLS pubkey for receiver-side membership verification (H-4)
+        // v2 wrapper: includes version, type discriminator, and sender timestamp
         val wrapper = JSONObject().apply {
+            put("v", 2)
+            put("type", "chat")
             put("text", text)
             put("senderBlsPubkey", android.util.Base64.encodeToString(
                 keyManager.blsPublicKey(), android.util.Base64.NO_WRAP))
+            put("ts", System.currentTimeMillis() / 1000)
         }
         val authenticatedText = wrapper.toString()
         val envelopeJson = GroupCrypto.encrypt(authenticatedText, key)
@@ -105,7 +116,7 @@ class NostrMessageTransport(
         )
 
         val event = NostrEventBuilder.build(
-            kind = 24114,
+            kind = 44114,
             tags = tags,
             content = content,
             keyManager = keyManager
@@ -114,6 +125,8 @@ class NostrMessageTransport(
         for (conn in connections) {
             conn.publish(event)
         }
+
+        return event
     }
 
     /** Send a protocol message (state update, salt request/response) to a group. */
@@ -134,13 +147,20 @@ class NostrMessageTransport(
         )
 
         val event = NostrEventBuilder.build(
-            kind = 24114,
+            kind = 44114,
             tags = tags,
             content = content,
             keyManager = keyManager
         )
 
         if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.d("MsgTransport", "sendProtocol to ${connections.size} relays")
+        for (conn in connections) {
+            conn.publish(event)
+        }
+    }
+
+    /** Publish a pre-built event to all connected relays. */
+    fun publish(event: NostrEvent) {
         for (conn in connections) {
             conn.publish(event)
         }
@@ -165,24 +185,53 @@ class NostrMessageTransport(
                 return
             }
 
-            if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.d("MsgTransport", "Decrypted OK group=${groupID.take(8)} isProtocol=${isProtocolMessage(innerText)} members=${currentMembers.size}")
+            val wrapperType = wrapper?.optString("type", "chat") ?: "chat"
 
-            // Check inner text for protocol messages (state updates, salt, etc.)
-            if (isProtocolMessage(innerText)) {
-                // Update currentMembers SYNCHRONOUSLY before processing the next event,
-                // so that chat messages arriving right after are not rejected.
-                applyMemberChanges(innerText)
-                onProtocolMessage?.invoke(groupID, innerText, event.id, event.pubkey)
-            } else {
-                // Chat message — verify BLS pubkey is in member list (H-4)
+            if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.d("MsgTransport", "Decrypted OK group=${groupID.take(8)} wrapperType=$wrapperType members=${currentMembers.size}")
+
+            if (wrapperType == "image") {
+                // Image message — verify BLS pubkey is in member list (H-4)
                 val blsPubkey = android.util.Base64.decode(blsPubkeyB64, android.util.Base64.NO_WRAP)
                 val isMember = currentMembers.any { it.publicKeyCompressed.contentEquals(blsPubkey) }
-                if (isMember) {
-                    onMessage?.invoke(groupID, event.pubkey, innerText,
-                        event.id, event.createdAt)
-                } else {
-                    if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.w("MsgTransport", "BLS rejected: members=${currentMembers.size}")
+                if (!isMember) {
+                    if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.w("MsgTransport", "BLS rejected image: members=${currentMembers.size}")
                     com.stellarmls.chat.SecurityLog.nonMemberMessageRejected(groupID)
+                    return
+                }
+                val mediaObj = wrapper.optJSONObject("media") ?: return
+                val servers = mediaObj.optJSONArray("blossomServers")?.let { arr ->
+                    (0 until arr.length()).map { arr.getString(it) }
+                } ?: emptyList()
+                val media = com.stellarmls.chat.model.MediaAttachment(
+                    blobHash = mediaObj.getString("blobHash"),
+                    fileKey = android.util.Base64.decode(mediaObj.getString("fileKey"), android.util.Base64.NO_WRAP),
+                    mimeType = mediaObj.optString("mimeType", "image/jpeg"),
+                    width = mediaObj.optInt("width", 0),
+                    height = mediaObj.optInt("height", 0),
+                    size = mediaObj.optInt("size", 0),
+                    blossomServers = servers,
+                    encryptedThumbnail = mediaObj.optString("thumbnail", "").takeIf { it.isNotEmpty() }
+                        ?.let { android.util.Base64.decode(it, android.util.Base64.NO_WRAP) }
+                )
+                onImageMessage?.invoke(groupID, innerText, media, event.id, event.pubkey, event.createdAt)
+            } else {
+                // Check inner text for protocol messages (state updates, salt, etc.)
+                if (isProtocolMessage(innerText)) {
+                    // Update currentMembers SYNCHRONOUSLY before processing the next event,
+                    // so that chat messages arriving right after are not rejected.
+                    applyMemberChanges(innerText)
+                    onProtocolMessage?.invoke(groupID, innerText, event.id, event.pubkey)
+                } else {
+                    // Chat message — verify BLS pubkey is in member list (H-4)
+                    val blsPubkey = android.util.Base64.decode(blsPubkeyB64, android.util.Base64.NO_WRAP)
+                    val isMember = currentMembers.any { it.publicKeyCompressed.contentEquals(blsPubkey) }
+                    if (isMember) {
+                        onMessage?.invoke(groupID, event.pubkey, innerText,
+                            event.id, event.createdAt)
+                    } else {
+                        if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.w("MsgTransport", "BLS rejected: members=${currentMembers.size}")
+                        com.stellarmls.chat.SecurityLog.nonMemberMessageRejected(groupID)
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -233,11 +282,12 @@ class NostrMessageTransport(
         } catch (_: Exception) { }
     }
 
-    /** Check if text is a protocol message (has a "type" field). */
+    /** Check if text is a protocol message (matches a known protocol type). */
     private fun isProtocolMessage(text: String): Boolean {
         return try {
             val obj = JSONObject(text)
-            obj.has("type")
+            val type = obj.optString("type", "")
+            type in setOf("member_joined", "group_state_update", "salt_request", "salt_response", "group_renamed")
         } catch (_: Exception) {
             false
         }

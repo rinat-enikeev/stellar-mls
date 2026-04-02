@@ -28,6 +28,8 @@ class NostrRelayConnection(
     private var webSocket: WebSocket? = null
     private val subscriptionCallbacks = ConcurrentHashMap<String, (NostrEvent) -> Unit>()
     @Volatile private var reconnectAttempts = 0
+    /** Callback for relay OK responses: (eventID, accepted). */
+    var onOK: ((String, Boolean) -> Unit)? = null
 
     fun connect() {
         val request = Request.Builder().url(url).build()
@@ -121,6 +123,7 @@ class NostrRelayConnection(
                         val accepted = array.getBoolean(2)
                         val reason = if (array.length() >= 4) array.optString(3, "") else ""
                         if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.d("Relay", "OK from $url eventId=${eventId.take(12)} accepted=$accepted reason=$reason")
+                        onOK?.invoke(eventId, accepted)
                     }
                 }
                 "NOTICE" -> { /* relay notice */ }

@@ -203,7 +203,7 @@ class NostrMessageTransport(
 
             if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.d("MsgTransport", "Decrypted OK group=${groupID.take(8)} wrapperType=$wrapperType members=${currentMembers.size}")
 
-            if (wrapperType == "image") {
+            if (wrapperType == "image" || wrapperType == "video") {
                 // Image message — verify BLS pubkey is in member list (H-4)
                 val blsPubkey = android.util.Base64.decode(blsPubkeyB64, android.util.Base64.NO_WRAP)
                 val isMember = currentMembers.any { it.publicKeyCompressed.contentEquals(blsPubkey) }
@@ -216,6 +216,7 @@ class NostrMessageTransport(
                 val servers = mediaObj.optJSONArray("blossomServers")?.let { arr ->
                     (0 until arr.length()).map { arr.getString(it) }
                 } ?: emptyList()
+                val duration = mediaObj.optInt("duration", -1).takeIf { it >= 0 }
                 val media = com.stellarmls.chat.model.MediaAttachment(
                     blobHash = mediaObj.getString("blobHash"),
                     fileKey = android.util.Base64.decode(mediaObj.getString("fileKey"), android.util.Base64.NO_WRAP),
@@ -225,7 +226,8 @@ class NostrMessageTransport(
                     size = mediaObj.optInt("size", 0),
                     blossomServers = servers,
                     encryptedThumbnail = mediaObj.optString("thumbnail", "").takeIf { it.isNotEmpty() }
-                        ?.let { android.util.Base64.decode(it, android.util.Base64.NO_WRAP) }
+                        ?.let { android.util.Base64.decode(it, android.util.Base64.NO_WRAP) },
+                    duration = duration
                 )
                 onImageMessage?.invoke(groupID, innerText, media, event.id, event.pubkey, event.displayMilliseconds)
             } else {

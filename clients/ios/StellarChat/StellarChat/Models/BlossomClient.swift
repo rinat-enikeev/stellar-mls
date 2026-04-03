@@ -5,6 +5,14 @@ import Foundation
 /// Files are addressed by SHA-256 hash of their content.
 /// Upload authorization uses Nostr-signed kind 24242 events.
 enum BlossomClient {
+    /// Extended session for large uploads (video). 300s request timeout.
+    private static let extendedSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 300
+        config.timeoutIntervalForResource = 600
+        return URLSession(configuration: config)
+    }()
+
     /// Upload an encrypted blob to Blossom server(s).
     /// Returns the SHA-256 hex hash of the uploaded blob.
     static func upload(
@@ -33,7 +41,8 @@ enum BlossomClient {
                 request.setValue(authToken, forHTTPHeaderField: "Authorization")
                 request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
 
-                let (responseData, response) = try await URLSession.shared.data(for: request)
+                let session = data.count > 2_000_000 ? extendedSession : URLSession.shared
+                let (responseData, response) = try await session.data(for: request)
                 if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
                     return blobHash
                 }

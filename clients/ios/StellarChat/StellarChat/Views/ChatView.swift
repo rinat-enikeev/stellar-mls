@@ -1,5 +1,7 @@
+import AVKit
 import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ChatView: View {
     @Bindable var viewModel: ChatViewModel
@@ -14,6 +16,8 @@ struct ChatView: View {
     /// LazyVStack to render every item between the viewport and the target,
     /// freezing the main thread.
     @State private var isNearBottom = true
+    @State private var videoThumbnail: UIImage?
+    @State private var videoDuration: Int?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -121,8 +125,62 @@ struct ChatView: View {
                 .padding(.vertical, 8)
             }
 
+            // Video preview bar
+            if viewModel.selectedVideoURL != nil {
+                HStack {
+                    ZStack {
+                        if let thumb = videoThumbnail {
+                            Image(uiImage: thumb)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 60, height: 60)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                        } else {
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color(.systemGray4))
+                                .frame(width: 60, height: 60)
+                        }
+                        Image(systemName: "play.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.white)
+                        if let dur = videoDuration {
+                            VStack {
+                                Spacer()
+                                HStack {
+                                    Spacer()
+                                    Text(formatDuration(dur))
+                                        .font(.caption2)
+                                        .foregroundStyle(.white)
+                                        .padding(2)
+                                        .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 4))
+                                }
+                            }
+                            .frame(width: 60, height: 60)
+                        }
+                    }
+
+                    Spacer()
+
+                    if viewModel.isSendingVideo {
+                        ProgressView()
+                    } else {
+                        Button("Cancel", role: .cancel) {
+                            viewModel.selectedVideoURL = nil
+                            videoThumbnail = nil
+                            videoDuration = nil
+                        }
+                        Button("Send") {
+                            Task { await viewModel.sendVideo() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+            }
+
             HStack(spacing: 12) {
-                PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                PhotosPicker(selection: $selectedPhotoItem, matching: .any(of: [.images, .videos])) {
                     Image(systemName: "photo")
                         .font(.title3)
                         .foregroundStyle(viewModel.hasBlossomServers ? .primary : .secondary)
@@ -131,8 +189,18 @@ struct ChatView: View {
                 .onChange(of: selectedPhotoItem) { _, newItem in
                     guard let newItem else { return }
                     Task {
-                        if let data = try? await newItem.loadTransferable(type: Data.self) {
-                            viewModel.selectedImageData = data
+                        let isVideo = newItem.supportedContentTypes.contains { $0.conforms(to: .movie) }
+                        if isVideo {
+                            if let data = try? await newItem.loadTransferable(type: Data.self) {
+                                let tempURL = FileManager.default.temporaryDirectory
+                                    .appendingPathComponent(UUID().uuidString + ".mp4")
+                                try? data.write(to: tempURL)
+                                viewModel.selectedVideoURL = tempURL
+                            }
+                        } else {
+                            if let data = try? await newItem.loadTransferable(type: Data.self) {
+                                viewModel.selectedImageData = data
+                            }
                         }
                         selectedPhotoItem = nil
                     }
@@ -189,6 +257,21 @@ struct ChatView: View {
         }
         .onDisappear {
             viewModel.onDisappear()
+        }
+        .onChange(of: viewModel.selectedVideoURL) { _, newURL in
+            guard let url = newURL else {
+                videoThumbnail = nil
+                videoDuration = nil
+                return
+            }
+            Task {
+                if let thumbData = await MediaCrypto.generateVideoThumbnail(url) {
+                    videoThumbnail = UIImage(data: thumbData)
+                }
+                if let meta = await MediaCrypto.videoMetadata(url) {
+                    videoDuration = meta.duration
+                }
+            }
         }
         .alert("Error", isPresented: Binding(
             get: { viewModel.errorMessage != nil },
@@ -310,7 +393,11 @@ struct MessageBubble: View {
                 }
                 HStack(alignment: .bottom, spacing: 4) {
                     if let media = message.mediaAttachment {
-                        ImageBubbleContent(media: media, isMine: message.isMine)
+                        if media.isVideo {
+                            VideoBubbleContent(media: media, isMine: message.isMine)
+                        } else {
+                            ImageBubbleContent(media: media, isMine: message.isMine)
+                        }
                     } else {
                         Text(message.text)
                             .padding(.horizontal, 12)
@@ -579,6 +666,155 @@ struct FullScreenImageView: View {
         let ratio = min(widthRatio, heightRatio)
         return CGSize(width: imageSize.width * ratio, height: imageSize.height * ratio)
     }
+}
+
+// MARK: - Video Bubble
+
+struct VideoBubbleContent: View {
+    let media: MediaAttachment
+    let isMine: Bool
+    @State private var thumbnailImage: UIImage?
+    @State private var isLoading = false
+    @State private var showFullScreen = false
+    @State private var videoFileURL: URL?
+
+    var body: some View {
+        ZStack {
+            if let thumbnail = thumbnailImage {
+                Image(uiImage: thumbnail)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Rectangle()
+                    .fill(Color(.systemGray4))
+            }
+
+            // Play icon overlay
+            if !isLoading {
+                Image(systemName: "play.circle.fill")
+                    .font(.largeTitle)
+                    .foregroundStyle(.white)
+                    .shadow(radius: 2)
+            } else {
+                ProgressView()
+                    .tint(.white)
+            }
+
+            // Duration label
+            if let duration = media.duration {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Text(formatDuration(duration))
+                            .font(.caption2)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 2)
+                            .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 4))
+                            .padding(4)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: 220, maxHeight: 280)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .onAppear {
+            if let encThumb = media.encryptedThumbnail,
+               let plainData = try? MediaCrypto.decryptMedia(encThumb, key: media.fileKey) {
+                thumbnailImage = UIImage(data: plainData)
+            }
+        }
+        .onTapGesture {
+            if videoFileURL != nil {
+                showFullScreen = true
+            } else if !isLoading {
+                loadVideo()
+            }
+        }
+        .fullScreenCover(isPresented: $showFullScreen) {
+            if let url = videoFileURL {
+                FullScreenVideoView(videoURL: url)
+            }
+        }
+    }
+
+    private func loadVideo() {
+        if let cached = VideoCache.shared.cachedFileURL(for: media.blobHash) {
+            videoFileURL = cached
+            showFullScreen = true
+            return
+        }
+
+        isLoading = true
+        Task {
+            do {
+                let servers = media.blossomServers.compactMap(URL.init(string:))
+                let encrypted = try await BlossomClient.download(blobHash: media.blobHash, servers: servers)
+                let plain = try MediaCrypto.decryptMedia(encrypted, key: media.fileKey)
+                let url = VideoCache.shared.store(plain, for: media.blobHash)
+                await MainActor.run {
+                    videoFileURL = url
+                    isLoading = false
+                    showFullScreen = true
+                }
+            } catch {
+                await MainActor.run { isLoading = false }
+            }
+        }
+    }
+}
+
+// MARK: - Full Screen Video
+
+struct FullScreenVideoView: View {
+    let videoURL: URL
+    @Environment(\.dismiss) private var dismiss
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            if let player {
+                VideoPlayer(player: player)
+                    .ignoresSafeArea()
+            }
+
+            VStack {
+                HStack {
+                    Spacer()
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title)
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, .white.opacity(0.3))
+                    }
+                    .padding()
+                }
+                Spacer()
+            }
+        }
+        .statusBarHidden()
+        .onAppear {
+            player = AVPlayer(url: videoURL)
+            player?.play()
+        }
+        .onDisappear {
+            player?.pause()
+            player = nil
+        }
+    }
+}
+
+// MARK: - Helpers
+
+private func formatDuration(_ seconds: Int) -> String {
+    let mins = seconds / 60
+    let secs = seconds % 60
+    return String(format: "%d:%02d", mins, secs)
 }
 
 // MARK: - Avatar

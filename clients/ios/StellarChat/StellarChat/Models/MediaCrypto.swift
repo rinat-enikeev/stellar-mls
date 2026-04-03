@@ -1,3 +1,4 @@
+import AVFoundation
 import CryptoKit
 import Foundation
 import UIKit
@@ -8,6 +9,8 @@ import UIKit
 enum MediaCrypto {
     /// Maximum compressed image size in bytes (2 MB).
     static let maxImageBytes = 2_000_000
+    /// Maximum video size in bytes before encryption (50 MB).
+    static let maxVideoBytes = 50_000_000
     /// Maximum thumbnail dimension in points.
     static let thumbnailMaxDimension: CGFloat = 200
     /// Thumbnail JPEG compression quality.
@@ -89,6 +92,90 @@ enum MediaCrypto {
     static func imageDimensions(_ imageData: Data) -> (width: Int, height: Int)? {
         guard let image = UIImage(data: imageData) else { return nil }
         return (Int(image.size.width * image.scale), Int(image.size.height * image.scale))
+    }
+
+    // MARK: - Video Processing
+
+    /// Extract video metadata: dimensions and duration.
+    static func videoMetadata(_ url: URL) async -> (width: Int, height: Int, duration: Int)? {
+        let asset = AVURLAsset(url: url)
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first else { return nil }
+        let size = try? await track.load(.naturalSize)
+        let transform = try? await track.load(.preferredTransform)
+        let duration = try? await asset.load(.duration)
+        guard let size, let duration else { return nil }
+        // Apply transform to handle rotated videos
+        let transformed = size.applying(transform ?? .identity)
+        let w = Int(abs(transformed.width))
+        let h = Int(abs(transformed.height))
+        let secs = Int(CMTimeGetSeconds(duration))
+        return (w, h, secs)
+    }
+
+    /// Generate a thumbnail from the first frame of a video.
+    static func generateVideoThumbnail(_ url: URL, maxDimension: CGFloat = thumbnailMaxDimension) async -> Data? {
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: maxDimension * 2, height: maxDimension * 2)
+        guard let cgImage = try? await generator.image(at: .zero).image else { return nil }
+        let uiImage = UIImage(cgImage: cgImage)
+        // Scale to thumbnail size
+        let size = uiImage.size
+        let scale: CGFloat = size.width > size.height
+            ? maxDimension / size.width
+            : maxDimension / size.height
+        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        let thumbnail = renderer.image { _ in
+            uiImage.draw(in: CGRect(origin: .zero, size: newSize))
+        }
+        return thumbnail.jpegData(compressionQuality: thumbnailQuality)
+    }
+
+    /// Compress a video to fit within maxBytes using AVAssetExportSession.
+    /// Returns the compressed video data, or nil if compression fails.
+    static func compressVideo(_ url: URL, maxBytes: Int = maxVideoBytes) async throws -> Data? {
+        // Check if original is already small enough
+        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+        let fileSize = attrs[.size] as? Int ?? 0
+        if fileSize <= maxBytes {
+            return try Data(contentsOf: url)
+        }
+
+        // Transcode to medium quality
+        let asset = AVURLAsset(url: url)
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetMediumQuality) else {
+            return nil
+        }
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("mp4")
+        session.outputURL = tempURL
+        session.outputFileType = .mp4
+        await session.export()
+
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        guard session.status == .completed else { return nil }
+        let data = try Data(contentsOf: tempURL)
+        if data.count > maxBytes {
+            // Still too large — try low quality
+            guard let lowSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetLowQuality) else {
+                return nil
+            }
+            let lowURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension("mp4")
+            lowSession.outputURL = lowURL
+            lowSession.outputFileType = .mp4
+            await lowSession.export()
+            defer { try? FileManager.default.removeItem(at: lowURL) }
+            guard lowSession.status == .completed else { return nil }
+            let lowData = try Data(contentsOf: lowURL)
+            return lowData.count <= maxBytes ? lowData : nil
+        }
+        return data
     }
 }
 

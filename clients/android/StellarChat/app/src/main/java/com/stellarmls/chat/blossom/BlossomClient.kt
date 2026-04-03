@@ -18,8 +18,8 @@ import java.util.concurrent.TimeUnit
 object BlossomClient {
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(300, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
         .build()
 
     /**

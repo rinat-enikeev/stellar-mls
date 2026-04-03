@@ -31,6 +31,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -83,6 +84,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.stellarmls.chat.blossom.BlossomClient
 import com.stellarmls.chat.blossom.ImageCache
+import com.stellarmls.chat.blossom.VideoCache
 import com.stellarmls.chat.crypto.MediaCrypto
 import com.stellarmls.chat.model.ChatMessage
 import com.stellarmls.chat.model.MediaAttachment
@@ -132,7 +134,14 @@ fun ChatScreen(
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
-        viewModel.selectedImageUri = uri
+        if (uri != null) {
+            val mimeType = context.contentResolver.getType(uri)
+            if (mimeType?.startsWith("video/") == true) {
+                viewModel.selectedVideoUri = uri
+            } else {
+                viewModel.selectedImageUri = uri
+            }
+        }
     }
 
     Scaffold(
@@ -290,6 +299,83 @@ fun ChatScreen(
                 }
             }
 
+            // Video preview bar
+            viewModel.selectedVideoUri?.let { uri ->
+                val videoThumb = remember(uri) {
+                    try {
+                        val bytes = MediaCrypto.generateVideoThumbnail(context, uri)
+                        bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+                    } catch (_: Exception) { null }
+                }
+                val videoMeta = remember(uri) {
+                    try {
+                        MediaCrypto.videoMetadata(context, uri)
+                    } catch (_: Exception) { null }
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box {
+                        if (videoThumb != null) {
+                            Image(
+                                bitmap = videoThumb.asImageBitmap(),
+                                contentDescription = "Video preview",
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(RoundedCornerShape(8.dp)),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Filled.PlayCircle, contentDescription = null)
+                            }
+                        }
+                        Icon(
+                            Icons.Filled.PlayCircle,
+                            contentDescription = "Video",
+                            modifier = Modifier
+                                .size(24.dp)
+                                .align(Alignment.Center),
+                            tint = Color.White
+                        )
+                        if (videoMeta != null) {
+                            Text(
+                                text = formatDuration(videoMeta.third),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White,
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(2.dp)
+                                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 2.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.weight(1f))
+                    if (viewModel.isSendingVideo) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    } else {
+                        TextButton(onClick = { viewModel.selectedVideoUri = null }) {
+                            Text("Cancel")
+                        }
+                        Button(onClick = {
+                            viewModel.sendVideo(context)
+                        }) {
+                            Text("Send")
+                        }
+                    }
+                }
+            }
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -299,7 +385,7 @@ fun ChatScreen(
                 IconButton(
                     onClick = {
                         photoPickerLauncher.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
                         )
                     },
                     enabled = viewModel.hasBlossomServers
@@ -455,7 +541,11 @@ fun MessageBubble(message: ChatMessage, isGrouped: Boolean = false, senderAlias:
                         else MaterialTheme.colorScheme.surfaceVariant
                     )
             ) {
-                ImageBubbleContent(media = message.mediaAttachment)
+                if (message.mediaAttachment.mimeType.startsWith("video/")) {
+                    VideoBubbleContent(media = message.mediaAttachment)
+                } else {
+                    ImageBubbleContent(media = message.mediaAttachment)
+                }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -717,6 +807,158 @@ fun FullScreenImageViewer(bitmap: Bitmap, onDismiss: () -> Unit) {
             }
         }
     }
+}
+
+@Composable
+fun VideoBubbleContent(media: MediaAttachment) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var isLoading by remember(media.blobHash) { mutableStateOf(false) }
+    var showFullScreen by remember { mutableStateOf(false) }
+    var videoFile by remember(media.blobHash) { mutableStateOf<java.io.File?>(
+        VideoCache.getInstance(context).getCachedFile(media.blobHash)
+    ) }
+
+    // Decrypt thumbnail for display
+    val thumbnailBitmap = remember(media.blobHash) {
+        media.encryptedThumbnail?.let { encThumb ->
+            try {
+                val plain = MediaCrypto.decryptMedia(encThumb, media.fileKey)
+                BitmapFactory.decodeByteArray(plain, 0, plain.size)
+            } catch (_: Exception) { null }
+        }
+    }
+
+    val aspectRatio = if (media.width > 0 && media.height > 0)
+        media.width.toFloat() / media.height.toFloat() else 1f
+
+    Box(
+        modifier = Modifier
+            .widthIn(max = 220.dp)
+            .aspectRatio(aspectRatio.coerceIn(0.5f, 2f))
+            .clickable {
+                if (videoFile != null) {
+                    showFullScreen = true
+                } else if (!isLoading) {
+                    scope.launch {
+                        isLoading = true
+                        try {
+                            val encrypted = withContext(Dispatchers.IO) {
+                                BlossomClient.download(media.blobHash, media.blossomServers)
+                            }
+                            val plain = withContext(Dispatchers.Default) {
+                                MediaCrypto.decryptMedia(encrypted, media.fileKey)
+                            }
+                            val file = VideoCache.getInstance(context).store(media.blobHash, plain)
+                            videoFile = file
+                            showFullScreen = true
+                        } catch (_: Exception) { }
+                        isLoading = false
+                    }
+                }
+            }
+    ) {
+        if (thumbnailBitmap != null) {
+            Image(
+                bitmap = thumbnailBitmap.asImageBitmap(),
+                contentDescription = "Video",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            )
+        }
+
+        // Play icon overlay
+        if (!isLoading) {
+            Icon(
+                Icons.Filled.PlayCircle,
+                contentDescription = "Play video",
+                modifier = Modifier
+                    .size(48.dp)
+                    .align(Alignment.Center),
+                tint = Color.White.copy(alpha = 0.9f)
+            )
+        } else {
+            CircularProgressIndicator(
+                modifier = Modifier
+                    .size(32.dp)
+                    .align(Alignment.Center),
+                color = Color.White
+            )
+        }
+
+        // Duration label
+        media.duration?.let { dur ->
+            Text(
+                text = formatDuration(dur),
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(4.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            )
+        }
+    }
+
+    if (showFullScreen && videoFile != null) {
+        FullScreenVideoPlayer(videoFile = videoFile!!, onDismiss = { showFullScreen = false })
+    }
+}
+
+@Composable
+fun FullScreenVideoPlayer(videoFile: java.io.File, onDismiss: () -> Unit) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        ) {
+            androidx.compose.ui.viewinterop.AndroidView(
+                factory = { ctx ->
+                    android.widget.VideoView(ctx).apply {
+                        setVideoURI(android.net.Uri.fromFile(videoFile))
+                        val mc = android.widget.MediaController(ctx)
+                        mc.setAnchorView(this)
+                        setMediaController(mc)
+                        setOnPreparedListener { start() }
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .align(Alignment.Center)
+            )
+
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+            ) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = "Close",
+                    tint = Color.White,
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+        }
+    }
+}
+
+private fun formatDuration(seconds: Int): String {
+    val mins = seconds / 60
+    val secs = seconds % 60
+    return String.format("%d:%02d", mins, secs)
 }
 
 @Composable

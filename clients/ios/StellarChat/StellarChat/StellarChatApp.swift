@@ -956,7 +956,8 @@ final class AppState {
             height: dimensions.height,
             size: encryptedBlob.count,
             blossomServers: blossomServerURLs.map(\.absoluteString),
-            encryptedThumbnail: encryptedThumbnail
+            encryptedThumbnail: encryptedThumbnail,
+            duration: nil
         )
 
         // Build v2 wrapper with type "image" and media dict
@@ -999,6 +1000,110 @@ final class AppState {
             groupID: groupID,
             senderPubkey: keyManager.publicKeyHex,
             text: "Sent an image",
+            timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
+            isMine: true,
+            status: .sending,
+            mediaAttachment: media
+        )
+        insertMessage(msg, into: groupID)
+        seenMessageIDs[groupID, default: []].insert(msg.id)
+        store.saveMessageAsync(msg)
+
+        // Publish to relays in the background
+        let transport = chatTransport
+        Task {
+            do {
+                try await transport.publishToRelays(event)
+            } catch {
+                await MainActor.run {
+                    if let idx = self.chatMessages[groupID]?.firstIndex(where: { $0.id == event.id }) {
+                        self.chatMessages[groupID]?[idx].status = .failed
+                    }
+                }
+            }
+        }
+    }
+
+    func sendVideo(videoURL: URL, groupID: String) async throws {
+        guard let group = groups.first(where: { $0.id == groupID }) else { return }
+
+        // Compress video (or verify size)
+        guard let videoData = try await MediaCrypto.compressVideo(videoURL) else {
+            throw MediaCryptoError.encryptionFailed
+        }
+
+        // Extract metadata
+        guard let meta = await MediaCrypto.videoMetadata(videoURL) else { return }
+        let thumbData = await MediaCrypto.generateVideoThumbnail(videoURL)
+
+        // Encrypt video with a fresh per-file key
+        let (encryptedBlob, fileKey) = try MediaCrypto.encryptMedia(videoData)
+
+        // Encrypt thumbnail with the same file key
+        let encryptedThumbnail: Data?
+        if let thumbData {
+            encryptedThumbnail = try MediaCrypto.encryptMedia(thumbData, key: fileKey)
+        } else {
+            encryptedThumbnail = nil
+        }
+
+        // Upload encrypted blob to Blossom
+        let blobHash = try await BlossomClient.upload(encryptedBlob, servers: blossomServerURLs, keyManager: keyManager)
+
+        // Build MediaAttachment
+        let media = MediaAttachment(
+            blobHash: blobHash,
+            fileKey: fileKey,
+            mimeType: "video/mp4",
+            width: meta.width,
+            height: meta.height,
+            size: encryptedBlob.count,
+            blossomServers: blossomServerURLs.map(\.absoluteString),
+            encryptedThumbnail: encryptedThumbnail,
+            duration: meta.duration
+        )
+
+        // Build v2 wrapper with type "video" and media dict
+        let blsPubkey = try keyManager.blsPublicKey
+        let ts = Int64(Date().timeIntervalSince1970)
+        var mediaDict: [String: Any] = [
+            "blobHash": media.blobHash,
+            "fileKey": media.fileKey.base64EncodedString(),
+            "mimeType": media.mimeType,
+            "width": media.width,
+            "height": media.height,
+            "size": media.size,
+            "blossomServers": media.blossomServers,
+            "duration": meta.duration,
+        ]
+        if let encThumb = media.encryptedThumbnail {
+            mediaDict["thumbnail"] = encThumb.base64EncodedString()
+        }
+        let wrapper: [String: Any] = [
+            "v": 2,
+            "type": "video",
+            "text": "Sent a video",
+            "senderBlsPubkey": blsPubkey.base64EncodedString(),
+            "ts": ts,
+            "media": mediaDict,
+        ]
+        let wrapperData = try JSONSerialization.data(withJSONObject: wrapper)
+        let wrapperText = String(data: wrapperData, encoding: .utf8)!
+
+        // Build the Nostr event locally
+        let envelope = try GroupCrypto.encrypt(wrapperText, key: group.encryptionKey)
+        let envelopeData = try JSONEncoder().encode(envelope)
+        let content = envelopeData.base64EncodedString()
+        let event = try NostrEvent.build(
+            kind: 44114, tags: [["t", group.topicTag]], content: content, keyManager: keyManager
+        )
+
+        // Optimistic UI: show locally before relay publish
+        let msg = ChatMessage(
+            id: event.id,
+            groupID: groupID,
+            senderPubkey: keyManager.publicKeyHex,
+            text: "Sent a video",
             timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
             isMine: true,
             status: .sending,

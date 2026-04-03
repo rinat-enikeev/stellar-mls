@@ -1,5 +1,6 @@
 package com.stellarmls.chat.viewmodel
 
+import android.content.Context
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -14,6 +15,8 @@ class ChatViewModel(
     var inputText by mutableStateOf("")
     var selectedImageUri by mutableStateOf<Uri?>(null)
     var isSendingImage by mutableStateOf(false)
+    var selectedVideoUri by mutableStateOf<Uri?>(null)
+    var isSendingVideo by mutableStateOf(false)
 
     val messages: List<ChatMessage>
         get() = groupListViewModel.chatMessages[groupID] ?: emptyList()
@@ -55,6 +58,14 @@ class ChatViewModel(
         groupListViewModel.sendImage(groupID, imageData)
         selectedImageUri = null
         isSendingImage = false
+    }
+
+    fun sendVideo(context: Context) {
+        val uri = selectedVideoUri ?: return
+        isSendingVideo = true
+        groupListViewModel.sendVideo(groupID, context, uri)
+        selectedVideoUri = null
+        isSendingVideo = false
     }
 
     override fun onCleared() {

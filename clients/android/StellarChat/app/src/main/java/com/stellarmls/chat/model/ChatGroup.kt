@@ -91,12 +91,13 @@ data class ChatMessage(
 data class MediaAttachment(
     val blobHash: String,           // SHA-256 hex of encrypted blob on Blossom
     val fileKey: ByteArray,         // 32-byte AES-256-GCM per-file key
-    val mimeType: String,           // e.g. "image/jpeg"
+    val mimeType: String,           // e.g. "image/jpeg" or "video/mp4"
     val width: Int,
     val height: Int,
     val size: Int,                  // encrypted blob size in bytes
     val blossomServers: List<String>, // server base URLs for retrieval
-    val encryptedThumbnail: ByteArray? // combined-format encrypted thumbnail
+    val encryptedThumbnail: ByteArray?, // combined-format encrypted thumbnail
+    val duration: Int? = null       // video duration in seconds, null for images
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

@@ -132,7 +132,7 @@ final class NostrMessageTransport {
 
             let wrapperType = wrapperJSON["type"] as? String
 
-            if wrapperType == "image" {
+            if wrapperType == "image" || wrapperType == "video" {
                 // Parse media attachment from wrapper JSON
                 let isMember = currentMembers.contains { $0.publicKeyCompressed == blsPubkey }
                 if isMember, let mediaDict = wrapperJSON["media"] as? [String: Any],
@@ -150,6 +150,7 @@ final class NostrMessageTransport {
                     } else {
                         encryptedThumbnail = nil
                     }
+                    let duration = mediaDict["duration"] as? Int
                     let media = MediaAttachment(
                         blobHash: blobHash,
                         fileKey: fileKey,
@@ -158,7 +159,8 @@ final class NostrMessageTransport {
                         height: height,
                         size: size,
                         blossomServers: blossomServers,
-                        encryptedThumbnail: encryptedThumbnail
+                        encryptedThumbnail: encryptedThumbnail,
+                        duration: duration
                     )
                     onImageMessage?(innerText, media, event)
                 } else if !isMember {

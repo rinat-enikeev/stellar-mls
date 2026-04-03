@@ -1107,6 +1107,113 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun sendVideo(groupID: String, context: Context, uri: android.net.Uri) {
+        val group = groups.find { it.id == groupID } ?: return
+
+        viewModelScope.launch {
+            try {
+                // Read video bytes and check size
+                val videoData = withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.readBytes()
+                } ?: return@launch
+
+                if (videoData.size > MediaCrypto.MAX_VIDEO_BYTES) {
+                    if (BuildConfig.DEBUG) Log.w("GroupListVM", "Video too large: ${videoData.size} bytes")
+                    return@launch
+                }
+
+                // Extract metadata
+                val meta = withContext(Dispatchers.Default) {
+                    MediaCrypto.videoMetadata(context, uri)
+                } ?: return@launch
+
+                // Generate thumbnail from first frame
+                val thumbData = withContext(Dispatchers.Default) {
+                    MediaCrypto.generateVideoThumbnail(context, uri)
+                }
+
+                // Encrypt video with a fresh per-file key
+                val (encryptedBlob, fileKey) = MediaCrypto.encryptMedia(videoData)
+                val encThumb = thumbData?.let { MediaCrypto.encryptMedia(it, fileKey) }
+
+                // Upload to Blossom
+                val blobHash = withContext(Dispatchers.IO) {
+                    BlossomClient.upload(encryptedBlob, blossomServerURLs.toList(), keyManager)
+                }
+
+                val media = MediaAttachment(
+                    blobHash = blobHash,
+                    fileKey = fileKey,
+                    mimeType = "video/mp4",
+                    width = meta.first,
+                    height = meta.second,
+                    size = encryptedBlob.size,
+                    blossomServers = blossomServerURLs.toList(),
+                    encryptedThumbnail = encThumb,
+                    duration = meta.third
+                )
+
+                // Build v2 wrapper with video type
+                val mediaJson = JSONObject().apply {
+                    put("blobHash", media.blobHash)
+                    put("fileKey", android.util.Base64.encodeToString(media.fileKey, android.util.Base64.NO_WRAP))
+                    put("mimeType", media.mimeType)
+                    put("width", media.width)
+                    put("height", media.height)
+                    put("size", media.size)
+                    put("blossomServers", JSONArray(media.blossomServers))
+                    put("duration", meta.third)
+                    if (encThumb != null) {
+                        put("thumbnail", android.util.Base64.encodeToString(encThumb, android.util.Base64.NO_WRAP))
+                    }
+                }
+                val wrapper = JSONObject().apply {
+                    put("v", 2)
+                    put("type", "video")
+                    put("text", "Sent a video")
+                    put("media", mediaJson)
+                    put("senderBlsPubkey", android.util.Base64.encodeToString(
+                        keyManager.blsPublicKey(), android.util.Base64.NO_WRAP))
+                    put("ts", System.currentTimeMillis() / 1000)
+                }
+
+                val key = group.encryptionKey
+                val envelopeJson = GroupCrypto.encrypt(wrapper.toString(), key)
+                val content = android.util.Base64.encodeToString(
+                    envelopeJson.toByteArray(), android.util.Base64.NO_WRAP)
+
+                val tags = listOf(listOf("t", group.topicTag))
+                val event = NostrEventBuilder.build(
+                    kind = 44114,
+                    tags = tags,
+                    content = content,
+                    keyManager = keyManager
+                )
+
+                transport.publish(event)
+
+                val msg = ChatMessage(
+                    id = event.id,
+                    groupID = groupID,
+                    senderPubkey = keyManager.publicKeyHex,
+                    text = "Sent a video",
+                    timestamp = Date(event.displayMilliseconds),
+                    isMine = true,
+                    status = MessageStatus.SENDING,
+                    mediaAttachment = media
+                )
+                val current = (chatMessages[groupID] ?: emptyList()) + msg
+                chatMessages[groupID] = current.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+                seenMessageIDs.getOrPut(groupID) { mutableSetOf() }.add(event.id)
+                launch {
+                    try { store.saveMessage(msg) } catch (_: Exception) { }
+                }
+            } catch (e: Exception) {
+                if (BuildConfig.DEBUG) Log.e("GroupListVM", "sendVideo failed: ${e.message}")
+            }
+        }
+    }
+
     /** Set up handler for protocol messages received on the group channel. */
     private fun setupProtocolMessageHandler() {
         transport.onProtocolMessage = { groupID, json, eventID, senderPubkey ->

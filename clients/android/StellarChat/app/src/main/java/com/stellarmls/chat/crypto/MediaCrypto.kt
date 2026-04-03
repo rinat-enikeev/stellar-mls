@@ -1,7 +1,10 @@
 package com.stellarmls.chat.crypto
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 import java.io.ByteArrayOutputStream
 import java.security.SecureRandom
 import javax.crypto.Cipher
@@ -16,6 +19,8 @@ import javax.crypto.spec.SecretKeySpec
 object MediaCrypto {
     /** Maximum compressed image size in bytes (2 MB). */
     const val MAX_IMAGE_BYTES = 2_000_000
+    /** Maximum video size in bytes before encryption (50 MB). */
+    const val MAX_VIDEO_BYTES = 50_000_000
     /** Maximum thumbnail dimension in pixels. */
     const val THUMBNAIL_MAX_DIMENSION = 200
     /** Thumbnail JPEG compression quality (0-100). */
@@ -126,5 +131,61 @@ object MediaCrypto {
         BitmapFactory.decodeByteArray(imageData, 0, imageData.size, options)
         if (options.outWidth <= 0 || options.outHeight <= 0) return null
         return Pair(options.outWidth, options.outHeight)
+    }
+
+    // -- Video Processing --
+
+    /**
+     * Extract video metadata: width, height, duration (seconds).
+     */
+    fun videoMetadata(context: Context, uri: Uri): Triple<Int, Int, Int>? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(context, uri)
+            val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+            val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0
+            val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            // Swap width/height for 90/270 rotation
+            val (w, h) = if (rotation == 90 || rotation == 270) Pair(height, width) else Pair(width, height)
+            Triple(w, h, (durationMs / 1000).toInt())
+        } catch (_: Exception) {
+            null
+        } finally {
+            retriever.release()
+        }
+    }
+
+    /**
+     * Generate a thumbnail from the first frame of a video.
+     */
+    fun generateVideoThumbnail(
+        context: Context,
+        uri: Uri,
+        maxDimension: Int = THUMBNAIL_MAX_DIMENSION
+    ): ByteArray? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(context, uri)
+            val frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?: return null
+            val scale: Float = if (frame.width > frame.height) {
+                maxDimension.toFloat() / frame.width
+            } else {
+                maxDimension.toFloat() / frame.height
+            }
+            val newWidth = (frame.width * scale).toInt().coerceAtLeast(1)
+            val newHeight = (frame.height * scale).toInt().coerceAtLeast(1)
+            val thumbnail = Bitmap.createScaledBitmap(frame, newWidth, newHeight, true)
+            val output = ByteArrayOutputStream()
+            thumbnail.compress(Bitmap.CompressFormat.JPEG, THUMBNAIL_QUALITY, output)
+            if (thumbnail != frame) thumbnail.recycle()
+            frame.recycle()
+            output.toByteArray()
+        } catch (_: Exception) {
+            null
+        } finally {
+            retriever.release()
+        }
     }
 }

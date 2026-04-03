@@ -132,6 +132,7 @@ class PersistenceStore(context: Context) {
             media.encryptedThumbnail?.let {
                 put("encryptedThumbnail", android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP))
             }
+            media.duration?.let { put("duration", it) }
         }.toString()
     }
 
@@ -149,7 +150,8 @@ class PersistenceStore(context: Context) {
             size = obj.getInt("size"),
             blossomServers = servers,
             encryptedThumbnail = obj.optString("encryptedThumbnail", "").takeIf { it.isNotEmpty() }
-                ?.let { android.util.Base64.decode(it, android.util.Base64.NO_WRAP) }
+                ?.let { android.util.Base64.decode(it, android.util.Base64.NO_WRAP) },
+            duration = obj.optInt("duration", -1).takeIf { it >= 0 }
         )
     }
 

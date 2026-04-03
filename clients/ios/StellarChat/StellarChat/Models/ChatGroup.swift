@@ -96,12 +96,15 @@ struct ChatMessage: Identifiable, Codable {
 struct MediaAttachment: Codable {
     let blobHash: String           // SHA-256 hex of encrypted blob on Blossom
     let fileKey: Data              // 32-byte AES-256-GCM per-file key
-    let mimeType: String           // e.g. "image/jpeg"
+    let mimeType: String           // e.g. "image/jpeg" or "video/mp4"
     let width: Int
     let height: Int
     let size: Int                  // encrypted blob size in bytes
     let blossomServers: [String]   // server base URLs for retrieval
     let encryptedThumbnail: Data?  // combined-format encrypted thumbnail
+    let duration: Int?             // video duration in seconds, nil for images
+
+    var isVideo: Bool { mimeType.hasPrefix("video/") }
 }
 
 struct InviteCode: Codable {

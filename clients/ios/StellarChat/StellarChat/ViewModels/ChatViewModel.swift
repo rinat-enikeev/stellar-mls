@@ -8,6 +8,8 @@ final class ChatViewModel {
     var errorMessage: String?
     var selectedImageData: Data?
     var isSendingImage = false
+    var selectedVideoURL: URL?
+    var isSendingVideo = false
     private weak var appState: AppState?
 
     var messages: [ChatMessage] {
@@ -61,6 +63,20 @@ final class ChatViewModel {
             selectedImageData = nil
         } catch {
             print("[Blossom] sendImage failed: \(error)")
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func sendVideo() async {
+        guard let videoURL = selectedVideoURL else { return }
+        isSendingVideo = true
+        defer { isSendingVideo = false }
+
+        do {
+            try await appState?.sendVideo(videoURL: videoURL, groupID: groupID)
+            selectedVideoURL = nil
+        } catch {
+            print("[Blossom] sendVideo failed: \(error)")
             errorMessage = error.localizedDescription
         }
     }

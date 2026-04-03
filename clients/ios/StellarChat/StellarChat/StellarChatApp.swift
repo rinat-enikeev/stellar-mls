@@ -696,7 +696,9 @@ final class AppState {
         chatTransport.currentMembers = groups.flatMap(\.members)
         if useSecureRekey {
             // Secure rekey: unsubscribe old topic now, subscribe new topic
+            #if !DEBUG
             chatTransport.unsubscribe(topic: currentGroup.topicTag)
+            #endif
             subscribeGroup(candidate)
         } else {
             subscribeGroup(candidate)
@@ -1138,7 +1140,9 @@ final class AppState {
 
             if selfRemoved {
                 // Unsubscribe — do NOT resubscribe with the new key
+                #if !DEBUG
                 chatTransport.unsubscribe(topic: group.topicTag)
+                #endif
                 insertSystemMessage(groupID: groupID, text: "You were removed from this group", event: "self-removed", epoch: update.epoch)
             } else {
                 subscribeGroup(group)
@@ -1322,7 +1326,9 @@ final class AppState {
         storeSalt(groupID: groupIDHex, epoch: envelope.epoch, salt: envelope.salt)
 
         // Migrate topic: unsubscribe old, subscribe new (groupSecret changed)
+        #if !DEBUG
         chatTransport.unsubscribe(topic: oldTopicTag)
+        #endif
         subscribeGroup(group)
         chatTransport.currentMembers = groups.flatMap(\.members)
 
@@ -2078,9 +2084,11 @@ final class AppState {
                             (try? self.keyManager.blsPublicKey) == removed
                         }
                         if selfRemoved {
+                            #if !DEBUG
                             if let g = self.groups.first(where: { $0.id == groupID }) {
                                 self.chatTransport.unsubscribe(topic: g.topicTag)
                             }
+                            #endif
                             self.insertSystemMessage(groupID: groupID, text: "You were removed from this group", event: "self-removed", epoch: notice.epoch)
                         }
                         // Remaining members will receive the rekey via inbox — no action needed here

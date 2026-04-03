@@ -494,7 +494,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         storeSalt(groupIDHex, epoch, group.salt)
 
         // Migrate topic
-        transport.unsubscribe(oldTopicTag)
+        if (!BuildConfig.DEBUG) transport.unsubscribe(oldTopicTag)
         syncTransportAndSubscribe(group)
 
         viewModelScope.launch {
@@ -1023,7 +1023,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         transport.currentMembers.addAll(groups.flatMap { it.members })
         if (useSecureRekey) {
             // Secure rekey: unsubscribe old topic now, subscribe new topic
-            transport.unsubscribe(currentGroup.topicTag)
+            if (!BuildConfig.DEBUG) transport.unsubscribe(currentGroup.topicTag)
             syncTransportAndSubscribe(candidate)
         } else {
             syncTransportAndSubscribe(candidate)
@@ -1351,7 +1351,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             storeSalt(groupID, update.epoch, update.salt)
 
             if (selfRemoved) {
-                transport.unsubscribe(group.topicTag)
+                if (!BuildConfig.DEBUG) transport.unsubscribe(group.topicTag)
                 insertSystemMessage(groupID, "You were removed from this group", "self-removed", update.epoch)
             } else {
                 syncTransportAndSubscribe(group)
@@ -2193,7 +2193,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                             }
                             if (selfRemoved) {
                                 val g = groups.find { it.id == groupID }
-                                if (g != null) transport.unsubscribe(g.topicTag)
+                                if (g != null && !BuildConfig.DEBUG) transport.unsubscribe(g.topicTag)
                                 val noticeEpoch = obj.getLong("epoch")
                                 insertSystemMessage(groupID, "You were removed from this group", "self-removed", noticeEpoch)
                             }

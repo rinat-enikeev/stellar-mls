@@ -16,7 +16,6 @@ final class CallKitProvider: NSObject {
     init(callManager: CallManager) {
         let config = CXProviderConfiguration()
         config.supportsVideo = true
-        config.maximumCallsPerGroup = 1
         config.maximumCallGroups = 1
         config.supportedHandleTypes = [.generic]
         self.provider = CXProvider(configuration: config)

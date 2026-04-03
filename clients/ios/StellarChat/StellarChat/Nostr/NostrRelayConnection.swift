@@ -56,6 +56,15 @@ actor NostrRelayConnection {
         for (subID, (filter, _)) in subscriptions {
             sendREQ(subscriptionID: subID, filter: filter)
         }
+
+        // URLSessionWebSocketTask exposes no reliable onOpen callback. Replay
+        // subscriptions shortly after connect so filters added during the
+        // handshake window are not lost if the initial send happens too early.
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self else { return }
+            await self.replaySubscriptions()
+        }
     }
 
     func disconnect() {
@@ -128,7 +137,18 @@ actor NostrRelayConnection {
         guard let data = try? JSONSerialization.data(withJSONObject: frame),
               let string = String(data: data, encoding: .utf8)
         else { return }
+        #if DEBUG
+        if let kinds = filter["kinds"] as? [Int], kinds.contains(34113) || kinds.contains(24113) {
+            print("[Relay] REQ \(url.host ?? url.absoluteString) sub=\(subscriptionID) filter=\(filter)")
+        }
+        #endif
         Task { try? await webSocketTask?.send(.string(string)) }
+    }
+
+    private func replaySubscriptions() {
+        for (subID, (filter, _)) in subscriptions {
+            sendREQ(subscriptionID: subID, filter: filter)
+        }
     }
 
     private func receiveLoop() async {

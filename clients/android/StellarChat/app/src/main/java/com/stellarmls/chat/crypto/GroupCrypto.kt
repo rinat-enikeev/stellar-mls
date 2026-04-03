@@ -93,7 +93,7 @@ object GroupCrypto {
         return String(cipher.doFinal(combined))
     }
 
-    // -- Invitation encryption (X25519 ECDH + AES-256-GCM, kind 34113) --
+    // -- Invitation encryption (X25519 ECDH + AES-256-GCM, kind 24113) --
 
     /**
      * Encrypt an invitation payload using ephemeral X25519 ECDH + AES-256-GCM.

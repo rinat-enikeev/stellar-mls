@@ -26,7 +26,7 @@ class NostrRelayConnection(
         .build()
 ) {
     private var webSocket: WebSocket? = null
-    private val subscriptionCallbacks = ConcurrentHashMap<String, (NostrEvent) -> Unit>()
+    private val subscriptions = ConcurrentHashMap<String, Pair<JSONObject, (NostrEvent) -> Unit>>()
     @Volatile private var reconnectAttempts = 0
     /** Callback for relay OK responses: (eventID, accepted). */
     var onOK: ((String, Boolean) -> Unit)? = null
@@ -41,6 +41,9 @@ class NostrRelayConnection(
                 reconnectAttempts = 0
                 isConnected = true
                 onConnectionStateChange?.invoke(true)
+                for ((subID, pair) in subscriptions) {
+                    sendREQ(subID, pair.first)
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -67,7 +70,7 @@ class NostrRelayConnection(
         webSocket?.close(1000, "Bye")
         webSocket = null
         reconnectAttempts = 0
-        subscriptionCallbacks.clear()
+        subscriptions.clear()
     }
 
     fun publish(event: NostrEvent) {
@@ -79,19 +82,14 @@ class NostrRelayConnection(
     }
 
     fun subscribe(subscriptionID: String, filter: JSONObject): Flow<NostrEvent> = callbackFlow {
-        subscriptionCallbacks[subscriptionID] = { event ->
+        subscriptions[subscriptionID] = filter to { event ->
             trySend(event)
         }
 
-        val frame = JSONArray().apply {
-            put("REQ")
-            put(subscriptionID)
-            put(filter)
-        }
-        webSocket?.send(frame.toString())
+        sendREQ(subscriptionID, filter)
 
         awaitClose {
-            subscriptionCallbacks.remove(subscriptionID)
+            subscriptions.remove(subscriptionID)
             val closeFrame = JSONArray().apply {
                 put("CLOSE")
                 put(subscriptionID)
@@ -121,7 +119,7 @@ class NostrRelayConnection(
                         val subID = array.getString(1)
                         val eventJson = array.getJSONObject(2)
                         val event = parseEvent(eventJson) ?: return
-                        subscriptionCallbacks[subID]?.invoke(event)
+                        subscriptions[subID]?.second?.invoke(event)
                     }
                 }
                 "EOSE" -> { /* end of stored events */ }
@@ -165,5 +163,24 @@ class NostrRelayConnection(
             }
             event
         } catch (_: Exception) { null }
+    }
+
+    private fun sendREQ(subscriptionID: String, filter: JSONObject) {
+        if (com.stellarmls.chat.BuildConfig.DEBUG) {
+            val kinds = filter.optJSONArray("kinds")
+            val includesInviteKind = (0 until (kinds?.length() ?: 0)).any { idx ->
+                val kind = kinds?.optInt(idx) ?: -1
+                kind == 34113 || kind == 24113
+            }
+            if (includesInviteKind) {
+                android.util.Log.d("Relay", "REQ $url sub=$subscriptionID filter=$filter")
+            }
+        }
+        val frame = JSONArray().apply {
+            put("REQ")
+            put(subscriptionID)
+            put(filter)
+        }
+        webSocket?.send(frame.toString())
     }
 }

@@ -2,13 +2,16 @@ name: StellarChat
 options:
   bundleIdPrefix: com.stellarmls
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "18.0"
   xcodeVersion: "15.4"
   generateEmptyDirectories: true
 
 packages:
   SwiftMLS:
     path: ../../../swift-mls
+  WebRTC:
+    url: https://github.com/stasel/WebRTC.git
+    from: "146.0.0"
 
 targets:
   StellarChat:
@@ -32,6 +35,7 @@ targets:
         DEVELOPMENT_TEAM: ""
     dependencies:
       - package: SwiftMLS
+      - package: WebRTC
 
   StellarChatTests:
     type: bundle.unit-test

@@ -2,6 +2,26 @@ import CryptoKit
 import Foundation
 import SwiftMLS
 
+enum KeyManagerError: LocalizedError {
+    case keychainReadFailed(key: String, status: OSStatus)
+    case keychainWriteFailed(key: String, status: OSStatus)
+    case invalidStoredKey(key: String, reason: String)
+    case signerInitializationFailed(reason: String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .keychainReadFailed(key, status):
+            return "Keychain read failed for \(key) (status \(status))"
+        case let .keychainWriteFailed(key, status):
+            return "Keychain write failed for \(key) (status \(status))"
+        case let .invalidStoredKey(key, reason):
+            return "Stored key \(key) is invalid: \(reason)"
+        case let .signerInitializationFailed(reason):
+            return "Nostr signer initialization failed: \(reason)"
+        }
+    }
+}
+
 final class KeyManager: Codable {
     /// secp256k1 secret key for Nostr event signing.
     private(set) var nostrSecretKey: Data
@@ -15,34 +35,42 @@ final class KeyManager: Codable {
     /// X25519 private key for invitation ECDH, derived from nostrSecretKey via HKDF.
     private let keyAgreementKey: Curve25519.KeyAgreement.PrivateKey
 
-    init() {
+    init() throws {
         // Load or generate Nostr key (preserves existing identity)
-        if let existing = Self.loadFromKeychain(key: Self.nostrKeychainKey) {
+        if let existing = try Self.loadFromKeychain(key: Self.nostrKeychainKey) {
             self.nostrSecretKey = existing
         } else {
             self.nostrSecretKey = Self.generateRandom(count: 32)
-            Self.saveToKeychain(self.nostrSecretKey, key: Self.nostrKeychainKey)
+            try Self.saveToKeychain(self.nostrSecretKey, key: Self.nostrKeychainKey)
         }
 
         // Load or generate independent BLS key
-        if let existing = Self.loadFromKeychain(key: Self.blsKeychainKey) {
+        if let existing = try Self.loadFromKeychain(key: Self.blsKeychainKey) {
             self.blsSecretKey = existing
         } else {
             self.blsSecretKey = Self.generateRandom(count: 32)
-            Self.saveToKeychain(self.blsSecretKey, key: Self.blsKeychainKey)
+            try Self.saveToKeychain(self.blsSecretKey, key: Self.blsKeychainKey)
         }
 
-        // N-4: Use do/catch instead of try! to avoid crash on corrupted keychain data.
-        // If Rust FFI fails, regenerate keys rather than crashing.
+        guard nostrSecretKey.count == 32 else {
+            throw KeyManagerError.invalidStoredKey(
+                key: Self.nostrKeychainKey,
+                reason: "expected 32 bytes, got \(nostrSecretKey.count)"
+            )
+        }
+        guard blsSecretKey.count == 32 else {
+            throw KeyManagerError.invalidStoredKey(
+                key: Self.blsKeychainKey,
+                reason: "expected 32 bytes, got \(blsSecretKey.count)"
+            )
+        }
+
+        // Refuse to rotate identity silently if a stored key is unreadable or invalid.
         do {
             self.signer = try RustBackedNostrSigner(secretKey: self.nostrSecretKey)
             self.publicKey = try signer.publicKey()
         } catch {
-            // Last resort: regenerate nostr key if existing one is invalid
-            self.nostrSecretKey = Self.generateRandom(count: 32)
-            Self.saveToKeychain(self.nostrSecretKey, key: Self.nostrKeychainKey)
-            self.signer = try! RustBackedNostrSigner(secretKey: self.nostrSecretKey)
-            self.publicKey = try! signer.publicKey()
+            throw KeyManagerError.signerInitializationFailed(reason: error.localizedDescription)
         }
         self.stellarPrivateKey = Self.deriveStellarKey(from: self.nostrSecretKey)
         self.keyAgreementKey = Self.deriveKeyAgreementKey(from: self.nostrSecretKey)
@@ -217,6 +245,7 @@ final class KeyManager: Codable {
 
     // MARK: - Keychain
 
+    private static let keychainService = "com.stellarmls.chat.keys"
     private static let nostrKeychainKey = "com.stellarmls.chat.nostrSecretKey"
     private static let blsKeychainKey = "com.stellarmls.chat.blsSecretKey"
 
@@ -226,27 +255,72 @@ final class KeyManager: Codable {
         return Data(bytes)
     }
 
-    private static func loadFromKeychain(key: String) -> Data? {
-        let query: [String: Any] = [
+    private static func keychainQuery(key: String, includeService: Bool) -> [String: Any] {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: key,
             kSecReturnData as String: true,
         ]
+        if includeService {
+            query[kSecAttrService as String] = keychainService
+        }
+        return query
+    }
+
+    private static func loadFromKeychain(key: String) throws -> Data? {
+        if let data = try readKeychainData(query: keychainQuery(key: key, includeService: true), key: key) {
+            return data
+        }
+
+        guard let legacyData = try readKeychainData(query: keychainQuery(key: key, includeService: false), key: key) else {
+            return nil
+        }
+
+        try saveToKeychain(legacyData, key: key)
+        deleteLegacyKeychainItem(key: key)
+        return legacyData
+    }
+
+    private static func readKeychainData(query: [String: Any], key: String) throws -> Data? {
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecSuccess, let data = result as? Data {
             return data
         }
-        return nil
+        if status == errSecItemNotFound {
+            return nil
+        }
+        throw KeyManagerError.keychainReadFailed(key: key, status: status)
     }
 
-    private static func saveToKeychain(_ data: Data, key: String) {
+    private static func saveToKeychain(_ data: Data, key: String) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
             kSecAttrAccount as String: key,
             kSecValueData as String: data,
         ]
-        SecItemDelete(query as CFDictionary)
-        SecItemAdd(query as CFDictionary, nil)
+        let deleteQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: key,
+        ]
+        let deleteStatus = SecItemDelete(deleteQuery as CFDictionary)
+        if deleteStatus != errSecSuccess && deleteStatus != errSecItemNotFound {
+            throw KeyManagerError.keychainWriteFailed(key: key, status: deleteStatus)
+        }
+
+        let addStatus = SecItemAdd(query as CFDictionary, nil)
+        if addStatus != errSecSuccess {
+            throw KeyManagerError.keychainWriteFailed(key: key, status: addStatus)
+        }
+    }
+
+    private static func deleteLegacyKeychainItem(key: String) {
+        let legacyQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: key,
+        ]
+        SecItemDelete(legacyQuery as CFDictionary)
     }
 }

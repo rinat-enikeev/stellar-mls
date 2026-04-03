@@ -19,10 +19,44 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Kind 34113 invitation send/receive over Nostr relays.
+ * Kind 24113 invitation send/receive over Nostr relays.
  * Uses X25519 ECDH + AES-256-GCM for invitation encryption.
  */
 class InvitationTransport(private val keyManager: KeyManager) {
+    companion object {
+        private const val PRIMARY_KIND = 34113
+        private const val LEGACY_KIND = 24113
+        private const val PRIMARY_INBOX_FILTER_KEY = "#d"
+        private const val PRIMARY_INBOX_EVENT_TAG_KEY = "d"
+        private const val SECONDARY_INBOX_EVENT_TAG_KEY = "t"
+        private const val LEGACY_INBOX_EVENT_TAG_KEY = "sep_inbox"
+        private const val PRIMARY_INBOX_TAG_PREFIX = "sep-inbox:"
+
+        fun subscriptionFilters(inboxTag: String): List<JSONObject> = listOf(
+            JSONObject().apply {
+                put("kinds", JSONArray().put(PRIMARY_KIND))
+                put(PRIMARY_INBOX_FILTER_KEY, JSONArray().put(PRIMARY_INBOX_TAG_PREFIX + inboxTag))
+            },
+            JSONObject().apply {
+                put("kinds", JSONArray().put(PRIMARY_KIND))
+                put("#t", JSONArray().put(inboxTag))
+            },
+            JSONObject().apply {
+                put("kinds", JSONArray().put(LEGACY_KIND))
+                put("#t", JSONArray().put(inboxTag))
+            }
+        )
+
+        fun eventTags(recipientInboxTag: String): List<List<String>> = listOf(
+            // Use a parameterized-replaceable `d` tag on an addressable kind so
+            // relays can retain and query invitations across reconnects.
+            listOf(PRIMARY_INBOX_EVENT_TAG_KEY, PRIMARY_INBOX_TAG_PREFIX + recipientInboxTag),
+            listOf(SECONDARY_INBOX_EVENT_TAG_KEY, recipientInboxTag),
+            listOf(LEGACY_INBOX_EVENT_TAG_KEY, recipientInboxTag),
+            listOf("sep_version", "1")
+        )
+    }
+
     private val connections = mutableListOf<NostrRelayConnection>()
     private val subscriptionJobs = ConcurrentHashMap<String, Job>()
     private val scope = CoroutineScope(Dispatchers.IO)
@@ -35,6 +69,9 @@ class InvitationTransport(private val keyManager: KeyManager) {
             val conn = NostrRelayConnection(url)
             conn.connect()
             connections.add(conn)
+        }
+        if (com.stellarmls.chat.BuildConfig.DEBUG) {
+            android.util.Log.d("InvitationTransport", "connect relays=$relayURLs")
         }
     }
 
@@ -49,16 +86,19 @@ class InvitationTransport(private val keyManager: KeyManager) {
     fun subscribeToInbox(inboxTag: String, privateKey: X25519PrivateKeyParameters) {
         val subID = "inbox-${UUID.randomUUID().toString().take(8)}"
 
-        val filter = JSONObject().apply {
-            put("kinds", JSONArray().put(34113))
-            put("#d", JSONArray().put("sep-inbox:$inboxTag"))
+        val filters = subscriptionFilters(inboxTag)
+        if (com.stellarmls.chat.BuildConfig.DEBUG) {
+            android.util.Log.d("InvitationTransport", "subscribeToInbox inboxTag=$inboxTag filters=$filters")
         }
 
         for (conn in connections) {
-            val job = conn.subscribe(subID, filter)
-                .onEach { event -> handleInvitationEvent(event, privateKey) }
-                .launchIn(scope)
-            subscriptionJobs["$subID-${conn.hashCode()}"] = job
+            filters.forEachIndexed { index, filter ->
+                val filterSubID = "$subID-$index"
+                val job = conn.subscribe(filterSubID, filter)
+                    .onEach { event -> handleInvitationEvent(event, privateKey) }
+                    .launchIn(scope)
+                subscriptionJobs["$filterSubID-${conn.hashCode()}"] = job
+            }
         }
     }
 
@@ -83,13 +123,10 @@ class InvitationTransport(private val keyManager: KeyManager) {
 
         val recipientInboxTag = GroupCrypto.hiddenInboxTag(recipientKeyAgreementPubkey)
 
-        val tags = listOf(
-            listOf("d", "sep-inbox:$recipientInboxTag"),
-            listOf("sep_version", "1")
-        )
+        val tags = eventTags(recipientInboxTag)
 
         val event = NostrEventBuilder.build(
-            kind = 34113,
+            kind = PRIMARY_KIND,
             tags = tags,
             content = contentBase64,
             keyManager = keyManager
@@ -102,6 +139,12 @@ class InvitationTransport(private val keyManager: KeyManager) {
 
     private fun handleInvitationEvent(event: NostrEvent, privateKey: X25519PrivateKeyParameters) {
         try {
+            if (com.stellarmls.chat.BuildConfig.DEBUG) {
+                android.util.Log.d(
+                    "InvitationTransport",
+                    "Received event id=${event.id.take(12)} kind=${event.kind} tags=${event.tags}"
+                )
+            }
             // Base64 decode the content to get the sealed envelope JSON
             val envelopeJson = String(
                 android.util.Base64.decode(event.content, android.util.Base64.NO_WRAP)
@@ -118,8 +161,13 @@ class InvitationTransport(private val keyManager: KeyManager) {
             )
 
             onInvitation?.invoke(invitation)
-        } catch (_: Exception) {
-            // Decryption failed — event not intended for us or corrupted
+        } catch (e: Exception) {
+            if (com.stellarmls.chat.BuildConfig.DEBUG) {
+                android.util.Log.d(
+                    "InvitationTransport",
+                    "Ignored event ${event.id.take(12)}: ${e.message}"
+                )
+            }
         }
     }
 }

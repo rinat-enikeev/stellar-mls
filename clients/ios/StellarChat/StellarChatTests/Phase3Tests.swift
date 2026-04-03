@@ -766,6 +766,40 @@ struct CrossPlatformTests {
     }
 }
 
+@Suite("InvitationTransport")
+struct InvitationTransportTests {
+    @Test("Inbox subscription supports primary persisted and legacy live filters")
+    func subscriptionFiltersSupportCurrentAndLegacyKinds() {
+        let filters = InvitationTransport.subscriptionFilters(inboxTag: "c9bcafedc73f4289")
+
+        #expect(filters.count == 3)
+
+        let primaryKinds = filters[0]["kinds"] as? [Int]
+        let primaryDTags = filters[0]["#d"] as? [String]
+        let primaryTopicKinds = filters[1]["kinds"] as? [Int]
+        let primaryTopicTags = filters[1]["#t"] as? [String]
+        let legacyKinds = filters[2]["kinds"] as? [Int]
+        let legacyTopicTags = filters[2]["#t"] as? [String]
+
+        #expect(primaryKinds == [34113])
+        #expect(primaryDTags == ["sep-inbox:c9bcafedc73f4289"])
+        #expect(primaryTopicKinds == [34113])
+        #expect(primaryTopicTags == ["c9bcafedc73f4289"])
+        #expect(legacyKinds == [24113])
+        #expect(legacyTopicTags == ["c9bcafedc73f4289"])
+    }
+
+    @Test("Published invitation keeps primary, secondary, and legacy inbox tags")
+    func eventTagsKeepLegacyMetadata() {
+        let tags = InvitationTransport.eventTags(recipientInboxTag: "c9bcafedc73f4289")
+
+        #expect(tags.contains { $0 == ["d", "sep-inbox:c9bcafedc73f4289"] })
+        #expect(tags.contains { $0 == ["t", "c9bcafedc73f4289"] })
+        #expect(tags.contains { $0 == ["sep_inbox", "c9bcafedc73f4289"] })
+        #expect(tags.contains { $0 == ["sep_version", "1"] })
+    }
+}
+
 // MARK: - Salt Generation
 
 @Suite("Salt Generation")

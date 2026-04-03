@@ -320,8 +320,20 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun startInboxListener() {
+        if (BuildConfig.DEBUG) {
+            Log.d(
+                "InvitationTransport",
+                "startInboxListener inboxTag=${keyManager.inboxTag} relays=${relayURLs.joinToString(prefix = "[", postfix = "]")}"
+            )
+        }
         invitationTransport.onInvitation = { invitation ->
             // Deduplicate
+            if (BuildConfig.DEBUG) {
+                Log.d(
+                    "InvitationTransport",
+                    "onInvitation id=${invitation.id.take(12)} group=${invitation.payload.groupID.toHex().take(24)} epoch=${invitation.payload.epoch}"
+                )
+            }
             if (pendingInvitations.none { it.id == invitation.id } &&
                 groups.none { it.id == invitation.payload.groupID.toHex() }) {
                 pendingInvitations.add(invitation)

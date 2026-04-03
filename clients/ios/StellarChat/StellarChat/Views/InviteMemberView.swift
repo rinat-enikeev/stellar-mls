@@ -91,6 +91,17 @@ struct InviteMemberView: View {
                     group: group,
                     senderPubkey: appState.keyManager.publicKeyHex
                 )
+                #if DEBUG
+                let firstMember = group.members.first
+                print(
+                    "[Invite] sendInvitation group=\(group.id.prefix(24)) " +
+                    "epoch=\(group.epoch) tier=\(group.tier.rawValue) members=\(group.members.count) " +
+                    "salt=\(group.salt.prefix(12).map { String(format: "%02x", $0) }.joined()) " +
+                    "payloadCommitment=\(payload.commitment?.prefix(12).map { String(format: "%02x", $0) }.joined() ?? "none") " +
+                    "firstPk=\(firstMember?.publicKeyCompressed.prefix(12).map { String(format: "%02x", $0) }.joined() ?? "none") " +
+                    "firstLeaf=\(firstMember?.leafHash.prefix(12).map { String(format: "%02x", $0) }.joined() ?? "none")"
+                )
+                #endif
 
                 await appState.invitationTransport.connect(to: appState.relayURLs)
 

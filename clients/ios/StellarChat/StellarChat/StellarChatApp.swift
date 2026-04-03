@@ -123,7 +123,11 @@ final class AppState {
     ]
 
     init() {
-        self.keyManager = KeyManager()
+        do {
+            self.keyManager = try KeyManager()
+        } catch {
+            fatalError("Failed to initialize identity keys: \(error.localizedDescription)")
+        }
         // N-15: Handle PersistenceStore init failure gracefully instead of crashing.
         // If first attempt fails (e.g., disk full), retry once; if both fail, create
         // an in-memory fallback so the app can still launch.
@@ -1484,6 +1488,9 @@ final class AppState {
 
     func startInboxListener() async {
         await invitationTransport.connect(to: relayURLs)
+        #if DEBUG
+        print("[Invite] startInboxListener inboxTag=\(keyManager.inboxTag) relays=\(relayURLs.map(\.absoluteString))")
+        #endif
 
         invitationTransport.onInvitation = { [weak self] invitation in
             Task { @MainActor in

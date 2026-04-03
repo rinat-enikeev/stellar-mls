@@ -157,6 +157,13 @@ fun InviteMemberScreen(
                                 )
                             }
                             withContext(Dispatchers.IO) {
+                                if (BuildConfig.DEBUG) {
+                                    val recipientInboxTag = com.stellarmls.chat.crypto.GroupCrypto.hiddenInboxTag(pubkeyBytes)
+                                    Log.d(
+                                        "InviteMember",
+                                        "recipientPubkey=${pubkeyBytes.debugHexPrefix(12)} recipientInboxTag=$recipientInboxTag"
+                                    )
+                                }
                                 invitationTransport.sendInvitation(payload, pubkeyBytes, keyManager)
                             }
                             status = "Invitation sent!"

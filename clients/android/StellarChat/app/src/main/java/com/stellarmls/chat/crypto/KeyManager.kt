@@ -14,34 +14,18 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import java.security.SecureRandom
 
+class KeyManagerException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
+
 /**
  * M-12: KeyManager initialization (EncryptedSharedPreferences + MasterKey generation)
  * may block the calling thread. Use [KeyManager.createAsync] to initialize on a
  * background thread, or call the constructor from a coroutine on Dispatchers.IO.
  */
 class KeyManager private constructor(private val prefs: android.content.SharedPreferences) {
-    val secretKey: ByteArray
-    val publicKey: ByteArray
-    val publicKeyHex: String
-    private val signer: RustBackedNostrSigner
-
-    /** Independent BLS12-381 secret key (separate from Nostr key per SEP-XXXX §1.1). */
-    val blsSecretKey: ByteArray
-
-    /** Ed25519 Stellar identity key (HKDF-derived from Nostr key). */
-    val stellarPublicKey: ByteArray
-    private val stellarPrivateKeyParams: Ed25519PrivateKeyParameters
-
-    /** X25519 key agreement key (HKDF-derived from Nostr key). */
-    val keyAgreementPublicKey: ByteArray
-    val keyAgreementPublicKeyHex: String
-    val keyAgreementPrivateKey: X25519PrivateKeyParameters
-
-    /** Hidden inbox tag derived from X25519 public key. */
-    val inboxTag: String
-
-    /** Create a KeyManager on a background thread to avoid blocking the main thread (M-12). */
     companion object {
+        private const val NOSTR_SECRET_KEY = "nostr_secret_key"
+        private const val BLS_SECRET_KEY = "bls_secret_key"
+        private const val IDENTITY_INITIALIZED = "identity_initialized"
         suspend fun createAsync(context: Context): KeyManager =
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 create(context)
@@ -68,34 +52,87 @@ class KeyManager private constructor(private val prefs: android.content.SharedPr
             verifier.update(message, 0, message.size)
             return verifier.verifySignature(signature)
         }
+
+        private fun decodeHexKey(value: String, keyName: String): ByteArray {
+            require(value.length == 64) {
+                "Expected 64 hex chars for $keyName, got ${value.length}"
+            }
+            return value.chunked(2).map { chunk ->
+                chunk.toIntOrNull(16)?.toByte()
+                    ?: throw IllegalArgumentException("Invalid hex in $keyName")
+            }.toByteArray()
+        }
     }
 
-    init {
+    val secretKey: ByteArray
+    val publicKey: ByteArray
+    val publicKeyHex: String
+    private val signer: RustBackedNostrSigner
 
-        // Nostr secp256k1 key
-        val storedNostr = prefs.getString("nostr_secret_key", null)
-        secretKey = if (storedNostr != null) {
-            storedNostr.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-        } else {
+    /** Independent BLS12-381 secret key (separate from Nostr key per SEP-XXXX §1.1). */
+    val blsSecretKey: ByteArray
+
+    /** Ed25519 Stellar identity key (HKDF-derived from Nostr key). */
+    val stellarPublicKey: ByteArray
+    private val stellarPrivateKeyParams: Ed25519PrivateKeyParameters
+
+    /** X25519 key agreement key (HKDF-derived from Nostr key). */
+    val keyAgreementPublicKey: ByteArray
+    val keyAgreementPublicKeyHex: String
+    val keyAgreementPrivateKey: X25519PrivateKeyParameters
+
+    /** Hidden inbox tag derived from X25519 public key. */
+    val inboxTag: String
+
+    init {
+        val storedNostr = prefs.getString(NOSTR_SECRET_KEY, null)
+        val storedBls = prefs.getString(BLS_SECRET_KEY, null)
+        val initialized = prefs.getBoolean(IDENTITY_INITIALIZED, false)
+
+        if (storedNostr == null && storedBls == null && !initialized) {
             val key = ByteArray(32)
             SecureRandom().nextBytes(key)
-            prefs.edit().putString("nostr_secret_key", key.toHex()).apply()
-            key
+            val blsKey = ByteArray(32)
+            SecureRandom().nextBytes(blsKey)
+            val saved = prefs.edit()
+                .putString(NOSTR_SECRET_KEY, key.toHex())
+                .putString(BLS_SECRET_KEY, blsKey.toHex())
+                .putBoolean(IDENTITY_INITIALIZED, true)
+                .commit()
+            if (!saved) {
+                throw KeyManagerException("Failed to persist newly generated identity keys")
+            }
+        } else if (storedNostr != null && storedBls != null) {
+            if (!initialized) {
+                val marked = prefs.edit().putBoolean(IDENTITY_INITIALIZED, true).commit()
+                if (!marked) {
+                    throw KeyManagerException("Failed to mark persisted identity as initialized")
+                }
+            }
+        } else {
+            throw KeyManagerException(
+                "Identity storage is inconsistent: initialized=$initialized nostrPresent=${storedNostr != null} blsPresent=${storedBls != null}"
+            )
         }
 
-        signer = RustBackedNostrSigner(secretKey)
-        publicKey = signer.publicKey()
-        publicKeyHex = publicKey.toHex()
+        val nostrHex = prefs.getString(NOSTR_SECRET_KEY, null)
+            ?: throw KeyManagerException("Missing persisted Nostr secret key")
+        val blsHex = prefs.getString(BLS_SECRET_KEY, null)
+            ?: throw KeyManagerException("Missing persisted BLS secret key")
 
-        // Independent BLS12-381 key
-        val storedBls = prefs.getString("bls_secret_key", null)
-        blsSecretKey = if (storedBls != null) {
-            storedBls.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-        } else {
-            val key = ByteArray(32)
-            SecureRandom().nextBytes(key)
-            prefs.edit().putString("bls_secret_key", key.toHex()).apply()
-            key
+        try {
+            secretKey = decodeHexKey(nostrHex, NOSTR_SECRET_KEY)
+            blsSecretKey = decodeHexKey(blsHex, BLS_SECRET_KEY)
+        } catch (e: IllegalArgumentException) {
+            throw KeyManagerException("Persisted identity key is invalid", e)
+        }
+
+        try {
+            signer = RustBackedNostrSigner(secretKey)
+            publicKey = signer.publicKey()
+            publicKeyHex = publicKey.toHex()
+        } catch (e: Exception) {
+            throw KeyManagerException("Failed to initialize persisted Nostr signer", e)
         }
 
         // Ed25519 Stellar key (HKDF-derived from Nostr secret)

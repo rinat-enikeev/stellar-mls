@@ -16,7 +16,6 @@
 		1F2DC6C7FF3C465CBD31ABA9 /* PendingInvitationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6867C765FBB9480D9E0D9FC /* PendingInvitationsView.swift */; };
 		276E482D1A8B67CFB9B7ADF1 /* InvitationTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C958564E515954D41E226897 /* InvitationTransport.swift */; };
 		2DAB2E5F09CA9490F5C7CDF8 /* CallManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 485C53049C1128D91F1CA2DB /* CallManager.swift */; };
-		E3F4A5B6C7D8E9F0A1B2C3D4 /* CallKitProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4A5B6C7D8E9F0A1B2C3D4E5 /* CallKitProvider.swift */; };
 		33D3690E63750E20852336EE /* AudioCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57DB304E93E815412ABA6010 /* AudioCache.swift */; };
 		3EC81E8DA76069452870626F /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68F22F3B02C2C003269BA135 /* QRScannerView.swift */; };
 		459BB52914DCD2B789CA689C /* MediaCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBAE6FF501ED7880C298C7FC /* MediaCrypto.swift */; };
@@ -28,15 +27,16 @@
 		69502F4BED8DAE5BB7CDC5A6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */; };
 		76E39A66EA185E3741BB902B /* Phase3Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30F3176E6A6E2A7C75F9CB47 /* Phase3Tests.swift */; };
 		7C027F9FEC64BC2471784A58 /* InviteMemberView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8D38B6A8AA5A166074EA951 /* InviteMemberView.swift */; };
+		7E322A06E7A5D688E206F2F3 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 3316A7A4CF4C52BEBFF32B30 /* WebRTC */; };
 		816EB9A5EB988647F86E220B /* ContactAliasStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F67E0578F1C0DC64C2004D62 /* ContactAliasStore.swift */; };
 		833FF1A77449454BF4ADC801 /* GroupInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7446E889E7A95E042201A70D /* GroupInfoView.swift */; };
 		8403CC60E770407C27CF89ED /* SwiftMLS in Frameworks */ = {isa = PBXBuildFile; productRef = 93FDE6A85EACB5AD144480F3 /* SwiftMLS */; };
-		A1B2C3D4E5F60718293A4B5C /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = B2C3D4E5F6071829A3B4C5D6 /* WebRTC */; };
 		865234AA099329B7E4D41789 /* JoinGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 005C04E920D6B0FC3423EE24 /* JoinGroupView.swift */; };
 		90B7D2930C07431EB75DBFB3 /* VoiceRecordButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E76AF13A26CCEC2E75C8310 /* VoiceRecordButton.swift */; };
 		95489626E5CAD02D3CDB0207 /* StellarStrKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */; };
 		9EABBA75189DA35E0BA71054 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD4DD514A884BAD2FC5B2D73 /* SearchView.swift */; };
 		A49A5C6B2401EEB1847229DE /* QRCodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C2E0A174CC0B050D6BADB3 /* QRCodeView.swift */; };
+		A59B1DBBCD75C4882A4A7EF6 /* CallKitProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4A3E005A9C5AF2DE5743188 /* CallKitProvider.swift */; };
 		AE25761903B1EA84D9AFADD2 /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8ACE473C3096412015326C52 /* ImageCache.swift */; };
 		B5836D3E7760359CFB8C42AC /* GroupCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8210CED65D67082D16673F07 /* GroupCrypto.swift */; };
 		C78434B5880A2483C3DAF9E9 /* CallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E005C90D6C91D9810C11364 /* CallView.swift */; };
@@ -78,7 +78,6 @@
 		3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StellarStrKey.swift; sourceTree = "<group>"; };
 		4705F8234AA6022CD782348E /* PersistedModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistedModels.swift; sourceTree = "<group>"; };
 		485C53049C1128D91F1CA2DB /* CallManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallManager.swift; sourceTree = "<group>"; };
-		F4A5B6C7D8E9F0A1B2C3D4E5 /* CallKitProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallKitProvider.swift; sourceTree = "<group>"; };
 		4FCDBA22391412C6D05BB99E /* BlossomClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlossomClient.swift; sourceTree = "<group>"; };
 		57DB304E93E815412ABA6010 /* AudioCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioCache.swift; sourceTree = "<group>"; };
 		62FB83C87F9348F97EEDE0C8 /* StellarChatApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StellarChatApp.swift; sourceTree = "<group>"; };
@@ -95,6 +94,7 @@
 		8ACE473C3096412015326C52 /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCache.swift; sourceTree = "<group>"; };
 		8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A4A3E005A9C5AF2DE5743188 /* CallKitProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallKitProvider.swift; sourceTree = "<group>"; };
 		B0884F32E9A807B2566DD234 /* NostrRelayConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrRelayConnection.swift; sourceTree = "<group>"; };
 		BF781055530F3AF0953DE842 /* CreateGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateGroupView.swift; sourceTree = "<group>"; };
 		C1FB5F184FBA9633C01BDFBC /* VideoCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCache.swift; sourceTree = "<group>"; };
@@ -105,7 +105,7 @@
 		F0C2E0A174CC0B050D6BADB3 /* QRCodeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeView.swift; sourceTree = "<group>"; };
 		F0F0E18BDAE3BFB365657BA8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		F1F7647C522D0F7D1F86CE17 /* VerificationBadgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerificationBadgeView.swift; sourceTree = "<group>"; };
-		F406EABD519847834878AA47 /* StellarChat.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = StellarChat.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F406EABD519847834878AA47 /* StellarChat.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = StellarChat.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F5EB556EBD80A9DC1A99F1F4 /* KeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyManager.swift; sourceTree = "<group>"; };
 		F67E0578F1C0DC64C2004D62 /* ContactAliasStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactAliasStore.swift; sourceTree = "<group>"; };
 		F8FD22552EBCF23A89DB7700 /* ChatGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGroup.swift; sourceTree = "<group>"; };
@@ -121,7 +121,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				8403CC60E770407C27CF89ED /* SwiftMLS in Frameworks */,
-				A1B2C3D4E5F60718293A4B5C /* WebRTC in Frameworks */,
+				7E322A06E7A5D688E206F2F3 /* WebRTC in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -195,8 +195,8 @@
 		4B01157F59B93E6CF03322E6 /* Call */ = {
 			isa = PBXGroup;
 			children = (
+				A4A3E005A9C5AF2DE5743188 /* CallKitProvider.swift */,
 				485C53049C1128D91F1CA2DB /* CallManager.swift */,
-				F4A5B6C7D8E9F0A1B2C3D4E5 /* CallKitProvider.swift */,
 				7E005C90D6C91D9810C11364 /* CallView.swift */,
 			);
 			path = Call;
@@ -299,7 +299,7 @@
 			name = StellarChat;
 			packageProductDependencies = (
 				93FDE6A85EACB5AD144480F3 /* SwiftMLS */,
-				B2C3D4E5F6071829A3B4C5D6 /* WebRTC */,
+				3316A7A4CF4C52BEBFF32B30 /* WebRTC */,
 			);
 			productName = StellarChat;
 			productReference = F406EABD519847834878AA47 /* StellarChat.app */;
@@ -319,7 +319,6 @@
 						ProvisioningStyle = Automatic;
 					};
 					7E1AB0C084DAFEAB2A75FC86 = {
-						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -334,8 +333,8 @@
 			mainGroup = 237EA72C7CEF1AD9196D281B;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				4412B59CEE4013FEAFA94A8F /* XCRemoteSwiftPackageReference "WebRTC" */,
 				F33EE2A00CAA98337DB93D99 /* XCLocalSwiftPackageReference "../../../swift-mls" */,
-				C3D4E5F607182930A4B5C6D7 /* XCRemoteSwiftPackageReference "WebRTC" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E290D72BA448D601D86C5E67 /* Products */;
@@ -375,8 +374,8 @@
 				33D3690E63750E20852336EE /* AudioCache.swift in Sources */,
 				E10FD8A2E1B0D8169A2BEB15 /* BlossomClient.swift in Sources */,
 				0029F253BA68E6B4CA11E864 /* BootstrapPayload.swift in Sources */,
+				A59B1DBBCD75C4882A4A7EF6 /* CallKitProvider.swift in Sources */,
 				2DAB2E5F09CA9490F5C7CDF8 /* CallManager.swift in Sources */,
-				E3F4A5B6C7D8E9F0A1B2C3D4 /* CallKitProvider.swift in Sources */,
 				C78434B5880A2483C3DAF9E9 /* CallView.swift in Sources */,
 				4E0468C0A25E658173F4E628 /* ChatGroup.swift in Sources */,
 				E54951E56532C7FBD90317DE /* ChatView.swift in Sources */,
@@ -434,7 +433,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = StellarChat/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -505,7 +504,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -544,7 +543,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = StellarChat/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -629,7 +628,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -680,7 +679,7 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		C3D4E5F607182930A4B5C6D7 /* XCRemoteSwiftPackageReference "WebRTC" */ = {
+		4412B59CEE4013FEAFA94A8F /* XCRemoteSwiftPackageReference "WebRTC" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/stasel/WebRTC.git";
 			requirement = {
@@ -691,6 +690,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		3316A7A4CF4C52BEBFF32B30 /* WebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4412B59CEE4013FEAFA94A8F /* XCRemoteSwiftPackageReference "WebRTC" */;
+			productName = WebRTC;
+		};
 		48F22356AB515994AECC167E /* SwiftMLS */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = SwiftMLS;
@@ -698,11 +702,6 @@
 		93FDE6A85EACB5AD144480F3 /* SwiftMLS */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = SwiftMLS;
-		};
-		B2C3D4E5F6071829A3B4C5D6 /* WebRTC */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = C3D4E5F607182930A4B5C6D7 /* XCRemoteSwiftPackageReference "WebRTC" */;
-			productName = WebRTC;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

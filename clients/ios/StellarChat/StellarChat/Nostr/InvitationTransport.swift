@@ -1,9 +1,17 @@
 import CryptoKit
 import Foundation
 
-/// Sends and receives kind 34113 invitation events over Nostr relays.
+/// Sends and receives kind 24113 invitation events over Nostr relays.
 @Observable
 final class InvitationTransport {
+    private static let primaryKind = 34113
+    private static let legacyKind = 24113
+    private static let primaryInboxFilterKey = "#d"
+    private static let primaryInboxEventTagKey = "d"
+    private static let secondaryInboxEventTagKey = "t"
+    private static let legacyInboxEventTagKey = "sep_inbox"
+    private static let primaryInboxTagPrefix = "sep-inbox:"
+
     private var connections: [URL: NostrRelayConnection] = [:]
     private var subscriptionTask: Task<Void, Never>?
 
@@ -11,6 +19,34 @@ final class InvitationTransport {
     var onInvitation: ((PendingInvitation) -> Void)?
     /// Called on transport-level errors.
     var onError: ((String) -> Void)?
+
+    static func subscriptionFilters(inboxTag: String) -> [[String: Any]] {
+        [
+            [
+                "kinds": [primaryKind],
+                primaryInboxFilterKey: [primaryInboxTagPrefix + inboxTag],
+            ],
+            [
+                "kinds": [primaryKind],
+                "#t": [inboxTag],
+            ],
+            [
+                "kinds": [legacyKind],
+                "#t": [inboxTag],
+            ],
+        ]
+    }
+
+    static func eventTags(recipientInboxTag: String) -> [[String]] {
+        [
+            // Use a parameterized-replaceable `d` tag on an addressable kind so
+            // relays can retain and query invitations across reconnects.
+            [primaryInboxEventTagKey, primaryInboxTagPrefix + recipientInboxTag],
+            [secondaryInboxEventTagKey, recipientInboxTag],
+            [legacyInboxEventTagKey, recipientInboxTag],
+            ["sep_version", "1"],
+        ]
+    }
 
     func connect(to urls: [URL]) async {
         for url in urls {
@@ -20,6 +56,9 @@ final class InvitationTransport {
                 await conn.connect()
             }
         }
+        #if DEBUG
+        print("[Invite] connect relays=\(urls.map(\.absoluteString))")
+        #endif
     }
 
     func disconnect() async {
@@ -42,15 +81,19 @@ final class InvitationTransport {
 
         subscriptionTask = Task { [weak self] in
             guard let self else { return }
-            for (_, conn) in self.connections {
-                let filter: [String: Any] = [
-                    "kinds": [34113],
-                    "#d": ["sep-inbox:" + inboxTag],
-                ]
-                let stream = await conn.subscribe(subscriptionID: subID, filter: filter)
-                for await event in stream {
-                    guard !Task.isCancelled else { break }
-                    self.handleInvitationEvent(event, privateKey: privateKey)
+            let filters = Self.subscriptionFilters(inboxTag: inboxTag)
+            await withTaskGroup(of: Void.self) { group in
+                for (_, conn) in self.connections {
+                    for (index, filter) in filters.enumerated() {
+                        group.addTask {
+                            let filterSubID = "\(subID)-\(index)"
+                            let stream = await conn.subscribe(subscriptionID: filterSubID, filter: filter)
+                            for await event in stream {
+                                guard !Task.isCancelled else { break }
+                                self.handleInvitationEvent(event, privateKey: privateKey)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -76,13 +119,13 @@ final class InvitationTransport {
             recipientPublicKey: recipientKeyAgreementPubkey
         )
 
-        let tags: [[String]] = [
-            ["d", "sep-inbox:" + recipientInboxTag],
-            ["sep_version", "1"],
-        ]
+        let tags = Self.eventTags(recipientInboxTag: recipientInboxTag)
+        #if DEBUG
+        print("[Invite] send recipientPubkey=\(recipientKeyAgreementPubkey.prefix(12).map { String(format: "%02x", $0) }.joined()) recipientInboxTag=\(recipientInboxTag) kind=\(Self.primaryKind) tags=\(tags)")
+        #endif
 
         let event = try NostrEvent.build(
-            kind: 34113,
+            kind: Self.primaryKind,
             tags: tags,
             content: content,
             keyManager: keyManager
@@ -109,11 +152,21 @@ final class InvitationTransport {
         _ event: NostrEvent,
         privateKey: Curve25519.KeyAgreement.PrivateKey
     ) {
+        #if DEBUG
+        let tagSummary = event.tags.map { $0.joined(separator: ":") }.joined(separator: ",")
+        print("[Invite] Received event id=\(event.id.prefix(12)) kind=\(event.kind) tags=\(tagSummary)")
+        #endif
         guard let envelopeData = Data(base64Encoded: event.content) else {
+            #if DEBUG
+            print("[Invite] Base64 decode failed for event \(event.id.prefix(12))")
+            #endif
             onError?("Failed to decode invitation base64")
             return
         }
         guard let envelope = try? JSONDecoder().decode(SealedEnvelope.self, from: envelopeData) else {
+            #if DEBUG
+            print("[Invite] Envelope decode failed for event \(event.id.prefix(12))")
+            #endif
             onError?("Failed to decode invitation envelope")
             return
         }
@@ -128,7 +181,9 @@ final class InvitationTransport {
             )
             onInvitation?(invitation)
         } catch {
-            // Not for us or corrupted — silently ignore
+            #if DEBUG
+            print("[Invite] Ignored event \(event.id.prefix(12)): \(error.localizedDescription)")
+            #endif
         }
     }
 }

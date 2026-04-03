@@ -45,7 +45,8 @@ data class ChatGroup(
     }
 
     /** Add a member and recompute the commitment.
-     *  Members are sorted by compressed G1 public key per SEP-XXXX §2.1. */
+     *  Members are sorted by compressed G1 public key per SEP-XXXX §2.1.
+     *  Salt is derived deterministically from the previous salt and the new member's key. */
     fun addMember(leaf: SEPGroupMemberLeaf) {
         if (members.size >= tier.maxMembers) return
         members.add(leaf)
@@ -59,7 +60,7 @@ data class ChatGroup(
             aKey.size - bKey.size
         }
         epoch++
-        salt = SEPCommitmentBuilder.generateSalt()
+        salt = SEPCommitmentBuilder.deriveSalt(salt, leaf.publicKeyCompressed)
         recomputeCommitment()
     }
 

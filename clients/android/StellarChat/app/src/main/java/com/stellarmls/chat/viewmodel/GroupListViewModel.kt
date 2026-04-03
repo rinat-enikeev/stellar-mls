@@ -50,6 +50,31 @@ import org.json.JSONObject
 import java.security.SecureRandom
 import java.util.Date
 
+// -- Blockchain-First Epoch Authority Types --
+
+/** Result of attempting an epoch transition through the chain-confirmed helper. */
+enum class EpochTransitionResult {
+    SUCCESS,
+    CHAIN_REJECTED,
+    CHAIN_UNAVAILABLE,
+    CHAIN_MISMATCH,
+    SYNC_REQUIRED
+}
+
+/** The kind of epoch transition being performed. */
+sealed class EpochTransitionKind {
+    data class MemberAdd(val member: SEPGroupMemberLeaf) : EpochTransitionKind()
+    data class MemberRemove(val blsPubkey: ByteArray) : EpochTransitionKind()
+    object KeyRotation : EpochTransitionKind()
+}
+
+/** Per-group pending transition state. While awaiting chain confirmation,
+ *  no additional epoch-changing actions are permitted for the group. */
+sealed class PendingTransitionState {
+    object Idle : PendingTransitionState()
+    data class AwaitingChainConfirmation(val targetEpoch: Long) : PendingTransitionState()
+}
+
 class GroupListViewModel(application: Application) : AndroidViewModel(application) {
     val keyManager = KeyManager.create(application)
     val groups = mutableStateListOf<ChatGroup>()
@@ -122,6 +147,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     private val saltRequestsResponded = java.util.Collections.newSetFromMap(
         java.util.concurrent.ConcurrentHashMap<String, Boolean>()
     )
+    /** Per-group pending epoch transition state. Blocks concurrent mutations. */
+    private val pendingTransitions = java.util.concurrent.ConcurrentHashMap<String, PendingTransitionState>()
 
     // Calls
     lateinit var callManager: com.stellarmls.chat.call.CallManager
@@ -672,12 +699,131 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         transport.sendProtocolMessage(group, json, overrideKey)
     }
 
+    // -- Blockchain-First Epoch Transition Helper --
+
     /**
-     * Apply a received state update to a local group.
-     * Handles three cases:
-     * - update.epoch > local: straightforward apply (normal case)
-     * - update.epoch == local: epoch fork — deterministic merge to resolve conflict
-     * - update.epoch < local: stale update, ignored
+     * The single entry point for all epoch-advancing operations on published groups.
+     * Computes candidate next state, submits to chain, confirms, then persists locally
+     * and broadcasts. For unpublished groups, applies the transition locally.
+     */
+    private suspend fun performEpochTransition(
+        groupID: String,
+        kind: EpochTransitionKind,
+        previousKey: ByteArray
+    ): EpochTransitionResult {
+        val index = groups.indexOfFirst { it.id == groupID }
+        if (index < 0) return EpochTransitionResult.CHAIN_REJECTED
+
+        val currentGroup = cloneGroup(groups[index])
+
+        // Block concurrent epoch mutations
+        val pending = pendingTransitions[groupID]
+        if (pending is PendingTransitionState.AwaitingChainConfirmation) {
+            return EpochTransitionResult.SYNC_REQUIRED
+        }
+
+        // Compute candidate next state
+        val candidate = cloneGroup(currentGroup)
+        val addedMembers = mutableListOf<SEPGroupMemberLeaf>()
+        val removedMemberKeys = mutableListOf<ByteArray>()
+
+        when (kind) {
+            is EpochTransitionKind.MemberAdd -> {
+                val member = kind.member
+                if (candidate.members.any { it.publicKeyCompressed.contentEquals(member.publicKeyCompressed) }) {
+                    return EpochTransitionResult.SUCCESS
+                }
+                if (candidate.members.size >= candidate.tier.maxMembers) {
+                    return EpochTransitionResult.CHAIN_REJECTED
+                }
+                candidate.members.add(member)
+                sortMembers(candidate)
+                candidate.epoch++
+                candidate.salt = SEPCommitmentBuilder.deriveSalt(candidate.salt, member.publicKeyCompressed)
+                addedMembers.add(member)
+            }
+            is EpochTransitionKind.MemberRemove -> {
+                val pubkey = kind.blsPubkey
+                if (candidate.members.none { it.publicKeyCompressed.contentEquals(pubkey) }) {
+                    return EpochTransitionResult.CHAIN_REJECTED
+                }
+                candidate.members.removeAll { it.publicKeyCompressed.contentEquals(pubkey) }
+                candidate.epoch++
+                candidate.salt = SEPCommitmentBuilder.generateSalt()
+                removedMemberKeys.add(pubkey)
+            }
+            is EpochTransitionKind.KeyRotation -> {
+                candidate.epoch++
+                candidate.salt = SEPCommitmentBuilder.generateSalt()
+            }
+        }
+
+        candidate.recomputeCommitment()
+
+        // --- Chain confirmation (published groups only) ---
+        if (currentGroup.isPublishedOnChain) {
+            val service = onChainService ?: return EpochTransitionResult.CHAIN_UNAVAILABLE
+
+            pendingTransitions[groupID] = PendingTransitionState.AwaitingChainConfirmation(candidate.epoch)
+            try {
+                val result = publishMembershipUpdateIfNeeded(currentGroup, candidate)
+                if (result.isFailure) {
+                    pendingTransitions[groupID] = PendingTransitionState.Idle
+                    return EpochTransitionResult.CHAIN_REJECTED
+                }
+
+                // Confirm on-chain state matches
+                try {
+                    val entry = withContext(Dispatchers.IO) {
+                        service.fetchOnChainState(candidate.groupIDData)
+                    }
+                    if (entry.epoch != candidate.epoch) {
+                        pendingTransitions[groupID] = PendingTransitionState.Idle
+                        if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain mismatch: submitted=${candidate.epoch} chain=${entry.epoch}")
+                        return EpochTransitionResult.CHAIN_MISMATCH
+                    }
+                } catch (e: Exception) {
+                    // Submission succeeded but confirmation failed — proceed
+                    if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain confirm fetch failed: ${e.message}")
+                }
+            } finally {
+                pendingTransitions[groupID] = PendingTransitionState.Idle
+            }
+        }
+
+        // --- Persist locally (only after chain success or unpublished) ---
+        candidate.isPublishedOnChain = currentGroup.isPublishedOnChain
+        groups[index] = candidate
+        storeSalt(groupID, candidate.epoch, candidate.salt)
+
+        // Sync transport
+        transport.currentMembers.clear()
+        transport.currentMembers.addAll(groups.flatMap { it.members })
+
+        // Broadcast state update with PREVIOUS key
+        val update = buildStateUpdate(candidate, addedMembers, removedMemberKeys)
+        broadcastStateUpdate(candidate, update, overrideKey = previousKey)
+
+        // Resubscribe with new key
+        transport.subscribe(candidate)
+
+        // Persist to DB
+        viewModelScope.launch {
+            try { store.saveGroup(candidate) } catch (_: Exception) { }
+        }
+
+        return EpochTransitionResult.SUCCESS
+    }
+
+    /** Check if a group has a pending epoch transition (for UI locking). */
+    fun pendingTransitionState(groupID: String): PendingTransitionState {
+        return pendingTransitions[groupID] ?: PendingTransitionState.Idle
+    }
+
+    /**
+     * Apply a received state update. For published groups, chain-confirm-first:
+     * the update is only applied if on-chain epoch/commitment matches.
+     * For unpublished groups, applies directly (local-first).
      */
     fun applyStateUpdate(update: SEPGroupStateUpdate, groupID: String) {
         val index = groups.indexOfFirst { it.id == groupID }
@@ -696,79 +842,135 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 signature = senderAtt.signature
             )
             if (!KeyAttestation.verify(att)) {
-                return // Invalid attestation — discard update without modifying state
+                return
             }
         }
 
         if (update.epoch == group.epoch) {
-            // Same epoch + same salt = our own update echoed back from the relay — ignore.
+            // Same epoch + same salt = own echo — ignore
             if (update.salt.contentEquals(group.salt)) {
-                if (BuildConfig.DEBUG) {
-                    Log.d("GroupListVM", "Ignoring own echo at epoch=${update.epoch} for group=${groupID.take(8)}")
-                }
+                if (BuildConfig.DEBUG) Log.d("GroupListVM", "Own echo at epoch=${update.epoch} group=${groupID.take(8)}")
                 return
             }
 
-            // Epoch fork: two members made concurrent changes at the same epoch.
-            // Deterministic merge: union members, lexicographic-smaller salt wins.
-            val remoteSalt = update.salt
-            val localSalt = group.salt
+            // Epoch fork: for published groups, fetch chain state and adopt winner.
+            // For unpublished groups, accept remote state.
+            if (group.isPublishedOnChain) {
+                val service = onChainService
+                if (service != null) {
+                    viewModelScope.launch {
+                        try {
+                            val entry = withContext(Dispatchers.IO) {
+                                service.fetchOnChainState(group.groupIDData)
+                            }
+                            if (BuildConfig.DEBUG) Log.d("GroupListVM", "Fork at epoch=${group.epoch}: chain=${entry.epoch} group=${groupID.take(8)}")
+                            val idx = groups.indexOfFirst { it.id == groupID }
+                            if (idx < 0) return@launch
+                            val g = groups[idx]
 
-            // Merge: add remote's added members, remove remote's removed members
-            for (removed in update.removedMemberKeys) {
-                group.members.removeAll { it.publicKeyCompressed.contentEquals(removed) }
-            }
-            for (added in update.addedMembers) {
-                if (group.members.none { it.publicKeyCompressed.contentEquals(added.publicKeyCompressed) }) {
-                    group.members.add(added)
+                            if (entry.epoch > g.epoch) {
+                                // Chain moved ahead — adopt chain epoch with update's member delta
+                                applyMemberDelta(update, g)
+                                g.epoch = entry.epoch
+                                g.salt = update.salt
+                                if (update.commitment != null) g.commitment = update.commitment
+                                pendingTransitions[groupID] = PendingTransitionState.Idle
+
+                                groups[idx] = g
+                                storeSalt(groupID, g.epoch, g.salt)
+                                syncTransportAndSubscribe(g)
+                                try { store.saveGroup(g) } catch (_: Exception) { }
+                            }
+                            // else: our local state was confirmed — ignore remote fork
+                        } catch (e: Exception) {
+                            if (BuildConfig.DEBUG) Log.d("GroupListVM", "Fork: chain fetch failed: ${e.message}")
+                            // Fall back to accepting remote
+                            val idx = groups.indexOfFirst { it.id == groupID }
+                            if (idx < 0) return@launch
+                            val g = groups[idx]
+                            applyMemberDelta(update, g)
+                            g.epoch = update.epoch + 1
+                            g.salt = update.salt
+                            g.recomputeCommitment()
+                            groups[idx] = g
+                            storeSalt(groupID, g.epoch, g.salt)
+                            syncTransportAndSubscribe(g)
+                            try { store.saveGroup(g) } catch (_: Exception) { }
+                        }
+                    }
+                    return // Handled async
                 }
             }
-            sortMembers(group)
 
-            // Deterministic salt selection: lexicographically smaller wins
-            val useRemoteSalt = lexCompare(remoteSalt, localSalt) < 0
+            // Unpublished: accept remote, bump epoch
+            applyMemberDelta(update, group)
             group.epoch += 1
-            group.salt = if (useRemoteSalt) remoteSalt else localSalt
+            group.salt = update.salt
             group.recomputeCommitment()
 
             groups[index] = group
             storeSalt(groupID, group.epoch, group.salt)
-
-            transport.currentMembers.clear()
-            transport.currentMembers.addAll(groups.flatMap { it.members })
-            transport.subscribe(group)
+            syncTransportAndSubscribe(group)
 
             viewModelScope.launch {
                 try { store.saveGroup(group) } catch (_: Exception) { }
             }
-
-            // Broadcast the merged state so all members converge
-            val mergedUpdate = buildStateUpdate(group)
-            broadcastStateUpdate(group, mergedUpdate)
         } else {
             // Normal case: update.epoch > group.epoch
-            for (removed in update.removedMemberKeys) {
-                group.members.removeAll { it.publicKeyCompressed.contentEquals(removed) }
-            }
-            for (added in update.addedMembers) {
-                if (group.members.none { it.publicKeyCompressed.contentEquals(added.publicKeyCompressed) }) {
-                    group.members.add(added)
+            // For published groups: verify against chain before applying.
+            if (group.isPublishedOnChain) {
+                val service = onChainService
+                if (service != null) {
+                    viewModelScope.launch {
+                        try {
+                            val entry = withContext(Dispatchers.IO) {
+                                service.fetchOnChainState(group.groupIDData)
+                            }
+                            if (entry.epoch != update.epoch) {
+                                if (BuildConfig.DEBUG) Log.d("GroupListVM", "Rejecting update: chain=${entry.epoch} != update=${update.epoch}")
+                                return@launch
+                            }
+                            if (update.commitment != null && !entry.commitment.contentEquals(update.commitment)) {
+                                if (BuildConfig.DEBUG) Log.d("GroupListVM", "Rejecting update: commitment mismatch with chain")
+                                return@launch
+                            }
+                        } catch (e: Exception) {
+                            // Chain unavailable — accept (graceful degradation)
+                            if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain verify failed, accepting: ${e.message}")
+                        }
+
+                        val idx = groups.indexOfFirst { it.id == groupID }
+                        if (idx < 0) return@launch
+                        val g = groups[idx]
+                        applyMemberDelta(update, g)
+                        g.epoch = update.epoch
+                        g.salt = update.salt
+                        if (update.commitment != null) g.commitment = update.commitment
+
+                        // Discard any superseded pending transition
+                        val pt = pendingTransitions[groupID]
+                        if (pt is PendingTransitionState.AwaitingChainConfirmation && update.epoch >= pt.targetEpoch) {
+                            pendingTransitions[groupID] = PendingTransitionState.Idle
+                        }
+
+                        groups[idx] = g
+                        storeSalt(groupID, update.epoch, update.salt)
+                        syncTransportAndSubscribe(g)
+                        try { store.saveGroup(g) } catch (_: Exception) { }
+                    }
+                    return // Handled async
                 }
             }
-            sortMembers(group)
 
+            // Unpublished or no service: apply directly
+            applyMemberDelta(update, group)
             group.epoch = update.epoch
             group.salt = update.salt
-            if (update.commitment != null) {
-                group.commitment = update.commitment
-            }
+            if (update.commitment != null) group.commitment = update.commitment
 
             groups[index] = group
             storeSalt(groupID, update.epoch, update.salt)
-
-            transport.currentMembers.clear()
-            transport.currentMembers.addAll(groups.flatMap { it.members })
-            transport.subscribe(group)
+            syncTransportAndSubscribe(group)
 
             viewModelScope.launch {
                 try { store.saveGroup(group) } catch (_: Exception) { }
@@ -776,30 +978,38 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    /** Rotate the group key without membership changes. Provides forward secrecy. */
-    fun rotateGroupKey(groupID: String) {
-        val index = groups.indexOfFirst { it.id == groupID }
-        if (index < 0) return
-        val group = groups[index]
+    /** Apply the member delta (adds/removes) from a state update to a group. */
+    private fun applyMemberDelta(update: SEPGroupStateUpdate, group: ChatGroup) {
+        for (removed in update.removedMemberKeys) {
+            group.members.removeAll { it.publicKeyCompressed.contentEquals(removed) }
+        }
+        for (added in update.addedMembers) {
+            if (group.members.none { it.publicKeyCompressed.contentEquals(added.publicKeyCompressed) }) {
+                group.members.add(added)
+            }
+        }
+        sortMembers(group)
+    }
 
-        val previousKey = group.encryptionKey
-
-        group.epoch++
-        group.salt = SEPCommitmentBuilder.generateSalt()
-        group.recomputeCommitment()
-
-        groups[index] = group
-        storeSalt(groupID, group.epoch, group.salt)
-
-        val update = buildStateUpdate(group)
-        broadcastStateUpdate(group, update, overrideKey = previousKey)
-
+    /** Sync transport members and resubscribe group. */
+    private fun syncTransportAndSubscribe(group: ChatGroup) {
         transport.currentMembers.clear()
         transport.currentMembers.addAll(groups.flatMap { it.members })
         transport.subscribe(group)
+    }
+
+    /** Rotate the group key via chain-confirmed epoch transition. */
+    fun rotateGroupKey(groupID: String) {
+        val group = groups.find { it.id == groupID } ?: return
+        val previousKey = group.encryptionKey
 
         viewModelScope.launch {
-            try { store.saveGroup(group) } catch (_: Exception) { }
+            val result = performEpochTransition(
+                groupID = groupID,
+                kind = EpochTransitionKind.KeyRotation,
+                previousKey = previousKey
+            )
+            if (BuildConfig.DEBUG) Log.d("GroupListVM", "rotateGroupKey result=$result group=${groupID.take(8)}")
         }
     }
 
@@ -849,46 +1059,34 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    /** Remove a member from a group, broadcast state update, and rotate keys. */
+    /** Remove a member from a group via chain-confirmed epoch transition. */
     fun removeMember(blsPubkey: ByteArray, groupID: String, onResult: (Result<Unit>) -> Unit = {}) {
         viewModelScope.launch {
-            val index = groups.indexOfFirst { it.id == groupID }
-            if (index < 0) {
+            val group = groups.find { it.id == groupID }
+            if (group == null) {
                 onResult(Result.failure(ChatError.VerificationFailed("Group not found")))
                 return@launch
             }
-
-            val currentGroup = cloneGroup(groups[index])
-            if (currentGroup.members.none { it.publicKeyCompressed.contentEquals(blsPubkey) }) {
+            if (group.members.none { it.publicKeyCompressed.contentEquals(blsPubkey) }) {
                 onResult(Result.failure(ChatError.VerificationFailed("Member not found")))
                 return@launch
             }
 
-            val previousKey = currentGroup.encryptionKey
-            val updatedGroup = cloneGroup(currentGroup)
-            updatedGroup.members.removeAll { it.publicKeyCompressed.contentEquals(blsPubkey) }
-            updatedGroup.epoch++
-            updatedGroup.salt = SEPCommitmentBuilder.generateSalt()
-            updatedGroup.recomputeCommitment()
+            val previousKey = group.encryptionKey
 
-            val publishResult = publishMembershipUpdateIfNeeded(currentGroup, updatedGroup)
-            if (publishResult.isFailure) {
-                onResult(Result.failure(publishResult.exceptionOrNull()!!))
-                return@launch
+            val result = performEpochTransition(
+                groupID = groupID,
+                kind = EpochTransitionKind.MemberRemove(blsPubkey),
+                previousKey = previousKey
+            )
+
+            when (result) {
+                EpochTransitionResult.SUCCESS -> onResult(Result.success(Unit))
+                EpochTransitionResult.CHAIN_REJECTED -> onResult(Result.failure(ChatError.OnChainPublishFailed("Chain rejected")))
+                EpochTransitionResult.CHAIN_UNAVAILABLE -> onResult(Result.failure(ChatError.ContractNotConfigured))
+                EpochTransitionResult.CHAIN_MISMATCH -> onResult(Result.failure(ChatError.VerificationFailed("Chain epoch mismatch")))
+                EpochTransitionResult.SYNC_REQUIRED -> onResult(Result.failure(ChatError.VerificationFailed("Pending transition")))
             }
-
-            groups[index] = updatedGroup
-            storeSalt(groupID, updatedGroup.epoch, updatedGroup.salt)
-
-            transport.currentMembers.clear()
-            transport.currentMembers.addAll(groups.flatMap { it.members })
-
-            val update = buildStateUpdate(updatedGroup, removedMemberKeys = listOf(blsPubkey))
-            broadcastStateUpdate(updatedGroup, update, overrideKey = previousKey)
-            transport.subscribe(updatedGroup)
-
-            try { store.saveGroup(updatedGroup) } catch (_: Exception) { }
-            onResult(Result.success(Unit))
         }
     }
 
@@ -912,61 +1110,30 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         return a.size - b.size
     }
 
-    /** Handle a member_joined announcement: add the joiner and broadcast updated state. */
+    /** Handle a member_joined announcement via chain-confirmed epoch transition. */
     private fun handleMemberJoined(member: SEPGroupMemberLeaf, groupID: String) {
         viewModelScope.launch {
-            if (BuildConfig.DEBUG) android.util.Log.d("GroupListVM", "handleMemberJoined group=${groupID.take(8)}")
-            val index = groups.indexOfFirst { it.id == groupID }
-            if (index < 0) {
-                if (BuildConfig.DEBUG) android.util.Log.w("GroupListVM", "handleMemberJoined: group not found")
-                return@launch
-            }
-            val currentGroup = cloneGroup(groups[index])
+            if (BuildConfig.DEBUG) Log.d("GroupListVM", "handleMemberJoined group=${groupID.take(8)}")
+            val group = groups.find { it.id == groupID } ?: return@launch
 
-            if (currentGroup.members.any { it.publicKeyCompressed.contentEquals(member.publicKeyCompressed) }) {
-                if (BuildConfig.DEBUG) android.util.Log.d("GroupListVM", "handleMemberJoined: already a member, skipping")
+            if (group.members.any { it.publicKeyCompressed.contentEquals(member.publicKeyCompressed) }) {
+                if (BuildConfig.DEBUG) Log.d("GroupListVM", "handleMemberJoined: already a member")
                 return@launch
             }
 
-            val previousKey = currentGroup.encryptionKey
-            val updatedGroup = cloneGroup(currentGroup)
+            val previousKey = group.encryptionKey
 
-            if (updatedGroup.members.size >= updatedGroup.tier.maxMembers) return@launch
-            updatedGroup.members.add(member)
-            sortMembers(updatedGroup)
-            updatedGroup.epoch++
-            updatedGroup.salt = SEPCommitmentBuilder.deriveSalt(updatedGroup.salt, member.publicKeyCompressed)
-            updatedGroup.recomputeCommitment()
-
-            val publishResult = publishMembershipUpdateIfNeeded(currentGroup, updatedGroup)
-            if (publishResult.isFailure) {
-                if (BuildConfig.DEBUG) {
-                    android.util.Log.e(
-                        "GroupListVM",
-                        "handleMemberJoined: rejected published update for group=${groupID.take(8)}",
-                        publishResult.exceptionOrNull()
-                    )
-                }
-                return@launch
-            }
-
-            groups[index] = updatedGroup
-            storeSalt(groupID, updatedGroup.epoch, updatedGroup.salt)
-            try { store.saveGroup(updatedGroup) } catch (_: Exception) { }
-
-            transport.currentMembers.clear()
-            transport.currentMembers.addAll(groups.flatMap { it.members })
-
-            val update = SEPGroupStateUpdate(
-                epoch = updatedGroup.epoch,
-                salt = updatedGroup.salt,
-                addedMembers = listOf(member),
-                commitment = updatedGroup.commitment
+            val result = performEpochTransition(
+                groupID = groupID,
+                kind = EpochTransitionKind.MemberAdd(member),
+                previousKey = previousKey
             )
-            broadcastStateUpdate(updatedGroup, update, overrideKey = previousKey)
-            if (BuildConfig.DEBUG) android.util.Log.d("GroupListVM", "broadcastStateUpdate SENT group=${groupID.take(8)} epoch=${updatedGroup.epoch} members=${updatedGroup.members.size}")
 
-            transport.subscribe(updatedGroup)
+            if (BuildConfig.DEBUG) Log.d("GroupListVM", "handleMemberJoined result=$result group=${groupID.take(8)}")
+
+            if (result != EpochTransitionResult.SUCCESS) {
+                SecurityLog.onChainOperationFailed("member_add_transition", result.name)
+            }
         }
     }
 

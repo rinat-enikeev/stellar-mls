@@ -53,12 +53,13 @@ struct ChatGroup: Identifiable, Codable {
 
     /// Add a member and recompute the commitment.
     /// Members are sorted by compressed G1 public key per SEP-XXXX §2.1.
+    /// Salt is derived deterministically from the previous salt and the new member's key.
     mutating func addMember(_ leaf: SEPGroupMemberLeaf) throws {
         guard members.count < tier.maxMembers else { return }
         members.append(leaf)
         members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
         epoch += 1
-        salt = SEPCommitmentBuilder.generateSalt()
+        salt = SEPCommitmentBuilder.deriveSalt(previousSalt: salt, memberKey: leaf.publicKeyCompressed)
         try recomputeCommitment()
     }
 }

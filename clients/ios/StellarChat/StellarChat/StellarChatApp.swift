@@ -1,5 +1,31 @@
+import CryptoKit
 import SwiftUI
 import SwiftMLS
+
+// MARK: - Blockchain-First Epoch Authority Types
+
+/// Result of attempting an epoch transition through the chain-confirmed helper.
+enum EpochTransitionResult: Equatable {
+    case success
+    case chainRejected(reason: String)
+    case chainUnavailable
+    case chainMismatch(localEpoch: UInt64, chainEpoch: UInt64)
+    case syncRequired
+}
+
+/// The kind of epoch transition being performed.
+enum EpochTransitionKind {
+    case memberAdd(member: SEPGroupMemberLeaf)
+    case memberRemove(blsPubkey: Data)
+    case keyRotation
+}
+
+/// Per-group pending transition state. While awaiting chain confirmation,
+/// no additional epoch-changing actions are permitted for the group.
+enum PendingTransitionState: Equatable {
+    case idle
+    case awaitingChainConfirmation(targetEpoch: UInt64)
+}
 
 @main
 struct StellarChatApp: App {
@@ -62,6 +88,8 @@ final class AppState {
     private var processedProtocolEventIDs: Set<String> = []
     /// Tracks (senderPubkey, epoch) pairs for salt request rate limiting (H-5).
     private var saltRequestsResponded: Set<String> = []
+    /// Per-group pending epoch transition state. Blocks concurrent mutations.
+    private var pendingTransitions: [String: PendingTransitionState] = [:]
     private static let maxDedupSetSize = 10_000
     /// Pending incoming messages awaiting batch insertion into chatMessages.
     private var pendingIncomingMessages: [(msg: ChatMessage, groupID: String, event: NostrEvent)] = []
@@ -537,6 +565,153 @@ final class AppState {
         }
     }
 
+    // MARK: - Blockchain-First Epoch Transition
+
+    /// The single entry point for all epoch-advancing operations on published groups.
+    /// Computes candidate next state, submits to chain, confirms, then persists locally
+    /// and broadcasts. For unpublished groups, applies the transition locally without
+    /// chain interaction.
+    ///
+    /// - Parameters:
+    ///   - groupID: The group to transition.
+    ///   - kind: What kind of transition (memberAdd, memberRemove, keyRotation).
+    ///   - previousKey: The encryption key BEFORE the transition, used to encrypt the
+    ///     broadcast so current members can decrypt it.
+    /// - Returns: The result of the transition attempt.
+    func performEpochTransition(
+        groupID: String,
+        kind: EpochTransitionKind,
+        previousKey: SymmetricKey
+    ) async -> EpochTransitionResult {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else {
+            return .chainRejected(reason: "Group not found")
+        }
+        let currentGroup = groups[index]
+
+        // Block concurrent epoch mutations for this group
+        if case .awaitingChainConfirmation = pendingTransitions[groupID] {
+            return .syncRequired
+        }
+
+        // Compute candidate next state
+        var candidate = currentGroup
+        var addedMembers: [SEPGroupMemberLeaf] = []
+        var removedMemberKeys: [Data] = []
+
+        switch kind {
+        case .memberAdd(let member):
+            guard !candidate.members.contains(where: { $0.publicKeyCompressed == member.publicKeyCompressed }) else {
+                return .success // Already a member
+            }
+            guard candidate.members.count < candidate.tier.maxMembers else {
+                return .chainRejected(reason: "Group is full")
+            }
+            candidate.members.append(member)
+            candidate.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
+            candidate.epoch += 1
+            candidate.salt = SEPCommitmentBuilder.deriveSalt(previousSalt: candidate.salt, memberKey: member.publicKeyCompressed)
+            addedMembers = [member]
+
+        case .memberRemove(let blsPubkey):
+            guard candidate.members.contains(where: { $0.publicKeyCompressed == blsPubkey }) else {
+                return .chainRejected(reason: "Not a member")
+            }
+            candidate.members.removeAll { $0.publicKeyCompressed == blsPubkey }
+            candidate.epoch += 1
+            candidate.salt = SEPCommitmentBuilder.generateSalt()
+            removedMemberKeys = [blsPubkey]
+
+        case .keyRotation:
+            candidate.epoch += 1
+            candidate.salt = SEPCommitmentBuilder.generateSalt()
+        }
+
+        do {
+            try candidate.recomputeCommitment()
+        } catch {
+            return .chainRejected(reason: "Failed to recompute commitment: \(error.localizedDescription)")
+        }
+
+        // --- Chain confirmation (published groups only) ---
+        if currentGroup.isPublishedOnChain {
+            guard onChainService != nil else {
+                return .chainUnavailable
+            }
+
+            pendingTransitions[groupID] = .awaitingChainConfirmation(targetEpoch: candidate.epoch)
+            defer { pendingTransitions[groupID] = .idle }
+
+            // Submit update_commitment to chain
+            do {
+                try await publishMemberUpdate(
+                    group: candidate,
+                    oldMembers: currentGroup.members,
+                    oldEpoch: currentGroup.epoch,
+                    oldSalt: currentGroup.salt
+                )
+            } catch {
+                #if DEBUG
+                print("[EpochTransition] Chain submission failed: \(error)")
+                #endif
+                return .chainRejected(reason: error.localizedDescription)
+            }
+
+            // Confirm on-chain state matches what we submitted
+            do {
+                let entry = try await onChainService!.fetchOnChainState(groupIDData: candidate.groupIDData)
+                guard entry.epoch == candidate.epoch else {
+                    #if DEBUG
+                    print("[EpochTransition] Chain mismatch: submitted epoch=\(candidate.epoch) chain=\(entry.epoch)")
+                    #endif
+                    return .chainMismatch(localEpoch: candidate.epoch, chainEpoch: entry.epoch)
+                }
+            } catch {
+                // Chain submission succeeded but confirmation fetch failed.
+                // Proceed — the update was accepted.
+                #if DEBUG
+                print("[EpochTransition] Chain confirmation fetch failed (proceeding): \(error)")
+                #endif
+            }
+        }
+
+        // --- Persist locally (only after chain success or unpublished) ---
+        candidate.isPublishedOnChain = currentGroup.isPublishedOnChain
+        groups[index] = candidate
+        store.saveGroup(candidate)
+        storeSalt(groupID: groupID, epoch: candidate.epoch, salt: candidate.salt)
+
+        // Sync transport
+        chatTransport.currentMembers = groups.flatMap(\.members)
+
+        // Broadcast state update encrypted with PREVIOUS key so all members can decrypt
+        let update = buildStateUpdate(
+            group: candidate,
+            addedMembers: addedMembers,
+            removedMemberKeys: removedMemberKeys
+        )
+        do {
+            try await chatTransport.sendProtocolMessage(
+                update,
+                topic: candidate.topicTag,
+                key: previousKey,
+                keyManager: keyManager
+            )
+        } catch {
+            #if DEBUG
+            print("[EpochTransition] Failed to broadcast state update: \(error)")
+            #endif
+        }
+
+        // Resubscribe with new encryption key
+        subscribeGroup(candidate)
+        return .success
+    }
+
+    /// Check if a group has a pending epoch transition (for UI locking).
+    func pendingTransitionState(for groupID: String) -> PendingTransitionState {
+        pendingTransitions[groupID] ?? .idle
+    }
+
     // MARK: - Salt Distribution
 
     /// Store a salt in the per-group history for offline recovery.
@@ -622,10 +797,16 @@ final class AppState {
 
     /// Apply a received state update to a local group.
     /// Handles three cases:
-    /// - update.epoch > local: straightforward apply (normal case)
-    /// - update.epoch == local: epoch fork — deterministic merge to resolve conflict
+    /// Apply a received state update. For published groups, chain-confirm-first:
+    /// the update is only applied if on-chain epoch/commitment matches.
+    /// For unpublished groups, applies directly (local-first).
+    ///
+    /// - update.epoch > local: verify against chain (published) or apply directly (unpublished)
+    /// - update.epoch == local + same salt: own echo, ignored
+    /// - update.epoch == local + different salt: epoch fork — for published groups, adopt
+    ///   chain-confirmed state; for unpublished, discard local pending and accept remote
     /// - update.epoch < local: stale update, ignored
-    func applyStateUpdate(_ update: SEPGroupStateUpdate, to groupID: String) {
+    func applyStateUpdate(_ update: SEPGroupStateUpdate, to groupID: String) async {
         guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
         var group = groups[index]
 
@@ -646,7 +827,7 @@ final class AppState {
         }
 
         if update.epoch == group.epoch {
-            // Same epoch + same salt = our own update echoed back from the relay — ignore.
+            // Same epoch + same salt = our own update echoed back — ignore
             if update.salt == group.salt {
                 #if DEBUG
                 print("[AppState] Ignoring own echo at epoch=\(update.epoch) for group=\(groupID.prefix(8))")
@@ -654,58 +835,100 @@ final class AppState {
                 return
             }
 
-            // Epoch fork: two members made concurrent changes at the same epoch.
-            // Deterministic merge: union members, lexicographic-smaller salt wins.
-            let remoteSalt = update.salt
-            let localSalt = group.salt
-
-            // Merge: add remote's added members, remove remote's removed members
-            for removed in update.removedMemberKeys {
-                group.members.removeAll { $0.publicKeyCompressed == removed }
-            }
-            for added in update.addedMembers {
-                if !group.members.contains(where: { $0.publicKeyCompressed == added.publicKeyCompressed }) {
-                    group.members.append(added)
+            // Epoch fork: concurrent changes at the same epoch.
+            // For published groups: fetch chain state and adopt whichever was confirmed.
+            // For unpublished groups: accept the remote state (no authority to resolve locally).
+            if group.isPublishedOnChain, let service = onChainService {
+                do {
+                    let entry = try await service.fetchOnChainState(groupIDData: group.groupIDData)
+                    #if DEBUG
+                    print("[AppState] Fork at epoch=\(group.epoch): chain epoch=\(entry.epoch) for group=\(groupID.prefix(8))")
+                    #endif
+                    if entry.epoch > group.epoch {
+                        // Chain has moved ahead — adopt chain epoch.
+                        // Apply member delta from the update, set epoch/salt from chain,
+                        // but we need the salt from the update (chain doesn't store salt).
+                        applyMemberDelta(update, to: &group)
+                        group.epoch = entry.epoch
+                        group.salt = update.salt
+                        if let commitment = update.commitment {
+                            group.commitment = commitment
+                        }
+                        // Discard any pending local transition
+                        pendingTransitions[groupID] = .idle
+                    } else {
+                        // Chain hasn't moved — our local transition was confirmed.
+                        // Ignore the conflicting remote update.
+                        #if DEBUG
+                        print("[AppState] Fork: local state confirmed on-chain, ignoring remote fork")
+                        #endif
+                        return
+                    }
+                } catch {
+                    // Chain unavailable — fall through to accept remote update
+                    #if DEBUG
+                    print("[AppState] Fork: chain fetch failed, accepting remote: \(error)")
+                    #endif
+                    applyMemberDelta(update, to: &group)
+                    group.epoch = update.epoch + 1
+                    group.salt = update.salt
+                    try? group.recomputeCommitment()
                 }
+            } else {
+                // Unpublished: accept remote state, bump epoch to resolve
+                applyMemberDelta(update, to: &group)
+                group.epoch += 1
+                group.salt = update.salt
+                try? group.recomputeCommitment()
             }
-            group.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
-
-            // Deterministic salt selection: lexicographically smaller wins
-            let useRemoteSalt = remoteSalt.lexicographicallyPrecedes(localSalt)
-            group.epoch += 1
-            group.salt = useRemoteSalt ? remoteSalt : localSalt
-            try? group.recomputeCommitment()
 
             groups[index] = group
             store.saveGroup(group)
             storeSalt(groupID: groupID, epoch: group.epoch, salt: group.salt)
             subscribeGroup(group)
 
-            // Broadcast the merged state so all members converge
-            let mergedUpdate = buildStateUpdate(group: group)
-            Task {
-                try? await chatTransport.sendProtocolMessage(
-                    mergedUpdate, topic: group.topicTag, key: group.encryptionKey, keyManager: keyManager)
-            }
             #if DEBUG
-            print("[AppState] Epoch fork resolved: merged to epoch=\(group.epoch) for group=\(groupID.prefix(8))")
+            print("[AppState] Epoch fork resolved to epoch=\(group.epoch) for group=\(groupID.prefix(8))")
             #endif
         } else {
             // Normal case: update.epoch > group.epoch
-            for removed in update.removedMemberKeys {
-                group.members.removeAll { $0.publicKeyCompressed == removed }
-            }
-            for added in update.addedMembers {
-                if !group.members.contains(where: { $0.publicKeyCompressed == added.publicKeyCompressed }) {
-                    group.members.append(added)
+            // For published groups: verify the update matches chain state before applying.
+            if group.isPublishedOnChain, let service = onChainService {
+                do {
+                    let entry = try await service.fetchOnChainState(groupIDData: group.groupIDData)
+                    guard entry.epoch == update.epoch else {
+                        #if DEBUG
+                        print("[AppState] Rejecting state update: chain epoch=\(entry.epoch) != update epoch=\(update.epoch)")
+                        #endif
+                        // If chain is ahead of the update, it's stale; if behind, defer
+                        return
+                    }
+                    // Verify commitment matches if both are present
+                    if let updateCommitment = update.commitment, entry.commitment != updateCommitment {
+                        #if DEBUG
+                        print("[AppState] Rejecting state update: commitment mismatch with chain")
+                        #endif
+                        return
+                    }
+                } catch {
+                    // Chain unavailable — accept the update (graceful degradation)
+                    #if DEBUG
+                    print("[AppState] Chain verification failed, accepting update: \(error)")
+                    #endif
                 }
             }
-            group.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
 
+            applyMemberDelta(update, to: &group)
             group.epoch = update.epoch
             group.salt = update.salt
             if let commitment = update.commitment {
                 group.commitment = commitment
+            }
+
+            // Discard any pending local transition that's now superseded
+            if case .awaitingChainConfirmation(let target) = pendingTransitions[groupID],
+               update.epoch >= target {
+                pendingTransitions[groupID] = .idle
             }
 
             groups[index] = group
@@ -715,68 +938,65 @@ final class AppState {
         }
     }
 
-    /// Rotate the group key without membership changes. Provides forward secrecy against compromised keys.
-    func rotateGroupKey(groupID: String) {
-        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
-        var group = groups[index]
+    /// Apply the member delta (adds/removes) from a state update to a group.
+    private func applyMemberDelta(_ update: SEPGroupStateUpdate, to group: inout ChatGroup) {
+        for removed in update.removedMemberKeys {
+            group.members.removeAll { $0.publicKeyCompressed == removed }
+        }
+        for added in update.addedMembers {
+            if !group.members.contains(where: { $0.publicKeyCompressed == added.publicKeyCompressed }) {
+                group.members.append(added)
+            }
+        }
+        group.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
+    }
+
+    /// Rotate the group key without membership changes. Provides forward secrecy.
+    /// For published groups, blocks until chain confirms the new epoch.
+    func rotateGroupKey(groupID: String) async {
+        guard let group = groups.first(where: { $0.id == groupID }) else { return }
 
         let previousKey = group.encryptionKey
 
-        group.epoch += 1
-        group.salt = SEPCommitmentBuilder.generateSalt()
-        try? group.recomputeCommitment()
+        let result = await performEpochTransition(
+            groupID: groupID,
+            kind: .keyRotation,
+            previousKey: previousKey
+        )
 
-        groups[index] = group
-        store.saveGroup(group)
-        storeSalt(groupID: groupID, epoch: group.epoch, salt: group.salt)
-        subscribeGroup(group)
-
-        // Broadcast to peers in the background — don't block the UI
-        let update = buildStateUpdate(group: group)
-        Task {
-            try? await chatTransport.sendProtocolMessage(
-                update, topic: group.topicTag, key: previousKey, keyManager: keyManager)
-        }
+        #if DEBUG
+        print("[AppState] rotateGroupKey result=\(result) group=\(groupID.prefix(8))")
+        #endif
     }
 
-    /// Remove a member from a group, broadcast the state update, and optionally update on-chain.
+    /// Remove a member from a group via chain-confirmed transition.
     func removeMember(blsPubkey: Data, from groupID: String) async throws {
-        guard let index = groups.firstIndex(where: { $0.id == groupID }) else {
+        guard let group = groups.first(where: { $0.id == groupID }) else {
             throw ChatError.verificationFailed("Group not found")
         }
-        let currentGroup = groups[index]
-
-        guard currentGroup.members.contains(where: { $0.publicKeyCompressed == blsPubkey }) else {
+        guard group.members.contains(where: { $0.publicKeyCompressed == blsPubkey }) else {
             throw ChatError.verificationFailed("Member not found")
         }
 
-        let previousKey = currentGroup.encryptionKey
+        let previousKey = group.encryptionKey
 
-        var updatedGroup = currentGroup
-        updatedGroup.members.removeAll { $0.publicKeyCompressed == blsPubkey }
-        updatedGroup.epoch += 1
-        updatedGroup.salt = SEPCommitmentBuilder.generateSalt()
-        try updatedGroup.recomputeCommitment()
+        let result = await performEpochTransition(
+            groupID: groupID,
+            kind: .memberRemove(blsPubkey: blsPubkey),
+            previousKey: previousKey
+        )
 
-        do {
-            try await publishMemberUpdateIfNeeded(oldGroup: currentGroup, newGroup: updatedGroup)
-        } catch {
-            SecurityLog.onChainOperationFailed(operation: "update_commitment", reason: error.localizedDescription)
-            throw error
-        }
-
-        groups[index] = updatedGroup
-        store.saveGroup(updatedGroup)
-        storeSalt(groupID: groupID, epoch: updatedGroup.epoch, salt: updatedGroup.salt)
-        chatTransport.currentMembers = updatedGroup.members
-        subscribeGroup(updatedGroup)
-
-        let update = buildStateUpdate(group: updatedGroup, removedMemberKeys: [blsPubkey])
-        do {
-            try await chatTransport.sendProtocolMessage(
-                update, topic: updatedGroup.topicTag, key: previousKey, keyManager: keyManager)
-        } catch {
-            SecurityLog.onChainOperationFailed(operation: "broadcast_state_update", reason: error.localizedDescription)
+        switch result {
+        case .success:
+            break
+        case .chainRejected(let reason):
+            throw ChatError.onChainPublishFailed(reason)
+        case .chainUnavailable:
+            throw ChatError.contractNotConfigured
+        case .chainMismatch:
+            throw ChatError.verificationFailed("Chain epoch mismatch after submission")
+        case .syncRequired:
+            throw ChatError.verificationFailed("Group has a pending transition")
         }
     }
 
@@ -1357,7 +1577,7 @@ final class AppState {
                         #if DEBUG
                         print("[AppState] Received state update epoch=\(update.epoch) for group=\(groupID.prefix(8))")
                         #endif
-                        self.applyStateUpdate(update, to: groupID)
+                        await self.applyStateUpdate(update, to: groupID)
                         if let updated = self.groups.first(where: { $0.id == groupID }) {
                             self.chatTransport.currentMembers = updated.members
                             self.subscribeGroup( updated)
@@ -1434,62 +1654,32 @@ final class AppState {
         )
     }
 
-    /// Handle a member_joined announcement: add the joiner and broadcast updated state.
+    /// Handle a member_joined announcement: add the joiner via chain-confirmed transition.
     private func handleMemberJoined(_ joined: SEPMemberJoined, groupID: String) async {
-        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
-        let currentGroup = groups[index]
+        guard let group = groups.first(where: { $0.id == groupID }) else { return }
 
         // Skip if already a member
-        guard !currentGroup.members.contains(where: { $0.publicKeyCompressed == joined.member.publicKeyCompressed }) else { return }
+        guard !group.members.contains(where: { $0.publicKeyCompressed == joined.member.publicKeyCompressed }) else { return }
 
-        // Capture old encryption key BEFORE bumping epoch/salt.
-        // The state update must be encrypted with the current key so all
-        // existing members (including the joiner) can decrypt it.
-        let previousKey = currentGroup.encryptionKey
+        // Capture old encryption key BEFORE the transition
+        let previousKey = group.encryptionKey
 
-        // Add the joiner
-        var updatedGroup = currentGroup
-        updatedGroup.members.append(joined.member)
-        updatedGroup.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
-        updatedGroup.epoch += 1
-        updatedGroup.salt = SEPCommitmentBuilder.deriveSalt(previousSalt: updatedGroup.salt, memberKey: joined.member.publicKeyCompressed)
-
-        do {
-            try updatedGroup.recomputeCommitment()
-            try await publishMemberUpdateIfNeeded(oldGroup: currentGroup, newGroup: updatedGroup)
-        } catch {
-            SecurityLog.onChainOperationFailed(operation: "update_commitment", reason: error.localizedDescription)
-            return
-        }
-
-        groups[index] = updatedGroup
-        store.saveGroup(updatedGroup)
-        storeSalt(groupID: groupID, epoch: updatedGroup.epoch, salt: updatedGroup.salt)
-
-        // Sync transport member list so BLS authentication accepts the new member
-        chatTransport.currentMembers = updatedGroup.members
-
-        // Broadcast state update so all members (including the joiner) converge.
-        // Encrypted with the PREVIOUS key so everyone can read it.
-        let update = SEPGroupStateUpdate(
-            epoch: updatedGroup.epoch,
-            salt: updatedGroup.salt,
-            addedMembers: [joined.member],
-            commitment: updatedGroup.commitment
+        let result = await performEpochTransition(
+            groupID: groupID,
+            kind: .memberAdd(member: joined.member),
+            previousKey: previousKey
         )
-        do {
-            try await chatTransport.sendProtocolMessage(
-                update,
-                topic: updatedGroup.topicTag,
-                key: previousKey,
-                keyManager: keyManager
-            )
-        } catch {
-            SecurityLog.onChainOperationFailed(operation: "broadcast_state_update", reason: error.localizedDescription)
-        }
 
-        // Resubscribe with the new encryption key after epoch change
-        subscribeGroup(updatedGroup)
+        #if DEBUG
+        print("[AppState] handleMemberJoined result=\(result) group=\(groupID.prefix(8))")
+        #endif
+
+        if result != .success {
+            SecurityLog.onChainOperationFailed(
+                operation: "member_add_transition",
+                reason: "\(result)"
+            )
+        }
     }
 
     // MARK: - TURN Configuration

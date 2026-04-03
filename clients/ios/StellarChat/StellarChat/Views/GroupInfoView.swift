@@ -73,9 +73,11 @@ struct GroupInfoView: View {
 
                 Section {
                     Button {
-                        appState.rotateGroupKey(groupID: group.id)
-                        removalStatus = "Key rotated to epoch \(appState.groups.first(where: { $0.id == group.id })?.epoch ?? 0)."
-                        removalStatusIsError = false
+                        Task {
+                            await appState.rotateGroupKey(groupID: group.id)
+                            removalStatus = "Key rotated to epoch \(appState.groups.first(where: { $0.id == group.id })?.epoch ?? 0)."
+                            removalStatusIsError = false
+                        }
                     } label: {
                         Text("Rotate Group Key")
                     }

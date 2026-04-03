@@ -94,7 +94,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     // Persistent chat message storage — keyed by group ID, alive for entire app session.
     // Uses SnapshotStateMap so Compose recomposes when messages change.
     val chatMessages = androidx.compose.runtime.mutableStateMapOf<String, List<ChatMessage>>()
-    private val seenMessageIDs = mutableMapOf<String, MutableSet<String>>()
+    private val seenMessageIDs = java.util.concurrent.ConcurrentHashMap<String, MutableSet<String>>()
     /** Unread message count per group. Reset when the user opens the chat. */
     val unreadCounts = androidx.compose.runtime.mutableStateMapOf<String, Int>()
     /** The group ID currently being viewed, used to suppress unread increments. */
@@ -256,7 +256,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     try {
                         val msgs = store.loadMessages(group.id)
                         chatMessages[group.id] = msgs
-                        seenMessageIDs[group.id] = msgs.map { it.id }.toMutableSet()
+                        seenMessageIDs[group.id] = java.util.Collections.synchronizedSet(msgs.map { it.id }.toMutableSet())
                     } catch (e: Exception) {
                         Log.e("GroupListVM", "Failed to load messages for group ${group.id.take(8)}", e)
                     }
@@ -323,7 +323,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         if (groups.none { it.id == group.id }) {
             groups.add(group)
             chatMessages[group.id] = emptyList()
-            seenMessageIDs[group.id] = mutableSetOf()
+            seenMessageIDs[group.id] = java.util.Collections.synchronizedSet(mutableSetOf())
             // Update transport members
             transport.currentMembers.clear()
             transport.currentMembers.addAll(groups.flatMap { it.members })
@@ -439,7 +439,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         val epoch = obj.getLong("epoch")
         val index = groups.indexOfFirst { it.id == groupIDHex }
         if (index < 0) return
-        val group = groups[index]
+        var group = cloneGroup(groups[index])
 
         // Only apply if epoch is ahead
         if (epoch <= group.epoch) return
@@ -455,12 +455,14 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         val oldTopicTag = group.topicTag
 
         // Install new secrets
-        group.groupSecret = android.util.Base64.decode(obj.getString("groupSecret"), android.util.Base64.NO_WRAP)
-        group.salt = android.util.Base64.decode(obj.getString("salt"), android.util.Base64.NO_WRAP)
-        group.epoch = epoch
-        obj.optString("commitment", "").takeIf { it.isNotEmpty() }?.let {
-            group.commitment = android.util.Base64.decode(it, android.util.Base64.NO_WRAP)
-        }
+        group = group.copy(
+            groupSecret = android.util.Base64.decode(obj.getString("groupSecret"), android.util.Base64.NO_WRAP),
+            salt = android.util.Base64.decode(obj.getString("salt"), android.util.Base64.NO_WRAP),
+            epoch = epoch,
+            commitment = obj.optString("commitment", "").takeIf { it.isNotEmpty() }?.let {
+                android.util.Base64.decode(it, android.util.Base64.NO_WRAP)
+            } ?: group.commitment
+        )
 
         // Apply member changes
         val removedArr = obj.optJSONArray("removedMemberKeys") ?: JSONArray()
@@ -923,7 +925,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
 
         // Compute candidate next state
-        val candidate = cloneGroup(currentGroup)
+        var candidate = cloneGroup(currentGroup)
         val addedMembers = mutableListOf<SEPGroupMemberLeaf>()
         val removedMemberKeys = mutableListOf<ByteArray>()
 
@@ -959,6 +961,21 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
 
         candidate.recomputeCommitment()
+
+        // Determine secure rekey BEFORE chain publish so we publish the final state
+        val isRemoval = removedMemberKeys.isNotEmpty()
+        val useSecureRekey = isRemoval && allMembersHaveBundles(groupID, candidate.members)
+
+        // If secure rekey, apply fresh groupSecret + salt now so the chain publish
+        // uses the final commitment (one publish instead of two).
+        val preRekeyCandidate = cloneGroup(candidate)
+        if (useSecureRekey) {
+            val random = SecureRandom()
+            val freshSecret = ByteArray(32).also { random.nextBytes(it) }
+            candidate = candidate.copy(groupSecret = freshSecret)
+            candidate.salt = SEPCommitmentBuilder.generateSalt()
+            candidate.recomputeCommitment()
+        }
 
         // --- Chain confirmation (published groups only) ---
         if (currentGroup.isPublishedOnChain) {
@@ -996,22 +1013,20 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         groups[index] = candidate
         storeSalt(groupID, candidate.epoch, candidate.salt)
 
-        // Sync transport
+        // Sync transport and ensure subscription uses the latest key.
+        // This must happen BEFORE the secure rekey / legacy blocks so A can
+        // at least communicate on the current state even if the blocks fail.
         transport.currentMembers.clear()
         transport.currentMembers.addAll(groups.flatMap { it.members })
+        if (useSecureRekey) {
+            // Secure rekey: unsubscribe old topic now, subscribe new topic
+            transport.unsubscribe(currentGroup.topicTag)
+            syncTransportAndSubscribe(candidate)
+        } else {
+            syncTransportAndSubscribe(candidate)
+        }
 
-        val isRemoval = removedMemberKeys.isNotEmpty()
-        val useSecureRekey = isRemoval && allMembersHaveBundles(groupID, candidate.members)
-
-        if (isRemoval && useSecureRekey) {
-            // --- SECURE INBOX REKEY (cryptographic eviction) ---
-            val random = SecureRandom()
-            val freshSecret = ByteArray(32).also { random.nextBytes(it) }
-            candidate.groupSecret = freshSecret
-            candidate.salt = SEPCommitmentBuilder.generateSalt()
-            candidate.recomputeCommitment()
-            groups[index] = candidate
-            storeSalt(groupID, candidate.epoch, candidate.salt)
+        if (useSecureRekey) {
 
             // 1. Broadcast SEPRemovalNotice on old channel (no secrets)
             val noticeJson = JSONObject().apply {
@@ -1074,27 +1089,25 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 }
             }
 
-            // Unsubscribe old topic, subscribe new (groupSecret changed)
-            transport.unsubscribe(currentGroup.topicTag)
-            transport.subscribe(candidate)
-
-            // Track as removal epoch
-            viewModelScope.launch {
+            // Persist new group state SYNCHRONOUSLY before subscribing/publishing,
+            // so a crash can't leave us on a stale groupSecret while recipients
+            // have already installed the new one from the rekey envelope.
+            val unackedKeys = candidate.members
+                .filter { !it.publicKeyCompressed.contentEquals(myLeaf.publicKeyCompressed) }
+                .map { it.publicKeyCompressed.toHex() }
+            kotlinx.coroutines.runBlocking {
                 try {
-                    val unackedKeys = candidate.members
-                        .filter { !it.publicKeyCompressed.contentEquals(myLeaf.publicKeyCompressed) }
-                        .map { it.publicKeyCompressed.toHex() }
-                    store.savePendingRekey(groupID, candidate.epoch.toInt(), envelopeJson, unackedKeys, isRemovalEpoch = true)
                     store.saveGroup(candidate)
+                    store.savePendingRekey(groupID, candidate.epoch.toInt(), envelopeJson, unackedKeys, isRemovalEpoch = true)
                 } catch (_: Exception) { }
             }
+
         } else {
             // --- LEGACY FLOW: poisoned-salt + SEPRekey (best-effort) ---
             val poisonedSalt = if (isRemoval) SEPCommitmentBuilder.generateSalt() else candidate.salt
             val broadcastCandidate = if (isRemoval) cloneGroup(candidate).also { it.salt = poisonedSalt } else candidate
             val update = buildStateUpdate(broadcastCandidate, addedMembers, removedMemberKeys)
             broadcastStateUpdate(broadcastCandidate, update, overrideKey = previousKey)
-            transport.subscribe(candidate)
             if (isRemoval) {
                 val poisonedKey = GroupCrypto.deriveMessageKey(candidate.groupSecret, candidate.epoch, poisonedSalt)
                 val rekeyJson = JSONObject().apply {
@@ -1628,7 +1641,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     /** Set up handler for incoming chat messages — stores in chatMessages, persists to store. */
     private fun setupChatMessageHandler() {
         transport.onMessage = { groupID, senderPubkey, text, eventID, timestampMs ->
-            val seen = seenMessageIDs.getOrPut(groupID) { mutableSetOf() }
+            val seen = seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }
             if (seen.add(eventID)) {
                 val msg = ChatMessage(
                     id = eventID,
@@ -1675,7 +1688,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     /** Set up handler for incoming image messages — stores in chatMessages with media attachment. */
     private fun setupImageMessageHandler() {
         transport.onImageMessage = { groupID, text, media, eventID, senderPubkey, timestampMs ->
-            val seen = seenMessageIDs.getOrPut(groupID) { mutableSetOf() }
+            val seen = seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }
             if (seen.add(eventID)) {
                 val msg = ChatMessage(
                     id = eventID,
@@ -1755,7 +1768,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             status = MessageStatus.SENDING
         )
         chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
-        seenMessageIDs.getOrPut(groupID) { mutableSetOf() }.add(event.id)
+        seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }.add(event.id)
         viewModelScope.launch {
             try { store.saveMessage(msg) } catch (_: Exception) { }
         }
@@ -1866,7 +1879,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     mediaAttachment = media
                 )
                 chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
-                seenMessageIDs.getOrPut(groupID) { mutableSetOf() }.add(event.id)
+                seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }.add(event.id)
                 launch {
                     try { store.saveMessage(msg) } catch (_: Exception) { }
                 }
@@ -1972,7 +1985,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     mediaAttachment = media
                 )
                 chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
-                seenMessageIDs.getOrPut(groupID) { mutableSetOf() }.add(event.id)
+                seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }.add(event.id)
                 launch {
                     try { store.saveMessage(msg) } catch (_: Exception) { }
                 }
@@ -2059,7 +2072,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 val current = (chatMessages[groupID] ?: emptyList()) + msg
                 chatMessages[groupID] = current.sortedWith(
                     compareBy<com.stellarmls.chat.model.ChatMessage> { it.timestamp }.thenBy { it.id })
-                seenMessageIDs.getOrPut(groupID) { mutableSetOf() }.add(event.id)
+                seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }.add(event.id)
                 launch {
                     try { store.saveMessage(msg) } catch (_: Exception) { }
                 }

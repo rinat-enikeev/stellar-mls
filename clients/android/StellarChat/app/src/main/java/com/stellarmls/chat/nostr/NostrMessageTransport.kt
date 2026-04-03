@@ -10,6 +10,10 @@ import com.stellarmls.mls.SEPGroupRenamed
 import com.stellarmls.mls.SEPGroupStateUpdate
 import com.stellarmls.mls.SEPMemberJoined
 import com.stellarmls.mls.SEPMessageAck
+import com.stellarmls.mls.SEPRekey
+import com.stellarmls.mls.SEPRekeyAck
+import com.stellarmls.mls.SEPRekeyResendRequest
+import com.stellarmls.mls.SEPRemovalNotice
 import com.stellarmls.mls.SEPSaltRequest
 import com.stellarmls.mls.SEPSaltResponse
 import kotlinx.coroutines.CoroutineScope
@@ -338,7 +342,11 @@ class NostrMessageTransport(
                 SEPSaltRequest.MESSAGE_TYPE,
                 SEPSaltResponse.MESSAGE_TYPE,
                 SEPGroupRenamed.MESSAGE_TYPE,
-                SEPMessageAck.MESSAGE_TYPE
+                SEPMessageAck.MESSAGE_TYPE,
+                SEPRekey.MESSAGE_TYPE,
+                SEPRemovalNotice.MESSAGE_TYPE,
+                SEPRekeyAck.MESSAGE_TYPE,
+                SEPRekeyResendRequest.MESSAGE_TYPE
             )
         } catch (_: Exception) {
             false

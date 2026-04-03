@@ -648,6 +648,36 @@ final class AppState {
             return .chainRejected(reason: "Failed to recompute commitment: \(error.localizedDescription)")
         }
 
+        // Determine secure rekey BEFORE chain publish so we publish the final state
+        let isRemoval = !removedMemberKeys.isEmpty
+        let useSecureRekey = isRemoval && allMembersHaveBundles(groupID: groupID, members: candidate.members)
+
+        // If secure rekey, apply fresh groupSecret + salt now so the chain publish
+        // uses the final commitment (one publish instead of two).
+        // Save pre-rekey candidate for broadcasting on the old channel later.
+        let preRekeyCandidate = candidate
+        if useSecureRekey {
+            var freshSecret = [UInt8](repeating: 0, count: 32)
+            _ = SecRandomCopyBytes(kSecRandomDefault, 32, &freshSecret)
+            let freshSalt = SEPCommitmentBuilder.generateSalt()
+            var rekeyCandidate = ChatGroup(
+                id: candidate.id,
+                name: candidate.name,
+                groupSecret: Data(freshSecret),
+                createdAt: candidate.createdAt,
+                relayHints: candidate.relayHints,
+                members: candidate.members,
+                epoch: candidate.epoch,
+                salt: freshSalt,
+                commitment: candidate.commitment,
+                tier: candidate.tier,
+                isPublishedOnChain: candidate.isPublishedOnChain,
+                lastEventTimestamp: candidate.lastEventTimestamp
+            )
+            try? rekeyCandidate.recomputeCommitment()
+            candidate = rekeyCandidate
+        }
+
         // --- Chain confirmation (published groups only) ---
         if currentGroup.isPublishedOnChain {
             guard onChainService != nil else {
@@ -657,7 +687,7 @@ final class AppState {
             pendingTransitions[groupID] = .awaitingChainConfirmation(targetEpoch: candidate.epoch)
             defer { pendingTransitions[groupID] = .idle }
 
-            // Submit update_commitment to chain
+            // Submit update_commitment to chain (with final post-rekey state if applicable)
             do {
                 try await publishMemberUpdate(
                     group: candidate,
@@ -696,27 +726,23 @@ final class AppState {
         store.saveGroup(candidate)
         storeSalt(groupID: groupID, epoch: candidate.epoch, salt: candidate.salt)
 
-        // Sync transport
+        // Sync transport and ensure subscription uses the latest key.
+        // This must happen BEFORE the secure rekey / legacy blocks so A can
+        // at least communicate on the current state even if the blocks fail.
         chatTransport.currentMembers = groups.flatMap(\.members)
+        if useSecureRekey {
+            // Secure rekey: unsubscribe old topic now, subscribe new topic
+            chatTransport.unsubscribe(topic: currentGroup.topicTag)
+            subscribeGroup(candidate)
+        } else {
+            subscribeGroup(candidate)
+        }
 
-        let isRemoval = !removedMemberKeys.isEmpty
-        let useSecureRekey = isRemoval && allMembersHaveBundles(groupID: groupID, members: candidate.members)
-
-        if isRemoval && useSecureRekey {
-            // --- SECURE INBOX REKEY (cryptographic eviction) ---
-            // Generate fresh groupSecret so removed member can't derive future keys.
-            var freshSecret = [UInt8](repeating: 0, count: 32)
-            _ = SecRandomCopyBytes(kSecRandomDefault, 32, &freshSecret)
-            candidate.groupSecret = Data(freshSecret)
-            candidate.salt = SEPCommitmentBuilder.generateSalt()
-            try? candidate.recomputeCommitment()
-            groups[index] = candidate
-            store.saveGroup(candidate)
-            storeSalt(groupID: groupID, epoch: candidate.epoch, salt: candidate.salt)
+        if useSecureRekey {
 
             // 1. Broadcast SEPRemovalNotice on old channel (no secrets)
             let notice = SEPRemovalNotice(
-                groupID: Data(hexString: groupID),
+                groupID: candidate.groupIDData,
                 epoch: candidate.epoch,
                 removedMemberKeys: removedMemberKeys,
                 commitment: candidate.commitment
@@ -738,7 +764,7 @@ final class AppState {
                 return transportBundles[groupID]?[hex]
             }
             let envelope = SEPRekeyEnvelope(
-                groupID: Data(hexString: groupID),
+                groupID: candidate.groupIDData,
                 epoch: candidate.epoch,
                 groupSecret: candidate.groupSecret,
                 salt: candidate.salt,
@@ -776,10 +802,6 @@ final class AppState {
                 }
             }
 
-            // Unsubscribe old topic, subscribe new (groupSecret changed → topic changed)
-            chatTransport.unsubscribe(topic: currentGroup.topicTag)
-            subscribeGroup(candidate)
-
             // Track as removal epoch for salt request filtering
             store.savePendingRekey(
                 groupID: groupID, epoch: Int(candidate.epoch),
@@ -812,9 +834,6 @@ final class AppState {
                 print("[EpochTransition] Failed to broadcast state update: \(error)")
                 #endif
             }
-
-            // Resubscribe with new encryption key (uses the REAL salt)
-            subscribeGroup(candidate)
 
             // For removals: send re-key message with real salt, encrypted with the
             // poisoned-salt-derived key.
@@ -1284,19 +1303,29 @@ final class AppState {
 
         let oldTopicTag = group.topicTag
 
-        // Install new secrets
-        group.groupSecret = envelope.groupSecret
-        group.salt = envelope.salt
-        group.epoch = envelope.epoch
-        if let commitment = envelope.commitment {
-            group.commitment = commitment
-        }
-
         // Apply member changes from envelope
+        var updatedMembers = group.members
         for removed in envelope.removedMemberKeys {
-            group.members.removeAll { $0.publicKeyCompressed == removed }
+            updatedMembers.removeAll { $0.publicKeyCompressed == removed }
         }
-        group.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
+        updatedMembers.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
+
+        // Install new secrets — ChatGroup.groupSecret is `let`, so create a new instance
+        let updatedGroup = ChatGroup(
+            id: group.id,
+            name: group.name,
+            groupSecret: envelope.groupSecret,
+            createdAt: group.createdAt,
+            relayHints: group.relayHints,
+            members: updatedMembers,
+            epoch: envelope.epoch,
+            salt: envelope.salt,
+            commitment: envelope.commitment ?? group.commitment,
+            tier: group.tier,
+            isPublishedOnChain: group.isPublishedOnChain,
+            lastEventTimestamp: group.lastEventTimestamp
+        )
+        group = updatedGroup
 
         // Update transport bundles from envelope
         for bundle in envelope.memberBundles {

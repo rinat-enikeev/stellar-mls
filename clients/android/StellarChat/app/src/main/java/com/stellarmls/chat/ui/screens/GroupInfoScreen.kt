@@ -2,6 +2,7 @@ package com.stellarmls.chat.ui.screens
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,6 +19,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PersonRemove
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -51,6 +53,7 @@ fun GroupInfoScreen(
     var memberToRemove by remember { mutableStateOf<SEPGroupMemberLeaf?>(null) }
     var removalStatus by remember { mutableStateOf<String?>(null) }
     var removalStatusIsError by remember { mutableStateOf(false) }
+    var isRemovingMember by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var newGroupName by remember { mutableStateOf(group.name) }
 
@@ -133,11 +136,15 @@ fun GroupInfoScreen(
                                 }
                             }
                             if (!isMe) {
-                                IconButton(onClick = { memberToRemove = member }) {
+                                IconButton(
+                                    onClick = { memberToRemove = member },
+                                    enabled = !isRemovingMember
+                                ) {
                                     Icon(
                                         Icons.Filled.PersonRemove,
                                         contentDescription = "Remove",
-                                        tint = MaterialTheme.colorScheme.error
+                                        tint = if (isRemovingMember) MaterialTheme.colorScheme.onSurfaceVariant
+                                            else MaterialTheme.colorScheme.error
                                     )
                                 }
                             }
@@ -171,6 +178,23 @@ fun GroupInfoScreen(
                 }
             }
 
+            if (isRemovingMember) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    Spacer(modifier = Modifier.size(8.dp))
+                    Text(
+                        "Removing member and updating on-chain state...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
             removalStatus?.let { status ->
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
@@ -193,7 +217,10 @@ fun GroupInfoScreen(
             text = { Text("The member will be removed and the group key will be rotated. They will not be able to decrypt future messages.") },
             confirmButton = {
                 TextButton(onClick = {
+                    isRemovingMember = true
+                    removalStatus = null
                     onRemoveMember(member.publicKeyCompressed) { result ->
+                        isRemovingMember = false
                         if (result.isSuccess) {
                             removalStatus = "Member removed. Key rotated."
                             removalStatusIsError = false

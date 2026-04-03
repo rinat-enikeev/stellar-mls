@@ -4,7 +4,6 @@ struct GroupListView: View {
     @Environment(AppState.self) private var appState
     @State private var showCreateGroup = false
     @State private var showJoinGroup = false
-    @State private var showSettings = false
     @State private var showInvitations = false
     @State private var inviteMemberGroup: ChatGroup?
     @State private var verificationResult: OnChainVerificationResult?
@@ -15,7 +14,7 @@ struct GroupListView: View {
         List {
             if appState.groups.isEmpty {
                 ContentUnavailableView(
-                    "No Groups",
+                    "No Chats",
                     systemImage: "bubble.left.and.bubble.right",
                     description: Text("Create a group or join one with an invite code.")
                 )
@@ -55,7 +54,7 @@ struct GroupListView: View {
                 }
             }
         }
-        .navigationTitle("Stellar Chat")
+        .navigationTitle("Chats")
         .toolbarTitleMenu {
             if !appState.isRelayConnected {
                 Label("Disconnected", systemImage: "bolt.slash.fill")
@@ -84,35 +83,29 @@ struct GroupListView: View {
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    Button("Create Group", systemImage: "plus.circle") {
-                        showCreateGroup = true
-                    }
-                    Button("Join Group", systemImage: "person.badge.plus") {
-                        showJoinGroup = true
-                    }
-                    Divider()
+                HStack(spacing: 4) {
                     Button {
                         showInvitations = true
                     } label: {
-                        Label(
-                            "Invitations\(appState.pendingInvitations.isEmpty ? "" : " (\(appState.pendingInvitations.count))")",
-                            systemImage: "envelope"
-                        )
-                    }
-                    Divider()
-                    Button("Settings", systemImage: "gear") {
-                        showSettings = true
-                    }
-                } label: {
-                    ZStack(alignment: .topTrailing) {
-                        Image(systemName: "plus")
-                        if !appState.pendingInvitations.isEmpty {
-                            Circle()
-                                .fill(.red)
-                                .frame(width: 8, height: 8)
-                                .offset(x: 4, y: -4)
+                        ZStack(alignment: .topTrailing) {
+                            Image(systemName: "envelope")
+                            if !appState.pendingInvitations.isEmpty {
+                                Circle()
+                                    .fill(.red)
+                                    .frame(width: 8, height: 8)
+                                    .offset(x: 4, y: -4)
+                            }
                         }
+                    }
+                    Menu {
+                        Button("Create Group", systemImage: "plus.circle") {
+                            showCreateGroup = true
+                        }
+                        Button("Join Group", systemImage: "person.badge.plus") {
+                            showJoinGroup = true
+                        }
+                    } label: {
+                        Image(systemName: "plus")
                     }
                 }
             }
@@ -122,9 +115,6 @@ struct GroupListView: View {
         }
         .sheet(isPresented: $showJoinGroup) {
             JoinGroupView()
-        }
-        .sheet(isPresented: $showSettings) {
-            SettingsView()
         }
         .sheet(isPresented: $showInvitations) {
             PendingInvitationsView()
@@ -235,7 +225,7 @@ struct GroupRow: View {
 /// and ChatView — forcing ForEach to rebuild every visible message cell from
 /// scratch instead of diffing, and triggering observation cascades from the
 /// init side-effects (`activeGroupID`, `unreadCounts`).
-private struct ChatViewContainer: View {
+struct ChatViewContainer: View {
     let groupID: String
     @Environment(AppState.self) private var appState
     @State private var viewModel: ChatViewModel?

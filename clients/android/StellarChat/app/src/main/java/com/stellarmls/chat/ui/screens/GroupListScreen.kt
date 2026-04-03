@@ -23,7 +23,6 @@ import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -78,7 +77,6 @@ fun GroupListScreen(
     onInviteMember: (ChatGroup) -> Unit = {},
     onCreateGroup: () -> Unit,
     onJoinGroup: () -> Unit,
-    onSettings: () -> Unit,
     onInvitations: () -> Unit = {},
     onDeleteGroup: (String) -> Unit,
     onRefresh: () -> Unit = {}
@@ -95,7 +93,7 @@ fun GroupListScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Stellar Chat") },
+                title = { Text("Chats") },
                 actions = {
                     IconButton(onClick = onInvitations) {
                         BadgedBox(
@@ -107,9 +105,6 @@ fun GroupListScreen(
                         ) {
                             Icon(Icons.Default.Email, contentDescription = "Invitations")
                         }
-                    }
-                    IconButton(onClick = onSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
                 }
             )
@@ -163,7 +158,7 @@ fun GroupListScreen(
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
-                                "No groups yet",
+                                "No chats yet",
                                 style = MaterialTheme.typography.titleLarge,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

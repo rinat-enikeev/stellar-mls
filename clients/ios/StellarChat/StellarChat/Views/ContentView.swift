@@ -7,8 +7,30 @@ struct ContentView: View {
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
 
     var body: some View {
-        NavigationStack {
-            GroupListView()
+        TabView {
+            Tab("Contacts", systemImage: "person.2") {
+                NavigationStack {
+                    ContactsView()
+                }
+            }
+
+            Tab("Chats", systemImage: "bubble.left.and.bubble.right") {
+                NavigationStack {
+                    GroupListView()
+                }
+            }
+
+            Tab("Search", systemImage: "magnifyingglass", role: .search) {
+                NavigationStack {
+                    SearchView()
+                }
+            }
+
+            Tab("Settings", systemImage: "gearshape") {
+                NavigationStack {
+                    SettingsView()
+                }
+            }
         }
         .onChange(of: appState.deepLinkInviteCode) { _, newValue in
             if newValue != nil {

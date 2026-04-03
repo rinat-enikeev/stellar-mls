@@ -10,6 +10,8 @@
 		0029F253BA68E6B4CA11E864 /* BootstrapPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA96977038D2F9F4EC31EF3D /* BootstrapPayload.swift */; };
 		01083F180D3E8311A7E002C6 /* CreateGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF781055530F3AF0953DE842 /* CreateGroupView.swift */; };
 		09EC25786F839A9A840E509A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E292A37C859D6BE12BE2376 /* ContentView.swift */; };
+		A1B2C3D4E5F60718A9B0C1D2 /* ContactsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718A9B0C1D3 /* ContactsView.swift */; };
+		B2C3D4E5F60718A9B0C1D2E3 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718A9B0C1D2E4 /* SearchView.swift */; };
 		16ADABAE1C78B394179DD74B /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76C1E6E24CEC0349F3C9A60A /* ChatViewModel.swift */; };
 		1AA0059A3C3D6B195FB5615C /* SecurityLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C987955167382BF0E0E251C /* SecurityLog.swift */; };
 		1F2DC6C7FF3C465CBD31ABA9 /* PendingInvitationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6867C765FBB9480D9E0D9FC /* PendingInvitationsView.swift */; };
@@ -69,6 +71,8 @@
 		4FCDBA22391412C6D05BB99E /* BlossomClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlossomClient.swift; sourceTree = "<group>"; };
 		62FB83C87F9348F97EEDE0C8 /* StellarChatApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StellarChatApp.swift; sourceTree = "<group>"; };
 		68F22F3B02C2C003269BA135 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718A9B0C1D3 /* ContactsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactsView.swift; sourceTree = "<group>"; };
+		B2C3D4E5F60718A9B0C1D2E4 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 		6E292A37C859D6BE12BE2376 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		703A9C8CDE76DF5C28608301 /* NostrEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrEvent.swift; sourceTree = "<group>"; };
 		70C111DF10AF94B4F95C4742 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
@@ -120,6 +124,7 @@
 			isa = PBXGroup;
 			children = (
 				70C111DF10AF94B4F95C4742 /* ChatView.swift */,
+				A1B2C3D4E5F60718A9B0C1D3 /* ContactsView.swift */,
 				6E292A37C859D6BE12BE2376 /* ContentView.swift */,
 				BF781055530F3AF0953DE842 /* CreateGroupView.swift */,
 				7446E889E7A95E042201A70D /* GroupInfoView.swift */,
@@ -129,6 +134,7 @@
 				C6867C765FBB9480D9E0D9FC /* PendingInvitationsView.swift */,
 				F0C2E0A174CC0B050D6BADB3 /* QRCodeView.swift */,
 				68F22F3B02C2C003269BA135 /* QRScannerView.swift */,
+				B2C3D4E5F60718A9B0C1D2E4 /* SearchView.swift */,
 				A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */,
 				F1F7647C522D0F7D1F86CE17 /* VerificationBadgeView.swift */,
 			);
@@ -337,7 +343,9 @@
 				4E0468C0A25E658173F4E628 /* ChatGroup.swift in Sources */,
 				E54951E56532C7FBD90317DE /* ChatView.swift in Sources */,
 				16ADABAE1C78B394179DD74B /* ChatViewModel.swift in Sources */,
+				A1B2C3D4E5F60718A9B0C1D2 /* ContactsView.swift in Sources */,
 				09EC25786F839A9A840E509A /* ContentView.swift in Sources */,
+				B2C3D4E5F60718A9B0C1D2E3 /* SearchView.swift in Sources */,
 				01083F180D3E8311A7E002C6 /* CreateGroupView.swift in Sources */,
 				B5836D3E7760359CFB8C42AC /* GroupCrypto.swift in Sources */,
 				833FF1A77449454BF4ADC801 /* GroupInfoView.swift in Sources */,
@@ -456,7 +464,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -580,7 +588,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";

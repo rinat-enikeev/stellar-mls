@@ -53,7 +53,7 @@ import com.stellarmls.mls.SEPTier
 @Composable
 fun SettingsScreen(
     viewModel: GroupListViewModel,
-    onBack: () -> Unit
+    onBack: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val km = viewModel.keyManager
@@ -71,8 +71,10 @@ fun SettingsScreen(
             TopAppBar(
                 title = { Text("Settings") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    if (onBack != null) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
                     }
                 }
             )
@@ -85,6 +87,32 @@ fun SettingsScreen(
                 .padding(16.dp)
                 .verticalScroll(rememberScrollState())
         ) {
+            // Nostr Identity QR
+            SettingsCard("Your Nostr ID") {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    QRCodeImage(text = km.publicKeyHex, size = 180.dp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        km.publicKeyHex,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    CopyableField("Nostr Public Key", km.publicKeyHex, context)
+                }
+                Text(
+                    "Share this QR code so others can find you.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             // Relay Management
             SettingsCard("Relays") {
                 viewModel.relayURLs.forEachIndexed { index, url ->

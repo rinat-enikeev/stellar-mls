@@ -80,8 +80,9 @@ struct ChatMessage: Identifiable, Codable {
     let isMine: Bool
     var status: MessageStatus
     let mediaAttachment: MediaAttachment?
+    var isSystemMessage: Bool
 
-    init(id: String, groupID: String, senderPubkey: String, text: String, timestamp: Date, isMine: Bool, status: MessageStatus = .sent, mediaAttachment: MediaAttachment? = nil) {
+    init(id: String, groupID: String, senderPubkey: String, text: String, timestamp: Date, isMine: Bool, status: MessageStatus = .sent, mediaAttachment: MediaAttachment? = nil, isSystemMessage: Bool = false) {
         self.id = id
         self.groupID = groupID
         self.senderPubkey = senderPubkey
@@ -90,6 +91,7 @@ struct ChatMessage: Identifiable, Codable {
         self.isMine = isMine
         self.status = status
         self.mediaAttachment = mediaAttachment
+        self.isSystemMessage = isSystemMessage
     }
 }
 

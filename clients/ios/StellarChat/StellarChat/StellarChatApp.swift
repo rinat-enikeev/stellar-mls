@@ -704,12 +704,54 @@ final class AppState {
 
         // Resubscribe with new encryption key
         subscribeGroup(candidate)
+
+        // Insert system message for the transition
+        switch kind {
+        case .memberAdd(let member):
+            let name = memberDisplayName(blsPubkey: member.publicKeyCompressed)
+            insertSystemMessage(groupID: groupID, text: "\(name) joined the group", event: "member-add", epoch: candidate.epoch)
+        case .memberRemove(let blsPubkey):
+            let name = memberDisplayName(blsPubkey: blsPubkey)
+            insertSystemMessage(groupID: groupID, text: "\(name) was removed from the group", event: "member-remove", epoch: candidate.epoch)
+        case .keyRotation:
+            insertSystemMessage(groupID: groupID, text: "Encryption key was rotated", event: "key-rotation", epoch: candidate.epoch)
+        }
+
         return .success
     }
 
     /// Check if a group has a pending epoch transition (for UI locking).
     func pendingTransitionState(for groupID: String) -> PendingTransitionState {
         pendingTransitions[groupID] ?? .idle
+    }
+
+    // MARK: - System Messages
+
+    /// Display name for a BLS member key: "You" for self, alias if set, or truncated hex.
+    private func memberDisplayName(blsPubkey: Data) -> String {
+        if let myLeaf = try? keyManager.memberLeaf,
+           myLeaf.publicKeyCompressed == blsPubkey {
+            return "You"
+        }
+        let hex = blsPubkey.map { String(format: "%02x", $0) }.joined()
+        return contactAliasStore?.displayName(for: hex) ?? (String(hex.prefix(8)) + "...")
+    }
+
+    /// Insert a system message into chatMessages (and persist). Uses deterministic IDs for dedup.
+    private func insertSystemMessage(groupID: String, text: String, event: String, epoch: UInt64) {
+        let id = "sys-\(event)-\(String(groupID.prefix(8)))-\(epoch)"
+        guard !(chatMessages[groupID]?.contains(where: { $0.id == id }) ?? false) else { return }
+        let msg = ChatMessage(
+            id: id,
+            groupID: groupID,
+            senderPubkey: "",
+            text: text,
+            timestamp: Date(),
+            isMine: false,
+            isSystemMessage: true
+        )
+        chatMessages[groupID, default: []].append(msg)
+        store.saveMessageAsync(msg)
     }
 
     // MARK: - Salt Distribution
@@ -935,6 +977,19 @@ final class AppState {
             store.saveGroup(group)
             storeSalt(groupID: groupID, epoch: update.epoch, salt: update.salt)
             subscribeGroup(group)
+
+            // System messages for peer state updates
+            for added in update.addedMembers {
+                let name = memberDisplayName(blsPubkey: added.publicKeyCompressed)
+                insertSystemMessage(groupID: groupID, text: "\(name) joined the group", event: "member-add", epoch: update.epoch)
+            }
+            for removed in update.removedMemberKeys {
+                let name = memberDisplayName(blsPubkey: removed)
+                insertSystemMessage(groupID: groupID, text: "\(name) was removed from the group", event: "member-remove", epoch: update.epoch)
+            }
+            if update.addedMembers.isEmpty && update.removedMemberKeys.isEmpty {
+                insertSystemMessage(groupID: groupID, text: "Encryption key was rotated", event: "key-rotation", epoch: update.epoch)
+            }
         }
     }
 
@@ -1021,6 +1076,7 @@ final class AppState {
         )
         groups[index] = updated
         store.saveGroup(updated)
+        insertSystemMessage(groupID: groupID, text: "Group renamed to \"\(renamed.name)\"", event: "renamed", epoch: updated.epoch)
     }
 
     /// Rename a group and broadcast the change to all members.

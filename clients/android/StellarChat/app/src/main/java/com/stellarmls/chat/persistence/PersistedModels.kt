@@ -49,7 +49,9 @@ data class PersistedMessage(
     val encryptedText: ByteArray,
     val timestamp: Long,              // cleartext (needed for sorting)
     val isMine: Boolean,              // cleartext
-    val encryptedMediaAttachment: ByteArray? = null
+    val encryptedMediaAttachment: ByteArray? = null,
+    @androidx.room.ColumnInfo(defaultValue = "0")
+    val isSystemMessage: Boolean = false
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

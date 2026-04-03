@@ -85,7 +85,8 @@ data class ChatMessage(
     val timestamp: Date,
     val isMine: Boolean,
     val status: MessageStatus = MessageStatus.SENT,
-    val mediaAttachment: MediaAttachment? = null
+    val mediaAttachment: MediaAttachment? = null,
+    val isSystemMessage: Boolean = false
 )
 
 /** Encrypted media attachment metadata, embedded inside E2EE message envelopes. */

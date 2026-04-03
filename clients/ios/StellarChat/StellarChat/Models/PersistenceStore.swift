@@ -282,7 +282,8 @@ final class PersistenceStore {
             encryptedText: encText,
             timestamp: message.timestamp,
             isMine: message.isMine,
-            encryptedMediaAttachment: encMedia
+            encryptedMediaAttachment: encMedia,
+            isSystemMessage: message.isSystemMessage
         )
     }
 
@@ -303,7 +304,8 @@ final class PersistenceStore {
             text: text,
             timestamp: persisted.timestamp,
             isMine: persisted.isMine,
-            mediaAttachment: media
+            mediaAttachment: media,
+            isSystemMessage: persisted.isSystemMessage ?? false
         )
     }
 }

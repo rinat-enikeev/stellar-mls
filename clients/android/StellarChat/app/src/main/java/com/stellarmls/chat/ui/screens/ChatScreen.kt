@@ -252,12 +252,16 @@ fun ChatScreen(
                                 UnreadSeparator()
                             }
 
-                            val isGrouped = isGroupedWithPrevious(viewModel.messages, index)
-                            val senderAlias = contactAliasStore?.displayName(message.senderPubkey)
-                            Box(modifier = Modifier.animateItem()) {
-                                MessageBubble(message, isGrouped, senderAlias = senderAlias, onRetry = {
-                                    viewModel.retryMessage(message.id)
-                                })
+                            if (message.isSystemMessage) {
+                                SystemMessage(message.text)
+                            } else {
+                                val isGrouped = isGroupedWithPrevious(viewModel.messages, index)
+                                val senderAlias = contactAliasStore?.displayName(message.senderPubkey)
+                                Box(modifier = Modifier.animateItem()) {
+                                    MessageBubble(message, isGrouped, senderAlias = senderAlias, onRetry = {
+                                        viewModel.retryMessage(message.id)
+                                    })
+                                }
                             }
                         }
                     }
@@ -496,6 +500,22 @@ fun UnreadSeparator() {
             modifier = Modifier.padding(horizontal = 8.dp)
         )
         HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
+    }
+}
+
+@Composable
+fun SystemMessage(text: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp, horizontal = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+        )
     }
 }
 

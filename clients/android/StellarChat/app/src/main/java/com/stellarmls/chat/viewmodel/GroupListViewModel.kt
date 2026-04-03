@@ -812,12 +812,54 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             try { store.saveGroup(candidate) } catch (_: Exception) { }
         }
 
+        // Insert system message for the transition
+        when (kind) {
+            is EpochTransitionKind.MemberAdd -> {
+                val name = memberDisplayName(kind.member.publicKeyCompressed)
+                insertSystemMessage(groupID, "$name joined the group", "member-add", candidate.epoch)
+            }
+            is EpochTransitionKind.MemberRemove -> {
+                val name = memberDisplayName(kind.blsPubkey)
+                insertSystemMessage(groupID, "$name was removed from the group", "member-remove", candidate.epoch)
+            }
+            is EpochTransitionKind.KeyRotation -> {
+                insertSystemMessage(groupID, "Encryption key was rotated", "key-rotation", candidate.epoch)
+            }
+        }
+
         return EpochTransitionResult.SUCCESS
     }
 
     /** Check if a group has a pending epoch transition (for UI locking). */
     fun pendingTransitionState(groupID: String): PendingTransitionState {
         return pendingTransitions[groupID] ?: PendingTransitionState.Idle
+    }
+
+    // -- System Messages --
+
+    /** Display name for a BLS member key: "You" for self, alias if set, or truncated hex. */
+    private fun memberDisplayName(blsPubkey: ByteArray): String {
+        val myLeaf = keyManager.memberLeaf()
+        if (myLeaf.publicKeyCompressed.contentEquals(blsPubkey)) return "You"
+        val hex = blsPubkey.toHex()
+        return contactAliasStore.displayName(hex) ?: (hex.take(8) + "...")
+    }
+
+    /** Insert a system message into chatMessages (and persist). Uses deterministic IDs for dedup. */
+    private fun insertSystemMessage(groupID: String, text: String, event: String, epoch: Long) {
+        val id = "sys-$event-${groupID.take(8)}-$epoch"
+        if (chatMessages[groupID]?.any { it.id == id } == true) return
+        val msg = ChatMessage(
+            id = id,
+            groupID = groupID,
+            senderPubkey = "",
+            text = text,
+            timestamp = java.util.Date(),
+            isMine = false,
+            isSystemMessage = true
+        )
+        chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
+        viewModelScope.launch { try { store.saveMessage(msg) } catch (_: Exception) { } }
     }
 
     /**
@@ -957,6 +999,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                         storeSalt(groupID, update.epoch, update.salt)
                         syncTransportAndSubscribe(g)
                         try { store.saveGroup(g) } catch (_: Exception) { }
+
+                        insertSystemMessagesForStateUpdate(update, groupID)
                     }
                     return // Handled async
                 }
@@ -975,6 +1019,23 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             viewModelScope.launch {
                 try { store.saveGroup(group) } catch (_: Exception) { }
             }
+
+            insertSystemMessagesForStateUpdate(update, groupID)
+        }
+    }
+
+    /** Insert system messages for each member change in a state update. */
+    private fun insertSystemMessagesForStateUpdate(update: SEPGroupStateUpdate, groupID: String) {
+        for (added in update.addedMembers) {
+            val name = memberDisplayName(added.publicKeyCompressed)
+            insertSystemMessage(groupID, "$name joined the group", "member-add", update.epoch)
+        }
+        for (removed in update.removedMemberKeys) {
+            val name = memberDisplayName(removed)
+            insertSystemMessage(groupID, "$name was removed from the group", "member-remove", update.epoch)
+        }
+        if (update.addedMembers.isEmpty() && update.removedMemberKeys.isEmpty()) {
+            insertSystemMessage(groupID, "Encryption key was rotated", "key-rotation", update.epoch)
         }
     }
 
@@ -1146,6 +1207,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             try { store.saveGroup(updated) } catch (_: Exception) { }
         }
+        insertSystemMessage(groupID, "Group renamed to \"$newName\"", "renamed", updated.epoch)
     }
 
     /** Rename a group and broadcast the change to all members. */

@@ -48,13 +48,18 @@ struct ChatView: View {
                                         UnreadSeparator()
                                     }
 
-                                    let isGrouped = isGroupedWithPrevious(at: index)
-                                    let senderAlias = appState.contactAliasStore.displayName(for: message.senderPubkey)
-                                    MessageBubble(message: message, isGrouped: isGrouped, senderAlias: senderAlias, onRetry: {
-                                        viewModel.retryMessage(id: message.id)
-                                    })
-                                    .id(message.id)
-                                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                                    if message.isSystemMessage {
+                                        SystemMessageView(text: message.text)
+                                            .id(message.id)
+                                    } else {
+                                        let isGrouped = isGroupedWithPrevious(at: index)
+                                        let senderAlias = appState.contactAliasStore.displayName(for: message.senderPubkey)
+                                        MessageBubble(message: message, isGrouped: isGrouped, senderAlias: senderAlias, onRetry: {
+                                            viewModel.retryMessage(id: message.id)
+                                        })
+                                        .id(message.id)
+                                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                                    }
                                 }
 
                                 // Invisible anchor — its onAppear/onDisappear tells us
@@ -380,6 +385,19 @@ struct UnreadSeparator: View {
 }
 
 // MARK: - Date Separator
+
+struct SystemMessageView: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.vertical, 4)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity)
+    }
+}
 
 struct DateSeparator: View {
     let date: Date

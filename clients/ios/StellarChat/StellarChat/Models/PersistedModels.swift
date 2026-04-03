@@ -72,6 +72,7 @@ final class PersistedMessage {
     var timestamp: Date
     var isMine: Bool
     var encryptedMediaAttachment: Data?
+    var isSystemMessage: Bool?
 
     init(
         id: String,
@@ -80,7 +81,8 @@ final class PersistedMessage {
         encryptedText: Data,
         timestamp: Date,
         isMine: Bool,
-        encryptedMediaAttachment: Data? = nil
+        encryptedMediaAttachment: Data? = nil,
+        isSystemMessage: Bool = false
     ) {
         self.id = id
         self.groupID = groupID
@@ -89,5 +91,6 @@ final class PersistedMessage {
         self.timestamp = timestamp
         self.isMine = isMine
         self.encryptedMediaAttachment = encryptedMediaAttachment
+        self.isSystemMessage = isSystemMessage
     }
 }

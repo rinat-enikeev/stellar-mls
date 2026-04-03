@@ -98,7 +98,8 @@ class PersistenceStore(context: Context) {
             encryptedText = StorageEncryption.encrypt(message.text),
             timestamp = message.timestamp.time,
             isMine = message.isMine,
-            encryptedMediaAttachment = encMedia
+            encryptedMediaAttachment = encMedia,
+            isSystemMessage = message.isSystemMessage
         )
     }
 
@@ -116,7 +117,8 @@ class PersistenceStore(context: Context) {
             text = StorageEncryption.decryptString(persisted.encryptedText),
             timestamp = Date(persisted.timestamp),
             isMine = persisted.isMine,
-            mediaAttachment = media
+            mediaAttachment = media,
+            isSystemMessage = persisted.isSystemMessage
         )
     }
 

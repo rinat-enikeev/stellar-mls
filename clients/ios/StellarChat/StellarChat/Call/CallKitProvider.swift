@@ -74,6 +74,15 @@ final class CallKitProvider: NSObject {
         }
     }
 
+    /// Request to answer the current incoming call through CallKit.
+    func requestAnswerCall() {
+        guard let uuid = currentUUID else { return }
+        let action = CXAnswerCallAction(call: uuid)
+        callController.request(CXTransaction(action: action)) { error in
+            if let error { print("CallKit answerCall error: \(error)") }
+        }
+    }
+
     /// Request to end the current call through CallKit.
     func requestEndCall() {
         guard let uuid = currentUUID else { return }

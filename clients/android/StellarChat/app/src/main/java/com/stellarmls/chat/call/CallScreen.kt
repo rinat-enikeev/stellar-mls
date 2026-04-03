@@ -246,8 +246,8 @@ fun WebRTCVideoView(
     DisposableEffect(track) {
         track.addSink(renderer)
         onDispose {
-            track.removeSink(renderer)
-            renderer.release()
+            try { track.removeSink(renderer) } catch (_: Exception) {}
+            try { renderer.release() } catch (_: Exception) {}
         }
     }
 

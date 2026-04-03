@@ -29,6 +29,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -41,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.stellarmls.chat.crypto.KeyAttestation
 import com.stellarmls.chat.crypto.KeyManager
@@ -284,6 +286,90 @@ fun SettingsScreen(
                     "New groups will use this tier. Larger tiers support more members but use bigger ZK circuits.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // TURN Servers
+            SettingsCard("TURN Servers") {
+                var newTurnUrl by remember { mutableStateOf("") }
+                var turnUsernameInput by remember { mutableStateOf(viewModel.turnUsername) }
+                var turnPasswordInput by remember { mutableStateOf(viewModel.turnPassword) }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Enable custom TURN", modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = viewModel.turnEnabled,
+                        onCheckedChange = { viewModel.updateTurnEnabled(it) }
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+
+                viewModel.turnURLs.forEachIndexed { index, url ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(url, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                        IconButton(onClick = { viewModel.removeTurnURL(index) }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Remove", tint = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = newTurnUrl,
+                        onValueChange = { newTurnUrl = it },
+                        label = { Text("turn:host:443?transport=tcp") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            if (viewModel.addTurnURL(newTurnUrl)) {
+                                newTurnUrl = ""
+                            }
+                        },
+                        enabled = newTurnUrl.isNotBlank()
+                    ) {
+                        Text("Add")
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = turnUsernameInput,
+                    onValueChange = { turnUsernameInput = it },
+                    label = { Text("Username") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = turnPasswordInput,
+                    onValueChange = { turnPasswordInput = it },
+                    label = { Text("Password") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = { viewModel.saveTurnCredentials(turnUsernameInput, turnPasswordInput) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Save Credentials")
+                }
+                Text(
+                    "Optional custom TURN servers for restrictive networks. Built-in EU TURN servers are always included. Use turn: or turns: URL schemes.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
                 )
             }
 

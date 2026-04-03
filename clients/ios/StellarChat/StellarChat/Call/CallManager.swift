@@ -14,6 +14,26 @@ enum CallDirection {
     case incoming
 }
 
+enum CallEndReason: String {
+    case none
+    case hangup
+    case rejected
+    case busy
+    case timeout
+    case iceFailed
+    case answeredElsewhere
+}
+
+enum ICEStatus: String {
+    case new
+    case checking
+    case connected
+    case completed
+    case failed
+    case disconnected
+    case closed
+}
+
 @MainActor @Observable
 final class CallManager: NSObject {
     var state: CallState = .idle
@@ -26,6 +46,8 @@ final class CallManager: NSObject {
     var isUsingFrontCamera = true
     var isVideoCall = false
     var callDuration: TimeInterval = 0
+    var iceStatus: ICEStatus = .new
+    var callEndReason: CallEndReason = .none
     /// Tracks whether the first answer has been received (first-answer-wins).
     private var answerReceived = false
 
@@ -41,25 +63,45 @@ final class CallManager: NSObject {
     var callKit: CallKitProvider?
 
     private var peerConnection: RTCPeerConnection?
+    private var peerConnectionDelegate: CallPeerConnectionDelegate?
     private var localAudioTrack: RTCAudioTrack?
     private var capturer: RTCCameraVideoCapturer?
     private var factory: RTCPeerConnectionFactory?
     private var durationTimer: Timer?
     private var ringTimer: Timer?
+    /// ICE candidates received before remote description is set.
+    private var pendingCandidates: [RTCIceCandidate] = []
 
-    private static let iceServers = [
-        RTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"]),
-        RTCIceServer(urlStrings: ["stun:stun1.l.google.com:19302"]),
-        // EU TURN (Metered) — TCP on 443 for firewall compatibility
-        RTCIceServer(
+    /// Custom TURN server configuration. Set from AppState before calls.
+    var turnURLs: [String] = []
+    var turnUsername: String = ""
+    var turnPassword: String = ""
+    var turnEnabled: Bool = false
+
+    private var iceServers: [RTCIceServer] {
+        var servers: [RTCIceServer] = [
+            RTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"]),
+            RTCIceServer(urlStrings: ["stun:stun1.l.google.com:19302"]),
+        ]
+        // Built-in EU TURN (Metered) — TCP on 443 for firewall compatibility
+        servers.append(RTCIceServer(
             urlStrings: [
                 "turn:eu-turn.metered.ca:443?transport=tcp",
                 "turns:eu-turn.metered.ca:443?transport=tcp",
             ],
             username: "stellarchat",
             credential: "stellarchat-turn-2026"
-        ),
-    ]
+        ))
+        // User-configured TURN servers
+        if turnEnabled, !turnURLs.isEmpty, !turnUsername.isEmpty {
+            servers.append(RTCIceServer(
+                urlStrings: turnURLs,
+                username: turnUsername,
+                credential: turnPassword
+            ))
+        }
+        return servers
+    }
 
     // MARK: - Start Call (Outgoing)
 
@@ -69,6 +111,8 @@ final class CallManager: NSObject {
         direction = .outgoing
         isVideoCall = video
         isVideoEnabled = video
+        callEndReason = .none
+        iceStatus = .new
         state = .ringing
 
         setupPeerConnection()
@@ -115,24 +159,24 @@ final class CallManager: NSObject {
             if let sdp = callDict["sdp"] as? String {
                 let remoteDesc = RTCSessionDescription(type: .offer, sdp: sdp)
                 try? await peerConnection?.setRemoteDescription(remoteDesc)
+                drainPendingCandidates()
             }
             try? await callKit?.reportIncomingCall(callerName: "Incoming Call", hasVideo: isVideoCall)
             startRingTimer()
 
         case "answer":
             guard incomingCallId == callId, direction == .outgoing else { return }
-            // First-answer-wins: dismiss late answerers
-            if answerReceived {
-                let hangup: [String: Any] = ["action": "hangup", "callId": callId, "reason": "answered"]
-                try? await sendSignal?(hangup)
-                return
-            }
+            // First-answer-wins: ignore duplicate/late answers.
+            // Duplicates arrive from multiple relays for the same answer.
+            // Late answerers will time out via the ring timer on their end.
+            guard !answerReceived else { return }
             guard state == .ringing else { return }
             answerReceived = true
             ringTimer?.invalidate()
             if let sdp = callDict["sdp"] as? String {
                 let remoteDesc = RTCSessionDescription(type: .answer, sdp: sdp)
                 try? await peerConnection?.setRemoteDescription(remoteDesc)
+                drainPendingCandidates()
             }
             state = .active
             startDurationTimer()
@@ -149,20 +193,27 @@ final class CallManager: NSObject {
                     sdpMLineIndex: Int32(sdpMLineIndex),
                     sdpMid: sdpMid
                 )
-                try? await peerConnection?.add(candidate)
+                if peerConnection?.remoteDescription != nil {
+                    try? await peerConnection?.add(candidate)
+                } else {
+                    pendingCandidates.append(candidate)
+                }
             }
 
         case "hangup":
             guard incomingCallId == callId else { return }
+            let reason = callDict["reason"] as? String
+            // "answered" hangups are meant for late answerers still ringing,
+            // not for connected parties. Ignore if already active.
+            if reason == "answered", state == .active { return }
+            callEndReason = reason == "answered" ? .answeredElsewhere : .hangup
             endCall(sendHangup: false)
 
-        case "busy":
-            guard incomingCallId == callId, state == .ringing, direction == .outgoing else { return }
-            endCall(sendHangup: false)
-
-        case "reject":
-            guard incomingCallId == callId, state == .ringing, direction == .outgoing else { return }
-            endCall(sendHangup: false)
+        case "busy", "reject":
+            // In a multi-member group, individual busy/reject responses should
+            // not kill the entire call — other members may still answer.
+            // The ring timer (30s) handles the case where nobody answers.
+            break
 
         default:
             break
@@ -193,10 +244,12 @@ final class CallManager: NSObject {
         guard state == .ringing, direction == .incoming else { return }
         let signal: [String: Any] = ["action": "reject", "callId": callId]
         Task { try? await sendSignal?(signal) }
+        callEndReason = .rejected
         endCall(sendHangup: false)
     }
 
     func hangup() {
+        callEndReason = .hangup
         endCall(sendHangup: true)
     }
 
@@ -213,6 +266,7 @@ final class CallManager: NSObject {
         capturer = nil
         peerConnection?.close()
         peerConnection = nil
+        peerConnectionDelegate = nil
         localAudioTrack = nil
         localVideoTrack = nil
         remoteVideoTrack = nil
@@ -222,6 +276,11 @@ final class CallManager: NSObject {
         isVideoCall = false
         isVideoEnabled = false
         answerReceived = false
+        pendingCandidates.removeAll()
+
+        #if DEBUG
+        print("[CallManager] Call ended: reason=\(callEndReason.rawValue)")
+        #endif
 
         callKit?.reportCallEnded(reason: sendHangup ? .remoteEnded : .remoteEnded)
 
@@ -233,6 +292,8 @@ final class CallManager: NSObject {
             if self.state == .ended {
                 self.state = .idle
                 self.remoteBlsPubkey = nil
+                self.iceStatus = .new
+                self.callEndReason = .none
             }
         }
     }
@@ -266,6 +327,17 @@ final class CallManager: NSObject {
 
     // MARK: - Private
 
+    private func drainPendingCandidates() {
+        guard !pendingCandidates.isEmpty else { return }
+        let candidates = pendingCandidates
+        pendingCandidates.removeAll()
+        Task {
+            for candidate in candidates {
+                try? await peerConnection?.add(candidate)
+            }
+        }
+    }
+
     private func setupPeerConnection() {
         let encoderFactory = RTCDefaultVideoEncoderFactory()
         let decoderFactory = RTCDefaultVideoDecoderFactory()
@@ -276,7 +348,12 @@ final class CallManager: NSObject {
         self.factory = factory
 
         let config = RTCConfiguration()
-        config.iceServers = Self.iceServers
+        let servers = iceServers
+        config.iceServers = servers
+        #if DEBUG
+        let urls = servers.flatMap(\.urlStrings)
+        print("[CallManager] ICE servers: \(urls)")
+        #endif
         config.sdpSemantics = .unifiedPlan
         config.bundlePolicy = .maxBundle
         config.rtcpMuxPolicy = .require
@@ -288,8 +365,11 @@ final class CallManager: NSObject {
         let pc = factory.peerConnection(with: config, constraints: constraints, delegate: nil)
         self.peerConnection = pc
 
-        // Set delegate via the wrapper to forward ICE candidates
-        pc?.delegate = CallPeerConnectionDelegate(callManager: self)
+        // Set delegate via the wrapper to forward ICE candidates.
+        // Must store a strong reference — RTCPeerConnection.delegate is weak.
+        let delegate = CallPeerConnectionDelegate(callManager: self)
+        self.peerConnectionDelegate = delegate
+        pc?.delegate = delegate
     }
 
     private func addAudioTrack() {
@@ -420,6 +500,7 @@ final class CallManager: NSObject {
         ringTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.state == .ringing else { return }
+                self.callEndReason = .timeout
                 self.endCall(sendHangup: self.direction == .outgoing)
             }
         }
@@ -463,18 +544,49 @@ private class CallPeerConnectionDelegate: NSObject, RTCPeerConnectionDelegate {
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
+        #if DEBUG
+        let candidateType: String
+        if candidate.sdp.contains("typ relay") {
+            candidateType = "relay"
+        } else if candidate.sdp.contains("typ srflx") {
+            candidateType = "srflx"
+        } else if candidate.sdp.contains("typ host") {
+            candidateType = "host"
+        } else {
+            candidateType = "unknown"
+        }
+        print("[CallManager] ICE candidate: \(candidateType)")
+        #endif
         callManager?.sendICECandidate(candidate)
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
         Task { @MainActor in
             guard let callManager else { return }
+
+            let status: ICEStatus = switch newState {
+            case .new: .new
+            case .checking: .checking
+            case .connected: .connected
+            case .completed: .completed
+            case .failed: .failed
+            case .disconnected: .disconnected
+            case .closed: .closed
+            case .count: .new
+            @unknown default: .new
+            }
+            callManager.iceStatus = status
+            #if DEBUG
+            print("[CallManager] ICE state: \(status.rawValue)")
+            #endif
+
             if newState == .failed || newState == .disconnected {
                 // Give 15 seconds for ICE to recover before ending
                 try? await Task.sleep(for: .seconds(15))
                 if callManager.state == .active {
                     let currentState = peerConnection.iceConnectionState
                     if currentState == .failed || currentState == .disconnected {
+                        callManager.callEndReason = .iceFailed
                         callManager.endCall(sendHangup: true)
                     }
                 }

@@ -15,6 +15,8 @@ import org.webrtc.Camera2Enumerator
 
 enum class CallState { IDLE, RINGING, ACTIVE, ENDED }
 enum class CallDirection { OUTGOING, INCOMING }
+enum class CallEndReason { NONE, HANGUP, REJECTED, BUSY, TIMEOUT, ICE_FAILED, ANSWERED_ELSEWHERE }
+enum class ICEStatus { NEW, CHECKING, CONNECTED, COMPLETED, FAILED, DISCONNECTED, CLOSED }
 
 class CallManager(private val context: Context) {
     var state by mutableStateOf(CallState.IDLE)
@@ -27,6 +29,8 @@ class CallManager(private val context: Context) {
     var isUsingFrontCamera by mutableStateOf(true)
     var isVideoCall by mutableStateOf(false)
     var callDuration by mutableLongStateOf(0L)
+    var iceStatus by mutableStateOf(ICEStatus.NEW)
+    var callEndReason by mutableStateOf(CallEndReason.NONE)
     /** Tracks whether the first answer has been received (first-answer-wins). */
     private var answerReceived = false
 
@@ -46,22 +50,44 @@ class CallManager(private val context: Context) {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var durationJob: Job? = null
     private var ringJob: Job? = null
+    /** ICE candidates received before remote description is set. */
+    private val pendingCandidates = mutableListOf<IceCandidate>()
+
+    /** Custom TURN server configuration. Set from ViewModel before calls. */
+    var turnURLs: List<String> = emptyList()
+    var turnUsername: String = ""
+    var turnPassword: String = ""
+    var turnEnabled: Boolean = false
+
+    private val iceServers: List<PeerConnection.IceServer>
+        get() {
+            val servers = mutableListOf(
+                PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
+                PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer(),
+                // Built-in EU TURN (Metered) — TCP on 443 for firewall compatibility
+                PeerConnection.IceServer.builder("turn:eu-turn.metered.ca:443?transport=tcp")
+                    .setUsername("stellarchat")
+                    .setPassword("stellarchat-turn-2026")
+                    .createIceServer(),
+                PeerConnection.IceServer.builder("turns:eu-turn.metered.ca:443?transport=tcp")
+                    .setUsername("stellarchat")
+                    .setPassword("stellarchat-turn-2026")
+                    .createIceServer(),
+            )
+            // User-configured TURN servers
+            if (turnEnabled && turnURLs.isNotEmpty() && turnUsername.isNotEmpty()) {
+                servers.add(
+                    PeerConnection.IceServer.builder(turnURLs)
+                        .setUsername(turnUsername)
+                        .setPassword(turnPassword)
+                        .createIceServer()
+                )
+            }
+            return servers
+        }
 
     companion object {
         private const val TAG = "CallManager"
-        private val iceServers = listOf(
-            PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
-            PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer(),
-            // EU TURN (Metered) — TCP on 443 for firewall compatibility
-            PeerConnection.IceServer.builder("turn:eu-turn.metered.ca:443?transport=tcp")
-                .setUsername("stellarchat")
-                .setPassword("stellarchat-turn-2026")
-                .createIceServer(),
-            PeerConnection.IceServer.builder("turns:eu-turn.metered.ca:443?transport=tcp")
-                .setUsername("stellarchat")
-                .setPassword("stellarchat-turn-2026")
-                .createIceServer(),
-        )
 
         fun initialize(context: Context) {
             PeerConnectionFactory.initialize(
@@ -80,6 +106,8 @@ class CallManager(private val context: Context) {
         direction = CallDirection.OUTGOING
         isVideoCall = video
         isVideoEnabled = video
+        callEndReason = CallEndReason.NONE
+        iceStatus = ICEStatus.NEW
         state = CallState.RINGING
 
         setupPeerConnection()
@@ -136,22 +164,17 @@ class CallManager(private val context: Context) {
                         SdpObserverAdapter(),
                         SessionDescription(SessionDescription.Type.OFFER, sdpStr)
                     )
+                    drainPendingCandidates()
                 }
                 CallConnectionService.reportIncomingCall(context, "Incoming Call", isVideoCall)
                 startRingTimer()
             }
             "answer" -> {
                 if (incomingCallId != callId || direction != CallDirection.OUTGOING) return
-                // First-answer-wins: dismiss late answerers
-                if (answerReceived) {
-                    val hangup = JSONObject().apply {
-                        put("action", "hangup")
-                        put("callId", callId)
-                        put("reason", "answered")
-                    }
-                    sendSignal?.invoke(hangup)
-                    return
-                }
+                // First-answer-wins: ignore duplicate/late answers.
+                // Duplicates arrive from multiple relays for the same answer.
+                // Late answerers will time out via the ring timer on their end.
+                if (answerReceived) return
                 if (state != CallState.RINGING) return
                 answerReceived = true
                 ringJob?.cancel()
@@ -161,6 +184,7 @@ class CallManager(private val context: Context) {
                         SdpObserverAdapter(),
                         SessionDescription(SessionDescription.Type.ANSWER, sdpStr)
                     )
+                    drainPendingCandidates()
                 }
                 state = CallState.ACTIVE
                 startDurationTimer()
@@ -172,22 +196,27 @@ class CallManager(private val context: Context) {
                 val sdpMid = callJson.optString("sdpMid")
                 val sdpMLineIndex = callJson.optInt("sdpMLineIndex", 0)
                 if (candidateStr.isNotEmpty()) {
-                    peerConnection?.addIceCandidate(
-                        IceCandidate(sdpMid, sdpMLineIndex, candidateStr)
-                    )
+                    val candidate = IceCandidate(sdpMid, sdpMLineIndex, candidateStr)
+                    if (peerConnection?.remoteDescription != null) {
+                        peerConnection?.addIceCandidate(candidate)
+                    } else {
+                        pendingCandidates.add(candidate)
+                    }
                 }
             }
             "hangup" -> {
                 if (incomingCallId != callId) return
+                val reason = callJson.optString("reason")
+                // "answered" hangups are meant for late answerers still ringing,
+                // not for connected parties. Ignore if already active.
+                if (reason == "answered" && state == CallState.ACTIVE) return
+                callEndReason = if (reason == "answered") CallEndReason.ANSWERED_ELSEWHERE else CallEndReason.HANGUP
                 endCall(sendHangup = false)
             }
-            "busy" -> {
-                if (incomingCallId != callId || state != CallState.RINGING || direction != CallDirection.OUTGOING) return
-                endCall(sendHangup = false)
-            }
-            "reject" -> {
-                if (incomingCallId != callId || state != CallState.RINGING || direction != CallDirection.OUTGOING) return
-                endCall(sendHangup = false)
+            "busy", "reject" -> {
+                // In a multi-member group, individual busy/reject responses should
+                // not kill the entire call — other members may still answer.
+                // The ring timer (30s) handles the case where nobody answers.
             }
         }
     }
@@ -224,10 +253,14 @@ class CallManager(private val context: Context) {
             put("callId", callId)
         }
         sendSignal?.invoke(signal)
+        callEndReason = CallEndReason.REJECTED
         endCall(sendHangup = false)
     }
 
-    fun hangup() = endCall(sendHangup = true)
+    fun hangup() {
+        callEndReason = CallEndReason.HANGUP
+        endCall(sendHangup = true)
+    }
 
     fun endCall(sendHangup: Boolean) {
         ringJob?.cancel()
@@ -241,25 +274,42 @@ class CallManager(private val context: Context) {
             sendSignal?.invoke(signal)
         }
 
+        // Null out video tracks first so Compose drops the renderers.
+        localVideoTrack = null
+        remoteVideoTrack = null
+        localAudioTrack = null
+
         capturer?.stopCapture()
         capturer?.dispose()
         capturer = null
         surfaceTextureHelper?.dispose()
         surfaceTextureHelper = null
-        peerConnection?.close()
+
+        // Defer native resource disposal — Compose needs a frame to
+        // recompose, remove the video views, and run onDispose before
+        // the underlying EGL/factory objects are destroyed.
+        val pc = peerConnection
+        val f = factory
+        val egl = eglBase
         peerConnection = null
-        localAudioTrack = null
-        localVideoTrack = null
-        remoteVideoTrack = null
-        factory?.dispose()
         factory = null
-        eglBase?.release()
         eglBase = null
+        scope.launch {
+            delay(300)
+            pc?.close()
+            f?.dispose()
+            egl?.release()
+        }
         state = CallState.ENDED
         callDuration = 0
         isVideoCall = false
         isVideoEnabled = false
         answerReceived = false
+        pendingCandidates.clear()
+
+        if (com.stellarmls.chat.BuildConfig.DEBUG) {
+            Log.d(TAG, "Call ended: reason=${callEndReason.name}")
+        }
 
         CallConnectionService.reportCallEnded()
 
@@ -271,6 +321,8 @@ class CallManager(private val context: Context) {
             if (state == CallState.ENDED) {
                 state = CallState.IDLE
                 remoteBlsPubkey = null
+                iceStatus = ICEStatus.NEW
+                callEndReason = CallEndReason.NONE
             }
         }
     }
@@ -310,6 +362,15 @@ class CallManager(private val context: Context) {
     val eglBaseContext: EglBase.Context?
         get() = eglBase?.eglBaseContext
 
+    private fun drainPendingCandidates() {
+        if (pendingCandidates.isEmpty()) return
+        val candidates = pendingCandidates.toList()
+        pendingCandidates.clear()
+        for (candidate in candidates) {
+            peerConnection?.addIceCandidate(candidate)
+        }
+    }
+
     private fun setupPeerConnection() {
         val egl = EglBase.create()
         this.eglBase = egl
@@ -320,7 +381,11 @@ class CallManager(private val context: Context) {
             .createPeerConnectionFactory()
         this.factory = factory
 
-        val config = PeerConnection.RTCConfiguration(iceServers).apply {
+        val servers = iceServers
+        if (com.stellarmls.chat.BuildConfig.DEBUG) {
+            Log.d(TAG, "ICE servers: ${servers.map { it.urls }}")
+        }
+        val config = PeerConnection.RTCConfiguration(servers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
             rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
@@ -342,6 +407,15 @@ class CallManager(private val context: Context) {
             }
 
             override fun onIceCandidate(candidate: IceCandidate) {
+                if (com.stellarmls.chat.BuildConfig.DEBUG) {
+                    val candidateType = when {
+                        candidate.sdp.contains("typ relay") -> "relay"
+                        candidate.sdp.contains("typ srflx") -> "srflx"
+                        candidate.sdp.contains("typ host") -> "host"
+                        else -> "unknown"
+                    }
+                    Log.d(TAG, "ICE candidate: $candidateType")
+                }
                 val signal = JSONObject().apply {
                     put("action", "ice")
                     put("callId", callId)
@@ -355,6 +429,21 @@ class CallManager(private val context: Context) {
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {}
 
             override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState?) {
+                val status = when (newState) {
+                    PeerConnection.IceConnectionState.NEW -> ICEStatus.NEW
+                    PeerConnection.IceConnectionState.CHECKING -> ICEStatus.CHECKING
+                    PeerConnection.IceConnectionState.CONNECTED -> ICEStatus.CONNECTED
+                    PeerConnection.IceConnectionState.COMPLETED -> ICEStatus.COMPLETED
+                    PeerConnection.IceConnectionState.FAILED -> ICEStatus.FAILED
+                    PeerConnection.IceConnectionState.DISCONNECTED -> ICEStatus.DISCONNECTED
+                    PeerConnection.IceConnectionState.CLOSED -> ICEStatus.CLOSED
+                    else -> ICEStatus.NEW
+                }
+                iceStatus = status
+                if (com.stellarmls.chat.BuildConfig.DEBUG) {
+                    Log.d(TAG, "ICE state: ${status.name}")
+                }
+
                 if (newState == PeerConnection.IceConnectionState.FAILED ||
                     newState == PeerConnection.IceConnectionState.DISCONNECTED) {
                     scope.launch {
@@ -363,6 +452,7 @@ class CallManager(private val context: Context) {
                             val current = peerConnection?.iceConnectionState()
                             if (current == PeerConnection.IceConnectionState.FAILED ||
                                 current == PeerConnection.IceConnectionState.DISCONNECTED) {
+                                callEndReason = CallEndReason.ICE_FAILED
                                 endCall(sendHangup = true)
                             }
                         }
@@ -432,6 +522,7 @@ class CallManager(private val context: Context) {
         ringJob = scope.launch {
             delay(30_000)
             if (state == CallState.RINGING) {
+                callEndReason = CallEndReason.TIMEOUT
                 endCall(sendHangup = direction == CallDirection.OUTGOING)
             }
         }

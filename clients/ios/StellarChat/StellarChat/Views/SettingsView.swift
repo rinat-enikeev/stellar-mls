@@ -14,6 +14,8 @@ struct SettingsView: View {
     @State private var showAdvanced = false
     @State private var newBlossomURL = ""
     @State private var blossomError: String?
+    @State private var newTurnURL = ""
+    @State private var turnError: String?
 
     var body: some View {
         Form {
@@ -61,6 +63,8 @@ struct SettingsView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+
+            turnServerSection
 
             Section {
                 DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
@@ -242,6 +246,65 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - TURN Servers
+
+    @ViewBuilder
+    private var turnServerSection: some View {
+        Section("TURN Servers") {
+            Toggle("Enable custom TURN", isOn: Bindable(appState).turnEnabled)
+                .onChange(of: appState.turnEnabled) { appState.syncTurnConfig() }
+
+            ForEach(appState.turnURLs, id: \.self) { url in
+                HStack {
+                    Image(systemName: "network")
+                        .foregroundStyle(.blue)
+                    Text(url)
+                        .font(.caption)
+                        .monospaced()
+                }
+            }
+            .onDelete { offsets in
+                appState.turnURLs.remove(atOffsets: offsets)
+                appState.syncTurnConfig()
+            }
+
+            HStack {
+                TextField("turn:host:443?transport=tcp", text: $newTurnURL)
+                    .font(.caption)
+                    .monospaced()
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+
+                Button("Add") {
+                    addTurnURL()
+                }
+                .disabled(newTurnURL.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+
+            if let error = turnError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            TextField("Username", text: Bindable(appState).turnUsername)
+                .font(.caption)
+                .monospaced()
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .onChange(of: appState.turnUsername) { appState.syncTurnConfig() }
+
+            SecureField("Password", text: Bindable(appState).turnPassword)
+                .font(.caption)
+                .monospaced()
+                .onChange(of: appState.turnPassword) { appState.syncTurnConfig() }
+
+            Text("Optional custom TURN servers for restrictive networks. Built-in EU TURN servers are always included. Use turn: or turns: URL schemes.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     // MARK: - Stellar Contract
 
     @ViewBuilder
@@ -305,6 +368,19 @@ struct SettingsView: View {
     }
 
     // MARK: - Actions
+
+    private func addTurnURL() {
+        turnError = nil
+        let urlString = newTurnURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard urlString.hasPrefix("turn:") || urlString.hasPrefix("turns:"),
+              !appState.turnURLs.contains(urlString) else {
+            turnError = "Invalid URL. Must start with turn: or turns: and not already added."
+            return
+        }
+        appState.turnURLs.append(urlString)
+        appState.syncTurnConfig()
+        newTurnURL = ""
+    }
 
     private func addBlossomServer() {
         blossomError = nil

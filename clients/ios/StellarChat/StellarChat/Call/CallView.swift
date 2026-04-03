@@ -104,7 +104,11 @@ struct CallView: View {
 
             // Accept
             Button {
-                Task { try? await callManager.acceptCall() }
+                if let callKit = callManager.callKit {
+                    callKit.requestAnswerCall()
+                } else {
+                    Task { try? await callManager.acceptCall() }
+                }
             } label: {
                 Image(systemName: "phone.fill")
                     .font(.title)

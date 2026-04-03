@@ -95,6 +95,16 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     val isRelayerConfigured: Boolean
         get() = relayerURL.isNotBlank()
 
+    // TURN server configuration
+    val turnURLs = mutableStateListOf<String>()
+    var turnEnabled by mutableStateOf(false)
+        private set
+    var turnUsername by mutableStateOf("")
+        private set
+    var turnPassword by mutableStateOf("")
+        private set
+    private val turnPrefs = application.getSharedPreferences("stellar_turn", Context.MODE_PRIVATE)
+
     // On-chain
     var onChainService: OnChainService? = null
         private set
@@ -163,6 +173,15 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
         relayerAuthToken = keyManager.loadRelayerAuthToken()
 
+        // Load TURN server config
+        turnEnabled = turnPrefs.getBoolean("turn_enabled", false)
+        val savedTurnURLs = turnPrefs.getString("turn_urls", null)
+        if (savedTurnURLs != null) {
+            turnURLs.addAll(savedTurnURLs.split(",").filter { it.isNotBlank() })
+        }
+        turnUsername = keyManager.loadTurnUsername()
+        turnPassword = keyManager.loadTurnPassword()
+
         // Initialize transports
         transport = NostrMessageTransport(keyManager, relayURLs.toList())
         invitationTransport = InvitationTransport(keyManager)
@@ -171,6 +190,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         com.stellarmls.chat.call.CallManager.initialize(application)
         callManager = com.stellarmls.chat.call.CallManager(application)
         com.stellarmls.chat.call.CallConnectionService.initialize(application, callManager)
+        syncTurnConfig()
 
         // Initialize on-chain service if configured
         configureContract()
@@ -431,6 +451,51 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         // N-5: Store auth token in encrypted prefs instead of plaintext SharedPreferences
         keyManager.saveRelayerAuthToken(relayerAuthToken)
         configureContract()
+    }
+
+    // -- TURN server configuration --
+
+    fun syncTurnConfig() {
+        callManager.turnEnabled = turnEnabled
+        callManager.turnURLs = turnURLs.toList()
+        callManager.turnUsername = turnUsername
+        callManager.turnPassword = turnPassword
+    }
+
+    fun addTurnURL(urlString: String): Boolean {
+        val trimmed = urlString.trim()
+        if (!trimmed.startsWith("turn:") && !trimmed.startsWith("turns:")) return false
+        if (turnURLs.contains(trimmed)) return false
+        turnURLs.add(trimmed)
+        persistTurnURLs()
+        syncTurnConfig()
+        return true
+    }
+
+    fun removeTurnURL(index: Int) {
+        if (index in turnURLs.indices) {
+            turnURLs.removeAt(index)
+            persistTurnURLs()
+            syncTurnConfig()
+        }
+    }
+
+    fun updateTurnEnabled(enabled: Boolean) {
+        turnEnabled = enabled
+        turnPrefs.edit().putBoolean("turn_enabled", enabled).apply()
+        syncTurnConfig()
+    }
+
+    fun saveTurnCredentials(username: String, password: String) {
+        turnUsername = username.trim()
+        turnPassword = password.trim()
+        keyManager.saveTurnUsername(turnUsername)
+        keyManager.saveTurnPassword(turnPassword)
+        syncTurnConfig()
+    }
+
+    private fun persistTurnURLs() {
+        turnPrefs.edit().putString("turn_urls", turnURLs.joinToString(",")).apply()
     }
 
     companion object {

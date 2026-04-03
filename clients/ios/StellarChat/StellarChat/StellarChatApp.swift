@@ -106,6 +106,25 @@ final class AppState {
     }
     private static let defaultGroupTierKey = "com.stellarmls.chat.defaultGroupTier"
 
+    // MARK: - TURN Server Configuration
+
+    var turnEnabled: Bool {
+        didSet { UserDefaults.standard.set(turnEnabled, forKey: Self.turnEnabledKey) }
+    }
+    var turnURLs: [String] {
+        didSet { UserDefaults.standard.set(turnURLs, forKey: Self.turnURLsKey) }
+    }
+    var turnUsername: String {
+        didSet { Self.saveToKeychain(turnUsername, key: Self.turnUsernameKey) }
+    }
+    var turnPassword: String {
+        didSet { Self.saveToKeychain(turnPassword, key: Self.turnPasswordKey) }
+    }
+    private static let turnEnabledKey = "com.stellarmls.chat.turnEnabled"
+    private static let turnURLsKey = "com.stellarmls.chat.turnURLs"
+    private static let turnUsernameKey = "com.stellarmls.chat.turnUsername"
+    private static let turnPasswordKey = "com.stellarmls.chat.turnPassword"
+
     // MARK: - Salt History (for offline recovery)
 
     /// Per-group salt history keyed by group ID, mapping epoch → salt.
@@ -154,6 +173,11 @@ final class AppState {
         } else {
             self.relayerAuthToken = Self.loadFromKeychain(key: Self.relayerAuthTokenKey) ?? ""
         }
+        // Load TURN server config
+        self.turnEnabled = UserDefaults.standard.bool(forKey: Self.turnEnabledKey)
+        self.turnURLs = UserDefaults.standard.stringArray(forKey: Self.turnURLsKey) ?? []
+        self.turnUsername = Self.loadFromKeychain(key: Self.turnUsernameKey) ?? ""
+        self.turnPassword = Self.loadFromKeychain(key: Self.turnPasswordKey) ?? ""
         configureContractIfReady()
 
         // M-17: Load persisted salt history, then add current group salts
@@ -177,6 +201,7 @@ final class AppState {
         setupCallSignalHandler()
         callKitProvider = CallKitProvider(callManager: callManager)
         callManager.callKit = callKitProvider
+        syncTurnConfig()
         Task { await connectAndSubscribeAllGroups() }
     }
 
@@ -1427,6 +1452,15 @@ final class AppState {
 
         // Resubscribe with the new encryption key after epoch change
         subscribeGroup(group)
+    }
+
+    // MARK: - TURN Configuration
+
+    func syncTurnConfig() {
+        callManager.turnEnabled = turnEnabled
+        callManager.turnURLs = turnURLs
+        callManager.turnUsername = turnUsername
+        callManager.turnPassword = turnPassword
     }
 
     // MARK: - Contract Configuration

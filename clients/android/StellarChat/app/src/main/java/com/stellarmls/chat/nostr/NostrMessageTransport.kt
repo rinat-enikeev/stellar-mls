@@ -191,17 +191,18 @@ class NostrMessageTransport(
 
             // All messages are BLS-wrapped: {"text":"...", "senderBlsPubkey":"..."}
             val wrapper = try { JSONObject(plaintext) } catch (_: Exception) { null }
-            val innerText = wrapper?.optString("text")
+            val innerText = wrapper?.optString("text") ?: ""
             val blsPubkeyB64 = wrapper?.optString("senderBlsPubkey")
+            val wrapperType = wrapper?.optString("type", "chat") ?: "chat"
 
-            if (innerText.isNullOrEmpty() || blsPubkeyB64.isNullOrEmpty()) {
-                // N-6: Reject messages without BLS sender authentication.
+            // N-6: Reject messages without BLS sender authentication.
+            // Call signals have empty text (payload is in "call" field), so only
+            // require non-empty text for chat messages.
+            if (blsPubkeyB64.isNullOrEmpty() || (wrapperType == "chat" && innerText.isNullOrEmpty())) {
                 if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.w("MsgTransport", "Rejected: missing BLS auth.")
                 com.stellarmls.chat.SecurityLog.nonMemberMessageRejected(groupID)
                 return
             }
-
-            val wrapperType = wrapper?.optString("type", "chat") ?: "chat"
 
             if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.d("MsgTransport", "Decrypted OK group=${groupID.take(8)} wrapperType=$wrapperType members=${currentMembers.size}")
 

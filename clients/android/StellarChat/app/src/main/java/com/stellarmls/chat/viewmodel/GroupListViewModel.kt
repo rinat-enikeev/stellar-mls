@@ -112,6 +112,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         java.util.concurrent.ConcurrentHashMap<String, Boolean>()
     )
 
+    // Calls
+    lateinit var callManager: com.stellarmls.chat.call.CallManager
+        private set
+
     // Transports
     lateinit var transport: NostrMessageTransport
         private set
@@ -163,6 +167,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         transport = NostrMessageTransport(keyManager, relayURLs.toList())
         invitationTransport = InvitationTransport(keyManager)
 
+        // Initialize call manager
+        com.stellarmls.chat.call.CallManager.initialize(application)
+        callManager = com.stellarmls.chat.call.CallManager(application)
+
         // Initialize on-chain service if configured
         configureContract()
 
@@ -213,6 +221,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             setupChatMessageHandler()
             setupImageMessageHandler()
             setupProtocolMessageHandler()
+            setupCallSignalHandler()
             setupOKHandler()
             connected = true
 
@@ -1300,6 +1309,38 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 audioFile.delete()
             } catch (e: Exception) {
                 if (BuildConfig.DEBUG) Log.e("GroupListVM", "sendVoice failed: ${e.message}")
+            }
+        }
+    }
+
+    // MARK: - Call Signaling
+
+    /** Send a call signaling message (offer/answer/ice/hangup) to a group. */
+    fun sendCallSignal(groupID: String, callJson: JSONObject) {
+        val group = groups.find { it.id == groupID } ?: return
+        val wrapper = JSONObject().apply {
+            put("v", 2)
+            put("type", "call")
+            put("text", "")
+            put("senderBlsPubkey", android.util.Base64.encodeToString(
+                keyManager.blsPublicKey(), android.util.Base64.NO_WRAP))
+            put("ts", System.currentTimeMillis() / 1000)
+            put("call", callJson)
+        }
+        val key = group.encryptionKey
+        val envelopeJson = GroupCrypto.encrypt(wrapper.toString(), key)
+        val content = android.util.Base64.encodeToString(
+            envelopeJson.toByteArray(), android.util.Base64.NO_WRAP)
+        val tags = listOf(listOf("t", group.topicTag))
+        val event = NostrEventBuilder.build(
+            kind = 44114, tags = tags, content = content, keyManager = keyManager)
+        transport.publish(event)
+    }
+
+    private fun setupCallSignalHandler() {
+        transport.onCallSignal = { groupID, callJson, senderPubkey, eventID ->
+            viewModelScope.launch {
+                callManager.handleSignal(callJson, senderPubkey)
             }
         }
     }

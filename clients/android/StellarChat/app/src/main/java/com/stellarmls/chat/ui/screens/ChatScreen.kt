@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -109,6 +110,7 @@ fun ChatScreen(
     onBack: () -> Unit,
     onInvite: () -> Unit,
     onGroupInfo: () -> Unit = {},
+    onStartCall: () -> Unit = {},
     contactAliasStore: com.stellarmls.chat.persistence.ContactAliasStore? = null
 ) {
     val groupName = viewModel.groupName
@@ -157,6 +159,9 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { onStartCall() }) {
+                        Icon(Icons.Filled.Phone, contentDescription = "Call")
+                    }
                     IconButton(onClick = onGroupInfo) {
                         Icon(Icons.Filled.Group, contentDescription = "Group Info")
                     }

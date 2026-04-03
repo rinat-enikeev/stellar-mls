@@ -177,8 +177,25 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                     onBack = { navController.popBackStack() },
                     onInvite = { navController.navigate("invite/$groupId") },
                     onGroupInfo = { navController.navigate("groupinfo/$groupId") },
+                    onStartCall = {
+                        val cm = groupListViewModel.callManager
+                        cm.sendSignal = { callJson ->
+                            groupListViewModel.sendCallSignal(groupId, callJson)
+                        }
+                        cm.startCall()
+                    },
                     contactAliasStore = groupListViewModel.contactAliasStore
                 )
+
+                // Show call screen overlay when a call is active
+                val callState = groupListViewModel.callManager.state
+                if (callState != com.stellarmls.chat.call.CallState.IDLE) {
+                    com.stellarmls.chat.call.CallScreen(
+                        callManager = groupListViewModel.callManager,
+                        remoteName = chatViewModel.groupName,
+                        onDismiss = {}
+                    )
+                }
             }
 
             composable("create") {

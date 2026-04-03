@@ -29,6 +29,9 @@ final class NostrMessageTransport {
     var onImageMessage: ((String, MediaAttachment, NostrEvent) -> Void)?
     /// Callback for received protocol messages (state updates, salt requests/responses).
     var onProtocolMessage: ((String, NostrEvent) -> Void)?
+    /// Callback for received call signaling messages (offer, answer, ice, hangup, busy, reject).
+    /// Parameters: (call JSON dict, senderBlsPubkey, event)
+    var onCallSignal: (([String: Any], Data, NostrEvent) -> Void)?
     /// Callback for transport-level errors (decryption, relay, encoding).
     var onError: ((String) -> Void)?
     /// Callback for relay OK responses: (eventID, accepted). Used for delivery status.
@@ -132,7 +135,20 @@ final class NostrMessageTransport {
 
             let wrapperType = wrapperJSON["type"] as? String
 
-            if wrapperType == "image" || wrapperType == "video" || wrapperType == "audio" {
+            if wrapperType == "call" {
+                // Call signaling — verify sender is a group member
+                let isMember = currentMembers.contains { $0.publicKeyCompressed == blsPubkey }
+                if isMember, let callDict = wrapperJSON["call"] as? [String: Any] {
+                    // Reject stale signaling (>60 seconds old)
+                    let ts = wrapperJSON["ts"] as? Int64 ?? 0
+                    let age = Int64(Date().timeIntervalSince1970) - ts
+                    if age <= 60 {
+                        onCallSignal?(callDict, blsPubkey, event)
+                    }
+                } else if !isMember {
+                    SecurityLog.nonMemberMessageRejected(groupID: groupID)
+                }
+            } else if wrapperType == "image" || wrapperType == "video" || wrapperType == "audio" {
                 // Parse media attachment from wrapper JSON
                 let isMember = currentMembers.contains { $0.publicKeyCompressed == blsPubkey }
                 if isMember, let mediaDict = wrapperJSON["media"] as? [String: Any],

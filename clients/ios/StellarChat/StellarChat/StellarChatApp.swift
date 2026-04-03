@@ -38,6 +38,10 @@ final class AppState {
     let invitationTransport = InvitationTransport()
     var pendingInvitations: [PendingInvitation] = []
 
+    // MARK: - Calls
+
+    let callManager = CallManager()
+
     // MARK: - Persistent Chat & Protocol Transport
 
     /// Single transport for ALL group communication (chat + protocol).
@@ -165,6 +169,7 @@ final class AppState {
         chatTransport.currentMembers = groups.flatMap(\.members)
         setupChatHandler()
         setupProtocolHandler()
+        setupCallSignalHandler()
         Task { await connectAndSubscribeAllGroups() }
     }
 
@@ -1217,6 +1222,34 @@ final class AppState {
 
         // Clean up temp file
         try? FileManager.default.removeItem(at: audioURL)
+    }
+
+    // MARK: - Call Signaling
+
+    private func setupCallSignalHandler() {
+        chatTransport.onCallSignal = { [weak self] callDict, senderBlsPubkey, event in
+            Task { @MainActor in
+                await self?.callManager.handleSignal(callDict, senderBlsPubkey: senderBlsPubkey)
+            }
+        }
+    }
+
+    /// Send a call signaling message (offer/answer/ice/hangup) to the active group.
+    func sendCallSignal(_ callDict: [String: Any], groupID: String) async throws {
+        guard let group = groups.first(where: { $0.id == groupID }) else { return }
+        let blsPubkey = try keyManager.blsPublicKey
+        let ts = Int64(Date().timeIntervalSince1970)
+        let wrapper: [String: Any] = [
+            "v": 2,
+            "type": "call",
+            "text": "",
+            "senderBlsPubkey": blsPubkey.base64EncodedString(),
+            "ts": ts,
+            "call": callDict,
+        ]
+        let wrapperData = try JSONSerialization.data(withJSONObject: wrapper)
+        let wrapperText = String(data: wrapperData, encoding: .utf8)!
+        try await chatTransport.sendWrapper(wrapperText, topic: group.topicTag, key: group.encryptionKey, keyManager: keyManager)
     }
 
     /// Set up the protocol message handler (runs once at init).

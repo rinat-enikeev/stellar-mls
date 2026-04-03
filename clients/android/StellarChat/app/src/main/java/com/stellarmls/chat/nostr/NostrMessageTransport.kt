@@ -49,6 +49,8 @@ class NostrMessageTransport(
     var onProtocolMessage: ((groupID: String, json: String, eventID: String, senderPubkey: String) -> Unit)? = null
     /** Called when a decrypted message is an image message with media attachment. */
     var onImageMessage: ((groupID: String, text: String, media: com.stellarmls.chat.model.MediaAttachment, eventID: String, senderPubkey: String, timestamp: Long) -> Unit)? = null
+    /** Callback for received call signaling messages (offer, answer, ice, hangup, busy, reject). */
+    var onCallSignal: ((groupID: String, callJson: JSONObject, senderPubkey: ByteArray, eventID: String) -> Unit)? = null
     /** Callback for relay OK responses: (eventID, accepted). Used for delivery status. */
     var onOK: ((String, Boolean) -> Unit)? = null
 
@@ -203,7 +205,22 @@ class NostrMessageTransport(
 
             if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.d("MsgTransport", "Decrypted OK group=${groupID.take(8)} wrapperType=$wrapperType members=${currentMembers.size}")
 
-            if (wrapperType == "image" || wrapperType == "video" || wrapperType == "audio") {
+            if (wrapperType == "call") {
+                // Call signaling — verify sender is a group member
+                val blsPubkey = android.util.Base64.decode(blsPubkeyB64, android.util.Base64.NO_WRAP)
+                val isMember = currentMembers.any { it.publicKeyCompressed.contentEquals(blsPubkey) }
+                if (!isMember) {
+                    com.stellarmls.chat.SecurityLog.nonMemberMessageRejected(groupID)
+                    return
+                }
+                val callObj = wrapper.optJSONObject("call") ?: return
+                // Reject stale signaling (>60 seconds old)
+                val ts = wrapper.optLong("ts", 0)
+                val age = (System.currentTimeMillis() / 1000) - ts
+                if (age <= 60) {
+                    onCallSignal?.invoke(groupID, callObj, blsPubkey, event.id)
+                }
+            } else if (wrapperType == "image" || wrapperType == "video" || wrapperType == "audio") {
                 // Image message — verify BLS pubkey is in member list (H-4)
                 val blsPubkey = android.util.Base64.decode(blsPubkeyB64, android.util.Base64.NO_WRAP)
                 val isMember = currentMembers.any { it.publicKeyCompressed.contentEquals(blsPubkey) }

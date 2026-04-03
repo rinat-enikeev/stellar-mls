@@ -18,6 +18,7 @@ struct ChatView: View {
     @State private var isNearBottom = true
     @State private var videoThumbnail: UIImage?
     @State private var videoDuration: Int?
+    @State private var showCallScreen = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -238,6 +239,11 @@ struct ChatView: View {
             ToolbarItem(placement: .primaryAction) {
                 HStack(spacing: 12) {
                     Button {
+                        startCall()
+                    } label: {
+                        Image(systemName: "phone.fill")
+                    }
+                    Button {
                         showGroupInfo = true
                     } label: {
                         Image(systemName: "person.3")
@@ -258,6 +264,18 @@ struct ChatView: View {
         .sheet(isPresented: $showGroupInfo) {
             if let group = viewModel.group {
                 GroupInfoView(group: group)
+            }
+        }
+        .fullScreenCover(isPresented: $showCallScreen) {
+            CallView(
+                callManager: appState.callManager,
+                remoteName: viewModel.group?.name ?? "Call",
+                onDismiss: { showCallScreen = false }
+            )
+        }
+        .onChange(of: appState.callManager.state) { _, newState in
+            if newState == .ringing || newState == .active {
+                showCallScreen = true
             }
         }
         .onDisappear {
@@ -307,6 +325,14 @@ struct ChatView: View {
         let curr = viewModel.messages[index]
         return prev.senderPubkey == curr.senderPubkey
             && curr.timestamp.timeIntervalSince(prev.timestamp) < 120
+    }
+
+    private func startCall() {
+        guard let groupID = viewModel.group?.id else { return }
+        appState.callManager.sendSignal = { [weak appState] callDict in
+            try await appState?.sendCallSignal(callDict, groupID: groupID)
+        }
+        Task { try? await appState.callManager.startCall() }
     }
 }
 

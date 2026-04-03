@@ -11,6 +11,7 @@ import kotlinx.coroutines.*
 import org.json.JSONObject
 import org.webrtc.*
 import java.security.SecureRandom
+import org.webrtc.Camera2Enumerator
 
 enum class CallState { IDLE, RINGING, ACTIVE, ENDED }
 enum class CallDirection { OUTGOING, INCOMING }
@@ -22,13 +23,23 @@ class CallManager(private val context: Context) {
     var remoteBlsPubkey: ByteArray? = null
     var isMuted by mutableStateOf(false)
     var isSpeaker by mutableStateOf(false)
+    var isVideoEnabled by mutableStateOf(false)
+    var isUsingFrontCamera by mutableStateOf(true)
+    var isVideoCall by mutableStateOf(false)
     var callDuration by mutableLongStateOf(0L)
+
+    /** Remote video track for rendering. */
+    var remoteVideoTrack by mutableStateOf<VideoTrack?>(null)
+    /** Local video track for PiP rendering. */
+    var localVideoTrack by mutableStateOf<VideoTrack?>(null)
 
     /** Set by ViewModel — sends signaling JSON over the group channel. */
     var sendSignal: ((JSONObject) -> Unit)? = null
 
     private var peerConnection: PeerConnection? = null
     private var localAudioTrack: AudioTrack? = null
+    private var capturer: CameraVideoCapturer? = null
+    private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var factory: PeerConnectionFactory? = null
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var durationJob: Job? = null
@@ -52,14 +63,17 @@ class CallManager(private val context: Context) {
 
     // MARK: - Start Call (Outgoing)
 
-    fun startCall() {
+    fun startCall(video: Boolean = false) {
         if (state != CallState.IDLE) return
         callId = generateCallId()
         direction = CallDirection.OUTGOING
+        isVideoCall = video
+        isVideoEnabled = video
         state = CallState.RINGING
 
         setupPeerConnection()
         addAudioTrack()
+        if (video) addVideoTrack()
 
         peerConnection?.createOffer(object : SdpObserverAdapter() {
             override fun onCreateSuccess(sdp: SessionDescription) {
@@ -67,12 +81,12 @@ class CallManager(private val context: Context) {
                 val signal = JSONObject().apply {
                     put("action", "offer")
                     put("callId", callId)
-                    put("mediaType", "audio")
+                    put("mediaType", if (video) "video" else "audio")
                     put("sdp", sdp.description)
                 }
                 sendSignal?.invoke(signal)
             }
-        }, audioOnlyConstraints())
+        }, mediaConstraints(video))
 
         startRingTimer()
     }
@@ -96,10 +110,13 @@ class CallManager(private val context: Context) {
                 callId = incomingCallId
                 direction = CallDirection.INCOMING
                 remoteBlsPubkey = senderPubkey
+                isVideoCall = callJson.optString("mediaType") == "video"
+                isVideoEnabled = isVideoCall
                 state = CallState.RINGING
 
                 setupPeerConnection()
                 addAudioTrack()
+                if (isVideoCall) addVideoTrack()
 
                 val sdpStr = callJson.optString("sdp")
                 if (sdpStr.isNotEmpty()) {
@@ -122,7 +139,7 @@ class CallManager(private val context: Context) {
                 }
                 state = CallState.ACTIVE
                 startDurationTimer()
-                configureAudioSession(false)
+                configureAudioSession(isVideoCall)
             }
             "ice" -> {
                 if (incomingCallId != callId) return
@@ -166,11 +183,11 @@ class CallManager(private val context: Context) {
                 }
                 sendSignal?.invoke(signal)
             }
-        }, audioOnlyConstraints())
+        }, mediaConstraints(isVideoCall))
 
         state = CallState.ACTIVE
         startDurationTimer()
-        configureAudioSession(false)
+        configureAudioSession(isVideoCall)
     }
 
     // MARK: - Reject / End
@@ -199,13 +216,24 @@ class CallManager(private val context: Context) {
             sendSignal?.invoke(signal)
         }
 
+        capturer?.stopCapture()
+        capturer?.dispose()
+        capturer = null
+        surfaceTextureHelper?.dispose()
+        surfaceTextureHelper = null
         peerConnection?.close()
         peerConnection = null
         localAudioTrack = null
+        localVideoTrack = null
+        remoteVideoTrack = null
         factory?.dispose()
         factory = null
+        eglBase?.release()
+        eglBase = null
         state = CallState.ENDED
         callDuration = 0
+        isVideoCall = false
+        isVideoEnabled = false
 
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audioManager.mode = AudioManager.MODE_NORMAL
@@ -231,10 +259,36 @@ class CallManager(private val context: Context) {
         configureAudioSession(isSpeaker)
     }
 
+    fun toggleVideo() {
+        isVideoEnabled = !isVideoEnabled
+        localVideoTrack?.setEnabled(isVideoEnabled)
+        if (isVideoEnabled) {
+            startCapture()
+        } else {
+            capturer?.stopCapture()
+        }
+    }
+
+    fun flipCamera() {
+        isUsingFrontCamera = !isUsingFrontCamera
+        startCapture()
+    }
+
     // MARK: - Private
 
+    private var eglBase: EglBase? = null
+
+    /** Expose EGL context for SurfaceViewRenderers. */
+    val eglBaseContext: EglBase.Context?
+        get() = eglBase?.eglBaseContext
+
     private fun setupPeerConnection() {
+        val egl = EglBase.create()
+        this.eglBase = egl
+
         val factory = PeerConnectionFactory.builder()
+            .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext))
+            .setVideoEncoderFactory(DefaultVideoEncoderFactory(egl.eglBaseContext, true, true))
             .createPeerConnectionFactory()
         this.factory = factory
 
@@ -252,7 +306,12 @@ class CallManager(private val context: Context) {
             override fun onRemoveStream(stream: MediaStream?) {}
             override fun onDataChannel(channel: DataChannel?) {}
             override fun onRenegotiationNeeded() {}
-            override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {}
+            override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {
+                val track = receiver?.track()
+                if (track is VideoTrack) {
+                    remoteVideoTrack = track
+                }
+            }
 
             override fun onIceCandidate(candidate: IceCandidate) {
                 val signal = JSONObject().apply {
@@ -292,9 +351,37 @@ class CallManager(private val context: Context) {
         peerConnection?.addTrack(localAudioTrack, listOf("stream0"))
     }
 
-    private fun audioOnlyConstraints() = MediaConstraints().apply {
+    private fun addVideoTrack() {
+        val factory = this.factory ?: return
+        val egl = this.eglBase ?: return
+        val videoSource = factory.createVideoSource(false)
+        val helper = SurfaceTextureHelper.create("CaptureThread", egl.eglBaseContext)
+        this.surfaceTextureHelper = helper
+
+        val enumerator = Camera2Enumerator(context)
+        val deviceName = if (isUsingFrontCamera) {
+            enumerator.deviceNames.firstOrNull { enumerator.isFrontFacing(it) }
+        } else {
+            enumerator.deviceNames.firstOrNull { enumerator.isBackFacing(it) }
+        } ?: enumerator.deviceNames.firstOrNull() ?: return
+
+        val capturer = enumerator.createCapturer(deviceName, null) ?: return
+        capturer.initialize(helper, context, videoSource.capturerObserver)
+        this.capturer = capturer
+
+        val track = factory.createVideoTrack("video0", videoSource)
+        localVideoTrack = track
+        peerConnection?.addTrack(track, listOf("stream0"))
+        startCapture()
+    }
+
+    private fun startCapture() {
+        capturer?.startCapture(640, 480, 30)
+    }
+
+    private fun mediaConstraints(video: Boolean) = MediaConstraints().apply {
         mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-        mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+        mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", if (video) "true" else "false"))
     }
 
     private fun configureAudioSession(speaker: Boolean) {

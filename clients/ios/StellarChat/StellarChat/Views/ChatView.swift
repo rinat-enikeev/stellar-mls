@@ -239,9 +239,14 @@ struct ChatView: View {
             ToolbarItem(placement: .primaryAction) {
                 HStack(spacing: 12) {
                     Button {
-                        startCall()
+                        startCall(video: false)
                     } label: {
                         Image(systemName: "phone.fill")
+                    }
+                    Button {
+                        startCall(video: true)
+                    } label: {
+                        Image(systemName: "video.fill")
                     }
                     Button {
                         showGroupInfo = true
@@ -327,12 +332,12 @@ struct ChatView: View {
             && curr.timestamp.timeIntervalSince(prev.timestamp) < 120
     }
 
-    private func startCall() {
+    private func startCall(video: Bool) {
         guard let groupID = viewModel.group?.id else { return }
         appState.callManager.sendSignal = { [weak appState] callDict in
             try await appState?.sendCallSignal(callDict, groupID: groupID)
         }
-        Task { try? await appState.callManager.startCall() }
+        Task { try? await appState.callManager.startCall(video: video) }
     }
 }
 

@@ -30,6 +30,7 @@
 		816EB9A5EB988647F86E220B /* ContactAliasStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F67E0578F1C0DC64C2004D62 /* ContactAliasStore.swift */; };
 		833FF1A77449454BF4ADC801 /* GroupInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7446E889E7A95E042201A70D /* GroupInfoView.swift */; };
 		8403CC60E770407C27CF89ED /* SwiftMLS in Frameworks */ = {isa = PBXBuildFile; productRef = 93FDE6A85EACB5AD144480F3 /* SwiftMLS */; };
+		A1B2C3D4E5F60718293A4B5C /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = B2C3D4E5F6071829A3B4C5D6 /* WebRTC */; };
 		865234AA099329B7E4D41789 /* JoinGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 005C04E920D6B0FC3423EE24 /* JoinGroupView.swift */; };
 		90B7D2930C07431EB75DBFB3 /* VoiceRecordButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E76AF13A26CCEC2E75C8310 /* VoiceRecordButton.swift */; };
 		95489626E5CAD02D3CDB0207 /* StellarStrKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */; };
@@ -118,6 +119,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				8403CC60E770407C27CF89ED /* SwiftMLS in Frameworks */,
+				A1B2C3D4E5F60718293A4B5C /* WebRTC in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -294,6 +296,7 @@
 			name = StellarChat;
 			packageProductDependencies = (
 				93FDE6A85EACB5AD144480F3 /* SwiftMLS */,
+				B2C3D4E5F6071829A3B4C5D6 /* WebRTC */,
 			);
 			productName = StellarChat;
 			productReference = F406EABD519847834878AA47 /* StellarChat.app */;
@@ -329,6 +332,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				F33EE2A00CAA98337DB93D99 /* XCLocalSwiftPackageReference "../../../swift-mls" */,
+				C3D4E5F607182930A4B5C6D7 /* XCRemoteSwiftPackageReference "WebRTC" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E290D72BA448D601D86C5E67 /* Products */;
@@ -671,6 +675,17 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		C3D4E5F607182930A4B5C6D7 /* XCRemoteSwiftPackageReference "WebRTC" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/stasel/WebRTC.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 146.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		48F22356AB515994AECC167E /* SwiftMLS */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -679,6 +694,11 @@
 		93FDE6A85EACB5AD144480F3 /* SwiftMLS */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = SwiftMLS;
+		};
+		B2C3D4E5F6071829A3B4C5D6 /* WebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C3D4E5F607182930A4B5C6D7 /* XCRemoteSwiftPackageReference "WebRTC" */;
+			productName = WebRTC;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

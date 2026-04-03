@@ -22,13 +22,22 @@ final class CallManager: NSObject {
     var remoteBlsPubkey: Data?
     var isMuted = false
     var isSpeaker = false
+    var isVideoEnabled = false
+    var isUsingFrontCamera = true
+    var isVideoCall = false
     var callDuration: TimeInterval = 0
+
+    /// Remote video track for rendering in the UI.
+    var remoteVideoTrack: RTCVideoTrack?
+    /// Local video track for PiP rendering.
+    var localVideoTrack: RTCVideoTrack?
 
     /// Set by AppState — sends signaling JSON over the group channel.
     var sendSignal: (([String: Any]) async throws -> Void)?
 
     private var peerConnection: RTCPeerConnection?
     private var localAudioTrack: RTCAudioTrack?
+    private var capturer: RTCCameraVideoCapturer?
     private var factory: RTCPeerConnectionFactory?
     private var durationTimer: Timer?
     private var ringTimer: Timer?
@@ -40,20 +49,23 @@ final class CallManager: NSObject {
 
     // MARK: - Start Call (Outgoing)
 
-    func startCall() async throws {
+    func startCall(video: Bool = false) async throws {
         guard state == .idle else { return }
         callId = Self.generateCallId()
         direction = .outgoing
+        isVideoCall = video
+        isVideoEnabled = video
         state = .ringing
 
         setupPeerConnection()
         addAudioTrack()
+        if video { addVideoTrack() }
 
-        let offer = try await createOffer()
+        let offer = try await createOffer(video: video)
         let signal: [String: Any] = [
             "action": "offer",
             "callId": callId,
-            "mediaType": "audio",
+            "mediaType": video ? "video" : "audio",
             "sdp": offer.sdp,
         ]
         try await sendSignal?(signal)
@@ -77,10 +89,13 @@ final class CallManager: NSObject {
             callId = incomingCallId
             direction = .incoming
             remoteBlsPubkey = senderBlsPubkey
+            isVideoCall = (callDict["mediaType"] as? String) == "video"
+            isVideoEnabled = isVideoCall
             state = .ringing
 
             setupPeerConnection()
             addAudioTrack()
+            if isVideoCall { addVideoTrack() }
 
             if let sdp = callDict["sdp"] as? String {
                 let remoteDesc = RTCSessionDescription(type: .offer, sdp: sdp)
@@ -97,7 +112,7 @@ final class CallManager: NSObject {
             }
             state = .active
             startDurationTimer()
-            configureAudioSession(speaker: false)
+            configureAudioSession(speaker: isVideoCall)
 
         case "ice":
             guard incomingCallId == callId else { return }
@@ -135,7 +150,7 @@ final class CallManager: NSObject {
         guard state == .ringing, direction == .incoming else { return }
         ringTimer?.invalidate()
 
-        let answer = try await createAnswer()
+        let answer = try await createAnswer(video: isVideoCall)
         let signal: [String: Any] = [
             "action": "answer",
             "callId": callId,
@@ -144,7 +159,7 @@ final class CallManager: NSObject {
         try await sendSignal?(signal)
         state = .active
         startDurationTimer()
-        configureAudioSession(speaker: false)
+        configureAudioSession(speaker: isVideoCall)
     }
 
     // MARK: - Reject / End
@@ -169,12 +184,18 @@ final class CallManager: NSObject {
             Task { try? await sendSignal?(signal) }
         }
 
+        capturer?.stopCapture()
+        capturer = nil
         peerConnection?.close()
         peerConnection = nil
         localAudioTrack = nil
+        localVideoTrack = nil
+        remoteVideoTrack = nil
         factory = nil
         state = .ended
         callDuration = 0
+        isVideoCall = false
+        isVideoEnabled = false
 
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
 
@@ -198,6 +219,21 @@ final class CallManager: NSObject {
     func toggleSpeaker() {
         isSpeaker.toggle()
         configureAudioSession(speaker: isSpeaker)
+    }
+
+    func toggleVideo() {
+        isVideoEnabled.toggle()
+        localVideoTrack?.isEnabled = isVideoEnabled
+        if isVideoEnabled {
+            startCapture()
+        } else {
+            capturer?.stopCapture()
+        }
+    }
+
+    func flipCamera() {
+        isUsingFrontCamera.toggle()
+        startCapture()
     }
 
     // MARK: - Private
@@ -234,11 +270,45 @@ final class CallManager: NSObject {
         pc.add(track, streamIds: ["stream0"])
     }
 
-    private func createOffer() async throws -> RTCSessionDescription {
+    private func addVideoTrack() {
+        guard let factory, let pc = peerConnection else { return }
+        let videoSource = factory.videoSource()
+        let capturer = RTCCameraVideoCapturer(delegate: videoSource)
+        self.capturer = capturer
+
+        let track = factory.videoTrack(with: videoSource, trackId: "video0")
+        localVideoTrack = track
+        pc.add(track, streamIds: ["stream0"])
+        startCapture()
+    }
+
+    private func startCapture() {
+        guard let capturer else { return }
+        let devices = RTCCameraVideoCapturer.captureDevices()
+        let position: AVCaptureDevice.Position = isUsingFrontCamera ? .front : .back
+        guard let device = devices.first(where: { $0.position == position }) ?? devices.first else { return }
+
+        // Pick a reasonable format: 640x480 or closest
+        let formats = RTCCameraVideoCapturer.supportedFormats(for: device)
+        let targetWidth: Int32 = 640
+        let format = formats.min(by: {
+            let d0 = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
+            let d1 = CMVideoFormatDescriptionGetDimensions($1.formatDescription)
+            return abs(d0.width - targetWidth) < abs(d1.width - targetWidth)
+        }) ?? formats.first
+        guard let format else { return }
+
+        let fps = format.videoSupportedFrameRateRanges
+            .max(by: { $0.maxFrameRate < $1.maxFrameRate })?
+            .maxFrameRate ?? 30
+        capturer.startCapture(with: device, format: format, fps: Int(min(fps, 30)))
+    }
+
+    private func createOffer(video: Bool = false) async throws -> RTCSessionDescription {
         let constraints = RTCMediaConstraints(
             mandatoryConstraints: [
                 "OfferToReceiveAudio": "true",
-                "OfferToReceiveVideo": "false",
+                "OfferToReceiveVideo": video ? "true" : "false",
             ],
             optionalConstraints: nil
         )
@@ -259,11 +329,11 @@ final class CallManager: NSObject {
         }
     }
 
-    private func createAnswer() async throws -> RTCSessionDescription {
+    private func createAnswer(video: Bool = false) async throws -> RTCSessionDescription {
         let constraints = RTCMediaConstraints(
             mandatoryConstraints: [
                 "OfferToReceiveAudio": "true",
-                "OfferToReceiveVideo": "false",
+                "OfferToReceiveVideo": video ? "true" : "false",
             ],
             optionalConstraints: nil
         )
@@ -339,7 +409,11 @@ private class CallPeerConnectionDelegate: NSObject, RTCPeerConnectionDelegate {
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
+    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
+        Task { @MainActor in
+            callManager?.remoteVideoTrack = stream.videoTracks.first
+        }
+    }
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
     func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}

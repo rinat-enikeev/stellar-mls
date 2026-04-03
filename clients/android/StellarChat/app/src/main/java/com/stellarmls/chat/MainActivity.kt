@@ -177,12 +177,12 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                     onBack = { navController.popBackStack() },
                     onInvite = { navController.navigate("invite/$groupId") },
                     onGroupInfo = { navController.navigate("groupinfo/$groupId") },
-                    onStartCall = {
+                    onStartCall = { video ->
                         val cm = groupListViewModel.callManager
                         cm.sendSignal = { callJson ->
                             groupListViewModel.sendCallSignal(groupId, callJson)
                         }
-                        cm.startCall()
+                        cm.startCall(video)
                     },
                     contactAliasStore = groupListViewModel.contactAliasStore
                 )

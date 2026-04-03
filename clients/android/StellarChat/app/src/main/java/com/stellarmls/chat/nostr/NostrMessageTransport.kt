@@ -10,6 +10,10 @@ import com.stellarmls.mls.SEPGroupRenamed
 import com.stellarmls.mls.SEPGroupStateUpdate
 import com.stellarmls.mls.SEPMemberJoined
 import com.stellarmls.mls.SEPMessageAck
+import com.stellarmls.mls.SEPRekey
+import com.stellarmls.mls.SEPRekeyAck
+import com.stellarmls.mls.SEPRekeyResendRequest
+import com.stellarmls.mls.SEPRemovalNotice
 import com.stellarmls.mls.SEPSaltRequest
 import com.stellarmls.mls.SEPSaltResponse
 import kotlinx.coroutines.CoroutineScope
@@ -33,13 +37,15 @@ class NostrMessageTransport(
         "wss://nostr.wine"
     )
 ) {
-    private val connections = mutableListOf<NostrRelayConnection>()
+    private val _connections = mutableListOf<NostrRelayConnection>()
+    /** Read-only access to relay connections for sending raw events (e.g., inbox rekeys). */
+    val connections: List<NostrRelayConnection> get() = _connections
     private val subscriptionJobs = ConcurrentHashMap<String, Job>()
     private val scope = CoroutineScope(Dispatchers.IO)
 
     /** Whether at least one relay connection is active. */
     val isAnyRelayConnected: Boolean
-        get() = connections.any { it.isConnected }
+        get() = _connections.any { it.isConnected }
 
     /** Called when any relay's connection state changes. */
     var onConnectionChange: (() -> Unit)? = null
@@ -67,15 +73,15 @@ class NostrMessageTransport(
                 onConnectionChange?.invoke()
             }
             conn.connect()
-            connections.add(conn)
+            _connections.add(conn)
         }
     }
 
     fun disconnect() {
         subscriptionJobs.values.forEach { it.cancel() }
         subscriptionJobs.clear()
-        connections.forEach { it.disconnect() }
-        connections.clear()
+        _connections.forEach { it.disconnect() }
+        _connections.clear()
     }
 
     fun subscribe(group: ChatGroup, sinceTimestamp: Long? = null) {
@@ -107,6 +113,15 @@ class NostrMessageTransport(
                 .onEach { event -> handleIncomingEvent(event, groupID, key) }
                 .launchIn(scope)
             subscriptionJobs["$topicKey-${conn.hashCode()}"] = job
+        }
+    }
+
+    /** Unsubscribe from a group's topic, cancelling all associated subscription jobs. */
+    fun unsubscribe(topicTag: String) {
+        val topicKey = "chat-$topicTag"
+        val toRemove = subscriptionJobs.keys.filter { it.startsWith(topicKey) }
+        for (key in toRemove) {
+            subscriptionJobs.remove(key)?.cancel()
         }
     }
 
@@ -312,6 +327,15 @@ class NostrMessageTransport(
                         }
                     }
                 }
+                SEPRemovalNotice.MESSAGE_TYPE -> {
+                    val removedArr = obj.optJSONArray("removedMemberKeys")
+                    if (removedArr != null) {
+                        for (i in 0 until removedArr.length()) {
+                            val removed = android.util.Base64.decode(removedArr.getString(i), android.util.Base64.NO_WRAP)
+                            currentMembers.removeAll { it.publicKeyCompressed.contentEquals(removed) }
+                        }
+                    }
+                }
             }
         } catch (_: Exception) { }
     }
@@ -327,7 +351,11 @@ class NostrMessageTransport(
                 SEPSaltRequest.MESSAGE_TYPE,
                 SEPSaltResponse.MESSAGE_TYPE,
                 SEPGroupRenamed.MESSAGE_TYPE,
-                SEPMessageAck.MESSAGE_TYPE
+                SEPMessageAck.MESSAGE_TYPE,
+                SEPRekey.MESSAGE_TYPE,
+                SEPRemovalNotice.MESSAGE_TYPE,
+                SEPRekeyAck.MESSAGE_TYPE,
+                SEPRekeyResendRequest.MESSAGE_TYPE
             )
         } catch (_: Exception) {
             false

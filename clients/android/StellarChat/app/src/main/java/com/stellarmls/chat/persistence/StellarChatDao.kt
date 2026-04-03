@@ -33,4 +33,39 @@ interface StellarChatDao {
 
     @Query("DELETE FROM contact_aliases WHERE pubkey = :pubkey")
     suspend fun deleteContactAlias(pubkey: String)
+
+    // Transport bundles
+    @Query("SELECT * FROM transport_bundles WHERE groupID = :groupID")
+    suspend fun loadTransportBundles(groupID: String): List<PersistedTransportBundle>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveTransportBundle(bundle: PersistedTransportBundle)
+
+    @Query("DELETE FROM transport_bundles WHERE groupID = :groupID")
+    suspend fun deleteTransportBundles(groupID: String)
+
+    @Query("DELETE FROM transport_bundles WHERE groupID = :groupID AND blsPubkeyHex = :blsPubkeyHex")
+    suspend fun deleteTransportBundle(groupID: String, blsPubkeyHex: String)
+
+    // Pending rekeys
+    @Query("SELECT * FROM pending_rekeys WHERE groupID = :groupID")
+    suspend fun loadPendingRekeys(groupID: String): List<PersistedPendingRekey>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun savePendingRekey(rekey: PersistedPendingRekey)
+
+    @Query("DELETE FROM pending_rekeys WHERE groupID = :groupID AND epoch = :epoch")
+    suspend fun deletePendingRekey(groupID: String, epoch: Int)
+
+    @Query("UPDATE pending_rekeys SET unackedMemberKeysJSON = :unackedJSON WHERE groupID = :groupID AND epoch = :epoch")
+    suspend fun updatePendingRekeyUnacked(groupID: String, epoch: Int, unackedJSON: String)
+
+    @Query("UPDATE pending_rekeys SET retryCount = retryCount + 1 WHERE groupID = :groupID AND epoch = :epoch")
+    suspend fun incrementPendingRekeyRetry(groupID: String, epoch: Int)
+
+    @Query("SELECT * FROM pending_rekeys")
+    suspend fun loadAllPendingRekeys(): List<PersistedPendingRekey>
+
+    @Query("SELECT COUNT(*) FROM pending_rekeys WHERE groupID = :groupID AND epoch = :epoch AND isRemovalEpoch = 1")
+    suspend fun isRemovalEpoch(groupID: String, epoch: Int): Int
 }

@@ -13,7 +13,11 @@ data class SEPGroupStateUpdate(
     val addedMembers: List<SEPGroupMemberLeaf> = emptyList(),
     val removedMemberKeys: List<ByteArray> = emptyList(),
     val commitment: ByteArray? = null,
-    val senderAttestation: SEPKeyAttestationPayload? = null
+    val senderAttestation: SEPKeyAttestationPayload? = null,
+    val senderTransportBundle: SEPMemberTransportBundle? = null,
+    /** All known transport bundles for group members. Enables secure rekey
+     *  by distributing bundles to members who joined after others. */
+    val memberBundles: List<SEPMemberTransportBundle> = emptyList()
 ) {
     companion object {
         const val MESSAGE_TYPE = "sep_state_update"
@@ -35,7 +39,8 @@ data class SEPGroupStateUpdate(
  */
 data class SEPMemberJoined(
     val type: String = MESSAGE_TYPE,
-    val member: SEPGroupMemberLeaf
+    val member: SEPGroupMemberLeaf,
+    val transportBundle: SEPMemberTransportBundle? = null
 ) {
     companion object {
         const val MESSAGE_TYPE = "sep_member_joined"
@@ -102,6 +107,30 @@ data class SEPKeyAttestationPayload(
 }
 
 /**
+ * Post-removal re-key message. Sent immediately after a member removal state update.
+ * Contains the real salt (the state update carries a poisoned/placeholder salt so the
+ * removed member cannot derive the new encryption key). Encrypted with the key derived
+ * from the poisoned salt — only members still subscribed will receive and process it.
+ */
+data class SEPRekey(
+    val type: String = MESSAGE_TYPE,
+    val epoch: Long,
+    val salt: ByteArray
+) {
+    companion object {
+        const val MESSAGE_TYPE = "sep_rekey"
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is SEPRekey) return false
+        return epoch == other.epoch && salt.contentEquals(other.salt)
+    }
+
+    override fun hashCode(): Int = 31 * epoch.hashCode() + salt.contentHashCode()
+}
+
+/**
  * Delivery acknowledgment sent when a member receives and decrypts a message.
  * Each device sends at most one ACK per original event ID.
  */
@@ -124,6 +153,160 @@ data class SEPGroupRenamed(
     companion object {
         const val MESSAGE_TYPE = "sep_group_renamed"
     }
+}
+
+// MARK: - Authenticated Member Transport Bundle
+
+/**
+ * Authenticated mapping from a group member to their X25519 inbox encryption key.
+ * Enables per-member asymmetric delivery of rekey material during removals.
+ * The signature covers a domain-separated hash of all fields, signed by the member's
+ * Stellar Ed25519 key, ensuring the inbox key cannot be spoofed.
+ */
+data class SEPMemberTransportBundle(
+    val blsPubkey: ByteArray,            // 48 bytes, compressed G1
+    val stellarEd25519Pubkey: ByteArray, // 32 bytes
+    val x25519InboxPubkey: ByteArray,    // 32 bytes
+    val version: Int = CURRENT_VERSION,  // u16
+    val signature: ByteArray             // 64 bytes, Ed25519
+) {
+    companion object {
+        const val CURRENT_VERSION = 1
+    }
+
+    val hasValidStructure: Boolean
+        get() = blsPubkey.size == 48 &&
+                stellarEd25519Pubkey.size == 32 &&
+                x25519InboxPubkey.size == 32 &&
+                signature.size == 64
+
+    /** Domain-separated binding message:
+     *  SHA-256("SEP-XXXX:member-transport-v1" || bls || stellar || x25519 || version) */
+    fun computeBindingMessage(): ByteArray {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        digest.update("SEP-XXXX:member-transport-v1".toByteArray())
+        digest.update(blsPubkey)
+        digest.update(stellarEd25519Pubkey)
+        digest.update(x25519InboxPubkey)
+        digest.update(byteArrayOf((version shr 8).toByte(), version.toByte()))
+        return digest.digest()
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is SEPMemberTransportBundle) return false
+        return blsPubkey.contentEquals(other.blsPubkey) &&
+                stellarEd25519Pubkey.contentEquals(other.stellarEd25519Pubkey) &&
+                x25519InboxPubkey.contentEquals(other.x25519InboxPubkey) &&
+                version == other.version &&
+                signature.contentEquals(other.signature)
+    }
+
+    override fun hashCode(): Int {
+        var result = blsPubkey.contentHashCode()
+        result = 31 * result + stellarEd25519Pubkey.contentHashCode()
+        result = 31 * result + x25519InboxPubkey.contentHashCode()
+        result = 31 * result + version
+        result = 31 * result + signature.contentHashCode()
+        return result
+    }
+}
+
+/**
+ * Non-secret notice broadcast on the old group channel during a secure removal.
+ * Does NOT contain new groupSecret or salt — only metadata.
+ */
+data class SEPRemovalNotice(
+    val type: String = MESSAGE_TYPE,
+    val groupID: ByteArray,
+    val epoch: Long,
+    val removedMemberKeys: List<ByteArray>,
+    val commitment: ByteArray? = null
+) {
+    companion object {
+        const val MESSAGE_TYPE = "sep_removal_notice"
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is SEPRemovalNotice) return false
+        return groupID.contentEquals(other.groupID) && epoch == other.epoch
+    }
+
+    override fun hashCode(): Int = 31 * groupID.contentHashCode() + epoch.hashCode()
+}
+
+/**
+ * Per-member rekey envelope delivered via X25519 inbox transport.
+ * Contains fresh groupSecret and salt that the removed member never receives.
+ */
+data class SEPRekeyEnvelope(
+    val type: String = MESSAGE_TYPE,
+    val groupID: ByteArray,           // 32 bytes
+    val epoch: Long,
+    val groupSecret: ByteArray,       // 32 bytes — the NEW group secret
+    val salt: ByteArray,              // 32 bytes — the NEW salt
+    val commitment: ByteArray? = null,
+    val memberBundles: List<SEPMemberTransportBundle>,
+    val removedMemberKeys: List<ByteArray>,
+    val relayHints: List<String>,
+    val senderBundle: SEPMemberTransportBundle
+) {
+    companion object {
+        const val MESSAGE_TYPE = "sep_rekey_envelope"
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is SEPRekeyEnvelope) return false
+        return groupID.contentEquals(other.groupID) && epoch == other.epoch
+    }
+
+    override fun hashCode(): Int = 31 * groupID.contentHashCode() + epoch.hashCode()
+}
+
+/**
+ * Acknowledgment that a member received and installed a rekey envelope.
+ */
+data class SEPRekeyAck(
+    val type: String = MESSAGE_TYPE,
+    val groupID: ByteArray,
+    val epoch: Long,
+    val senderBlsPubkey: ByteArray
+) {
+    companion object {
+        const val MESSAGE_TYPE = "sep_rekey_ack"
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is SEPRekeyAck) return false
+        return groupID.contentEquals(other.groupID) && epoch == other.epoch
+    }
+
+    override fun hashCode(): Int = 31 * groupID.contentHashCode() + epoch.hashCode()
+}
+
+/**
+ * Request for a rekey envelope resend (sent via inbox when a member misses the original).
+ */
+data class SEPRekeyResendRequest(
+    val type: String = MESSAGE_TYPE,
+    val groupID: ByteArray,
+    val epoch: Long,
+    val requesterBundle: SEPMemberTransportBundle
+) {
+    companion object {
+        const val MESSAGE_TYPE = "sep_rekey_resend_request"
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is SEPRekeyResendRequest) return false
+        return groupID.contentEquals(other.groupID) && epoch == other.epoch
+    }
+
+    override fun hashCode(): Int = 31 * groupID.contentHashCode() + epoch.hashCode()
 }
 
 /**

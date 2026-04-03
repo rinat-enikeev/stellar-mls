@@ -63,6 +63,7 @@ class InvitationTransport(private val keyManager: KeyManager) {
     private val scope = CoroutineScope(Dispatchers.IO)
 
     var onInvitation: ((PendingInvitation) -> Unit)? = null
+    var onRekeyEnvelope: ((JSONObject) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
 
     fun connect(relayURLs: List<String>) {
@@ -138,6 +139,22 @@ class InvitationTransport(private val keyManager: KeyManager) {
         }
     }
 
+    /** Publish a pre-built event to all connected relays. */
+    fun publishToRelays(event: NostrEvent, relayURLs: List<String> = emptyList()) {
+        if (connections.isEmpty() && relayURLs.isNotEmpty()) {
+            if (com.stellarmls.chat.BuildConfig.DEBUG) {
+                android.util.Log.d("InvitationTransport", "publishToRelays: no connections — connecting to ${relayURLs.size} relays")
+            }
+            connect(relayURLs)
+        }
+        if (com.stellarmls.chat.BuildConfig.DEBUG) {
+            android.util.Log.d("InvitationTransport", "publishToRelays: connections=${connections.size}")
+        }
+        for (conn in connections) {
+            conn.publish(event)
+        }
+    }
+
     private fun handleInvitationEvent(event: NostrEvent, privateKey: X25519PrivateKeyParameters) {
         try {
             if (com.stellarmls.chat.BuildConfig.DEBUG) {
@@ -153,15 +170,28 @@ class InvitationTransport(private val keyManager: KeyManager) {
 
             // Decrypt using X25519 ECDH
             val payloadBytes = GroupCrypto.decryptInvitation(envelopeJson, privateKey)
-            val payload = BootstrapPayload.fromJson(String(payloadBytes))
+            val payloadStr = String(payloadBytes)
+            val payloadObj = try { JSONObject(payloadStr) } catch (_: Exception) { null }
 
-            val invitation = PendingInvitation(
-                id = event.id,
-                payload = payload,
-                receivedAt = Date(event.displayMilliseconds)
-            )
-
-            onInvitation?.invoke(invitation)
+            // Dispatch: rekey envelope or invitation
+            val msgType = payloadObj?.optString("type", "") ?: ""
+            if (com.stellarmls.chat.BuildConfig.DEBUG) {
+                android.util.Log.d("InvitationTransport", "Decrypted payload type=$msgType len=${payloadStr.length}")
+            }
+            if (msgType == com.stellarmls.mls.SEPRekeyEnvelope.MESSAGE_TYPE) {
+                if (com.stellarmls.chat.BuildConfig.DEBUG) {
+                    android.util.Log.d("InvitationTransport", "Dispatching rekey envelope")
+                }
+                onRekeyEnvelope?.invoke(payloadObj!!)
+            } else {
+                val payload = BootstrapPayload.fromJson(payloadStr)
+                val invitation = PendingInvitation(
+                    id = event.id,
+                    payload = payload,
+                    receivedAt = Date(event.displayMilliseconds)
+                )
+                onInvitation?.invoke(invitation)
+            }
         } catch (e: Exception) {
             if (com.stellarmls.chat.BuildConfig.DEBUG) {
                 android.util.Log.d(

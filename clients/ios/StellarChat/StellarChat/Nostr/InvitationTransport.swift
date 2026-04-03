@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import SwiftMLS
 
 /// Sends kind 34113 invitation events over Nostr relays and still listens for
 /// legacy kind 24113 events during migration.
@@ -18,6 +19,8 @@ final class InvitationTransport {
 
     /// Called when an invitation is successfully decrypted.
     var onInvitation: ((PendingInvitation) -> Void)?
+    /// Called when a rekey envelope is successfully decrypted.
+    var onRekeyEnvelope: ((SEPRekeyEnvelope) -> Void)?
     /// Called on transport-level errors.
     var onError: ((String) -> Void)?
 
@@ -132,17 +135,66 @@ final class InvitationTransport {
             keyManager: keyManager
         )
 
-        var published = false
-        for conn in connections.values {
-            do {
-                try await conn.publish(event: event)
-                published = true
-            } catch {
-                onError?("Relay publish failed: \(error.localizedDescription)")
+        let conns = Array(connections.values)
+        let published = await withTaskGroup(of: Bool.self) { group in
+            for conn in conns {
+                group.addTask {
+                    do {
+                        try await conn.publish(event: event)
+                        return true
+                    } catch {
+                        return false
+                    }
+                }
             }
+            var any = false
+            for await result in group {
+                if result { any = true }
+            }
+            return any
         }
 
-        if !published && !connections.isEmpty {
+        if !published && !conns.isEmpty {
+            throw ChatError.relayPublishFailed
+        }
+    }
+
+    /// Publish a pre-built event to all connected relays (concurrently).
+    func publishToRelays(_ event: NostrEvent, relayURLs: [URL] = []) async throws {
+        if connections.isEmpty && !relayURLs.isEmpty {
+            #if DEBUG
+            print("[Invite] publishToRelays: no connections — connecting to \(relayURLs.count) relays")
+            #endif
+            await connect(to: relayURLs)
+        }
+        let conns = Array(connections.values)
+        #if DEBUG
+        print("[Invite] publishToRelays: publishing to \(conns.count) connections")
+        #endif
+        guard !conns.isEmpty else {
+            throw ChatError.relayPublishFailed
+        }
+        let published = await withTaskGroup(of: Bool.self) { group in
+            for conn in conns {
+                group.addTask {
+                    do {
+                        try await conn.publish(event: event)
+                        return true
+                    } catch {
+                        return false
+                    }
+                }
+            }
+            var any = false
+            for await result in group {
+                if result { any = true }
+            }
+            return any
+        }
+        #if DEBUG
+        print("[Invite] publishToRelays: published=\(published)")
+        #endif
+        if !published {
             throw ChatError.relayPublishFailed
         }
     }
@@ -174,13 +226,19 @@ final class InvitationTransport {
 
         do {
             let payloadData = try GroupCrypto.decryptInvitation(envelope, privateKey: privateKey)
-            let payload = try JSONDecoder().decode(BootstrapPayload.self, from: payloadData)
-            let invitation = PendingInvitation(
-                id: event.id,
-                payload: payload,
-                receivedAt: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0)
-            )
-            onInvitation?(invitation)
+            // Try to parse as rekey envelope first, then as invitation
+            if let rekeyEnvelope = try? JSONDecoder().decode(SEPRekeyEnvelope.self, from: payloadData),
+               rekeyEnvelope.type == SEPRekeyEnvelope.messageType {
+                onRekeyEnvelope?(rekeyEnvelope)
+            } else {
+                let payload = try JSONDecoder().decode(BootstrapPayload.self, from: payloadData)
+                let invitation = PendingInvitation(
+                    id: event.id,
+                    payload: payload,
+                    receivedAt: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0)
+                )
+                onInvitation?(invitation)
+            }
         } catch {
             #if DEBUG
             print("[Invite] Ignored event \(event.id.prefix(12)): \(error.localizedDescription)")

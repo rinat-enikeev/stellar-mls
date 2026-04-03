@@ -9,6 +9,7 @@ struct GroupInfoView: View {
     @State private var showRemoveConfirmation = false
     @State private var removalStatus: String?
     @State private var removalStatusIsError = false
+    @State private var isRemovingMember = false
     @State private var showRenameAlert = false
     @State private var newGroupName = ""
 
@@ -66,6 +67,7 @@ struct GroupInfoView: View {
                                 } label: {
                                     Image(systemName: "person.badge.minus")
                                 }
+                                .disabled(isRemovingMember)
                             }
                         }
                     }
@@ -84,6 +86,17 @@ struct GroupInfoView: View {
                     Text("Generate a new encryption key without changing membership. Provides forward secrecy.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                }
+
+                if isRemovingMember {
+                    Section {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("Removing member and updating on-chain state...")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
 
                 if let status = removalStatus {
@@ -132,6 +145,8 @@ struct GroupInfoView: View {
     }
 
     private func removeMember(_ member: SEPGroupMemberLeaf) {
+        isRemovingMember = true
+        removalStatus = nil
         Task {
             do {
                 try await appState.removeMember(blsPubkey: member.publicKeyCompressed, from: group.id)
@@ -142,6 +157,7 @@ struct GroupInfoView: View {
                 removalStatus = error.localizedDescription
                 removalStatusIsError = true
             }
+            isRemovingMember = false
         }
     }
 }

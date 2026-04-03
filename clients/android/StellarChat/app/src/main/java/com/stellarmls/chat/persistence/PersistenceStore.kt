@@ -40,6 +40,94 @@ class PersistenceStore(context: Context) {
         dao.saveMessage(encryptMessage(message))
     }
 
+    // -- Transport Bundles --
+
+    suspend fun loadTransportBundles(groupID: String): Map<String, com.stellarmls.mls.SEPMemberTransportBundle> {
+        val result = mutableMapOf<String, com.stellarmls.mls.SEPMemberTransportBundle>()
+        for (persisted in dao.loadTransportBundles(groupID)) {
+            try {
+                val json = String(StorageEncryption.decrypt(persisted.encryptedBundle))
+                val bundle = deserializeTransportBundle(json)
+                result[persisted.blsPubkeyHex] = bundle
+            } catch (_: Exception) { }
+        }
+        return result
+    }
+
+    suspend fun saveTransportBundle(bundle: com.stellarmls.mls.SEPMemberTransportBundle, groupID: String) {
+        val json = serializeTransportBundle(bundle)
+        val encrypted = StorageEncryption.encrypt(json.toByteArray())
+        val hex = bundle.blsPubkey.toHex()
+        dao.saveTransportBundle(PersistedTransportBundle(groupID, hex, encrypted))
+    }
+
+    suspend fun deleteTransportBundles(groupID: String) {
+        dao.deleteTransportBundles(groupID)
+    }
+
+    // -- Pending Rekeys --
+
+    suspend fun savePendingRekey(
+        groupID: String, epoch: Int, envelopeJson: String,
+        unackedKeys: List<String>, isRemovalEpoch: Boolean
+    ) {
+        val encrypted = StorageEncryption.encrypt(envelopeJson.toByteArray())
+        dao.savePendingRekey(PersistedPendingRekey(
+            id = "$groupID-$epoch",
+            groupID = groupID,
+            epoch = epoch,
+            encryptedEnvelope = encrypted,
+            unackedMemberKeysJSON = org.json.JSONArray(unackedKeys).toString(),
+            isRemovalEpoch = isRemovalEpoch
+        ))
+    }
+
+    suspend fun loadPendingRekeys(groupID: String): List<PersistedPendingRekey> {
+        return dao.loadPendingRekeys(groupID)
+    }
+
+    suspend fun deletePendingRekey(groupID: String, epoch: Int) {
+        dao.deletePendingRekey(groupID, epoch)
+    }
+
+    /** Remove a single member from the unacked set. Deletes the record if all members have acked. */
+    suspend fun updatePendingRekeyAck(groupID: String, epoch: Int, ackedMemberHex: String) {
+        val records = dao.loadPendingRekeys(groupID)
+        val record = records.firstOrNull { it.epoch == epoch } ?: return
+        val keys = try {
+            val arr = org.json.JSONArray(record.unackedMemberKeysJSON)
+            (0 until arr.length()).map { arr.getString(it) }.toMutableList()
+        } catch (_: Exception) { mutableListOf() }
+        keys.removeAll { it == ackedMemberHex }
+        if (keys.isEmpty()) {
+            dao.deletePendingRekey(groupID, epoch)
+        } else {
+            dao.updatePendingRekeyUnacked(groupID, epoch, org.json.JSONArray(keys).toString())
+        }
+    }
+
+    suspend fun incrementPendingRekeyRetry(groupID: String, epoch: Int) {
+        dao.incrementPendingRekeyRetry(groupID, epoch)
+    }
+
+    suspend fun loadAllPendingRekeys(): List<PersistedPendingRekey> {
+        return dao.loadAllPendingRekeys()
+    }
+
+    suspend fun isRemovalEpoch(groupID: String, epoch: Int): Boolean {
+        return dao.isRemovalEpoch(groupID, epoch) > 0
+    }
+
+    // -- Transport Bundle Serialization --
+
+    private fun serializeTransportBundle(bundle: com.stellarmls.mls.SEPMemberTransportBundle): String {
+        return com.stellarmls.chat.model.BootstrapPayload.serializeTransportBundle(bundle).toString()
+    }
+
+    private fun deserializeTransportBundle(json: String): com.stellarmls.mls.SEPMemberTransportBundle {
+        return com.stellarmls.chat.model.BootstrapPayload.deserializeTransportBundle(org.json.JSONObject(json))
+    }
+
     // -- Encryption helpers --
 
     private fun encryptGroup(group: ChatGroup): PersistedGroup {

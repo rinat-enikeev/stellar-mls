@@ -223,6 +223,13 @@ final class NostrMessageTransport {
                 }
             }
         }
+
+        // SEPRemovalNotice — strip removed members immediately so BLS rejects their messages
+        if let notice = try? decoder.decode(SEPRemovalNotice.self, from: data) {
+            for removed in notice.removedMemberKeys {
+                currentMembers.removeAll { $0.publicKeyCompressed == removed }
+            }
+        }
     }
 
     func unsubscribe(topic: String) {

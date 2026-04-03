@@ -20,14 +20,10 @@ struct ChatView: View {
     @State private var videoDuration: Int?
     @State private var showCallScreen = false
 
-    @State private var showInviteBanner = true
+    @State private var inviteLinkCopied = false
 
     var body: some View {
         VStack(spacing: 0) {
-            if showInviteBanner, let group = viewModel.group {
-                InviteBanner(group: group) { showInviteBanner = false }
-            }
-
             if viewModel.messages.isEmpty {
                 Spacer()
                 ContentUnavailableView(
@@ -263,6 +259,26 @@ struct ChatView: View {
                         showInvite = true
                     } label: {
                         Image(systemName: "person.badge.plus")
+                    }
+                    Button {
+                        if let group = viewModel.group {
+                            let code = InviteCode(
+                                groupID: group.groupIDData,
+                                groupSecret: group.groupSecret,
+                                name: group.name,
+                                relayHints: group.relayHints.map(\.absoluteString),
+                                members: group.members,
+                                epoch: group.epoch,
+                                salt: group.salt,
+                                commitment: group.commitment,
+                                tierRawValue: group.tier.rawValue
+                            )
+                            UIPasteboard.general.string = "stellarchat://join?code=\(code.encode())"
+                            inviteLinkCopied = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { inviteLinkCopied = false }
+                        }
+                    } label: {
+                        Image(systemName: inviteLinkCopied ? "checkmark" : "link")
                     }
                 }
             }
@@ -592,67 +608,6 @@ struct ImageBubbleContent: View {
                 await MainActor.run { isLoading = false }
             }
         }
-    }
-}
-
-// MARK: - Invite Banner
-
-private struct InviteBanner: View {
-    let group: ChatGroup
-    let onDismiss: () -> Void
-    @State private var copied = false
-
-    private var inviteCode: String {
-        let code = InviteCode(
-            groupID: group.groupIDData,
-            groupSecret: group.groupSecret,
-            name: group.name,
-            relayHints: group.relayHints.map(\.absoluteString),
-            members: group.members,
-            epoch: group.epoch,
-            salt: group.salt,
-            commitment: group.commitment,
-            tierRawValue: group.tier.rawValue
-        )
-        return code.encode()
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "link")
-                .foregroundStyle(.secondary)
-                .font(.caption)
-
-            Text("Invite Link")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Spacer()
-
-            Button {
-                let deepLink = "stellarchat://join?code=\(inviteCode)"
-                UIPasteboard.general.string = deepLink
-                copied = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
-            } label: {
-                Text(copied ? "Copied!" : "Copy")
-                    .font(.caption)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.mini)
-
-            Button {
-                onDismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(.bar)
     }
 }
 

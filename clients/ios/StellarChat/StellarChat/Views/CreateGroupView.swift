@@ -269,10 +269,20 @@ struct CreateGroupView: View {
         }
 
         if !invitationStatuses.isEmpty {
-            Section("Invitation Results") {
+            Section("Invitations") {
+                let sendingCount = invitationStatuses.values.filter { if case .sending = $0 { return true }; return false }.count
                 let sentCount = invitationStatuses.values.filter { if case .sent = $0 { return true }; return false }.count
                 let failedCount = invitationStatuses.values.filter { if case .failed = $0 { return true }; return false }.count
 
+                if sendingCount > 0 {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Sending \(sendingCount) invitation\(sendingCount == 1 ? "" : "s")...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 if sentCount > 0 {
                     Label("\(sentCount) invitation\(sentCount == 1 ? "" : "s") sent", systemImage: "checkmark.circle.fill")
                         .font(.caption)
@@ -393,14 +403,10 @@ struct CreateGroupView: View {
                     }
                 }
 
-                // Send invitations
-                #if DEBUG
-                print("[CreateGroup] about to sendInvitations")
-                #endif
-                await sendInvitations(to: group)
-                #if DEBUG
-                print("[CreateGroup] sendInvitations returned, setting phase=done")
-                #endif
+                // Send invitations in background, transition to done immediately
+                if !participantKeys.isEmpty {
+                    fireInvitations(to: group)
+                }
                 phase = .done
             } catch {
                 errorMessage = error.localizedDescription
@@ -417,7 +423,9 @@ struct CreateGroupView: View {
             do {
                 try await appState.publishGroupOnChain(group)
                 onChainStatus = .published
-                await sendInvitations(to: group)
+                if !participantKeys.isEmpty {
+                    fireInvitations(to: group)
+                }
                 phase = .done
             } catch {
                 onChainStatus = .failed(error.localizedDescription)
@@ -427,62 +435,48 @@ struct CreateGroupView: View {
 
     private func skipOnChainAndContinue() {
         guard let group = createdGroup else { return }
-        Task {
-            await sendInvitations(to: group)
-            phase = .done
+        if !participantKeys.isEmpty {
+            fireInvitations(to: group)
         }
+        phase = .done
     }
 
-    private func sendInvitations(to group: ChatGroup) async {
-        guard !participantKeys.isEmpty else { return }
-        phase = .inviting
+    /// Fire invitation sending in the background — does not block the UI.
+    private func fireInvitations(to group: ChatGroup) {
+        let keys = participantKeys
+        let transport = appState.invitationTransport
+        let relayURLs = appState.relayURLs
+        let keyManager = appState.keyManager
 
-        #if DEBUG
-        print("[CreateGroup] sendInvitations start, keys=\(participantKeys.count)")
-        #endif
-
-        await appState.invitationTransport.connect(to: appState.relayURLs)
-
-        #if DEBUG
-        print("[CreateGroup] invitationTransport connected")
-        #endif
-
-        for key in participantKeys {
+        // Mark all as sending immediately
+        for key in keys {
             invitationStatuses[key] = .sending
-            do {
-                guard let pubkeyData = hexToData(key), pubkeyData.count == 32 else {
-                    invitationStatuses[key] = .failed("Invalid key format")
-                    continue
-                }
-                let payload = BootstrapPayload.from(
-                    group: group,
-                    senderPubkey: appState.keyManager.publicKeyHex
-                )
-                #if DEBUG
-                print("[CreateGroup] sending invitation to \(key.prefix(8))...")
-                #endif
-
-                try await appState.invitationTransport.sendInvitation(
-                    payload: payload,
-                    recipientKeyAgreementPubkey: pubkeyData,
-                    keyManager: appState.keyManager
-                )
-
-                #if DEBUG
-                print("[CreateGroup] invitation sent to \(key.prefix(8))")
-                #endif
-                invitationStatuses[key] = .sent
-            } catch {
-                #if DEBUG
-                print("[CreateGroup] invitation failed for \(key.prefix(8)): \(error)")
-                #endif
-                invitationStatuses[key] = .failed(error.localizedDescription)
-            }
         }
 
-        #if DEBUG
-        print("[CreateGroup] sendInvitations done")
-        #endif
+        Task {
+            await transport.connect(to: relayURLs)
+
+            for key in keys {
+                do {
+                    guard let pubkeyData = hexToData(key), pubkeyData.count == 32 else {
+                        invitationStatuses[key] = .failed("Invalid key format")
+                        continue
+                    }
+                    let payload = BootstrapPayload.from(
+                        group: group,
+                        senderPubkey: keyManager.publicKeyHex
+                    )
+                    try await transport.sendInvitation(
+                        payload: payload,
+                        recipientKeyAgreementPubkey: pubkeyData,
+                        keyManager: keyManager
+                    )
+                    invitationStatuses[key] = .sent
+                } catch {
+                    invitationStatuses[key] = .failed(error.localizedDescription)
+                }
+            }
+        }
     }
 
     /// M-15: Sanitize group name — strip control characters and enforce length limit.

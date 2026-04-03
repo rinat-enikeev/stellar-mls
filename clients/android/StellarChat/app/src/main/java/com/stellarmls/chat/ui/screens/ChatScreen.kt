@@ -152,8 +152,7 @@ fun ChatScreen(
         }
     }
 
-    var showInviteBanner by remember { mutableStateOf(true) }
-    var inviteCopied by remember { mutableStateOf(false) }
+    var inviteLinkCopied by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -177,6 +176,23 @@ fun ChatScreen(
                     IconButton(onClick = onInvite) {
                         Icon(Icons.Filled.PersonAdd, contentDescription = "Invite Member")
                     }
+                    IconButton(onClick = {
+                        val link = viewModel.inviteLink
+                        if (link != null) {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Invite Link", link))
+                            inviteLinkCopied = true
+                            scope.launch {
+                                kotlinx.coroutines.delay(2000)
+                                inviteLinkCopied = false
+                            }
+                        }
+                    }) {
+                        Icon(
+                            if (inviteLinkCopied) Icons.Filled.Check else Icons.Filled.Share,
+                            contentDescription = "Copy Invite Link"
+                        )
+                    }
                 }
             )
         }
@@ -187,63 +203,6 @@ fun ChatScreen(
                 .padding(padding)
                 .imePadding()
         ) {
-            // Invite link banner
-            if (showInviteBanner) {
-                val inviteLink = viewModel.inviteLink
-                if (inviteLink != null) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Filled.Share,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                "Invite Link",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.weight(1f))
-                            TextButton(
-                                onClick = {
-                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Invite Link", inviteLink))
-                                    inviteCopied = true
-                                    scope.launch {
-                                        kotlinx.coroutines.delay(2000)
-                                        inviteCopied = false
-                                    }
-                                },
-                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                            ) {
-                                Text(
-                                    if (inviteCopied) "Copied!" else "Copy",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                            IconButton(
-                                onClick = { showInviteBanner = false },
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(
-                                    Icons.Filled.Close,
-                                    contentDescription = "Dismiss",
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
             if (viewModel.messages.isEmpty()) {
                 // Empty state
                 Column(

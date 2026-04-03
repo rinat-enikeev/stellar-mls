@@ -150,6 +150,22 @@ final class InvitationTransport {
         }
     }
 
+    /// Publish a pre-built event to all connected relays.
+    func publishToRelays(_ event: NostrEvent) async throws {
+        var published = false
+        for conn in connections.values {
+            do {
+                try await conn.publish(event: event)
+                published = true
+            } catch {
+                onError?("Relay publish failed: \(error.localizedDescription)")
+            }
+        }
+        if !published && !connections.isEmpty {
+            throw ChatError.relayPublishFailed
+        }
+    }
+
     // MARK: - Private
 
     private func handleInvitationEvent(

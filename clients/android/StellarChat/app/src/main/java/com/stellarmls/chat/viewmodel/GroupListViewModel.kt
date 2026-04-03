@@ -438,17 +438,29 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         val groupIDBytes = android.util.Base64.decode(obj.getString("groupID"), android.util.Base64.NO_WRAP)
         val groupIDHex = groupIDBytes.toHex()
         val epoch = obj.getLong("epoch")
+        if (BuildConfig.DEBUG) Log.d("GroupListVM", "applyRekeyEnvelope: group=${groupIDHex.take(8)} epoch=$epoch")
         val index = groups.indexOfFirst { it.id == groupIDHex }
-        if (index < 0) return
+        if (index < 0) {
+            if (BuildConfig.DEBUG) Log.w("GroupListVM", "applyRekeyEnvelope: group not found ${groupIDHex.take(8)}")
+            return
+        }
         var group = cloneGroup(groups[index])
 
         // Only apply if epoch is ahead
-        if (epoch <= group.epoch) return
+        if (epoch <= group.epoch) {
+            if (BuildConfig.DEBUG) Log.w("GroupListVM", "applyRekeyEnvelope: stale epoch=$epoch <= current=${group.epoch}")
+            return
+        }
 
         // Verify sender bundle signature AND membership
-        val senderBundleObj = obj.optJSONObject("senderBundle") ?: return
+        val senderBundleObj = obj.optJSONObject("senderBundle")
+        if (senderBundleObj == null) {
+            if (BuildConfig.DEBUG) Log.w("GroupListVM", "applyRekeyEnvelope: missing senderBundle")
+            return
+        }
         val senderBundle = BootstrapPayload.deserializeTransportBundle(senderBundleObj)
         if (!keyManager.verifyTransportBundle(senderBundle)) {
+            if (BuildConfig.DEBUG) Log.w("GroupListVM", "applyRekeyEnvelope: sender bundle signature FAILED")
             SecurityLog.invalidAttestation("rekey envelope sender bundle verification failed")
             return
         }
@@ -552,7 +564,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 val recipientInboxTag = GroupCrypto.hiddenInboxTag(requesterBundle.x25519InboxPubkey)
                 val tags = InvitationTransport.eventTags(recipientInboxTag)
                 val event = com.stellarmls.chat.crypto.NostrEventBuilder.build(34113, tags, contentBase64, keyManager)
-                for (conn in transport.connections) conn.publish(event)
+                invitationTransport.publishToRelays(event)
                 if (BuildConfig.DEBUG) Log.d("GroupListVM", "Re-sent rekey envelope epoch=$epoch to requester")
             } catch (e: Exception) {
                 if (BuildConfig.DEBUG) Log.e("GroupListVM", "Resend request failed: ${e.message}")
@@ -609,7 +621,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     val recipientInboxTag = GroupCrypto.hiddenInboxTag(bundle.x25519InboxPubkey)
                     val tags = InvitationTransport.eventTags(recipientInboxTag)
                     val event = com.stellarmls.chat.crypto.NostrEventBuilder.build(34113, tags, contentBase64, keyManager)
-                    for (conn in transport.connections) conn.publish(event)
+                    invitationTransport.publishToRelays(event)
                 } catch (e: Exception) {
                     if (BuildConfig.DEBUG) Log.e("GroupListVM", "Resend failed for ${hex.take(8)}: ${e.message}")
                 }
@@ -1086,7 +1098,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     val recipientInboxTag = GroupCrypto.hiddenInboxTag(bundle.x25519InboxPubkey)
                     val tags = InvitationTransport.eventTags(recipientInboxTag)
                     val event = com.stellarmls.chat.crypto.NostrEventBuilder.build(34113, tags, contentBase64, keyManager)
-                    for (conn in transport.connections) conn.publish(event)
+                    invitationTransport.publishToRelays(event)
                 } catch (e: Exception) {
                     if (BuildConfig.DEBUG) Log.e("GroupListVM", "Failed to send inbox rekey to ${hex.take(8)}: ${e.message}")
                 }

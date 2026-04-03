@@ -760,7 +760,13 @@ final class AppState {
                     let recipientInboxTag = GroupCrypto.hiddenInboxTag(recipientPublicKey: bundle.x25519InboxPubkey)
                     let tags = InvitationTransport.eventTags(recipientInboxTag: recipientInboxTag)
                     let event = try NostrEvent.build(kind: 34113, tags: tags, content: content, keyManager: keyManager)
-                    try await chatTransport.publishToRelays(event)
+                    #if DEBUG
+                    print("[EpochTransition] Sending inbox rekey to \(hex.prefix(8)) inboxTag=\(recipientInboxTag) eventID=\(event.id.prefix(12)) contentLen=\(content.count)")
+                    #endif
+                    try await invitationTransport.publishToRelays(event)
+                    #if DEBUG
+                    print("[EpochTransition] Published inbox rekey to \(hex.prefix(8)) OK")
+                    #endif
                 } catch {
                     #if DEBUG
                     print("[EpochTransition] Failed to send inbox rekey to \(hex.prefix(8)): \(error)")
@@ -1386,7 +1392,7 @@ final class AppState {
                 let recipientInboxTag = GroupCrypto.hiddenInboxTag(recipientPublicKey: req.requesterBundle.x25519InboxPubkey)
                 let tags = InvitationTransport.eventTags(recipientInboxTag: recipientInboxTag)
                 let event = try NostrEvent.build(kind: 34113, tags: tags, content: content, keyManager: keyManager)
-                try await chatTransport.publishToRelays(event)
+                try await invitationTransport.publishToRelays(event)
                 #if DEBUG
                 print("[AppState] Re-sent rekey envelope epoch=\(req.epoch) to requester")
                 #endif
@@ -1445,7 +1451,7 @@ final class AppState {
                     let recipientInboxTag = GroupCrypto.hiddenInboxTag(recipientPublicKey: bundle.x25519InboxPubkey)
                     let tags = InvitationTransport.eventTags(recipientInboxTag: recipientInboxTag)
                     let event = try NostrEvent.build(kind: 34113, tags: tags, content: content, keyManager: keyManager)
-                    try await chatTransport.publishToRelays(event)
+                    try await invitationTransport.publishToRelays(event)
                 } catch {
                     #if DEBUG
                     print("[AppState] Resend failed for \(hex.prefix(8)): \(error)")

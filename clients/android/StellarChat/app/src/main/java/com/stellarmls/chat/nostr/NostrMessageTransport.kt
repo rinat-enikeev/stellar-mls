@@ -327,6 +327,15 @@ class NostrMessageTransport(
                         }
                     }
                 }
+                SEPRemovalNotice.MESSAGE_TYPE -> {
+                    val removedArr = obj.optJSONArray("removedMemberKeys")
+                    if (removedArr != null) {
+                        for (i in 0 until removedArr.length()) {
+                            val removed = android.util.Base64.decode(removedArr.getString(i), android.util.Base64.NO_WRAP)
+                            currentMembers.removeAll { it.publicKeyCompressed.contentEquals(removed) }
+                        }
+                    }
+                }
             }
         } catch (_: Exception) { }
     }

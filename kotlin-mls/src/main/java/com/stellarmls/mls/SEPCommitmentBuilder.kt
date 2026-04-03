@@ -12,6 +12,16 @@ object SEPCommitmentBuilder {
         return salt
     }
 
+    /** Deterministic salt derivation for member-join events.
+     *  All members processing the same SEPMemberJoined will derive the same salt,
+     *  preventing epoch/key divergence. */
+    fun deriveSalt(previousSalt: ByteArray, memberKey: ByteArray): ByteArray {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        digest.update(previousSalt)
+        digest.update(memberKey)
+        return digest.digest()
+    }
+
     /** Compute the Poseidon leaf hash for a 32-byte secret key. Returns 32 bytes. */
     fun computeLeafHash(secretKey: ByteArray): ByteArray {
         require(secretKey.size == 32) { "secret key must be 32 bytes" }

@@ -1427,7 +1427,7 @@ final class AppState {
         group.members.append(joined.member)
         group.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
         group.epoch += 1
-        group.salt = SEPCommitmentBuilder.generateSalt()
+        group.salt = SEPCommitmentBuilder.deriveSalt(previousSalt: group.salt, memberKey: joined.member.publicKeyCompressed)
         try? group.recomputeCommitment()
 
         groups[index] = group

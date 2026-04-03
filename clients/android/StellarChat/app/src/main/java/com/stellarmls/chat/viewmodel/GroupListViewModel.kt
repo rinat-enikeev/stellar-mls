@@ -876,8 +876,21 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         // existing members (including the joiner) can decrypt it.
         val previousKey = group.encryptionKey
 
-        // Add the joiner (bumps epoch and salt internally)
-        group.addMember(member)
+        // Add the joiner with deterministic salt so all members converge
+        if (group.members.size >= group.tier.maxMembers) return
+        group.members.add(member)
+        group.members.sortWith { a, b ->
+            val aKey = a.publicKeyCompressed
+            val bKey = b.publicKeyCompressed
+            for (i in 0 until minOf(aKey.size, bKey.size)) {
+                val cmp = (aKey[i].toInt() and 0xFF) - (bKey[i].toInt() and 0xFF)
+                if (cmp != 0) return@sortWith cmp
+            }
+            aKey.size - bKey.size
+        }
+        group.epoch++
+        group.salt = SEPCommitmentBuilder.deriveSalt(group.salt, member.publicKeyCompressed)
+        group.recomputeCommitment()
 
         groups[index] = group
         storeSalt(groupID, group.epoch, group.salt)

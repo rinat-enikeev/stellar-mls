@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum SEPCommitmentBuilder {
@@ -7,6 +8,17 @@ public enum SEPCommitmentBuilder {
             bytes[index] = UInt8.random(in: UInt8.min ... UInt8.max)
         }
         return Data(bytes)
+    }
+
+    /// Deterministic salt derivation for member-join events.
+    /// All members processing the same SEPMemberJoined will derive the same salt,
+    /// preventing epoch/key divergence.
+    public static func deriveSalt(previousSalt: Data, memberKey: Data) -> Data {
+        var data = Data()
+        data.append(previousSalt)
+        data.append(memberKey)
+        let hash = SHA256.hash(data: data)
+        return Data(hash)
     }
 
     public static func computeLeafHash(secretKey: Data) throws -> Data {

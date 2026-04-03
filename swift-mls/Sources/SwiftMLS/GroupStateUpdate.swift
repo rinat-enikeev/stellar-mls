@@ -16,6 +16,9 @@ public struct SEPGroupStateUpdate: Codable, Equatable, Sendable {
     public let commitment: Data?           // new Poseidon commitment (optional)
     public let senderAttestation: SEPKeyAttestationPayload?
     public let senderTransportBundle: SEPMemberTransportBundle?
+    /// All known transport bundles for group members. Enables secure rekey
+    /// by distributing bundles to members who joined after others.
+    public let memberBundles: [SEPMemberTransportBundle]?
 
     public init(
         epoch: UInt64,
@@ -24,7 +27,8 @@ public struct SEPGroupStateUpdate: Codable, Equatable, Sendable {
         removedMemberKeys: [Data] = [],
         commitment: Data? = nil,
         senderAttestation: SEPKeyAttestationPayload? = nil,
-        senderTransportBundle: SEPMemberTransportBundle? = nil
+        senderTransportBundle: SEPMemberTransportBundle? = nil,
+        memberBundles: [SEPMemberTransportBundle]? = nil
     ) {
         self.type = Self.messageType
         self.epoch = epoch
@@ -34,6 +38,7 @@ public struct SEPGroupStateUpdate: Codable, Equatable, Sendable {
         self.commitment = commitment
         self.senderAttestation = senderAttestation
         self.senderTransportBundle = senderTransportBundle
+        self.memberBundles = memberBundles
     }
 }
 

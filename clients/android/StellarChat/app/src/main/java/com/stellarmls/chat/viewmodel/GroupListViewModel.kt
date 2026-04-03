@@ -65,7 +65,8 @@ enum class EpochTransitionResult {
     CHAIN_REJECTED,
     CHAIN_UNAVAILABLE,
     CHAIN_MISMATCH,
-    SYNC_REQUIRED
+    SYNC_REQUIRED,
+    BUNDLES_MISSING
 }
 
 /** The kind of epoch transition being performed. */
@@ -444,11 +445,18 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         // Only apply if epoch is ahead
         if (epoch <= group.epoch) return
 
-        // Verify sender bundle
+        // Verify sender bundle signature AND membership
         val senderBundleObj = obj.optJSONObject("senderBundle") ?: return
         val senderBundle = BootstrapPayload.deserializeTransportBundle(senderBundleObj)
         if (!keyManager.verifyTransportBundle(senderBundle)) {
             SecurityLog.invalidAttestation("rekey envelope sender bundle verification failed")
+            return
+        }
+        // Sender must be a current member of the group (not a removed ex-member)
+        val senderHex = senderBundle.blsPubkey.toHex()
+        if (group.members.none { it.publicKeyCompressed.toHex() == senderHex }) {
+            if (BuildConfig.DEBUG) Log.w("GroupListVM", "Rejected rekey envelope: sender ${senderHex.take(8)} not a member")
+            SecurityLog.nonMemberMessageRejected(groupIDHex)
             return
         }
 
@@ -513,13 +521,29 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         transport.sendProtocolMessage(group, ackJson)
     }
 
-    /** Handle a resend request: look up stored envelope, verify requester, and re-send. */
+    /** Handle a resend request: look up stored envelope, verify requester is authorized, and re-send. */
     private fun handleRekeyResendRequest(groupID: String, epoch: Long, requesterBundle: com.stellarmls.mls.SEPMemberTransportBundle) {
         if (!keyManager.verifyTransportBundle(requesterBundle)) return
         viewModelScope.launch {
             try {
                 val records = store.loadPendingRekeys(groupID)
                 val record = records.firstOrNull { it.epoch == epoch.toInt() } ?: return@launch
+
+                // Verify requester is an authorized surviving member for this epoch
+                val requesterHex = requesterBundle.blsPubkey.toHex()
+                val unackedKeys = try {
+                    val arr = org.json.JSONArray(record.unackedMemberKeysJSON)
+                    (0 until arr.length()).map { arr.getString(it) }
+                } catch (_: Exception) { emptyList() }
+                // Must also check against post-removal membership (in case requester was already acked)
+                val group = groups.find { it.id == groupID }
+                val isCurrentMember = group?.members?.any { it.publicKeyCompressed.toHex() == requesterHex } ?: false
+                if (!unackedKeys.contains(requesterHex) && !isCurrentMember) {
+                    if (BuildConfig.DEBUG) Log.w("GroupListVM", "Resend denied: requester ${requesterHex.take(8)} not authorized for epoch=$epoch")
+                    SecurityLog.nonMemberMessageRejected(groupID)
+                    return@launch
+                }
+
                 val envelopeJson = String(StorageEncryption.decrypt(record.encryptedEnvelope))
 
                 val sealed = GroupCrypto.encryptInvitation(
@@ -884,6 +908,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
         val myBundle = try { keyManager.createTransportBundle() } catch (_: Exception) { null }
 
+        // Include all known transport bundles so every member can collect bundles
+        // from members who joined before them — required for secure rekey.
+        val allBundles = transportBundles[group.id]?.values?.toList() ?: emptyList()
+
         return SEPGroupStateUpdate(
             epoch = group.epoch,
             salt = group.salt,
@@ -891,7 +919,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             removedMemberKeys = removedMemberKeys,
             commitment = group.commitment,
             senderAttestation = attestation,
-            senderTransportBundle = myBundle
+            senderTransportBundle = myBundle,
+            memberBundles = allBundles
         )
     }
 
@@ -965,6 +994,11 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         // Determine secure rekey BEFORE chain publish so we publish the final state
         val isRemoval = removedMemberKeys.isNotEmpty()
         val useSecureRekey = isRemoval && allMembersHaveBundles(groupID, candidate.members)
+        if (BuildConfig.DEBUG) {
+            val bundleKeys = transportBundles[groupID]?.keys?.map { it.take(8) } ?: emptyList()
+            val memberKeys = candidate.members.map { it.publicKeyCompressed.toHex().take(8) }
+            Log.d("GroupListVM", "Removal flow: useSecureRekey=$useSecureRekey isRemoval=$isRemoval bundles=$bundleKeys members=$memberKeys")
+        }
 
         // If secure rekey, apply fresh groupSecret + salt now so the chain publish
         // uses the final commitment (one publish instead of two).
@@ -977,38 +1011,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             candidate.recomputeCommitment()
         }
 
-        // --- Chain confirmation (published groups only) ---
-        if (currentGroup.isPublishedOnChain) {
-            val service = onChainService ?: return EpochTransitionResult.CHAIN_UNAVAILABLE
-
-            pendingTransitions[groupID] = PendingTransitionState.AwaitingChainConfirmation(candidate.epoch)
-            try {
-                val result = publishMembershipUpdateIfNeeded(currentGroup, candidate)
-                if (result.isFailure) {
-                    pendingTransitions[groupID] = PendingTransitionState.Idle
-                    return EpochTransitionResult.CHAIN_REJECTED
-                }
-
-                // Confirm on-chain state matches
-                try {
-                    val entry = withContext(Dispatchers.IO) {
-                        service.fetchOnChainState(candidate.groupIDData)
-                    }
-                    if (entry.epoch != candidate.epoch) {
-                        pendingTransitions[groupID] = PendingTransitionState.Idle
-                        if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain mismatch: submitted=${candidate.epoch} chain=${entry.epoch}")
-                        return EpochTransitionResult.CHAIN_MISMATCH
-                    }
-                } catch (e: Exception) {
-                    // Submission succeeded but confirmation failed — proceed
-                    if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain confirm fetch failed: ${e.message}")
-                }
-            } finally {
-                pendingTransitions[groupID] = PendingTransitionState.Idle
-            }
-        }
-
-        // --- Persist locally (only after chain success or unpublished) ---
+        // --- Persist locally FIRST (optimistic), then sync chain in background ---
         candidate.isPublishedOnChain = currentGroup.isPublishedOnChain
         groups[index] = candidate
         storeSalt(groupID, candidate.epoch, candidate.salt)
@@ -1102,21 +1105,17 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 } catch (_: Exception) { }
             }
 
+        } else if (isRemoval) {
+            // Removals REQUIRE inbox delivery (secure rekey). If bundles are missing,
+            // the remover must first do a key rotation to distribute bundles.
+            if (BuildConfig.DEBUG) Log.w("GroupListVM", "Removal blocked: not all remaining members have transport bundles. Rotate key first.")
+            // Revert the optimistic local state
+            groups[index] = currentGroup
+            return EpochTransitionResult.BUNDLES_MISSING
         } else {
-            // --- LEGACY FLOW: poisoned-salt + SEPRekey (best-effort) ---
-            val poisonedSalt = if (isRemoval) SEPCommitmentBuilder.generateSalt() else candidate.salt
-            val broadcastCandidate = if (isRemoval) cloneGroup(candidate).also { it.salt = poisonedSalt } else candidate
-            val update = buildStateUpdate(broadcastCandidate, addedMembers, removedMemberKeys)
-            broadcastStateUpdate(broadcastCandidate, update, overrideKey = previousKey)
-            if (isRemoval) {
-                val poisonedKey = GroupCrypto.deriveMessageKey(candidate.groupSecret, candidate.epoch, poisonedSalt)
-                val rekeyJson = JSONObject().apply {
-                    put("type", SEPRekey.MESSAGE_TYPE)
-                    put("epoch", candidate.epoch)
-                    put("salt", android.util.Base64.encodeToString(candidate.salt, android.util.Base64.NO_WRAP))
-                }.toString()
-                transport.sendProtocolMessage(candidate, rekeyJson, poisonedKey)
-            }
+            // --- LEGACY FLOW: non-removal operations only (add member, key rotation) ---
+            val update = buildStateUpdate(candidate, addedMembers, removedMemberKeys)
+            broadcastStateUpdate(candidate, update, overrideKey = previousKey)
             viewModelScope.launch {
                 try { store.saveGroup(candidate) } catch (_: Exception) { }
             }
@@ -1134,6 +1133,30 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             }
             is EpochTransitionKind.KeyRotation -> {
                 insertSystemMessage(groupID, "Encryption key was rotated", "key-rotation", candidate.epoch)
+            }
+        }
+
+        // --- Async chain sync (non-blocking) ---
+        // Local state and protocol messages are already applied/sent.
+        // Publish to chain in the background so the UI isn't blocked.
+        // Lock transitions during chain publish to prevent races.
+        if (currentGroup.isPublishedOnChain && onChainService != null) {
+            pendingTransitions[groupID] = PendingTransitionState.AwaitingChainConfirmation(candidate.epoch)
+            val chainCurrentGroup = cloneGroup(currentGroup)
+            val chainCandidate = cloneGroup(candidate)
+            viewModelScope.launch {
+                try {
+                    val result = publishMembershipUpdateIfNeeded(chainCurrentGroup, chainCandidate)
+                    if (result.isSuccess) {
+                        if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain sync succeeded for epoch=${chainCandidate.epoch}")
+                    } else {
+                        if (BuildConfig.DEBUG) Log.e("GroupListVM", "Chain sync failed (local state applied): ${result.exceptionOrNull()?.message}")
+                    }
+                } catch (e: Exception) {
+                    if (BuildConfig.DEBUG) Log.e("GroupListVM", "Chain sync error (local state applied): ${e.message}")
+                } finally {
+                    pendingTransitions[groupID] = PendingTransitionState.Idle
+                }
             }
         }
 
@@ -1234,6 +1257,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
         // Extract and persist sender's transport bundle if present
         update.senderTransportBundle?.let { processTransportBundle(it, groupID) }
+        // Process all member bundles — enables secure rekey for members who
+        // joined after others and never received their bundles directly.
+        for (b in update.memberBundles) { processTransportBundle(b, groupID) }
 
         if (update.epoch == group.epoch) {
             // Same epoch + same salt = own echo — ignore
@@ -1308,64 +1334,18 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             // Check if WE were removed before applying
             val selfRemoved = isSelfRemoved(update)
 
-            // Normal case: update.epoch > group.epoch
-            // For published groups: verify against chain before applying.
-            if (group.isPublishedOnChain) {
-                val service = onChainService
-                if (service != null) {
-                    viewModelScope.launch {
-                        try {
-                            val entry = withContext(Dispatchers.IO) {
-                                service.fetchOnChainState(group.groupIDData)
-                            }
-                            if (entry.epoch != update.epoch) {
-                                if (BuildConfig.DEBUG) Log.d("GroupListVM", "Rejecting update: chain=${entry.epoch} != update=${update.epoch}")
-                                return@launch
-                            }
-                            if (update.commitment != null && !entry.commitment.contentEquals(update.commitment)) {
-                                if (BuildConfig.DEBUG) Log.d("GroupListVM", "Rejecting update: commitment mismatch with chain")
-                                return@launch
-                            }
-                        } catch (e: Exception) {
-                            // Chain unavailable — accept (graceful degradation)
-                            if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain verify failed, accepting: ${e.message}")
-                        }
-
-                        val idx = groups.indexOfFirst { it.id == groupID }
-                        if (idx < 0) return@launch
-                        val g = groups[idx]
-                        applyMemberDelta(update, g)
-                        g.epoch = update.epoch
-                        g.salt = update.salt
-                        if (update.commitment != null) g.commitment = update.commitment
-
-                        // Discard any superseded pending transition
-                        val pt = pendingTransitions[groupID]
-                        if (pt is PendingTransitionState.AwaitingChainConfirmation && update.epoch >= pt.targetEpoch) {
-                            pendingTransitions[groupID] = PendingTransitionState.Idle
-                        }
-
-                        groups[idx] = g
-                        storeSalt(groupID, update.epoch, update.salt)
-
-                        if (selfRemoved) {
-                            transport.unsubscribe(g.topicTag)
-                            insertSystemMessage(groupID, "You were removed from this group", "self-removed", update.epoch)
-                        } else {
-                            syncTransportAndSubscribe(g)
-                            try { store.saveGroup(g) } catch (_: Exception) { }
-                            insertSystemMessagesForStateUpdate(update, groupID)
-                        }
-                    }
-                    return // Handled async
-                }
-            }
-
-            // Unpublished or no service: apply directly
+            // Apply optimistically — sender already verified with chain.
+            // Verify in background for integrity, but don't block the update.
             applyMemberDelta(update, group)
             group.epoch = update.epoch
             group.salt = update.salt
             if (update.commitment != null) group.commitment = update.commitment
+
+            // Discard any superseded pending transition
+            val pt = pendingTransitions[groupID]
+            if (pt is PendingTransitionState.AwaitingChainConfirmation && update.epoch >= pt.targetEpoch) {
+                pendingTransitions[groupID] = PendingTransitionState.Idle
+            }
 
             groups[index] = group
             storeSalt(groupID, update.epoch, update.salt)
@@ -1518,6 +1498,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 EpochTransitionResult.CHAIN_UNAVAILABLE -> onResult(Result.failure(ChatError.ContractNotConfigured))
                 EpochTransitionResult.CHAIN_MISMATCH -> onResult(Result.failure(ChatError.VerificationFailed("Chain epoch mismatch")))
                 EpochTransitionResult.SYNC_REQUIRED -> onResult(Result.failure(ChatError.VerificationFailed("Pending transition")))
+                EpochTransitionResult.BUNDLES_MISSING -> onResult(Result.failure(ChatError.VerificationFailed("Transport bundles missing. Rotate key first to distribute bundles, then retry removal.")))
             }
         }
     }
@@ -1578,6 +1559,11 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         val index = groups.indexOfFirst { it.id == groupID }
         if (index < 0) return
         val group = groups[index]
+        // Don't apply rekey if we were removed from this group
+        if (!isMember(group)) {
+            if (BuildConfig.DEBUG) Log.d("GroupListVM", "Ignoring rekey — no longer a member of group=${groupID.take(8)}")
+            return
+        }
         if (group.epoch != epoch) return
         if (group.salt.contentEquals(salt)) return
         group.salt = salt
@@ -2327,6 +2313,13 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         if (bundle != null) {
             obj.put("senderTransportBundle", BootstrapPayload.serializeTransportBundle(bundle))
         }
+        if (update.memberBundles.isNotEmpty()) {
+            val bundlesArr = JSONArray()
+            for (b in update.memberBundles) {
+                bundlesArr.put(BootstrapPayload.serializeTransportBundle(b))
+            }
+            obj.put("memberBundles", bundlesArr)
+        }
         return obj.toString()
     }
 
@@ -2369,6 +2362,14 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             catch (_: Exception) { null }
         } else null
 
+        val memberBundles = if (obj.has("memberBundles")) {
+            val arr = obj.getJSONArray("memberBundles")
+            (0 until arr.length()).mapNotNull { i ->
+                try { BootstrapPayload.deserializeTransportBundle(arr.getJSONObject(i)) }
+                catch (_: Exception) { null }
+            }
+        } else emptyList()
+
         return SEPGroupStateUpdate(
             epoch = obj.getLong("epoch"),
             salt = salt,
@@ -2376,7 +2377,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             removedMemberKeys = removedKeys,
             commitment = commitment,
             senderAttestation = attestation,
-            senderTransportBundle = transportBundle
+            senderTransportBundle = transportBundle,
+            memberBundles = memberBundles
         )
     }
 

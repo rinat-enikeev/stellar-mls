@@ -14,7 +14,10 @@ data class SEPGroupStateUpdate(
     val removedMemberKeys: List<ByteArray> = emptyList(),
     val commitment: ByteArray? = null,
     val senderAttestation: SEPKeyAttestationPayload? = null,
-    val senderTransportBundle: SEPMemberTransportBundle? = null
+    val senderTransportBundle: SEPMemberTransportBundle? = null,
+    /** All known transport bundles for group members. Enables secure rekey
+     *  by distributing bundles to members who joined after others. */
+    val memberBundles: List<SEPMemberTransportBundle> = emptyList()
 ) {
     companion object {
         const val MESSAGE_TYPE = "sep_state_update"

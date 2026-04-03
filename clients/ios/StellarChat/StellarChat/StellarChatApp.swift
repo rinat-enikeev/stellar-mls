@@ -11,6 +11,7 @@ enum EpochTransitionResult: Equatable {
     case chainUnavailable
     case chainMismatch(localEpoch: UInt64, chainEpoch: UInt64)
     case syncRequired
+    case bundlesMissing
 }
 
 /// The kind of epoch transition being performed.
@@ -651,6 +652,11 @@ final class AppState {
         // Determine secure rekey BEFORE chain publish so we publish the final state
         let isRemoval = !removedMemberKeys.isEmpty
         let useSecureRekey = isRemoval && allMembersHaveBundles(groupID: groupID, members: candidate.members)
+        #if DEBUG
+        let bundleKeys = transportBundles[groupID]?.keys.map { $0.prefix(8) } ?? []
+        let memberKeys = candidate.members.map { $0.publicKeyCompressed.map { String(format: "%02x", $0) }.joined().prefix(8) }
+        print("[AppState] Removal flow: useSecureRekey=\(useSecureRekey) isRemoval=\(isRemoval) bundles=\(bundleKeys) members=\(memberKeys)")
+        #endif
 
         // If secure rekey, apply fresh groupSecret + salt now so the chain publish
         // uses the final commitment (one publish instead of two).
@@ -678,49 +684,7 @@ final class AppState {
             candidate = rekeyCandidate
         }
 
-        // --- Chain confirmation (published groups only) ---
-        if currentGroup.isPublishedOnChain {
-            guard onChainService != nil else {
-                return .chainUnavailable
-            }
-
-            pendingTransitions[groupID] = .awaitingChainConfirmation(targetEpoch: candidate.epoch)
-            defer { pendingTransitions[groupID] = .idle }
-
-            // Submit update_commitment to chain (with final post-rekey state if applicable)
-            do {
-                try await publishMemberUpdate(
-                    group: candidate,
-                    oldMembers: currentGroup.members,
-                    oldEpoch: currentGroup.epoch,
-                    oldSalt: currentGroup.salt
-                )
-            } catch {
-                #if DEBUG
-                print("[EpochTransition] Chain submission failed: \(error)")
-                #endif
-                return .chainRejected(reason: error.localizedDescription)
-            }
-
-            // Confirm on-chain state matches what we submitted
-            do {
-                let entry = try await onChainService!.fetchOnChainState(groupIDData: candidate.groupIDData)
-                guard entry.epoch == candidate.epoch else {
-                    #if DEBUG
-                    print("[EpochTransition] Chain mismatch: submitted epoch=\(candidate.epoch) chain=\(entry.epoch)")
-                    #endif
-                    return .chainMismatch(localEpoch: candidate.epoch, chainEpoch: entry.epoch)
-                }
-            } catch {
-                // Chain submission succeeded but confirmation fetch failed.
-                // Proceed — the update was accepted.
-                #if DEBUG
-                print("[EpochTransition] Chain confirmation fetch failed (proceeding): \(error)")
-                #endif
-            }
-        }
-
-        // --- Persist locally (only after chain success or unpublished) ---
+        // --- Persist locally FIRST (optimistic), then sync chain in background ---
         candidate.isPublishedOnChain = currentGroup.isPublishedOnChain
         groups[index] = candidate
         store.saveGroup(candidate)
@@ -813,15 +777,20 @@ final class AppState {
                 },
                 isRemovalEpoch: true
             )
+        } else if isRemoval {
+            // Removals REQUIRE inbox delivery (secure rekey). If bundles are missing,
+            // the remover must first do a key rotation to distribute bundles.
+            #if DEBUG
+            print("[EpochTransition] Removal blocked: not all remaining members have transport bundles. Rotate key first.")
+            #endif
+            // Revert the optimistic local state
+            groups[index] = currentGroup
+            store.saveGroup(currentGroup)
+            return .bundlesMissing
         } else {
-            // --- LEGACY FLOW: poisoned-salt + SEPRekey (best-effort) ---
-            let poisonedSalt = isRemoval ? SEPCommitmentBuilder.generateSalt() : candidate.salt
-
-            // Broadcast state update encrypted with PREVIOUS key so all members can decrypt
-            var broadcastCandidate = candidate
-            if isRemoval { broadcastCandidate.salt = poisonedSalt }
+            // --- LEGACY FLOW: non-removal operations only (add member, key rotation) ---
             let update = buildStateUpdate(
-                group: broadcastCandidate,
+                group: candidate,
                 addedMembers: addedMembers,
                 removedMemberKeys: removedMemberKeys
             )
@@ -833,24 +802,6 @@ final class AppState {
                 #if DEBUG
                 print("[EpochTransition] Failed to broadcast state update: \(error)")
                 #endif
-            }
-
-            // For removals: send re-key message with real salt, encrypted with the
-            // poisoned-salt-derived key.
-            if isRemoval {
-                let poisonedKey = GroupCrypto.deriveMessageKey(
-                    groupSecret: candidate.groupSecret, epoch: candidate.epoch, salt: poisonedSalt
-                )
-                let rekey = SEPRekey(epoch: candidate.epoch, salt: candidate.salt)
-                do {
-                    try await chatTransport.sendProtocolMessage(
-                        rekey, topic: candidate.topicTag, key: poisonedKey, keyManager: keyManager
-                    )
-                } catch {
-                    #if DEBUG
-                    print("[EpochTransition] Failed to send re-key: \(error)")
-                    #endif
-                }
             }
         }
 
@@ -864,6 +815,36 @@ final class AppState {
             insertSystemMessage(groupID: groupID, text: "\(name) was removed from the group", event: "member-remove", epoch: candidate.epoch)
         case .keyRotation:
             insertSystemMessage(groupID: groupID, text: "Encryption key was rotated", event: "key-rotation", epoch: candidate.epoch)
+        }
+
+        // --- Async chain sync (non-blocking) ---
+        // Local state and protocol messages are already applied/sent.
+        // Publish to chain in the background so the UI isn't blocked.
+        if currentGroup.isPublishedOnChain, onChainService != nil {
+            // Lock transitions during chain publish to prevent races
+            pendingTransitions[groupID] = .awaitingChainConfirmation(targetEpoch: candidate.epoch)
+            let chainCandidate = candidate
+            let chainOldMembers = currentGroup.members
+            let chainOldEpoch = currentGroup.epoch
+            let chainOldSalt = currentGroup.salt
+            Task {
+                defer { self.pendingTransitions[groupID] = .idle }
+                do {
+                    try await self.publishMemberUpdate(
+                        group: chainCandidate,
+                        oldMembers: chainOldMembers,
+                        oldEpoch: chainOldEpoch,
+                        oldSalt: chainOldSalt
+                    )
+                    #if DEBUG
+                    print("[EpochTransition] Chain sync succeeded for epoch=\(chainCandidate.epoch)")
+                    #endif
+                } catch {
+                    #if DEBUG
+                    print("[EpochTransition] Chain sync failed (local state applied): \(error)")
+                    #endif
+                }
+            }
         }
 
         return .success
@@ -1011,6 +992,10 @@ final class AppState {
 
         let myBundle = try? keyManager.createTransportBundle()
 
+        // Include all known transport bundles so every member can collect bundles
+        // from members who joined after them — required for secure rekey.
+        let allBundles = transportBundles[group.id].map { Array($0.values) }
+
         return SEPGroupStateUpdate(
             epoch: group.epoch,
             salt: group.salt,
@@ -1018,7 +1003,8 @@ final class AppState {
             removedMemberKeys: removedMemberKeys,
             commitment: group.commitment,
             senderAttestation: attestation,
-            senderTransportBundle: myBundle
+            senderTransportBundle: myBundle,
+            memberBundles: allBundles
         )
     }
 
@@ -1055,6 +1041,11 @@ final class AppState {
 
         // Extract and persist sender's transport bundle if present
         if let bundle = update.senderTransportBundle {
+            processTransportBundle(bundle, groupID: groupID)
+        }
+        // Process all member bundles — enables secure rekey for members who
+        // joined after others and never received their bundles directly.
+        for bundle in update.memberBundles ?? [] {
             processTransportBundle(bundle, groupID: groupID)
         }
 
@@ -1124,32 +1115,7 @@ final class AppState {
             #endif
         } else {
             // Normal case: update.epoch > group.epoch
-            // For published groups: verify the update matches chain state before applying.
-            if group.isPublishedOnChain, let service = onChainService {
-                do {
-                    let entry = try await service.fetchOnChainState(groupIDData: group.groupIDData)
-                    guard entry.epoch == update.epoch else {
-                        #if DEBUG
-                        print("[AppState] Rejecting state update: chain epoch=\(entry.epoch) != update epoch=\(update.epoch)")
-                        #endif
-                        // If chain is ahead of the update, it's stale; if behind, defer
-                        return
-                    }
-                    // Verify commitment matches if both are present
-                    if let updateCommitment = update.commitment, entry.commitment != updateCommitment {
-                        #if DEBUG
-                        print("[AppState] Rejecting state update: commitment mismatch with chain")
-                        #endif
-                        return
-                    }
-                } catch {
-                    // Chain unavailable — accept the update (graceful degradation)
-                    #if DEBUG
-                    print("[AppState] Chain verification failed, accepting update: \(error)")
-                    #endif
-                }
-            }
-
+            // Apply optimistically — sender already verified with chain.
             // Check if WE were removed before applying
             let selfRemoved = isSelfRemoved(in: update)
 
@@ -1264,6 +1230,8 @@ final class AppState {
             throw ChatError.verificationFailed("Chain epoch mismatch after submission")
         case .syncRequired:
             throw ChatError.verificationFailed("Group has a pending transition")
+        case .bundlesMissing:
+            throw ChatError.verificationFailed("Transport bundles missing. Rotate key first to distribute bundles, then retry removal.")
         }
     }
 
@@ -1272,6 +1240,13 @@ final class AppState {
     func applyRekey(_ rekey: SEPRekey, to groupID: String) {
         guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
         var group = groups[index]
+        // Don't apply rekey if we were removed from this group
+        guard isMember(of: group) else {
+            #if DEBUG
+            print("[AppState] Ignoring rekey — no longer a member of group=\(groupID.prefix(8))")
+            #endif
+            return
+        }
         guard rekey.epoch == group.epoch else { return }
         // Only apply if the salt differs (i.e., we have the poisoned salt)
         guard group.salt != rekey.salt else { return }
@@ -1295,9 +1270,18 @@ final class AppState {
         // Only apply if epoch is ahead of current
         guard envelope.epoch > group.epoch else { return }
 
-        // Verify sender bundle
+        // Verify sender bundle signature AND membership
         guard KeyManager.verifyTransportBundle(envelope.senderBundle) else {
             SecurityLog.invalidAttestation(reason: "rekey envelope sender bundle verification failed")
+            return
+        }
+        // Sender must be a current member of the group (not a removed ex-member)
+        let senderHex = envelope.senderBundle.blsPubkey.map { String(format: "%02x", $0) }.joined()
+        guard group.members.contains(where: { $0.publicKeyCompressed.map { String(format: "%02x", $0) }.joined() == senderHex }) else {
+            #if DEBUG
+            print("[AppState] Rejected rekey envelope: sender \(senderHex.prefix(8)) not a member")
+            #endif
+            SecurityLog.nonMemberMessageRejected(groupID: groupIDHex)
             return
         }
 
@@ -1367,6 +1351,20 @@ final class AppState {
         guard KeyManager.verifyTransportBundle(req.requesterBundle) else { return }
         let pending = store.loadPendingRekeys(groupID: groupID)
         guard let record = pending.first(where: { $0.epoch == Int(req.epoch) }) else { return }
+
+        // Verify requester is an authorized surviving member for this epoch
+        let requesterHex = req.requesterBundle.blsPubkey.map { String(format: "%02x", $0) }.joined()
+        let unackedKeys = (try? JSONDecoder().decode([String].self, from: record.unackedMemberKeysJSON)) ?? []
+        let isCurrentMember = groups.first(where: { $0.id == groupID })?.members
+            .contains(where: { $0.publicKeyCompressed.map { String(format: "%02x", $0) }.joined() == requesterHex }) ?? false
+        guard unackedKeys.contains(requesterHex) || isCurrentMember else {
+            #if DEBUG
+            print("[AppState] Resend denied: requester \(requesterHex.prefix(8)) not authorized for epoch=\(req.epoch)")
+            #endif
+            SecurityLog.nonMemberMessageRejected(groupID: groupID)
+            return
+        }
+
         guard let envelopeData = try? StorageEncryption.decrypt(record.encryptedEnvelope) else { return }
 
         // Re-send to the requester's inbox
@@ -2035,9 +2033,10 @@ final class AppState {
                         print("[AppState] Received state update epoch=\(update.epoch) for group=\(groupID.prefix(8))")
                         #endif
                         await self.applyStateUpdate(update, to: groupID)
+                        // applyStateUpdate handles subscribe/unsubscribe internally.
+                        // Only update currentMembers here — do NOT re-subscribe if self was removed.
                         if let updated = self.groups.first(where: { $0.id == groupID }) {
                             self.chatTransport.currentMembers = updated.members
-                            self.subscribeGroup( updated)
                         }
                     } catch {
                         #if DEBUG

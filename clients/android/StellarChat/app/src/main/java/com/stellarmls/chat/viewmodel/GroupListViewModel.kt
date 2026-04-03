@@ -970,9 +970,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     timestamp = Date(timestampMs),
                     isMine = senderPubkey == keyManager.publicKeyHex
                 )
-                // Replace the list to trigger Compose recomposition
-                val current = (chatMessages[groupID] ?: emptyList()) + msg
-                chatMessages[groupID] = current.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+                // Append to trigger Compose recomposition. Arrival order prevents
+                // messages received after epoch transition from jumping into the middle.
+                chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
                 viewModelScope.launch {
                     try { store.saveMessage(msg) } catch (_: Exception) { }
                 }
@@ -1018,8 +1018,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     isMine = senderPubkey == keyManager.publicKeyHex,
                     mediaAttachment = media
                 )
-                val current = (chatMessages[groupID] ?: emptyList()) + msg
-                chatMessages[groupID] = current.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+                chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
                 viewModelScope.launch {
                     try { store.saveMessage(msg) } catch (_: Exception) { }
                 }
@@ -1084,9 +1083,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             isMine = true,
             status = MessageStatus.SENDING
         )
-        // Replace the list to trigger Compose recomposition
-        val current = (chatMessages[groupID] ?: emptyList()) + msg
-        chatMessages[groupID] = current.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+        chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
         seenMessageIDs.getOrPut(groupID) { mutableSetOf() }.add(event.id)
         viewModelScope.launch {
             try { store.saveMessage(msg) } catch (_: Exception) { }
@@ -1197,8 +1194,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     status = MessageStatus.SENDING,
                     mediaAttachment = media
                 )
-                val current = (chatMessages[groupID] ?: emptyList()) + msg
-                chatMessages[groupID] = current.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+                chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
                 seenMessageIDs.getOrPut(groupID) { mutableSetOf() }.add(event.id)
                 launch {
                     try { store.saveMessage(msg) } catch (_: Exception) { }
@@ -1304,8 +1300,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     status = MessageStatus.SENDING,
                     mediaAttachment = media
                 )
-                val current = (chatMessages[groupID] ?: emptyList()) + msg
-                chatMessages[groupID] = current.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+                chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
                 seenMessageIDs.getOrPut(groupID) { mutableSetOf() }.add(event.id)
                 launch {
                     try { store.saveMessage(msg) } catch (_: Exception) { }

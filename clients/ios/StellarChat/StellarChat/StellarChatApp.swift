@@ -310,11 +310,18 @@ final class AppState {
         messageFlushTask = nil
         guard !batch.isEmpty else { return }
 
-        // Batch-insert all messages into a local copy, then assign once (single observation trigger)
+        // Sort batch by timestamp so messages within the batch are ordered correctly,
+        // then append to existing list. Appending (arrival order) prevents messages
+        // received after an epoch transition from jumping into the middle of the chat.
+        let sortedBatch = batch.sorted {
+            $0.msg.timestamp != $1.msg.timestamp
+                ? $0.msg.timestamp < $1.msg.timestamp
+                : $0.msg.id < $1.msg.id
+        }
         var localMessages = chatMessages
-        for (msg, groupID, _) in batch {
+        for (msg, groupID, _) in sortedBatch {
             var arr = localMessages[groupID, default: []]
-            Self.insertIntoArray(&arr, message: msg)
+            arr.append(msg)
             localMessages[groupID] = arr
         }
         chatMessages = localMessages

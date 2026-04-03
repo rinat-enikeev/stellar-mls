@@ -564,7 +564,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 val recipientInboxTag = GroupCrypto.hiddenInboxTag(requesterBundle.x25519InboxPubkey)
                 val tags = InvitationTransport.eventTags(recipientInboxTag)
                 val event = com.stellarmls.chat.crypto.NostrEventBuilder.build(34113, tags, contentBase64, keyManager)
-                invitationTransport.publishToRelays(event)
+                invitationTransport.publishToRelays(event, relayURLs.toList())
                 if (BuildConfig.DEBUG) Log.d("GroupListVM", "Re-sent rekey envelope epoch=$epoch to requester")
             } catch (e: Exception) {
                 if (BuildConfig.DEBUG) Log.e("GroupListVM", "Resend request failed: ${e.message}")
@@ -621,7 +621,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     val recipientInboxTag = GroupCrypto.hiddenInboxTag(bundle.x25519InboxPubkey)
                     val tags = InvitationTransport.eventTags(recipientInboxTag)
                     val event = com.stellarmls.chat.crypto.NostrEventBuilder.build(34113, tags, contentBase64, keyManager)
-                    invitationTransport.publishToRelays(event)
+                    invitationTransport.publishToRelays(event, relayURLs.toList())
                 } catch (e: Exception) {
                     if (BuildConfig.DEBUG) Log.e("GroupListVM", "Resend failed for ${hex.take(8)}: ${e.message}")
                 }
@@ -1098,7 +1098,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     val recipientInboxTag = GroupCrypto.hiddenInboxTag(bundle.x25519InboxPubkey)
                     val tags = InvitationTransport.eventTags(recipientInboxTag)
                     val event = com.stellarmls.chat.crypto.NostrEventBuilder.build(34113, tags, contentBase64, keyManager)
-                    invitationTransport.publishToRelays(event)
+                    invitationTransport.publishToRelays(event, relayURLs.toList())
                 } catch (e: Exception) {
                     if (BuildConfig.DEBUG) Log.e("GroupListVM", "Failed to send inbox rekey to ${hex.take(8)}: ${e.message}")
                 }
@@ -2204,10 +2204,22 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                                 if (key.contentEquals(myBls)) { selfRemoved = true; break }
                             }
                             if (selfRemoved) {
-                                val g = groups.find { it.id == groupID }
-                                if (g != null && !BuildConfig.DEBUG) transport.unsubscribe(g.topicTag)
                                 val noticeEpoch = obj.getLong("epoch")
+                                val idx = groups.indexOfFirst { it.id == groupID }
+                                if (idx >= 0) {
+                                    var g = cloneGroup(groups[idx])
+                                    // Update epoch and remove self from member list
+                                    g = g.copy(epoch = noticeEpoch)
+                                    g.members.removeAll { it.publicKeyCompressed.contentEquals(myBls) }
+                                    groups[idx] = g
+                                    viewModelScope.launch { try { store.saveGroup(g) } catch (_: Exception) { } }
+                                    if (!BuildConfig.DEBUG) transport.unsubscribe(g.topicTag)
+                                    // Rebuild currentMembers so BLS check rejects our own messages too
+                                    transport.currentMembers.clear()
+                                    transport.currentMembers.addAll(groups.flatMap { it.members })
+                                }
                                 insertSystemMessage(groupID, "You were removed from this group", "self-removed", noticeEpoch)
+                                if (BuildConfig.DEBUG) Log.d("GroupListVM", "Self-removed from group=${groupID.take(8)} epoch=$noticeEpoch")
                             }
                         }
                         SEPRekeyAck.MESSAGE_TYPE -> {

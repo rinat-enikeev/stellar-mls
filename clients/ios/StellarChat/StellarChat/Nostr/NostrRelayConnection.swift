@@ -46,9 +46,6 @@ actor NostrRelayConnection {
         task.resume()
         isConnected = true
         reconnectAttempts = 0
-        #if DEBUG
-        print("[Relay] Connected to \(url.host ?? url.absoluteString)")
-        #endif
         Task { await receiveLoop() }
         startHeartbeat()
 
@@ -137,11 +134,6 @@ actor NostrRelayConnection {
         guard let data = try? JSONSerialization.data(withJSONObject: frame),
               let string = String(data: data, encoding: .utf8)
         else { return }
-        #if DEBUG
-        if let kinds = filter["kinds"] as? [Int], kinds.contains(34113) || kinds.contains(24113) {
-            print("[Relay] REQ \(url.host ?? url.absoluteString) sub=\(subscriptionID) filter=\(filter)")
-        }
-        #endif
         Task { try? await webSocketTask?.send(.string(string)) }
     }
 
@@ -176,9 +168,6 @@ actor NostrRelayConnection {
                     Self.maxReconnectDelay,
                     Self.baseReconnectDelay * pow(2.0, Double(min(reconnectAttempts - 1, 6)))
                 )
-                #if DEBUG
-                print("[Relay] Disconnected from \(url.host ?? url.absoluteString), reconnecting in \(Int(delay))s (attempt \(reconnectAttempts))")
-                #endif
                 try? await Task.sleep(for: .seconds(delay))
                 connect()
                 return

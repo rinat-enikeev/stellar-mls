@@ -140,7 +140,16 @@ class InvitationTransport(private val keyManager: KeyManager) {
     }
 
     /** Publish a pre-built event to all connected relays. */
-    fun publishToRelays(event: NostrEvent) {
+    fun publishToRelays(event: NostrEvent, relayURLs: List<String> = emptyList()) {
+        if (connections.isEmpty() && relayURLs.isNotEmpty()) {
+            if (com.stellarmls.chat.BuildConfig.DEBUG) {
+                android.util.Log.d("InvitationTransport", "publishToRelays: no connections — connecting to ${relayURLs.size} relays")
+            }
+            connect(relayURLs)
+        }
+        if (com.stellarmls.chat.BuildConfig.DEBUG) {
+            android.util.Log.d("InvitationTransport", "publishToRelays: connections=${connections.size}")
+        }
         for (conn in connections) {
             conn.publish(event)
         }

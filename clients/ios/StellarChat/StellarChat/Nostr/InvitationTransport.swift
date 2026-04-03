@@ -135,33 +135,66 @@ final class InvitationTransport {
             keyManager: keyManager
         )
 
-        var published = false
-        for conn in connections.values {
-            do {
-                try await conn.publish(event: event)
-                published = true
-            } catch {
-                onError?("Relay publish failed: \(error.localizedDescription)")
+        let conns = Array(connections.values)
+        let published = await withTaskGroup(of: Bool.self) { group in
+            for conn in conns {
+                group.addTask {
+                    do {
+                        try await conn.publish(event: event)
+                        return true
+                    } catch {
+                        return false
+                    }
+                }
             }
+            var any = false
+            for await result in group {
+                if result { any = true }
+            }
+            return any
         }
 
-        if !published && !connections.isEmpty {
+        if !published && !conns.isEmpty {
             throw ChatError.relayPublishFailed
         }
     }
 
-    /// Publish a pre-built event to all connected relays.
-    func publishToRelays(_ event: NostrEvent) async throws {
-        var published = false
-        for conn in connections.values {
-            do {
-                try await conn.publish(event: event)
-                published = true
-            } catch {
-                onError?("Relay publish failed: \(error.localizedDescription)")
-            }
+    /// Publish a pre-built event to all connected relays (concurrently).
+    func publishToRelays(_ event: NostrEvent, relayURLs: [URL] = []) async throws {
+        if connections.isEmpty && !relayURLs.isEmpty {
+            #if DEBUG
+            print("[Invite] publishToRelays: no connections — connecting to \(relayURLs.count) relays")
+            #endif
+            await connect(to: relayURLs)
         }
-        if !published && !connections.isEmpty {
+        let conns = Array(connections.values)
+        #if DEBUG
+        print("[Invite] publishToRelays: publishing to \(conns.count) connections")
+        #endif
+        guard !conns.isEmpty else {
+            throw ChatError.relayPublishFailed
+        }
+        let published = await withTaskGroup(of: Bool.self) { group in
+            for conn in conns {
+                group.addTask {
+                    do {
+                        try await conn.publish(event: event)
+                        return true
+                    } catch {
+                        return false
+                    }
+                }
+            }
+            var any = false
+            for await result in group {
+                if result { any = true }
+            }
+            return any
+        }
+        #if DEBUG
+        print("[Invite] publishToRelays: published=\(published)")
+        #endif
+        if !published {
             throw ChatError.relayPublishFailed
         }
     }

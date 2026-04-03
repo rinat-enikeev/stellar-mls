@@ -600,6 +600,9 @@ final class AppState {
         kind: EpochTransitionKind,
         previousKey: SymmetricKey
     ) async -> EpochTransitionResult {
+        #if DEBUG
+        print(">>> EPOCH TRANSITION START kind=\(kind) group=\(groupID.prefix(8))")
+        #endif
         guard let index = groups.firstIndex(where: { $0.id == groupID }) else {
             return .chainRejected(reason: "Group not found")
         }
@@ -713,14 +716,23 @@ final class AppState {
                 removedMemberKeys: removedMemberKeys,
                 commitment: candidate.commitment
             )
-            do {
-                try await chatTransport.sendProtocolMessage(
-                    notice, topic: currentGroup.topicTag, key: previousKey, keyManager: keyManager
-                )
-            } catch {
-                #if DEBUG
-                print("[EpochTransition] Failed to send removal notice: \(error)")
-                #endif
+            // Fire-and-forget: don't block rekey envelope delivery
+            let noticeTopic = currentGroup.topicTag
+            let noticeKey = previousKey
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.chatTransport.sendProtocolMessage(
+                        notice, topic: noticeTopic, key: noticeKey, keyManager: self.keyManager
+                    )
+                    #if DEBUG
+                    print(">>> REMOVAL NOTICE SENT OK")
+                    #endif
+                } catch {
+                    #if DEBUG
+                    print(">>> REMOVAL NOTICE FAILED: \(error)")
+                    #endif
+                }
             }
 
             // 2. Build SEPRekeyEnvelope with fresh secrets
@@ -743,8 +755,16 @@ final class AppState {
 
             // 3. Send per-member rekey envelopes via inbox
             let envelopeData = try! JSONEncoder().encode(envelope)
+            #if DEBUG
+            print(">>> REKEY LOOP: \(candidate.members.count) members, envelopeLen=\(envelopeData.count)")
+            #endif
             for member in candidate.members {
                 let hex = member.publicKeyCompressed.map { String(format: "%02x", $0) }.joined()
+                let hasBundle = transportBundles[groupID]?[hex] != nil
+                let isSelf = (try? keyManager.memberLeaf)?.publicKeyCompressed == member.publicKeyCompressed
+                #if DEBUG
+                print(">>> REKEY MEMBER \(hex.prefix(8)): hasBundle=\(hasBundle) isSelf=\(isSelf)")
+                #endif
                 guard let bundle = transportBundles[groupID]?[hex] else { continue }
                 // Don't send to self
                 if let myLeaf = try? keyManager.memberLeaf,
@@ -763,7 +783,7 @@ final class AppState {
                     #if DEBUG
                     print("[EpochTransition] Sending inbox rekey to \(hex.prefix(8)) inboxTag=\(recipientInboxTag) eventID=\(event.id.prefix(12)) contentLen=\(content.count)")
                     #endif
-                    try await invitationTransport.publishToRelays(event)
+                    try await invitationTransport.publishToRelays(event, relayURLs: relayURLs)
                     #if DEBUG
                     print("[EpochTransition] Published inbox rekey to \(hex.prefix(8)) OK")
                     #endif
@@ -1392,7 +1412,7 @@ final class AppState {
                 let recipientInboxTag = GroupCrypto.hiddenInboxTag(recipientPublicKey: req.requesterBundle.x25519InboxPubkey)
                 let tags = InvitationTransport.eventTags(recipientInboxTag: recipientInboxTag)
                 let event = try NostrEvent.build(kind: 34113, tags: tags, content: content, keyManager: keyManager)
-                try await invitationTransport.publishToRelays(event)
+                try await invitationTransport.publishToRelays(event, relayURLs: relayURLs)
                 #if DEBUG
                 print("[AppState] Re-sent rekey envelope epoch=\(req.epoch) to requester")
                 #endif
@@ -1451,7 +1471,7 @@ final class AppState {
                     let recipientInboxTag = GroupCrypto.hiddenInboxTag(recipientPublicKey: bundle.x25519InboxPubkey)
                     let tags = InvitationTransport.eventTags(recipientInboxTag: recipientInboxTag)
                     let event = try NostrEvent.build(kind: 34113, tags: tags, content: content, keyManager: keyManager)
-                    try await invitationTransport.publishToRelays(event)
+                    try await invitationTransport.publishToRelays(event, relayURLs: relayURLs)
                 } catch {
                     #if DEBUG
                     print("[AppState] Resend failed for \(hex.prefix(8)): \(error)")
@@ -2090,12 +2110,24 @@ final class AppState {
                             (try? self.keyManager.blsPublicKey) == removed
                         }
                         if selfRemoved {
-                            #if !DEBUG
-                            if let g = self.groups.first(where: { $0.id == groupID }) {
+                            if let idx = self.groups.firstIndex(where: { $0.id == groupID }) {
+                                var g = self.groups[idx]
+                                // Update epoch and remove self from member list
+                                g.epoch = notice.epoch
+                                if let myBls = try? self.keyManager.blsPublicKey {
+                                    g.members.removeAll { $0.publicKeyCompressed == myBls }
+                                }
+                                self.groups[idx] = g
+                                self.store.saveGroup(g)
+                                #if !DEBUG
                                 self.chatTransport.unsubscribe(topic: g.topicTag)
+                                #endif
+                                self.chatTransport.currentMembers = self.groups.flatMap(\.members)
                             }
-                            #endif
                             self.insertSystemMessage(groupID: groupID, text: "You were removed from this group", event: "self-removed", epoch: notice.epoch)
+                            #if DEBUG
+                            print("[AppState] Self-removed from group=\(groupID.prefix(8)) epoch=\(notice.epoch)")
+                            #endif
                         }
                         // Remaining members will receive the rekey via inbox — no action needed here
                     }

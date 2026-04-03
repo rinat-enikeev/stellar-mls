@@ -14,7 +14,7 @@ struct ChatGroup: Identifiable, Codable {
     var epoch: UInt64 = 0
     var salt: Data = SEPCommitmentBuilder.generateSalt()
     var commitment: Data?   // latest verified commitment (Poseidon variant)
-    var tier: SEPTier = .small
+    var tier: SEPTier = .large
     var isPublishedOnChain: Bool = false
     /// Unix timestamp of the last received event, used for offline catch-up.
     var lastEventTimestamp: Int64 = 0
@@ -114,6 +114,32 @@ struct InviteCode: Codable {
     let epoch: UInt64
     let salt: Data
     let commitment: Data?
+    let tierRawValue: Int
+
+    init(groupID: Data, groupSecret: Data, name: String, relayHints: [String], members: [SEPGroupMemberLeaf], epoch: UInt64, salt: Data, commitment: Data?, tierRawValue: Int = SEPTier.large.rawValue) {
+        self.groupID = groupID
+        self.groupSecret = groupSecret
+        self.name = name
+        self.relayHints = relayHints
+        self.members = members
+        self.epoch = epoch
+        self.salt = salt
+        self.commitment = commitment
+        self.tierRawValue = tierRawValue
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        groupID = try container.decode(Data.self, forKey: .groupID)
+        groupSecret = try container.decode(Data.self, forKey: .groupSecret)
+        name = try container.decode(String.self, forKey: .name)
+        relayHints = try container.decode([String].self, forKey: .relayHints)
+        members = try container.decode([SEPGroupMemberLeaf].self, forKey: .members)
+        epoch = try container.decode(UInt64.self, forKey: .epoch)
+        salt = try container.decode(Data.self, forKey: .salt)
+        commitment = try container.decodeIfPresent(Data.self, forKey: .commitment)
+        tierRawValue = try container.decodeIfPresent(Int.self, forKey: .tierRawValue) ?? SEPTier.large.rawValue
+    }
 
     func encode() -> String {
         let data = try! JSONEncoder().encode(self)

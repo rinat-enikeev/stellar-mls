@@ -135,9 +135,9 @@ struct GroupInfoView: View {
 private extension SEPTier {
     var displayName: String {
         switch self {
-        case .small: return "Small (up to 8)"
-        case .medium: return "Medium (up to 64)"
-        case .large: return "Large (up to 2048)"
+        case .small: return "Small (up to 32)"
+        case .medium: return "Medium (up to 256)"
+        case .large: return "Large (up to 2,048)"
         @unknown default: return "Unknown"
         }
     }

@@ -93,6 +93,13 @@ final class AppState {
         !relayerURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    // MARK: - Default Group Capacity
+
+    var defaultGroupTier: SEPTier {
+        didSet { UserDefaults.standard.set(defaultGroupTier.rawValue, forKey: Self.defaultGroupTierKey) }
+    }
+    private static let defaultGroupTierKey = "com.stellarmls.chat.defaultGroupTier"
+
     // MARK: - Salt History (for offline recovery)
 
     /// Per-group salt history keyed by group ID, mapping epoch → salt.
@@ -126,6 +133,7 @@ final class AppState {
         self.blossomServerURLs = Self.loadBlossomServerURLs()
         self.contractEndpoint = UserDefaults.standard.string(forKey: Self.contractEndpointKey) ?? ""
         self.contractID = UserDefaults.standard.string(forKey: Self.contractIDKey) ?? ""
+        self.defaultGroupTier = SEPTier(rawValue: UserDefaults.standard.integer(forKey: Self.defaultGroupTierKey)) ?? .large
         self.relayerURL = UserDefaults.standard.string(forKey: Self.relayerURLKey) ?? ""
         // N-5: Load auth token from Keychain; migrate from UserDefaults if present
         if let legacyToken = UserDefaults.standard.string(forKey: Self.relayerAuthTokenKey), !legacyToken.isEmpty {
@@ -327,7 +335,7 @@ final class AppState {
             members: [myLeaf],
             epoch: 0,
             salt: SEPCommitmentBuilder.generateSalt(),
-            tier: .small
+            tier: defaultGroupTier
         )
         try group.recomputeCommitment()
         addGroup(group)
@@ -340,7 +348,8 @@ final class AppState {
             members: group.members,
             epoch: group.epoch,
             salt: group.salt,
-            commitment: group.commitment
+            commitment: group.commitment,
+            tierRawValue: group.tier.rawValue
         )
         return (group, code.encode())
     }
@@ -766,7 +775,7 @@ final class AppState {
                     groupID: groupID,
                     senderPubkey: event.pubkey,
                     text: plaintext,
-                    timestamp: Date(timeIntervalSince1970: TimeInterval(event.createdAt)),
+                    timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
                     isMine: event.pubkey == self.keyManager.publicKeyHex
                 )
                 self.queueIncomingMessage(msg, groupID: groupID, event: event)
@@ -788,7 +797,7 @@ final class AppState {
                     groupID: groupID,
                     senderPubkey: event.pubkey,
                     text: plaintext,
-                    timestamp: Date(timeIntervalSince1970: TimeInterval(event.createdAt)),
+                    timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
                     isMine: event.pubkey == self.keyManager.publicKeyHex,
                     mediaAttachment: media
                 )
@@ -842,7 +851,7 @@ final class AppState {
             groupID: groupID,
             senderPubkey: keyManager.publicKeyHex,
             text: trimmed,
-            timestamp: Date(timeIntervalSince1970: TimeInterval(event.createdAt)),
+            timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
             isMine: true,
             status: .sending
         )
@@ -988,7 +997,7 @@ final class AppState {
             groupID: groupID,
             senderPubkey: keyManager.publicKeyHex,
             text: "Sent an image",
-            timestamp: Date(timeIntervalSince1970: TimeInterval(event.createdAt)),
+            timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
             isMine: true,
             status: .sending,
             mediaAttachment: media

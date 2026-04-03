@@ -37,6 +37,7 @@ import com.stellarmls.mls.SEPGroupStateUpdate
 import com.stellarmls.mls.SEPKeyAttestationPayload
 import com.stellarmls.mls.SEPMemberJoined
 import com.stellarmls.mls.SEPMessageAck
+import com.stellarmls.mls.SEPTier
 import com.stellarmls.mls.SEPSaltRequest
 import com.stellarmls.mls.SEPSaltResponse
 import kotlinx.coroutines.Dispatchers
@@ -52,9 +53,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     val groups = mutableStateListOf<ChatGroup>()
     val pendingInvitations = mutableStateListOf<PendingInvitation>()
 
-    /** Whether at least one relay is connected. */
-    val isRelayConnected: Boolean
-        get() = transport.isAnyRelayConnected
+    /** Whether at least one relay is connected. Observable by Compose. */
+    var isRelayConnected by mutableStateOf(false)
+        private set
 
     // Persistent chat message storage — keyed by group ID, alive for entire app session.
     // Uses SnapshotStateMap so Compose recomposes when messages change.
@@ -79,6 +80,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     var contractID by mutableStateOf("")
         private set
     private val contractPrefs = application.getSharedPreferences("stellar_contract", Context.MODE_PRIVATE)
+
+    // Default group capacity
+    var defaultGroupTier by mutableStateOf(SEPTier.LARGE)
+        private set
 
     // Relayer configuration (fee decoupling)
     var relayerURL by mutableStateOf("")
@@ -136,6 +141,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             blossomServerURLs.add("https://nostr.download")
         }
 
+        // Load default group tier
+        val savedTierId = contractPrefs.getInt("default_tier", SEPTier.LARGE.id)
+        defaultGroupTier = SEPTier.entries.find { it.id == savedTierId } ?: SEPTier.LARGE
+
         // Load contract + relayer config
         contractEndpoint = contractPrefs.getString("endpoint", "") ?: ""
         contractID = contractPrefs.getString("contract_id", "") ?: ""
@@ -159,26 +168,34 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             try {
                 val loaded = store.loadGroups()
+                Log.d("GroupListVM", "Loaded ${loaded.size} groups from store")
                 groups.addAll(loaded)
                 // Populate currentMembers from all persisted groups
                 transport.currentMembers.addAll(loaded.flatMap { it.members })
                 for (group in loaded) {
                     storeSalt(group.id, group.epoch, group.salt)
                     // Load persisted chat messages
-                    val msgs = store.loadMessages(group.id)
-                    chatMessages[group.id] = msgs
-                    seenMessageIDs[group.id] = msgs.map { it.id }.toMutableSet()
+                    try {
+                        val msgs = store.loadMessages(group.id)
+                        chatMessages[group.id] = msgs
+                        seenMessageIDs[group.id] = msgs.map { it.id }.toMutableSet()
+                    } catch (e: Exception) {
+                        Log.e("GroupListVM", "Failed to load messages for group ${group.id.take(8)}", e)
+                    }
                 }
-                // Connect to relays and subscribe all loaded groups
-                if (loaded.isNotEmpty()) {
-                    connectIfNeeded()
-                }
-            } catch (_: Exception) { }
+            } catch (e: Exception) {
+                Log.e("GroupListVM", "Failed to load groups from store", e)
+            }
+            // Always connect to relays, even if group loading fails
+            connectIfNeeded()
         }
     }
 
     fun connectIfNeeded() {
         if (!connected) {
+            transport.onConnectionChange = {
+                viewModelScope.launch { isRelayConnected = transport.isAnyRelayConnected }
+            }
             transport.connect()
             invitationTransport.connect(relayURLs.toList())
             startInboxListener()
@@ -345,6 +362,13 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun persistBlossomServers() {
         blossomPrefs.edit().putString("blossom_urls", blossomServerURLs.joinToString(",")).apply()
+    }
+
+    // -- Default group tier --
+
+    fun saveDefaultGroupTier(tier: SEPTier) {
+        defaultGroupTier = tier
+        contractPrefs.edit().putInt("default_tier", tier.id).apply()
     }
 
     // -- Contract configuration --
@@ -822,7 +846,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Set up handler for incoming chat messages — stores in chatMessages, persists to store. */
     private fun setupChatMessageHandler() {
-        transport.onMessage = { groupID, senderPubkey, text, eventID, timestamp ->
+        transport.onMessage = { groupID, senderPubkey, text, eventID, timestampMs ->
             val seen = seenMessageIDs.getOrPut(groupID) { mutableSetOf() }
             if (seen.add(eventID)) {
                 val msg = ChatMessage(
@@ -830,7 +854,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     groupID = groupID,
                     senderPubkey = senderPubkey,
                     text = text,
-                    timestamp = Date(timestamp * 1000),
+                    timestamp = Date(timestampMs),
                     isMine = senderPubkey == keyManager.publicKeyHex
                 )
                 // Replace the list to trigger Compose recomposition
@@ -854,10 +878,11 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                         transport.sendProtocolMessage(group, ackJson)
                     }
                 }
-                // Update lastEventTimestamp
+                // Update lastEventTimestamp (stored in seconds for relay catch-up filters)
                 val group = groups.find { it.id == groupID }
-                if (group != null && timestamp > group.lastEventTimestamp) {
-                    group.lastEventTimestamp = timestamp
+                val timestampSec = timestampMs / 1000
+                if (group != null && timestampSec > group.lastEventTimestamp) {
+                    group.lastEventTimestamp = timestampSec
                     viewModelScope.launch {
                         try { store.saveGroup(group) } catch (_: Exception) { }
                     }
@@ -868,7 +893,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Set up handler for incoming image messages — stores in chatMessages with media attachment. */
     private fun setupImageMessageHandler() {
-        transport.onImageMessage = { groupID, text, media, eventID, senderPubkey, timestamp ->
+        transport.onImageMessage = { groupID, text, media, eventID, senderPubkey, timestampMs ->
             val seen = seenMessageIDs.getOrPut(groupID) { mutableSetOf() }
             if (seen.add(eventID)) {
                 val msg = ChatMessage(
@@ -876,7 +901,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     groupID = groupID,
                     senderPubkey = senderPubkey,
                     text = text,
-                    timestamp = Date(timestamp * 1000),
+                    timestamp = Date(timestampMs),
                     isMine = senderPubkey == keyManager.publicKeyHex,
                     mediaAttachment = media
                 )
@@ -900,8 +925,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     }
                 }
                 val group = groups.find { it.id == groupID }
-                if (group != null && timestamp > group.lastEventTimestamp) {
-                    group.lastEventTimestamp = timestamp
+                val timestampSec = timestampMs / 1000
+                if (group != null && timestampSec > group.lastEventTimestamp) {
+                    group.lastEventTimestamp = timestampSec
                     viewModelScope.launch {
                         try { store.saveGroup(group) } catch (_: Exception) { }
                     }
@@ -941,7 +967,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             groupID = groupID,
             senderPubkey = keyManager.publicKeyHex,
             text = trimmed,
-            timestamp = Date(event.createdAt * 1000),
+            timestamp = Date(event.displayMilliseconds),
             isMine = true,
             status = MessageStatus.SENDING
         )
@@ -1053,7 +1079,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     groupID = groupID,
                     senderPubkey = keyManager.publicKeyHex,
                     text = "\uD83D\uDDBC\uFE0F Image",
-                    timestamp = Date(event.createdAt * 1000),
+                    timestamp = Date(event.displayMilliseconds),
                     isMine = true,
                     status = MessageStatus.SENDING,
                     mediaAttachment = media

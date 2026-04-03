@@ -41,6 +41,9 @@ class NostrMessageTransport(
     val isAnyRelayConnected: Boolean
         get() = connections.any { it.isConnected }
 
+    /** Called when any relay's connection state changes. */
+    var onConnectionChange: (() -> Unit)? = null
+
     var onMessage: ((groupID: String, senderPubkey: String, text: String, eventID: String, timestamp: Long) -> Unit)? = null
     /** Called when a decrypted message is a protocol message (state update, salt request/response). */
     var onProtocolMessage: ((groupID: String, json: String, eventID: String, senderPubkey: String) -> Unit)? = null
@@ -57,6 +60,9 @@ class NostrMessageTransport(
             val conn = NostrRelayConnection(url)
             conn.onOK = { eventID, accepted ->
                 onOK?.invoke(eventID, accepted)
+            }
+            conn.onConnectionStateChange = { _ ->
+                onConnectionChange?.invoke()
             }
             conn.connect()
             connections.add(conn)
@@ -221,7 +227,7 @@ class NostrMessageTransport(
                     encryptedThumbnail = mediaObj.optString("thumbnail", "").takeIf { it.isNotEmpty() }
                         ?.let { android.util.Base64.decode(it, android.util.Base64.NO_WRAP) }
                 )
-                onImageMessage?.invoke(groupID, innerText, media, event.id, event.pubkey, event.createdAt)
+                onImageMessage?.invoke(groupID, innerText, media, event.id, event.pubkey, event.displayMilliseconds)
             } else {
                 // Check inner text for protocol messages (state updates, salt, etc.)
                 if (isProtocolMessage(innerText)) {
@@ -235,7 +241,7 @@ class NostrMessageTransport(
                     val isMember = currentMembers.any { it.publicKeyCompressed.contentEquals(blsPubkey) }
                     if (isMember) {
                         onMessage?.invoke(groupID, event.pubkey, innerText,
-                            event.id, event.createdAt)
+                            event.id, event.displayMilliseconds)
                     } else {
                         if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.w("MsgTransport", "BLS rejected: members=${currentMembers.size}")
                         com.stellarmls.chat.SecurityLog.nonMemberMessageRejected(groupID)

@@ -1,3 +1,4 @@
+import SwiftMLS
 import SwiftUI
 
 struct SettingsView: View {
@@ -23,6 +24,19 @@ struct SettingsView: View {
                 blossomServerSection
 
                 contractSection
+
+                Section("Default Group Capacity") {
+                    Picker("Capacity", selection: Bindable(appState).defaultGroupTier) {
+                        Text("32 members").tag(SEPTier.small)
+                        Text("256 members").tag(SEPTier.medium)
+                        Text("2,048 members").tag(SEPTier.large)
+                    }
+                    .pickerStyle(.segmented)
+
+                    Text("New groups will use this tier. Larger tiers support more members but use bigger ZK circuits.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
 
                 Section {
                     DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
@@ -105,7 +119,7 @@ struct SettingsView: View {
                         Divider()
 
                         // Protocol Details
-                        LabeledContent("Invitation Kind") { Text("24113") }
+                        LabeledContent("Invitation Kind") { Text("34113") }
                         LabeledContent("Message Kind") { Text("24114") }
                         LabeledContent("Encryption") { Text("AES-256-GCM") }
                         LabeledContent("Invitation Encryption") { Text("X25519 ECDH + AES-256-GCM") }

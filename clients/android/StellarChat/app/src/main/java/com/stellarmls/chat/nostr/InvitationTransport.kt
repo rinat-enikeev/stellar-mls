@@ -19,7 +19,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Kind 24113 invitation send/receive over Nostr relays.
+ * Kind 34113 invitation send/receive over Nostr relays.
  * Uses X25519 ECDH + AES-256-GCM for invitation encryption.
  */
 class InvitationTransport(private val keyManager: KeyManager) {
@@ -50,7 +50,7 @@ class InvitationTransport(private val keyManager: KeyManager) {
         val subID = "inbox-${UUID.randomUUID().toString().take(8)}"
 
         val filter = JSONObject().apply {
-            put("kinds", JSONArray().put(24113))
+            put("kinds", JSONArray().put(34113))
             put("#d", JSONArray().put("sep-inbox:$inboxTag"))
         }
 
@@ -89,7 +89,7 @@ class InvitationTransport(private val keyManager: KeyManager) {
         )
 
         val event = NostrEventBuilder.build(
-            kind = 24113,
+            kind = 34113,
             tags = tags,
             content = contentBase64,
             keyManager = keyManager
@@ -114,7 +114,7 @@ class InvitationTransport(private val keyManager: KeyManager) {
             val invitation = PendingInvitation(
                 id = event.id,
                 payload = payload,
-                receivedAt = Date()
+                receivedAt = Date(event.displayMilliseconds)
             )
 
             onInvitation?.invoke(invitation)

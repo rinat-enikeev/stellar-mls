@@ -47,6 +47,7 @@ import com.stellarmls.chat.crypto.KeyManager
 import com.stellarmls.chat.model.toHex
 import com.stellarmls.chat.ui.components.QRCodeImage
 import com.stellarmls.chat.viewmodel.GroupListViewModel
+import com.stellarmls.mls.SEPTier
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -232,6 +233,34 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            // Default Group Capacity
+            SettingsCard("Default Group Capacity") {
+                val tiers = listOf(SEPTier.SMALL to "32 members", SEPTier.MEDIUM to "256 members", SEPTier.LARGE to "2,048 members")
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    tiers.forEach { (tier, label) ->
+                        OutlinedButton(
+                            onClick = { viewModel.saveDefaultGroupTier(tier) },
+                            modifier = Modifier.weight(1f).padding(horizontal = 2.dp),
+                            colors = if (viewModel.defaultGroupTier == tier)
+                                androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                                )
+                            else androidx.compose.material3.ButtonDefaults.outlinedButtonColors()
+                        ) {
+                            Text(label, style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "New groups will use this tier. Larger tiers support more members but use bigger ZK circuits.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             // Collapsible Advanced section
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -323,7 +352,7 @@ fun SettingsScreen(
                             Text("Protocol", style = MaterialTheme.typography.titleSmall)
                             Spacer(modifier = Modifier.height(4.dp))
                             SettingsRow("Transport", "Nostr (NIP-01)")
-                            SettingsRow("Invitation Kind", "24113")
+                            SettingsRow("Invitation Kind", "34113")
                             SettingsRow("Message Kind", "24114")
                             SettingsRow("Encryption", "AES-256-GCM")
                             SettingsRow("Invitation Encryption", "X25519 ECDH + AES-256-GCM")

@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
-import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
@@ -22,20 +21,13 @@ abstract class StellarChatDatabase : RoomDatabase() {
         @Volatile
         private var instance: StellarChatDatabase? = null
 
-        /** Migration 1→2: Add encrypted media attachment column to messages table. */
-        private val MIGRATION_1_2 = object : Migration(1, 2) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE messages ADD COLUMN encryptedMediaAttachment BLOB DEFAULT NULL")
-            }
-        }
-
         fun getInstance(context: Context): StellarChatDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     StellarChatDatabase::class.java,
                     "stellar_chat.db"
-                ).addMigrations(MIGRATION_1_2)
+                ).fallbackToDestructiveMigration()
                 .build().also { instance = it }
             }
         }

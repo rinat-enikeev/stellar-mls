@@ -30,6 +30,8 @@ class NostrRelayConnection(
     @Volatile private var reconnectAttempts = 0
     /** Callback for relay OK responses: (eventID, accepted). */
     var onOK: ((String, Boolean) -> Unit)? = null
+    /** Called when connection state changes (connected or disconnected). */
+    var onConnectionStateChange: ((Boolean) -> Unit)? = null
     @Volatile var isConnected = false
 
     fun connect() {
@@ -38,6 +40,7 @@ class NostrRelayConnection(
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 reconnectAttempts = 0
                 isConnected = true
+                onConnectionStateChange?.invoke(true)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -45,7 +48,9 @@ class NostrRelayConnection(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                val wasConnected = isConnected
                 isConnected = false
+                if (wasConnected) onConnectionStateChange?.invoke(false)
                 // M-8: Exponential backoff reconnection
                 reconnectAttempts++
                 val delay = minOf(

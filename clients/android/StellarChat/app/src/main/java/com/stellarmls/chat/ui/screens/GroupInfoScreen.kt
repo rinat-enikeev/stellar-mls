@@ -242,7 +242,7 @@ private fun InfoRow(label: String, value: String) {
 
 private val com.stellarmls.mls.SEPTier.displayName: String
     get() = when (this) {
-        com.stellarmls.mls.SEPTier.SMALL -> "Small (up to 8)"
-        com.stellarmls.mls.SEPTier.MEDIUM -> "Medium (up to 64)"
-        com.stellarmls.mls.SEPTier.LARGE -> "Large (up to 2048)"
+        com.stellarmls.mls.SEPTier.SMALL -> "Small (up to 32)"
+        com.stellarmls.mls.SEPTier.MEDIUM -> "Medium (up to 256)"
+        com.stellarmls.mls.SEPTier.LARGE -> "Large (up to 2,048)"
     }

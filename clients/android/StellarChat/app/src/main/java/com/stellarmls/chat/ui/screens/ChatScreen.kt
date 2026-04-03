@@ -1,5 +1,6 @@
 package com.stellarmls.chat.ui.screens
 
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -7,6 +8,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,6 +30,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -57,6 +62,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -64,10 +70,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.stellarmls.chat.blossom.BlossomClient
@@ -509,6 +520,7 @@ fun ImageBubbleContent(media: MediaAttachment) {
     var bitmap by remember(media.blobHash) { mutableStateOf(imageCache.getBitmap(media.blobHash)) }
     var isLoading by remember(media.blobHash) { mutableStateOf(false) }
     var failed by remember(media.blobHash) { mutableStateOf(false) }
+    var showFullScreen by remember { mutableStateOf(false) }
 
     // Try to decrypt thumbnail for immediate display
     val thumbnailBitmap = remember(media.blobHash) {
@@ -556,7 +568,9 @@ fun ImageBubbleContent(media: MediaAttachment) {
                 .widthIn(max = 220.dp)
                 .aspectRatio(aspectRatio.coerceIn(0.5f, 2f))
                 .clickable {
-                    if (bitmap == null && !isLoading) {
+                    if (bitmap != null) {
+                        showFullScreen = true
+                    } else if (!isLoading) {
                         scope.launch {
                             isLoading = true
                             try {
@@ -610,6 +624,94 @@ fun ImageBubbleContent(media: MediaAttachment) {
                 CircularProgressIndicator(modifier = Modifier.size(24.dp))
             } else {
                 Icon(Icons.Filled.Image, contentDescription = "Image", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+
+    if (showFullScreen && bitmap != null) {
+        FullScreenImageViewer(bitmap = bitmap!!, onDismiss = { showFullScreen = false })
+    }
+}
+
+@Composable
+fun FullScreenImageViewer(bitmap: Bitmap, onDismiss: () -> Unit) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        var scale by remember { mutableFloatStateOf(1f) }
+        var offset by remember { mutableStateOf(Offset.Zero) }
+        var dragOffsetY by remember { mutableFloatStateOf(0f) }
+        val backgroundAlpha = 1f - (kotlin.math.abs(dragOffsetY) / 900f).coerceAtMost(0.6f)
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = backgroundAlpha))
+        ) {
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = "Full screen image",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer(
+                        scaleX = scale,
+                        scaleY = scale,
+                        translationX = offset.x,
+                        translationY = offset.y + dragOffsetY
+                    )
+                    .pointerInput(Unit) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            val newScale = (scale * zoom).coerceIn(1f, 5f)
+                            if (newScale > 1f) {
+                                scale = newScale
+                                offset = Offset(offset.x + pan.x, offset.y + pan.y)
+                            } else {
+                                scale = newScale
+                                // When at 1x, vertical drag dismisses
+                                dragOffsetY += pan.y
+                            }
+                        }
+                    }
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onDoubleTap = {
+                                if (scale > 1f) {
+                                    scale = 1f
+                                    offset = Offset.Zero
+                                    dragOffsetY = 0f
+                                } else {
+                                    scale = 2.5f
+                                }
+                            }
+                        )
+                    },
+                contentScale = ContentScale.Fit
+            )
+
+            // Check dismiss after gesture ends — use a side effect on dragOffsetY
+            LaunchedEffect(dragOffsetY) {
+                // Only act when finger lifts (stable value)
+                if (dragOffsetY != 0f && scale <= 1f) {
+                    kotlinx.coroutines.delay(50)
+                    if (kotlin.math.abs(dragOffsetY) > 400f) {
+                        onDismiss()
+                    }
+                }
+            }
+
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+            ) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = "Close",
+                    tint = Color.White,
+                    modifier = Modifier.size(28.dp)
+                )
             }
         }
     }

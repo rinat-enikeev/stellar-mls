@@ -1,7 +1,7 @@
 import Foundation
 import SwiftMLS
 
-/// NIP-XX bootstrap payload — the decrypted content of a kind 24113 invitation.
+/// NIP-XX bootstrap payload — the decrypted content of a kind 34113 invitation.
 /// Contains everything a recipient needs to join the group.
 struct BootstrapPayload: Codable, Equatable {
     let groupID: Data           // 32 bytes
@@ -52,7 +52,7 @@ struct BootstrapPayload: Codable, Equatable {
             epoch: epoch,
             salt: salt,
             commitment: commitment,
-            tier: SEPTier(rawValue: tierRawValue) ?? .small
+            tier: SEPTier(rawValue: tierRawValue) ?? .large
         )
     }
 }

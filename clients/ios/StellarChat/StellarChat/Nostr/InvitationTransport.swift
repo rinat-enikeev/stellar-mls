@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// Sends and receives kind 24113 invitation events over Nostr relays.
+/// Sends and receives kind 34113 invitation events over Nostr relays.
 @Observable
 final class InvitationTransport {
     private var connections: [URL: NostrRelayConnection] = [:]
@@ -44,7 +44,7 @@ final class InvitationTransport {
             guard let self else { return }
             for (_, conn) in self.connections {
                 let filter: [String: Any] = [
-                    "kinds": [24113],
+                    "kinds": [34113],
                     "#d": ["sep-inbox:" + inboxTag],
                 ]
                 let stream = await conn.subscribe(subscriptionID: subID, filter: filter)
@@ -82,7 +82,7 @@ final class InvitationTransport {
         ]
 
         let event = try NostrEvent.build(
-            kind: 24113,
+            kind: 34113,
             tags: tags,
             content: content,
             keyManager: keyManager
@@ -124,7 +124,7 @@ final class InvitationTransport {
             let invitation = PendingInvitation(
                 id: event.id,
                 payload: payload,
-                receivedAt: Date(timeIntervalSince1970: TimeInterval(event.createdAt))
+                receivedAt: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0)
             )
             onInvitation?(invitation)
         } catch {

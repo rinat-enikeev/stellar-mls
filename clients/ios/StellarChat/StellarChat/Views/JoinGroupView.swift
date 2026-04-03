@@ -1,3 +1,4 @@
+import SwiftMLS
 import SwiftUI
 
 struct JoinGroupView: View {
@@ -9,6 +10,9 @@ struct JoinGroupView: View {
     @State private var isSyncing = false
     @State private var showScanner = false
     @State private var clipboardDetected = false
+    @State private var decodedGroup: ChatGroup?
+    @State private var verificationResult: OnChainVerificationResult?
+    @State private var isVerifying = false
 
     var body: some View {
         NavigationStack {
@@ -29,6 +33,31 @@ struct JoinGroupView: View {
                         showScanner = true
                     } label: {
                         Label("Scan QR Code", systemImage: "qrcode.viewfinder")
+                    }
+                }
+
+                if let group = decodedGroup {
+                    Section("Group Preview") {
+                        LabeledContent("Name", value: group.name)
+                        LabeledContent("Members", value: "\(group.members.count)")
+                        LabeledContent("Epoch", value: "\(group.epoch)")
+
+                        if let result = verificationResult {
+                            VerificationBadgeView(result: result)
+                            if result == .inactive {
+                                Text("This group has been deactivated on-chain and cannot be joined.")
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                            }
+                        } else if isVerifying {
+                            HStack(spacing: 4) {
+                                ProgressView()
+                                    .controlSize(.mini)
+                                Text("Verifying on-chain...")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
                 }
 
@@ -65,8 +94,11 @@ struct JoinGroupView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     if joined {
                         Button("Done") { dismiss() }
+                    } else if decodedGroup != nil {
+                        Button("Join") { confirmJoin() }
+                            .disabled(isSyncing || verificationResult == .inactive)
                     } else {
-                        Button("Join") { joinGroup() }
+                        Button("Preview") { decodeInvite() }
                             .disabled(isSyncing || codeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
@@ -77,6 +109,11 @@ struct JoinGroupView: View {
                     codeText = scannedCode
                     showScanner = false
                 }
+            }
+            .onChange(of: codeText) { _, _ in
+                decodedGroup = nil
+                verificationResult = nil
+                errorMessage = nil
             }
             .onAppear {
                 guard codeText.isEmpty, !clipboardDetected,
@@ -90,28 +127,19 @@ struct JoinGroupView: View {
         }
     }
 
-    private func joinGroup() {
+    private func decodeInvite() {
         errorMessage = nil
         do {
             let code = try InviteCode.decode(from: codeText.trimmingCharacters(in: .whitespacesAndNewlines))
             let groupIDHex = code.groupID.map { String(format: "%02x", $0) }.joined()
 
-            // Check if already joined
             if appState.groups.contains(where: { $0.id == groupIDHex }) {
                 errorMessage = "You're already in this group."
                 return
             }
 
             let codeRelays = code.relayHints.compactMap(URL.init(string:))
-            // Merge invite code relays with user's relays (union) for maximum overlap
             let mergedRelays = Array(Set(appState.relayURLs + codeRelays))
-
-            // Add ourselves to the member list so our own messages pass BLS auth
-            var members = code.members
-            let myLeaf = try appState.keyManager.memberLeaf
-            if !members.contains(where: { $0.publicKeyCompressed == myLeaf.publicKeyCompressed }) {
-                members.append(myLeaf)
-            }
 
             let group = ChatGroup(
                 id: groupIDHex,
@@ -119,20 +147,44 @@ struct JoinGroupView: View {
                 groupSecret: code.groupSecret,
                 createdAt: Date(),
                 relayHints: mergedRelays.isEmpty ? appState.relayURLs : mergedRelays,
-                members: members,
+                members: code.members,
                 epoch: code.epoch,
                 salt: code.salt,
-                commitment: code.commitment
+                commitment: code.commitment,
+                tier: SEPTier(rawValue: code.tierRawValue) ?? .large
             )
-            appState.addGroup(group)
-            joined = true
+            decodedGroup = group
 
-            // Announce ourselves to existing members so they add us (fire-and-forget)
-            Task {
-                await appState.announceMemberJoined(group: group)
-            }
+            Task { await verifyGroup() }
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func verifyGroup() async {
+        guard let group = decodedGroup else { return }
+        guard appState.isContractConfigured else { return }
+        isVerifying = true
+        let result = await appState.verifyGroupOnChain(group)
+        verificationResult = result
+        isVerifying = false
+    }
+
+    private func confirmJoin() {
+        guard var group = decodedGroup else { return }
+        if verificationResult == .verified {
+            group.isPublishedOnChain = true
+        }
+        // Add ourselves to the member list so our own messages pass BLS auth
+        if let myLeaf = try? appState.keyManager.memberLeaf,
+           !group.members.contains(where: { $0.publicKeyCompressed == myLeaf.publicKeyCompressed }) {
+            group.members.append(myLeaf)
+        }
+        appState.addGroup(group)
+        joined = true
+
+        Task {
+            await appState.announceMemberJoined(group: group)
         }
     }
 }

@@ -1,3 +1,4 @@
+import SwiftMLS
 import SwiftUI
 
 struct ContentView: View {
@@ -89,6 +90,9 @@ private struct DeepLinkJoinGroupView: View {
     @State private var errorMessage: String?
     @State private var joined = false
     @State private var isSyncing = false
+    @State private var decodedGroup: ChatGroup?
+    @State private var verificationResult: OnChainVerificationResult?
+    @State private var isVerifying = false
 
     var body: some View {
         NavigationStack {
@@ -99,6 +103,32 @@ private struct DeepLinkJoinGroupView: View {
                         .monospaced()
                         .lineLimit(3)
                 }
+
+                if let group = decodedGroup {
+                    Section("Group Preview") {
+                        LabeledContent("Name", value: group.name)
+                        LabeledContent("Members", value: "\(group.members.count)")
+                        LabeledContent("Epoch", value: "\(group.epoch)")
+
+                        if let result = verificationResult {
+                            VerificationBadgeView(result: result)
+                            if result == .inactive {
+                                Text("This group has been deactivated on-chain and cannot be joined.")
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                            }
+                        } else if isVerifying {
+                            HStack(spacing: 4) {
+                                ProgressView()
+                                    .controlSize(.mini)
+                                Text("Verifying on-chain...")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
                 if let error = errorMessage {
                     Section {
                         Label(error, systemImage: "exclamationmark.triangle")
@@ -132,16 +162,17 @@ private struct DeepLinkJoinGroupView: View {
                     if joined {
                         Button("Done") { dismiss() }
                     } else {
-                        Button("Join") { joinGroup() }
-                            .disabled(isSyncing)
+                        Button("Join") { confirmJoin() }
+                            .disabled(isSyncing || decodedGroup == nil || verificationResult == .inactive)
                     }
                 }
             }
             .interactiveDismissDisabled(isSyncing)
+            .task { await decodeAndVerify() }
         }
     }
 
-    private func joinGroup() {
+    private func decodeAndVerify() async {
         do {
             let invite = try InviteCode.decode(from: code)
             let groupIDHex = invite.groupID.map { String(format: "%02x", $0) }.joined()
@@ -151,31 +182,44 @@ private struct DeepLinkJoinGroupView: View {
             }
             let codeRelays = invite.relayHints.compactMap(URL.init(string:))
             let mergedRelays = Array(Set(appState.relayURLs + codeRelays))
-            // Add ourselves to the member list so our own messages pass BLS auth
-            var members = invite.members
-            let myLeaf = try appState.keyManager.memberLeaf
-            if !members.contains(where: { $0.publicKeyCompressed == myLeaf.publicKeyCompressed }) {
-                members.append(myLeaf)
-            }
-
             let group = ChatGroup(
                 id: groupIDHex,
                 name: invite.name,
                 groupSecret: invite.groupSecret,
                 createdAt: Date(),
                 relayHints: mergedRelays.isEmpty ? appState.relayURLs : mergedRelays,
-                members: members,
+                members: invite.members,
                 epoch: invite.epoch,
                 salt: invite.salt,
-                commitment: invite.commitment
+                commitment: invite.commitment,
+                tier: SEPTier(rawValue: invite.tierRawValue) ?? .large
             )
-            appState.addGroup(group)
-            joined = true
-            Task {
-                await appState.announceMemberJoined(group: group)
-            }
+            decodedGroup = group
+
+            guard appState.isContractConfigured else { return }
+            isVerifying = true
+            let result = await appState.verifyGroupOnChain(group)
+            verificationResult = result
+            isVerifying = false
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func confirmJoin() {
+        guard var group = decodedGroup else { return }
+        if verificationResult == .verified {
+            group.isPublishedOnChain = true
+        }
+        // Add ourselves to the member list so our own messages pass BLS auth
+        if let myLeaf = try? appState.keyManager.memberLeaf,
+           !group.members.contains(where: { $0.publicKeyCompressed == myLeaf.publicKeyCompressed }) {
+            group.members.append(myLeaf)
+        }
+        appState.addGroup(group)
+        joined = true
+        Task {
+            await appState.announceMemberJoined(group: group)
         }
     }
 }

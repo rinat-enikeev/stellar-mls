@@ -9,6 +9,7 @@ import com.stellarmls.chat.model.ChatGroup
 import com.stellarmls.chat.model.InviteCode
 import com.stellarmls.chat.model.toHex
 import com.stellarmls.mls.SEPCommitmentBuilder
+import com.stellarmls.mls.SEPTier
 import java.security.SecureRandom
 
 class CreateGroupViewModel : ViewModel() {
@@ -17,7 +18,7 @@ class CreateGroupViewModel : ViewModel() {
     var createdGroup by mutableStateOf<ChatGroup?>(null)
     var errorMessage by mutableStateOf<String?>(null)
 
-    fun createGroup(keyManager: KeyManager) {
+    fun createGroup(keyManager: KeyManager, tier: SEPTier = SEPTier.LARGE) {
         val name = groupName.trim()
         if (name.isEmpty()) return
 
@@ -34,7 +35,8 @@ class CreateGroupViewModel : ViewModel() {
                 groupSecret = groupSecret,
                 members = mutableListOf(myLeaf),
                 epoch = 0,
-                salt = SEPCommitmentBuilder.generateSalt()
+                salt = SEPCommitmentBuilder.generateSalt(),
+                tier = tier
             )
             group.recomputeCommitment()
 
@@ -46,7 +48,8 @@ class CreateGroupViewModel : ViewModel() {
                 members = group.members.toList(),
                 epoch = group.epoch,
                 salt = group.salt,
-                commitment = group.commitment
+                commitment = group.commitment,
+                tierRawValue = group.tier.id
             )
 
             createdGroup = group

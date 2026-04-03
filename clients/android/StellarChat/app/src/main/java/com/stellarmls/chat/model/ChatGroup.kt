@@ -25,7 +25,7 @@ data class ChatGroup(
     var epoch: Long = 0,
     var salt: ByteArray = SEPCommitmentBuilder.generateSalt(),
     var commitment: ByteArray? = null,
-    var tier: SEPTier = SEPTier.SMALL,
+    var tier: SEPTier = SEPTier.LARGE,
     var isPublishedOnChain: Boolean = false,
     /** Unix timestamp of the last received event, used for offline catch-up. */
     var lastEventTimestamp: Long = 0
@@ -115,7 +115,8 @@ data class InviteCode(
     val members: List<SEPGroupMemberLeaf>,
     val epoch: Long,
     val salt: ByteArray,
-    val commitment: ByteArray?
+    val commitment: ByteArray?,
+    val tierRawValue: Int = SEPTier.LARGE.id
 ) {
     /** Encode to a Base64 string using the canonical JSON format (base64 for binary fields).
      *  Compatible with iOS Codable serialization of Data fields. */
@@ -141,6 +142,7 @@ data class InviteCode(
             if (commitment != null) {
                 put("commitment", android.util.Base64.encodeToString(commitment, android.util.Base64.NO_WRAP))
             }
+            put("tierRawValue", tierRawValue)
         }
         return android.util.Base64.encodeToString(
             json.toString().toByteArray(),
@@ -185,7 +187,8 @@ data class InviteCode(
                 salt = if (saltStr.isNotEmpty()) android.util.Base64.decode(saltStr, android.util.Base64.NO_WRAP)
                        else SEPCommitmentBuilder.generateSalt(),
                 commitment = if (commitmentStr.isNotEmpty()) android.util.Base64.decode(commitmentStr, android.util.Base64.NO_WRAP)
-                            else null
+                            else null,
+                tierRawValue = json.optInt("tierRawValue", SEPTier.LARGE.id)
             )
         }
 

@@ -41,7 +41,19 @@ struct NostrEvent: Codable, Identifiable {
         return computedID == id
     }
 
+    /// App-specific millisecond timestamp from `["ms", "..."]` tag.
+    /// Falls back to `createdAt * 1000` if absent or invalid.
+    /// This is an app-local convention — relays and third-party clients may ignore it.
+    var displayMilliseconds: Int64 {
+        if let msTag = tags.first(where: { $0.first == "ms" && $0.count >= 2 }),
+           let ms = Int64(msTag[1]), ms >= 0 {
+            return ms
+        }
+        return createdAt * 1000
+    }
+
     /// Build a NIP-01 event, computing the event ID and signing it.
+    /// Appends an app-specific `["ms", "<unix_ms>"]` tag for sub-second ordering.
     static func build(
         kind: Int,
         tags: [[String]],
@@ -49,10 +61,15 @@ struct NostrEvent: Codable, Identifiable {
         keyManager: KeyManager
     ) throws -> NostrEvent {
         let pubkeyHex = keyManager.publicKeyHex
-        let createdAt = Int64(Date().timeIntervalSince1970)
+        let unixMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let createdAt = unixMs / 1000
+
+        // Append app-specific ms tag for sub-second ordering
+        var allTags = tags
+        allTags.append(["ms", String(unixMs)])
 
         // NIP-01 event ID: SHA256([0, pubkey, created_at, kind, tags, content])
-        let canonical: [Any] = [0, pubkeyHex, createdAt, kind, tags, content]
+        let canonical: [Any] = [0, pubkeyHex, createdAt, kind, allTags, content]
         let serialized = try JSONSerialization.data(withJSONObject: canonical, options: [])
         let hash = SHA256.hash(data: serialized)
         let eventID = Data(hash)
@@ -66,7 +83,7 @@ struct NostrEvent: Codable, Identifiable {
             pubkey: pubkeyHex,
             createdAt: createdAt,
             kind: kind,
-            tags: tags,
+            tags: allTags,
             content: content,
             sig: sigHex
         )

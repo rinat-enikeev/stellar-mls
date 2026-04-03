@@ -87,7 +87,7 @@ fun CreateGroupScreen(
                     // M-15: Sanitize group name before creation
                     val sanitized = sanitizeGroupName(viewModel.groupName) ?: return@Button
                     viewModel.groupName = sanitized
-                    viewModel.createGroup(keyManager)
+                    viewModel.createGroup(keyManager, groupListViewModel?.defaultGroupTier ?: com.stellarmls.mls.SEPTier.LARGE)
                     viewModel.createdGroup?.let { group ->
                         // Add group immediately but stay on screen so user can share QR/invite code
                         onGroupCreated(group)

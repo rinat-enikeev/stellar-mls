@@ -122,8 +122,13 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
             }
             JoinGroupScreen(
                 viewModel = joinViewModel,
+                groupListViewModel = groupListViewModel,
                 onBack = { navController.popBackStack() },
                 onGroupJoined = { group ->
+                    // Mark as published if on-chain verification passed
+                    if (joinViewModel.verificationResult is com.stellarmls.chat.onchain.OnChainVerificationResult.Verified) {
+                        group.isPublishedOnChain = true
+                    }
                     // Add ourselves to the member list so our messages pass BLS auth
                     val myLeaf = groupListViewModel.keyManager.memberLeaf()
                     if (group.members.none { it.publicKeyCompressed.contentEquals(myLeaf.publicKeyCompressed) }) {

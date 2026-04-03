@@ -13,6 +13,16 @@ data class NostrEvent(
     val content: String,
     val sig: String
 ) {
+    /** App-specific millisecond timestamp from `["ms", "..."]` tag.
+     *  Falls back to `createdAt * 1000` if absent or invalid.
+     *  This is an app-local convention — relays and third-party clients may ignore it. */
+    val displayMilliseconds: Long
+        get() {
+            val msTag = tags.firstOrNull { it.size >= 2 && it[0] == "ms" }
+            val ms = msTag?.get(1)?.toLongOrNull()
+            return if (ms != null && ms >= 0) ms else createdAt * 1000
+        }
+
     fun toJson(): org.json.JSONObject = org.json.JSONObject().apply {
         put("id", id)
         put("pubkey", pubkey)
@@ -40,7 +50,8 @@ data class NostrEvent(
 }
 
 object NostrEventBuilder {
-    /** Build a NIP-01 event with computed ID and real Schnorr signature. */
+    /** Build a NIP-01 event with computed ID and real Schnorr signature.
+     *  Appends an app-specific `["ms", "<unix_ms>"]` tag for sub-second ordering. */
     fun build(
         kind: Int,
         tags: List<List<String>>,
@@ -48,7 +59,11 @@ object NostrEventBuilder {
         keyManager: KeyManager
     ): NostrEvent {
         val pubkeyHex = keyManager.publicKeyHex
-        val createdAt = System.currentTimeMillis() / 1000
+        val unixMs = System.currentTimeMillis()
+        val createdAt = unixMs / 1000
+
+        // Append app-specific ms tag for sub-second ordering
+        val allTags = tags + listOf(listOf("ms", unixMs.toString()))
 
         // NIP-01: event ID = SHA256([0, pubkey, created_at, kind, tags, content])
         val canonical = JSONArray().apply {
@@ -56,7 +71,7 @@ object NostrEventBuilder {
             put(pubkeyHex)
             put(createdAt)
             put(kind)
-            put(JSONArray(tags.map { JSONArray(it) }))
+            put(JSONArray(allTags.map { JSONArray(it) }))
             put(content)
         }
         val serialized = canonical.toString().toByteArray()
@@ -72,7 +87,7 @@ object NostrEventBuilder {
             pubkey = pubkeyHex,
             createdAt = createdAt,
             kind = kind,
-            tags = tags,
+            tags = allTags,
             content = content,
             sig = sigHex
         )

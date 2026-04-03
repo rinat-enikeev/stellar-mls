@@ -69,7 +69,7 @@ class PersistenceStore(context: Context) {
             (0 until arr.length()).map { arr.getString(it) }
         }
         val members = deserializeMembers(membersJson)
-        val tier = SEPTier.entries.find { it.id == persisted.tierRawValue } ?: SEPTier.SMALL
+        val tier = SEPTier.entries.find { it.id == persisted.tierRawValue } ?: SEPTier.LARGE
 
         return ChatGroup(
             id = persisted.id,

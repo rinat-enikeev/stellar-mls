@@ -4,14 +4,19 @@ import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -27,17 +32,22 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.stellarmls.chat.model.ChatGroup
+import com.stellarmls.chat.onchain.OnChainVerificationResult
 import com.stellarmls.chat.ui.components.QRScannerView
+import com.stellarmls.chat.ui.components.VerificationBadge
+import com.stellarmls.chat.viewmodel.GroupListViewModel
 import com.stellarmls.chat.viewmodel.JoinGroupViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun JoinGroupScreen(
     viewModel: JoinGroupViewModel,
+    groupListViewModel: GroupListViewModel? = null,
     onBack: () -> Unit,
     onGroupJoined: (ChatGroup) -> Unit
 ) {
@@ -57,6 +67,17 @@ fun JoinGroupScreen(
                     } catch (_: Exception) { }
                 }
             }
+        }
+    }
+
+    // Trigger on-chain verification when a group is decoded
+    LaunchedEffect(viewModel.decodedGroup) {
+        val group = viewModel.decodedGroup ?: return@LaunchedEffect
+        if (groupListViewModel?.isContractConfigured != true) return@LaunchedEffect
+        viewModel.isVerifying = true
+        groupListViewModel.verifyGroupOnChain(group) { result ->
+            viewModel.verificationResult = result
+            viewModel.isVerifying = false
         }
     }
 
@@ -92,7 +113,6 @@ fun JoinGroupScreen(
                 value = viewModel.inviteText,
                 onValueChange = {
                     viewModel.inviteText = it
-                    viewModel.error = null
                 },
                 label = { Text("Invite Code") },
                 modifier = Modifier
@@ -127,15 +147,67 @@ fun JoinGroupScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Button(
-                onClick = {
-                    viewModel.joinGroup()
-                    viewModel.joinedGroup?.let { onGroupJoined(it) }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = viewModel.inviteText.isNotBlank()
-            ) {
-                Text("Join Group")
+            // Group preview card
+            viewModel.decodedGroup?.let { group ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(group.name, style = MaterialTheme.typography.titleMedium)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Members: ${group.members.size} | Epoch: ${group.epoch}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        val result = viewModel.verificationResult
+                        if (result != null) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            VerificationBadge(result)
+                            if (result is OnChainVerificationResult.Inactive) {
+                                Text(
+                                    "This group has been deactivated on-chain and cannot be joined.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
+                        } else if (viewModel.isVerifying) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    "Verifying on-chain...",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+
+            if (viewModel.decodedGroup != null) {
+                Button(
+                    onClick = {
+                        viewModel.confirmJoin()
+                        viewModel.joinedGroup?.let { onGroupJoined(it) }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = viewModel.verificationResult !is OnChainVerificationResult.Inactive
+                ) {
+                    Text("Join Group")
+                }
+            } else {
+                Button(
+                    onClick = { viewModel.decodeInvite() },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = viewModel.inviteText.isNotBlank()
+                ) {
+                    Text("Preview")
+                }
             }
 
             viewModel.error?.let { err ->

@@ -27,6 +27,8 @@ class CallManager(private val context: Context) {
     var isUsingFrontCamera by mutableStateOf(true)
     var isVideoCall by mutableStateOf(false)
     var callDuration by mutableLongStateOf(0L)
+    /** Tracks whether the first answer has been received (first-answer-wins). */
+    private var answerReceived = false
 
     /** Remote video track for rendering. */
     var remoteVideoTrack by mutableStateOf<VideoTrack?>(null)
@@ -50,6 +52,15 @@ class CallManager(private val context: Context) {
         private val iceServers = listOf(
             PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
             PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer(),
+            // EU TURN (Metered) — TCP on 443 for firewall compatibility
+            PeerConnection.IceServer.builder("turn:eu-turn.metered.ca:443?transport=tcp")
+                .setUsername("stellarchat")
+                .setPassword("stellarchat-turn-2026")
+                .createIceServer(),
+            PeerConnection.IceServer.builder("turns:eu-turn.metered.ca:443?transport=tcp")
+                .setUsername("stellarchat")
+                .setPassword("stellarchat-turn-2026")
+                .createIceServer(),
         )
 
         fun initialize(context: Context) {
@@ -130,7 +141,19 @@ class CallManager(private val context: Context) {
                 startRingTimer()
             }
             "answer" -> {
-                if (incomingCallId != callId || state != CallState.RINGING || direction != CallDirection.OUTGOING) return
+                if (incomingCallId != callId || direction != CallDirection.OUTGOING) return
+                // First-answer-wins: dismiss late answerers
+                if (answerReceived) {
+                    val hangup = JSONObject().apply {
+                        put("action", "hangup")
+                        put("callId", callId)
+                        put("reason", "answered")
+                    }
+                    sendSignal?.invoke(hangup)
+                    return
+                }
+                if (state != CallState.RINGING) return
+                answerReceived = true
                 ringJob?.cancel()
                 val sdpStr = callJson.optString("sdp")
                 if (sdpStr.isNotEmpty()) {
@@ -236,6 +259,7 @@ class CallManager(private val context: Context) {
         callDuration = 0
         isVideoCall = false
         isVideoEnabled = false
+        answerReceived = false
 
         CallConnectionService.reportCallEnded()
 

@@ -30,8 +30,8 @@ final class NostrMessageTransport {
     /// Callback for received protocol messages (state updates, salt requests/responses).
     var onProtocolMessage: ((String, NostrEvent) -> Void)?
     /// Callback for received call signaling messages (offer, answer, ice, hangup, busy, reject).
-    /// Parameters: (call JSON dict, senderBlsPubkey, event)
-    var onCallSignal: (([String: Any], Data, NostrEvent) -> Void)?
+    /// Parameters: (groupID, call JSON dict, senderBlsPubkey, event)
+    var onCallSignal: ((String, [String: Any], Data, NostrEvent) -> Void)?
     /// Callback for transport-level errors (decryption, relay, encoding).
     var onError: ((String) -> Void)?
     /// Callback for relay OK responses: (eventID, accepted). Used for delivery status.
@@ -143,7 +143,7 @@ final class NostrMessageTransport {
                     let ts = wrapperJSON["ts"] as? Int64 ?? 0
                     let age = Int64(Date().timeIntervalSince1970) - ts
                     if age <= 60 {
-                        onCallSignal?(callDict, blsPubkey, event)
+                        onCallSignal?(groupID, callDict, blsPubkey, event)
                     }
                 } else if !isMember {
                     SecurityLog.nonMemberMessageRejected(groupID: groupID)

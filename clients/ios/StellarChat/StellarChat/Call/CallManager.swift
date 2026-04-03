@@ -26,6 +26,8 @@ final class CallManager: NSObject {
     var isUsingFrontCamera = true
     var isVideoCall = false
     var callDuration: TimeInterval = 0
+    /// Tracks whether the first answer has been received (first-answer-wins).
+    private var answerReceived = false
 
     /// Remote video track for rendering in the UI.
     var remoteVideoTrack: RTCVideoTrack?
@@ -48,6 +50,15 @@ final class CallManager: NSObject {
     private static let iceServers = [
         RTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"]),
         RTCIceServer(urlStrings: ["stun:stun1.l.google.com:19302"]),
+        // EU TURN (Metered) — TCP on 443 for firewall compatibility
+        RTCIceServer(
+            urlStrings: [
+                "turn:eu-turn.metered.ca:443?transport=tcp",
+                "turns:eu-turn.metered.ca:443?transport=tcp",
+            ],
+            username: "stellarchat",
+            credential: "stellarchat-turn-2026"
+        ),
     ]
 
     // MARK: - Start Call (Outgoing)
@@ -109,7 +120,15 @@ final class CallManager: NSObject {
             startRingTimer()
 
         case "answer":
-            guard incomingCallId == callId, state == .ringing, direction == .outgoing else { return }
+            guard incomingCallId == callId, direction == .outgoing else { return }
+            // First-answer-wins: dismiss late answerers
+            if answerReceived {
+                let hangup: [String: Any] = ["action": "hangup", "callId": callId, "reason": "answered"]
+                try? await sendSignal?(hangup)
+                return
+            }
+            guard state == .ringing else { return }
+            answerReceived = true
             ringTimer?.invalidate()
             if let sdp = callDict["sdp"] as? String {
                 let remoteDesc = RTCSessionDescription(type: .answer, sdp: sdp)
@@ -202,6 +221,7 @@ final class CallManager: NSObject {
         callDuration = 0
         isVideoCall = false
         isVideoEnabled = false
+        answerReceived = false
 
         callKit?.reportCallEnded(reason: sendHangup ? .remoteEnded : .remoteEnded)
 
@@ -247,7 +267,12 @@ final class CallManager: NSObject {
     // MARK: - Private
 
     private func setupPeerConnection() {
-        let factory = RTCPeerConnectionFactory()
+        let encoderFactory = RTCDefaultVideoEncoderFactory()
+        let decoderFactory = RTCDefaultVideoDecoderFactory()
+        let factory = RTCPeerConnectionFactory(
+            encoderFactory: encoderFactory,
+            decoderFactory: decoderFactory
+        )
         self.factory = factory
 
         let config = RTCConfiguration()
@@ -427,6 +452,15 @@ private class CallPeerConnectionDelegate: NSObject, RTCPeerConnectionDelegate {
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
+
+    // Modern track delivery (unified plan) — preferred over deprecated didAdd stream:
+    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams: [RTCMediaStream]) {
+        Task { @MainActor in
+            if let videoTrack = rtpReceiver.track as? RTCVideoTrack {
+                callManager?.remoteVideoTrack = videoTrack
+            }
+        }
+    }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
         callManager?.sendICECandidate(candidate)

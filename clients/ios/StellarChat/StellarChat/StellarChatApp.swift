@@ -1234,9 +1234,14 @@ final class AppState {
     // MARK: - Call Signaling
 
     private func setupCallSignalHandler() {
-        chatTransport.onCallSignal = { [weak self] callDict, senderBlsPubkey, event in
+        chatTransport.onCallSignal = { [weak self] groupID, callDict, senderBlsPubkey, event in
             Task { @MainActor in
-                await self?.callManager.handleSignal(callDict, senderBlsPubkey: senderBlsPubkey)
+                guard let self else { return }
+                // Configure signaling channel for incoming calls before handling
+                self.callManager.sendSignal = { [weak self] callDict in
+                    try await self?.sendCallSignal(callDict, groupID: groupID)
+                }
+                await self.callManager.handleSignal(callDict, senderBlsPubkey: senderBlsPubkey)
             }
         }
     }

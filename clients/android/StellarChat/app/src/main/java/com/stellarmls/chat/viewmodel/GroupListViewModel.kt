@@ -1353,6 +1353,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     private fun setupCallSignalHandler() {
         transport.onCallSignal = { groupID, callJson, senderPubkey, eventID ->
             viewModelScope.launch {
+                // Configure signaling channel for incoming calls before handling
+                callManager.sendSignal = { outgoingJson ->
+                    sendCallSignal(groupID, outgoingJson)
+                }
                 callManager.handleSignal(callJson, senderPubkey)
             }
         }

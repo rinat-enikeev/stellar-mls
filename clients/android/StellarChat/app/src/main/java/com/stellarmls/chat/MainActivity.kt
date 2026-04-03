@@ -204,10 +204,8 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                     viewModel = createViewModel,
                     keyManager = groupListViewModel.keyManager,
                     groupListViewModel = groupListViewModel,
-                    onBack = { navController.popBackStack() },
-                    onGroupCreated = { group ->
-                        groupListViewModel.addGroup(group)
-                    }
+                    invitationTransport = groupListViewModel.invitationTransport,
+                    onBack = { navController.popBackStack() }
                 )
             }
 

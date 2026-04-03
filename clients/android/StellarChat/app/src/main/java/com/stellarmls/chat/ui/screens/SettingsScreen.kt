@@ -60,10 +60,10 @@ fun SettingsScreen(
     val context = LocalContext.current
     val km = viewModel.keyManager
     var newRelayUrl by remember { mutableStateOf("") }
-    var contractEndpointInput by remember { mutableStateOf(viewModel.contractEndpoint) }
-    var contractIDInput by remember { mutableStateOf(viewModel.contractID) }
-    var relayerURLInput by remember { mutableStateOf(viewModel.relayerURL) }
-    var relayerAuthTokenInput by remember { mutableStateOf(viewModel.relayerAuthToken) }
+    var contractEndpointInput by remember(viewModel.contractEndpoint) { mutableStateOf(viewModel.contractEndpoint) }
+    var contractIDInput by remember(viewModel.contractID) { mutableStateOf(viewModel.contractID) }
+    var relayerURLInput by remember(viewModel.relayerURL) { mutableStateOf(viewModel.relayerURL) }
+    var relayerAuthTokenInput by remember(viewModel.relayerAuthToken) { mutableStateOf(viewModel.relayerAuthToken) }
     var contractSaveStatus by remember { mutableStateOf<String?>(null) }
     var attestationStatus by remember { mutableStateOf<String?>(null) }
     var advancedExpanded by remember { mutableStateOf(false) }

@@ -105,7 +105,7 @@
 		F0C2E0A174CC0B050D6BADB3 /* QRCodeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeView.swift; sourceTree = "<group>"; };
 		F0F0E18BDAE3BFB365657BA8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		F1F7647C522D0F7D1F86CE17 /* VerificationBadgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerificationBadgeView.swift; sourceTree = "<group>"; };
-		F406EABD519847834878AA47 /* StellarChat.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = StellarChat.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F406EABD519847834878AA47 /* StellarChat.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = StellarChat.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F5EB556EBD80A9DC1A99F1F4 /* KeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyManager.swift; sourceTree = "<group>"; };
 		F67E0578F1C0DC64C2004D62 /* ContactAliasStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactAliasStore.swift; sourceTree = "<group>"; };
 		F8FD22552EBCF23A89DB7700 /* ChatGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGroup.swift; sourceTree = "<group>"; };
@@ -319,7 +319,6 @@
 						ProvisioningStyle = Automatic;
 					};
 					7E1AB0C084DAFEAB2A75FC86 = {
-						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -434,7 +433,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = StellarChat/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -544,7 +543,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = StellarChat/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

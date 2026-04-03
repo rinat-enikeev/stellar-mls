@@ -12,6 +12,7 @@ struct ContentView: View {
     @Environment(AppState.self) private var appState
     @State private var showDeepLinkJoin = false
     @State private var selectedTab: RootTab = .chats
+    @State private var chatNavigationPath = NavigationPath()
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
 
     var body: some View {
@@ -23,7 +24,7 @@ struct ContentView: View {
             }
 
             Tab("Chats", systemImage: "bubble.left.and.bubble.right", value: .chats) {
-                NavigationStack {
+                NavigationStack(path: $chatNavigationPath) {
                     GroupListView()
                 }
             }
@@ -43,6 +44,15 @@ struct ContentView: View {
         .onChange(of: appState.deepLinkInviteCode) { _, newValue in
             if newValue != nil {
                 showDeepLinkJoin = true
+            }
+        }
+        .onChange(of: appState.navigateToGroupID) { _, newValue in
+            if let groupID = newValue {
+                selectedTab = .chats
+                // Pop to root then push the chat
+                chatNavigationPath = NavigationPath()
+                chatNavigationPath.append(groupID)
+                appState.navigateToGroupID = nil
             }
         }
         .sheet(isPresented: $showDeepLinkJoin, onDismiss: {

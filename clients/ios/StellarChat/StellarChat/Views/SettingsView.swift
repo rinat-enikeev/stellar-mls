@@ -19,12 +19,12 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            // Profile / Nostr Identity
+            // Invite Key (X25519 inbox key) — shown prominently for scanning
             Section {
                 VStack(spacing: 12) {
-                    QRCodeView(appState.keyManager.publicKeyHex, size: 180)
+                    QRCodeView(appState.keyManager.keyAgreementPublicKeyHex, size: 180)
 
-                    Text(appState.keyManager.publicKeyHex)
+                    Text(appState.keyManager.keyAgreementPublicKeyHex)
                         .font(.caption2)
                         .monospaced()
                         .multilineTextAlignment(.center)
@@ -32,15 +32,15 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
 
                     Button {
-                        UIPasteboard.general.string = appState.keyManager.publicKeyHex
+                        UIPasteboard.general.string = appState.keyManager.keyAgreementPublicKeyHex
                     } label: {
-                        Label("Copy Nostr Public Key", systemImage: "doc.on.doc")
+                        Label("Copy Invite Key", systemImage: "doc.on.doc")
                     }
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
             } header: {
-                Text("Your Nostr ID")
+                Text("Your Invite Key")
             } footer: {
                 Text("Share this QR code so others can find you.")
             }

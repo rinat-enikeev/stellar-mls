@@ -89,24 +89,24 @@ fun SettingsScreen(
                 .padding(16.dp)
                 .verticalScroll(rememberScrollState())
         ) {
-            // Nostr Identity QR
-            SettingsCard("Your Nostr ID") {
+            // Invite Key QR (X25519 inbox key)
+            SettingsCard("Your Invite Key") {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    QRCodeImage(text = km.publicKeyHex, size = 180.dp)
+                    QRCodeImage(text = km.keyAgreementPublicKeyHex, size = 180.dp)
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        km.publicKeyHex,
+                        km.keyAgreementPublicKeyHex,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 2
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    CopyableField("Nostr Public Key", km.publicKeyHex, context)
+                    CopyableField("Invite Key", km.keyAgreementPublicKeyHex, context)
                 }
                 Text(
-                    "Share this QR code so others can find you.",
+                    "Share this QR code so others can invite you to groups.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp)

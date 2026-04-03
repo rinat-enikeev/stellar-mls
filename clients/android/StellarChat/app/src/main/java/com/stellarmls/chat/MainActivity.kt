@@ -205,7 +205,12 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                     keyManager = groupListViewModel.keyManager,
                     groupListViewModel = groupListViewModel,
                     invitationTransport = groupListViewModel.invitationTransport,
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStack() },
+                    onNavigateToChat = { groupId ->
+                        navController.navigate("chat/$groupId") {
+                            popUpTo("create") { inclusive = true }
+                        }
+                    }
                 )
             }
 

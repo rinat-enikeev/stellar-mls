@@ -58,7 +58,8 @@ fun CreateGroupScreen(
     keyManager: com.stellarmls.chat.crypto.KeyManager,
     groupListViewModel: GroupListViewModel,
     invitationTransport: InvitationTransport,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onNavigateToChat: (groupId: String) -> Unit = {}
 ) {
     val context = LocalContext.current
     var showScanner by remember { mutableStateOf(false) }
@@ -73,9 +74,10 @@ fun CreateGroupScreen(
     if (showScanner) {
         androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxSize()) {
             QRScannerView { scannedCode ->
-                val trimmed = scannedCode.trim()
-                if (trimmed.length == 64 && trimmed.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
+                val trimmed = scannedCode.trim().lowercase()
+                if (trimmed.length == 64 && trimmed.all { it in '0'..'9' || it in 'a'..'f' }) {
                     viewModel.keyInput = trimmed
+                    viewModel.addParticipant(keyManager.keyAgreementPublicKeyHex)
                 }
                 showScanner = false
             }
@@ -88,9 +90,20 @@ fun CreateGroupScreen(
             TopAppBar(
                 title = { Text("Create Group") },
                 navigationIcon = {
-                    if (viewModel.phase == CreationPhase.INPUT || viewModel.phase == CreationPhase.DONE) {
+                    if (viewModel.phase == CreationPhase.INPUT) {
                         IconButton(onClick = onBack) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    } else if (viewModel.phase == CreationPhase.DONE) {
+                        IconButton(onClick = {
+                            val groupId = viewModel.createdGroup?.id
+                            if (groupId != null) {
+                                onNavigateToChat(groupId)
+                            } else {
+                                onBack()
+                            }
+                        }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Go to chat")
                         }
                     }
                 }
@@ -123,7 +136,11 @@ fun CreateGroupScreen(
                 CreationPhase.DONE -> DoneContent(
                     viewModel = viewModel,
                     groupListViewModel = groupListViewModel,
-                    context = context
+                    context = context,
+                    onNavigateToChat = {
+                        val groupId = viewModel.createdGroup?.id
+                        if (groupId != null) onNavigateToChat(groupId)
+                    }
                 )
             }
 
@@ -353,8 +370,18 @@ private fun ProgressContent(
 private fun DoneContent(
     viewModel: CreateGroupViewModel,
     groupListViewModel: GroupListViewModel,
-    context: Context
+    context: Context,
+    onNavigateToChat: () -> Unit = {}
 ) {
+    Button(
+        onClick = onNavigateToChat,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text("Go to Chat")
+    }
+
+    Spacer(modifier = Modifier.height(12.dp))
+
     viewModel.inviteCode?.let { code ->
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(

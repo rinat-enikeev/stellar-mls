@@ -73,7 +73,12 @@ struct CreateGroupView: View {
                         Button("Create") { startCreation() }
                             .disabled(groupName.trimmingCharacters(in: .whitespaces).isEmpty)
                     case .done:
-                        Button("Done") { dismiss() }
+                        Button("Done") {
+                            if let groupID = createdGroup?.id {
+                                appState.navigateToGroupID = groupID
+                            }
+                            dismiss()
+                        }
                     default:
                         EmptyView()
                     }
@@ -82,9 +87,10 @@ struct CreateGroupView: View {
             .interactiveDismissDisabled(isProcessing)
             .sheet(isPresented: $showScanner) {
                 QRScannerView { scannedCode in
-                    let trimmed = scannedCode.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let trimmed = scannedCode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                     if trimmed.count == 64, trimmed.allSatisfy({ $0.isHexDigit }) {
                         keyInput = trimmed
+                        addParticipant()
                     }
                     showScanner = false
                 }
@@ -388,7 +394,13 @@ struct CreateGroupView: View {
                 }
 
                 // Send invitations
+                #if DEBUG
+                print("[CreateGroup] about to sendInvitations")
+                #endif
                 await sendInvitations(to: group)
+                #if DEBUG
+                print("[CreateGroup] sendInvitations returned, setting phase=done")
+                #endif
                 phase = .done
             } catch {
                 errorMessage = error.localizedDescription
@@ -425,7 +437,15 @@ struct CreateGroupView: View {
         guard !participantKeys.isEmpty else { return }
         phase = .inviting
 
+        #if DEBUG
+        print("[CreateGroup] sendInvitations start, keys=\(participantKeys.count)")
+        #endif
+
         await appState.invitationTransport.connect(to: appState.relayURLs)
+
+        #if DEBUG
+        print("[CreateGroup] invitationTransport connected")
+        #endif
 
         for key in participantKeys {
             invitationStatuses[key] = .sending
@@ -438,30 +458,31 @@ struct CreateGroupView: View {
                     group: group,
                     senderPubkey: appState.keyManager.publicKeyHex
                 )
-                // Timeout per participant: sendInvitation publishes to all relays
-                // sequentially (each with its own 5s timeout), so cap the total.
-                try await withThrowingTaskGroup(of: Void.self) { taskGroup in
-                    taskGroup.addTask {
-                        try await self.appState.invitationTransport.sendInvitation(
-                            payload: payload,
-                            recipientKeyAgreementPubkey: pubkeyData,
-                            keyManager: self.appState.keyManager
-                        )
-                    }
-                    taskGroup.addTask {
-                        try await Task.sleep(for: .seconds(15))
-                        throw URLError(.timedOut)
-                    }
-                    try await taskGroup.next()
-                    taskGroup.cancelAll()
-                }
+                #if DEBUG
+                print("[CreateGroup] sending invitation to \(key.prefix(8))...")
+                #endif
+
+                try await appState.invitationTransport.sendInvitation(
+                    payload: payload,
+                    recipientKeyAgreementPubkey: pubkeyData,
+                    keyManager: appState.keyManager
+                )
+
+                #if DEBUG
+                print("[CreateGroup] invitation sent to \(key.prefix(8))")
+                #endif
                 invitationStatuses[key] = .sent
             } catch {
-                invitationStatuses[key] = .failed(
-                    error is URLError ? "Timed out" : error.localizedDescription
-                )
+                #if DEBUG
+                print("[CreateGroup] invitation failed for \(key.prefix(8)): \(error)")
+                #endif
+                invitationStatuses[key] = .failed(error.localizedDescription)
             }
         }
+
+        #if DEBUG
+        print("[CreateGroup] sendInvitations done")
+        #endif
     }
 
     /// M-15: Sanitize group name — strip control characters and enforce length limit.

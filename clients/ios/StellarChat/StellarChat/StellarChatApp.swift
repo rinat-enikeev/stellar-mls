@@ -35,6 +35,8 @@ final class AppState {
     var contactAliasStore: ContactAliasStore!
     /// Set by deep link handler; consumed by ContentView to navigate to join screen.
     var deepLinkInviteCode: String?
+    /// Set after group creation; consumed by ContentView to navigate to the new chat.
+    var navigateToGroupID: String?
     let invitationTransport = InvitationTransport()
     var pendingInvitations: [PendingInvitation] = []
 

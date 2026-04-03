@@ -22,8 +22,28 @@ class ChatViewModel(
     val messages: List<ChatMessage>
         get() = groupListViewModel.chatMessages[groupID] ?: emptyList()
 
+    val group: com.stellarmls.chat.model.ChatGroup?
+        get() = groupListViewModel.groups.find { it.id == groupID }
+
     val groupName: String
-        get() = groupListViewModel.groups.find { it.id == groupID }?.name ?: "Chat"
+        get() = group?.name ?: "Chat"
+
+    val inviteLink: String?
+        get() {
+            val g = group ?: return null
+            val code = com.stellarmls.chat.model.InviteCode(
+                groupID = g.groupIDData,
+                groupSecret = g.groupSecret,
+                name = g.name,
+                relayHints = g.relayHints,
+                members = g.members.toList(),
+                epoch = g.epoch,
+                salt = g.salt,
+                commitment = g.commitment,
+                tierRawValue = g.tier.id
+            )
+            return "stellarchat://join?code=${code.encode()}"
+        }
 
     val hasBlossomServers: Boolean
         get() = groupListViewModel.blossomServerURLs.isNotEmpty()

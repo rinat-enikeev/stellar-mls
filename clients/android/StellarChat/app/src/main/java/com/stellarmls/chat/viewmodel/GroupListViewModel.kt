@@ -32,6 +32,7 @@ import com.stellarmls.chat.onchain.OnChainService
 import com.stellarmls.chat.onchain.OnChainVerificationResult
 import com.stellarmls.chat.persistence.ContactAliasStore
 import com.stellarmls.chat.persistence.PersistenceStore
+import com.stellarmls.chat.crypto.StorageEncryption
 import com.stellarmls.mls.SEPCommitmentBuilder
 import com.stellarmls.mls.SEPGroupMemberLeaf
 import com.stellarmls.mls.SEPGroupRenamed
@@ -39,6 +40,11 @@ import com.stellarmls.mls.SEPGroupStateUpdate
 import com.stellarmls.mls.SEPKeyAttestationPayload
 import com.stellarmls.mls.SEPMemberJoined
 import com.stellarmls.mls.SEPRekey
+import com.stellarmls.mls.SEPRekeyAck
+import com.stellarmls.mls.SEPRekeyEnvelope
+import com.stellarmls.mls.SEPRekeyResendRequest
+import com.stellarmls.mls.SEPRemovalNotice
+import com.stellarmls.mls.SEPMemberTransportBundle
 import com.stellarmls.mls.SEPMessageAck
 import com.stellarmls.mls.SEPTier
 import com.stellarmls.mls.SEPSaltRequest
@@ -151,6 +157,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     /** Per-group pending epoch transition state. Blocks concurrent mutations. */
     private val pendingTransitions = java.util.concurrent.ConcurrentHashMap<String, PendingTransitionState>()
 
+    /** In-memory transport bundle directory: groupID → (blsPubkeyHex → bundle). */
+    private val transportBundles = java.util.concurrent.ConcurrentHashMap<String, MutableMap<String, com.stellarmls.mls.SEPMemberTransportBundle>>()
+
     // Calls
     lateinit var callManager: com.stellarmls.chat.call.CallManager
         private set
@@ -251,10 +260,29 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     } catch (e: Exception) {
                         Log.e("GroupListVM", "Failed to load messages for group ${group.id.take(8)}", e)
                     }
+                    // Load transport bundles
+                    try {
+                        val bundles = store.loadTransportBundles(group.id)
+                        if (bundles.isNotEmpty()) {
+                            transportBundles[group.id] = bundles.toMutableMap()
+                        }
+                    } catch (_: Exception) { }
                 }
             } catch (e: Exception) {
                 Log.e("GroupListVM", "Failed to load groups from store", e)
             }
+            // Clean up expired pending rekeys (>24h) on startup
+            try {
+                val allPending = store.loadAllPendingRekeys()
+                val now = System.currentTimeMillis()
+                val expiryMs = 24 * 60 * 60 * 1000L
+                for (record in allPending) {
+                    if (now - record.createdAt > expiryMs) {
+                        store.deletePendingRekey(record.groupID, record.epoch)
+                    }
+                }
+            } catch (_: Exception) { }
+
             // Always connect to relays, even if group loading fails
             connectIfNeeded()
         }
@@ -356,6 +384,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             )
 
             addGroup(group)
+            ensureOwnTransportBundle(group.id)
             return Pair(group, invite.encode())
         } catch (_: Exception) {
             return null
@@ -390,10 +419,177 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 }
             }
         }
+        invitationTransport.onRekeyEnvelope = { envelopeObj ->
+            viewModelScope.launch {
+                applyRekeyEnvelope(envelopeObj)
+            }
+        }
         invitationTransport.subscribeToInbox(
             inboxTag = keyManager.inboxTag,
             privateKey = keyManager.keyAgreementPrivateKey
         )
+        // Start rekey resend timer for reliability
+        startRekeyResendTimer()
+    }
+
+    /** Apply a secure rekey envelope received via inbox. Installs fresh groupSecret/salt and migrates topic. */
+    private fun applyRekeyEnvelope(obj: JSONObject) {
+        val groupIDBytes = android.util.Base64.decode(obj.getString("groupID"), android.util.Base64.NO_WRAP)
+        val groupIDHex = groupIDBytes.toHex()
+        val epoch = obj.getLong("epoch")
+        val index = groups.indexOfFirst { it.id == groupIDHex }
+        if (index < 0) return
+        val group = groups[index]
+
+        // Only apply if epoch is ahead
+        if (epoch <= group.epoch) return
+
+        // Verify sender bundle
+        val senderBundleObj = obj.optJSONObject("senderBundle") ?: return
+        val senderBundle = BootstrapPayload.deserializeTransportBundle(senderBundleObj)
+        if (!keyManager.verifyTransportBundle(senderBundle)) {
+            SecurityLog.invalidAttestation("rekey envelope sender bundle verification failed")
+            return
+        }
+
+        val oldTopicTag = group.topicTag
+
+        // Install new secrets
+        group.groupSecret = android.util.Base64.decode(obj.getString("groupSecret"), android.util.Base64.NO_WRAP)
+        group.salt = android.util.Base64.decode(obj.getString("salt"), android.util.Base64.NO_WRAP)
+        group.epoch = epoch
+        obj.optString("commitment", "").takeIf { it.isNotEmpty() }?.let {
+            group.commitment = android.util.Base64.decode(it, android.util.Base64.NO_WRAP)
+        }
+
+        // Apply member changes
+        val removedArr = obj.optJSONArray("removedMemberKeys") ?: JSONArray()
+        for (i in 0 until removedArr.length()) {
+            val removedKey = android.util.Base64.decode(removedArr.getString(i), android.util.Base64.NO_WRAP)
+            group.members.removeAll { it.publicKeyCompressed.contentEquals(removedKey) }
+        }
+        sortMembers(group)
+
+        // Update transport bundles
+        val bundlesArr = obj.optJSONArray("memberBundles") ?: JSONArray()
+        for (i in 0 until bundlesArr.length()) {
+            try {
+                val bundle = BootstrapPayload.deserializeTransportBundle(bundlesArr.getJSONObject(i))
+                processTransportBundle(bundle, groupIDHex)
+            } catch (_: Exception) { }
+        }
+        processTransportBundle(senderBundle, groupIDHex)
+
+        groups[index] = group
+        storeSalt(groupIDHex, epoch, group.salt)
+
+        // Migrate topic
+        transport.unsubscribe(oldTopicTag)
+        syncTransportAndSubscribe(group)
+
+        viewModelScope.launch {
+            try { store.saveGroup(group) } catch (_: Exception) { }
+        }
+
+        // System messages
+        for (i in 0 until removedArr.length()) {
+            val removedKey = android.util.Base64.decode(removedArr.getString(i), android.util.Base64.NO_WRAP)
+            val name = memberDisplayName(removedKey)
+            insertSystemMessage(groupIDHex, "$name was removed from the group", "member-remove", epoch)
+        }
+
+        if (BuildConfig.DEBUG) Log.d("GroupListVM", "Applied secure rekey envelope epoch=$epoch group=${groupIDHex.take(8)}")
+
+        // Send ack on the NEW topic
+        val myBls = keyManager.blsPublicKey()
+        val ackJson = JSONObject().apply {
+            put("type", com.stellarmls.mls.SEPRekeyAck.MESSAGE_TYPE)
+            put("groupID", android.util.Base64.encodeToString(groupIDBytes, android.util.Base64.NO_WRAP))
+            put("epoch", epoch)
+            put("senderBlsPubkey", android.util.Base64.encodeToString(myBls, android.util.Base64.NO_WRAP))
+        }.toString()
+        transport.sendProtocolMessage(group, ackJson)
+    }
+
+    /** Handle a resend request: look up stored envelope, verify requester, and re-send. */
+    private fun handleRekeyResendRequest(groupID: String, epoch: Long, requesterBundle: com.stellarmls.mls.SEPMemberTransportBundle) {
+        if (!keyManager.verifyTransportBundle(requesterBundle)) return
+        viewModelScope.launch {
+            try {
+                val records = store.loadPendingRekeys(groupID)
+                val record = records.firstOrNull { it.epoch == epoch.toInt() } ?: return@launch
+                val envelopeJson = String(StorageEncryption.decrypt(record.encryptedEnvelope))
+
+                val sealed = GroupCrypto.encryptInvitation(
+                    envelopeJson.toByteArray(), requesterBundle.x25519InboxPubkey, keyManager)
+                val contentBase64 = android.util.Base64.encodeToString(sealed.toByteArray(), android.util.Base64.NO_WRAP)
+                val recipientInboxTag = GroupCrypto.hiddenInboxTag(requesterBundle.x25519InboxPubkey)
+                val tags = InvitationTransport.eventTags(recipientInboxTag)
+                val event = com.stellarmls.chat.crypto.NostrEventBuilder.build(34113, tags, contentBase64, keyManager)
+                for (conn in transport.connections) conn.publish(event)
+                if (BuildConfig.DEBUG) Log.d("GroupListVM", "Re-sent rekey envelope epoch=$epoch to requester")
+            } catch (e: Exception) {
+                if (BuildConfig.DEBUG) Log.e("GroupListVM", "Resend request failed: ${e.message}")
+            }
+        }
+    }
+
+    /** Periodically resend rekey envelopes to unacked members. Max 3 retries, 24h expiry. */
+    private fun startRekeyResendTimer() {
+        viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(30_000) // 30 seconds
+                resendPendingRekeys()
+            }
+        }
+    }
+
+    private suspend fun resendPendingRekeys() {
+        val allPending = try { store.loadAllPendingRekeys() } catch (_: Exception) { return }
+        val now = System.currentTimeMillis()
+        val maxRetries = 3
+        val expiryMs = 24 * 60 * 60 * 1000L // 24 hours
+
+        for (record in allPending) {
+            // Expire old pending rekeys
+            if (now - record.createdAt > expiryMs) {
+                try { store.deletePendingRekey(record.groupID, record.epoch) } catch (_: Exception) { }
+                continue
+            }
+            if (record.retryCount >= maxRetries) continue
+
+            val envelopeJson = try {
+                String(StorageEncryption.decrypt(record.encryptedEnvelope))
+            } catch (_: Exception) { continue }
+
+            val unackedKeys = try {
+                val arr = org.json.JSONArray(record.unackedMemberKeysJSON)
+                (0 until arr.length()).map { arr.getString(it) }
+            } catch (_: Exception) { emptyList() }
+
+            if (unackedKeys.isEmpty()) {
+                try { store.deletePendingRekey(record.groupID, record.epoch) } catch (_: Exception) { }
+                continue
+            }
+
+            val groupBundles = transportBundles[record.groupID] ?: continue
+
+            for (hex in unackedKeys) {
+                val bundle = groupBundles[hex] ?: continue
+                try {
+                    val sealed = GroupCrypto.encryptInvitation(
+                        envelopeJson.toByteArray(), bundle.x25519InboxPubkey, keyManager)
+                    val contentBase64 = android.util.Base64.encodeToString(sealed.toByteArray(), android.util.Base64.NO_WRAP)
+                    val recipientInboxTag = GroupCrypto.hiddenInboxTag(bundle.x25519InboxPubkey)
+                    val tags = InvitationTransport.eventTags(recipientInboxTag)
+                    val event = com.stellarmls.chat.crypto.NostrEventBuilder.build(34113, tags, contentBase64, keyManager)
+                    for (conn in transport.connections) conn.publish(event)
+                } catch (e: Exception) {
+                    if (BuildConfig.DEBUG) Log.e("GroupListVM", "Resend failed for ${hex.take(8)}: ${e.message}")
+                }
+            }
+            try { store.incrementPendingRekeyRetry(record.groupID, record.epoch) } catch (_: Exception) { }
+        }
     }
 
     // -- Relay management --
@@ -684,13 +880,16 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             )
         } catch (_: Exception) { null }
 
+        val myBundle = try { keyManager.createTransportBundle() } catch (_: Exception) { null }
+
         return SEPGroupStateUpdate(
             epoch = group.epoch,
             salt = group.salt,
             addedMembers = addedMembers,
             removedMemberKeys = removedMemberKeys,
             commitment = group.commitment,
-            senderAttestation = attestation
+            senderAttestation = attestation,
+            senderTransportBundle = myBundle
         )
     }
 
@@ -801,34 +1000,113 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         transport.currentMembers.clear()
         transport.currentMembers.addAll(groups.flatMap { it.members })
 
-        // For member removal: use a poisoned (random) salt in the broadcast so the
-        // removed member cannot derive the new encryption key.
         val isRemoval = removedMemberKeys.isNotEmpty()
-        val poisonedSalt = if (isRemoval) SEPCommitmentBuilder.generateSalt() else candidate.salt
+        val useSecureRekey = isRemoval && allMembersHaveBundles(groupID, candidate.members)
 
-        // Broadcast state update with PREVIOUS key
-        val broadcastCandidate = if (isRemoval) cloneGroup(candidate).also { it.salt = poisonedSalt } else candidate
-        val update = buildStateUpdate(broadcastCandidate, addedMembers, removedMemberKeys)
-        broadcastStateUpdate(broadcastCandidate, update, overrideKey = previousKey)
+        if (isRemoval && useSecureRekey) {
+            // --- SECURE INBOX REKEY (cryptographic eviction) ---
+            val random = SecureRandom()
+            val freshSecret = ByteArray(32).also { random.nextBytes(it) }
+            candidate.groupSecret = freshSecret
+            candidate.salt = SEPCommitmentBuilder.generateSalt()
+            candidate.recomputeCommitment()
+            groups[index] = candidate
+            storeSalt(groupID, candidate.epoch, candidate.salt)
 
-        // Resubscribe with new key (uses the REAL salt)
-        transport.subscribe(candidate)
-
-        // For removals: send re-key with real salt, encrypted with poisoned-salt key.
-        // Removed member's client has already unsubscribed, so only remaining members get this.
-        if (isRemoval) {
-            val poisonedKey = GroupCrypto.deriveMessageKey(candidate.groupSecret, candidate.epoch, poisonedSalt)
-            val rekeyJson = JSONObject().apply {
-                put("type", SEPRekey.MESSAGE_TYPE)
+            // 1. Broadcast SEPRemovalNotice on old channel (no secrets)
+            val noticeJson = JSONObject().apply {
+                put("type", com.stellarmls.mls.SEPRemovalNotice.MESSAGE_TYPE)
+                put("groupID", android.util.Base64.encodeToString(currentGroup.groupIDData, android.util.Base64.NO_WRAP))
                 put("epoch", candidate.epoch)
-                put("salt", android.util.Base64.encodeToString(candidate.salt, android.util.Base64.NO_WRAP))
+                val removedArr = JSONArray()
+                for (k in removedMemberKeys) removedArr.put(android.util.Base64.encodeToString(k, android.util.Base64.NO_WRAP))
+                put("removedMemberKeys", removedArr)
+                candidate.commitment?.let {
+                    put("commitment", android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP))
+                }
             }.toString()
-            transport.sendProtocolMessage(candidate, rekeyJson, poisonedKey)
-        }
+            transport.sendProtocolMessage(currentGroup, noticeJson, previousKey)
 
-        // Persist to DB
-        viewModelScope.launch {
-            try { store.saveGroup(candidate) } catch (_: Exception) { }
+            // 2. Build rekey envelope JSON
+            val myBundle = keyManager.createTransportBundle()
+            val memberBundlesArr = JSONArray()
+            for (member in candidate.members) {
+                val hex = member.publicKeyCompressed.toHex()
+                transportBundles[groupID]?.get(hex)?.let {
+                    memberBundlesArr.put(BootstrapPayload.serializeTransportBundle(it))
+                }
+            }
+            val removedKeysArr = JSONArray()
+            for (k in removedMemberKeys) removedKeysArr.put(android.util.Base64.encodeToString(k, android.util.Base64.NO_WRAP))
+            val relayHintsArr = JSONArray(candidate.relayHints)
+            val envelopeJson = JSONObject().apply {
+                put("type", com.stellarmls.mls.SEPRekeyEnvelope.MESSAGE_TYPE)
+                put("groupID", android.util.Base64.encodeToString(currentGroup.groupIDData, android.util.Base64.NO_WRAP))
+                put("epoch", candidate.epoch)
+                put("groupSecret", android.util.Base64.encodeToString(candidate.groupSecret, android.util.Base64.NO_WRAP))
+                put("salt", android.util.Base64.encodeToString(candidate.salt, android.util.Base64.NO_WRAP))
+                candidate.commitment?.let { put("commitment", android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP)) }
+                put("memberBundles", memberBundlesArr)
+                put("removedMemberKeys", removedKeysArr)
+                put("relayHints", relayHintsArr)
+                put("senderBundle", BootstrapPayload.serializeTransportBundle(myBundle))
+            }.toString()
+
+            // 3. Send per-member rekey envelopes via inbox
+            val myLeaf = keyManager.memberLeaf()
+            for (member in candidate.members) {
+                if (member.publicKeyCompressed.contentEquals(myLeaf.publicKeyCompressed)) continue
+                val hex = member.publicKeyCompressed.toHex()
+                val bundle = transportBundles[groupID]?.get(hex) ?: continue
+                try {
+                    val sealed = GroupCrypto.encryptInvitation(
+                        envelopeJson.toByteArray(),
+                        bundle.x25519InboxPubkey,
+                        keyManager
+                    )
+                    val contentBase64 = android.util.Base64.encodeToString(sealed.toByteArray(), android.util.Base64.NO_WRAP)
+                    val recipientInboxTag = GroupCrypto.hiddenInboxTag(bundle.x25519InboxPubkey)
+                    val tags = InvitationTransport.eventTags(recipientInboxTag)
+                    val event = com.stellarmls.chat.crypto.NostrEventBuilder.build(34113, tags, contentBase64, keyManager)
+                    for (conn in transport.connections) conn.publish(event)
+                } catch (e: Exception) {
+                    if (BuildConfig.DEBUG) Log.e("GroupListVM", "Failed to send inbox rekey to ${hex.take(8)}: ${e.message}")
+                }
+            }
+
+            // Unsubscribe old topic, subscribe new (groupSecret changed)
+            transport.unsubscribe(currentGroup.topicTag)
+            transport.subscribe(candidate)
+
+            // Track as removal epoch
+            viewModelScope.launch {
+                try {
+                    val unackedKeys = candidate.members
+                        .filter { !it.publicKeyCompressed.contentEquals(myLeaf.publicKeyCompressed) }
+                        .map { it.publicKeyCompressed.toHex() }
+                    store.savePendingRekey(groupID, candidate.epoch.toInt(), envelopeJson, unackedKeys, isRemovalEpoch = true)
+                    store.saveGroup(candidate)
+                } catch (_: Exception) { }
+            }
+        } else {
+            // --- LEGACY FLOW: poisoned-salt + SEPRekey (best-effort) ---
+            val poisonedSalt = if (isRemoval) SEPCommitmentBuilder.generateSalt() else candidate.salt
+            val broadcastCandidate = if (isRemoval) cloneGroup(candidate).also { it.salt = poisonedSalt } else candidate
+            val update = buildStateUpdate(broadcastCandidate, addedMembers, removedMemberKeys)
+            broadcastStateUpdate(broadcastCandidate, update, overrideKey = previousKey)
+            transport.subscribe(candidate)
+            if (isRemoval) {
+                val poisonedKey = GroupCrypto.deriveMessageKey(candidate.groupSecret, candidate.epoch, poisonedSalt)
+                val rekeyJson = JSONObject().apply {
+                    put("type", SEPRekey.MESSAGE_TYPE)
+                    put("epoch", candidate.epoch)
+                    put("salt", android.util.Base64.encodeToString(candidate.salt, android.util.Base64.NO_WRAP))
+                }.toString()
+                transport.sendProtocolMessage(candidate, rekeyJson, poisonedKey)
+            }
+            viewModelScope.launch {
+                try { store.saveGroup(candidate) } catch (_: Exception) { }
+            }
         }
 
         // Insert system message for the transition
@@ -881,6 +1159,40 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch { try { store.saveMessage(msg) } catch (_: Exception) { } }
     }
 
+    // -- Transport Bundle Management --
+
+    /** Verify and persist a transport bundle for a group member. */
+    private fun processTransportBundle(bundle: com.stellarmls.mls.SEPMemberTransportBundle, groupID: String) {
+        if (!bundle.hasValidStructure) return
+        if (!keyManager.verifyTransportBundle(bundle)) {
+            SecurityLog.invalidAttestation("transport bundle signature verification failed")
+            return
+        }
+        val hex = bundle.blsPubkey.toHex()
+        val existing = transportBundles[groupID]?.get(hex)
+        if (existing != null && existing.version >= bundle.version) return
+        transportBundles.getOrPut(groupID) { mutableMapOf() }[hex] = bundle
+        viewModelScope.launch {
+            try { store.saveTransportBundle(bundle, groupID) } catch (_: Exception) { }
+        }
+    }
+
+    /** Create and persist own transport bundle for a group. */
+    private fun ensureOwnTransportBundle(groupID: String) {
+        val bundle = keyManager.createTransportBundle()
+        val hex = bundle.blsPubkey.toHex()
+        transportBundles.getOrPut(groupID) { mutableMapOf() }[hex] = bundle
+        viewModelScope.launch {
+            try { store.saveTransportBundle(bundle, groupID) } catch (_: Exception) { }
+        }
+    }
+
+    /** Check if all members have transport bundles for a group. */
+    private fun allMembersHaveBundles(groupID: String, members: List<SEPGroupMemberLeaf>): Boolean {
+        val bundles = transportBundles[groupID] ?: return false
+        return members.all { bundles.containsKey(it.publicKeyCompressed.toHex()) }
+    }
+
     /**
      * Apply a received state update. For published groups, chain-confirm-first:
      * the update is only applied if on-chain epoch/commitment matches.
@@ -906,6 +1218,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 return
             }
         }
+
+        // Extract and persist sender's transport bundle if present
+        update.senderTransportBundle?.let { processTransportBundle(it, groupID) }
 
         if (update.epoch == group.epoch) {
             // Same epoch + same salt = own echo — ignore
@@ -1215,9 +1530,13 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /** Handle a member_joined announcement via chain-confirmed epoch transition. */
-    private fun handleMemberJoined(member: SEPGroupMemberLeaf, groupID: String) {
+    private fun handleMemberJoined(member: SEPGroupMemberLeaf, groupID: String, transportBundle: com.stellarmls.mls.SEPMemberTransportBundle? = null) {
         viewModelScope.launch {
             if (BuildConfig.DEBUG) Log.d("GroupListVM", "handleMemberJoined group=${groupID.take(8)}")
+
+            // Extract and persist joiner's transport bundle
+            transportBundle?.let { processTransportBundle(it, groupID) }
+
             val group = groups.find { it.id == groupID } ?: return@launch
 
             if (group.members.any { it.publicKeyCompressed.contentEquals(member.publicKeyCompressed) }) {
@@ -1288,7 +1607,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Announce ourselves as a new member to the group over the Nostr transport. */
     fun announceMemberJoined(group: ChatGroup) {
+        ensureOwnTransportBundle(group.id)
         val member = keyManager.memberLeaf()
+        val myBundle = try { keyManager.createTransportBundle() } catch (_: Exception) { null }
         val json = JSONObject().apply {
             put("type", SEPMemberJoined.MESSAGE_TYPE)
             put("member", JSONObject().apply {
@@ -1297,6 +1618,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 put("leafHash", android.util.Base64.encodeToString(
                     member.leafHash, android.util.Base64.NO_WRAP))
             })
+            if (myBundle != null) {
+                put("transportBundle", BootstrapPayload.serializeTransportBundle(myBundle))
+            }
         }.toString()
         transport.sendProtocolMessage(group, json)
     }
@@ -1810,7 +2134,11 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                                 leafHash = android.util.Base64.decode(
                                     memberObj.getString("leafHash"), android.util.Base64.NO_WRAP)
                             )
-                            handleMemberJoined(member, groupID)
+                            val bundle = if (obj.has("transportBundle")) {
+                                try { BootstrapPayload.deserializeTransportBundle(obj.getJSONObject("transportBundle")) }
+                                catch (_: Exception) { null }
+                            } else null
+                            handleMemberJoined(member, groupID, bundle)
                         }
                         SEPGroupStateUpdate.MESSAGE_TYPE -> {
                             val update = parseStateUpdate(obj)
@@ -1818,15 +2146,24 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                         }
                         SEPSaltRequest.MESSAGE_TYPE -> {
                             val epoch = obj.getLong("epoch")
-                            // Rate-limit: respond only once per (sender, epoch) pair (H-5)
-                            val rateKey = "$senderPubkey:$epoch"
-                            if (saltRequestsResponded.add(rateKey)) {
-                                val salt = getSalt(groupID, epoch)
-                                if (salt != null) {
-                                    val group = groups.find { it.id == groupID }
-                                    if (group != null) {
-                                        val response = SEPSaltResponse(epoch = epoch, salt = salt)
-                                        transport.sendProtocolMessage(group, saltResponseToJson(response))
+                            // Phase 4: Refuse salt responses for removal epochs — the requester
+                            // should use SEPRekeyResendRequest via inbox instead.
+                            val isRemoval = try {
+                                kotlinx.coroutines.runBlocking { store.isRemovalEpoch(groupID, epoch.toInt()) }
+                            } catch (_: Exception) { false }
+                            if (isRemoval) {
+                                if (BuildConfig.DEBUG) Log.d("GroupListVM", "Salt request for removal epoch $epoch — refusing")
+                            } else {
+                                // Rate-limit: respond only once per (sender, epoch) pair (H-5)
+                                val rateKey = "$senderPubkey:$epoch"
+                                if (saltRequestsResponded.add(rateKey)) {
+                                    val salt = getSalt(groupID, epoch)
+                                    if (salt != null) {
+                                        val group = groups.find { it.id == groupID }
+                                        if (group != null) {
+                                            val response = SEPSaltResponse(epoch = epoch, salt = salt)
+                                            transport.sendProtocolMessage(group, saltResponseToJson(response))
+                                        }
                                     }
                                 }
                             }
@@ -1845,6 +2182,38 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                         SEPGroupRenamed.MESSAGE_TYPE -> {
                             val newName = obj.getString("name")
                             applyGroupRenamed(newName, groupID)
+                        }
+                        SEPRemovalNotice.MESSAGE_TYPE -> {
+                            // Non-secret removal notice — check if we were removed
+                            val removedArr = obj.optJSONArray("removedMemberKeys") ?: JSONArray()
+                            val myBls = keyManager.blsPublicKey()
+                            var selfRemoved = false
+                            for (i in 0 until removedArr.length()) {
+                                val key = android.util.Base64.decode(removedArr.getString(i), android.util.Base64.NO_WRAP)
+                                if (key.contentEquals(myBls)) { selfRemoved = true; break }
+                            }
+                            if (selfRemoved) {
+                                val g = groups.find { it.id == groupID }
+                                if (g != null) transport.unsubscribe(g.topicTag)
+                                val noticeEpoch = obj.getLong("epoch")
+                                insertSystemMessage(groupID, "You were removed from this group", "self-removed", noticeEpoch)
+                            }
+                        }
+                        SEPRekeyAck.MESSAGE_TYPE -> {
+                            val ackEpoch = obj.getLong("epoch")
+                            val senderHex = android.util.Base64.decode(
+                                obj.getString("senderBlsPubkey"), android.util.Base64.NO_WRAP).toHex()
+                            viewModelScope.launch {
+                                try { store.updatePendingRekeyAck(groupID, ackEpoch.toInt(), senderHex) } catch (_: Exception) { }
+                            }
+                        }
+                        SEPRekeyResendRequest.MESSAGE_TYPE -> {
+                            val reqEpoch = obj.getLong("epoch")
+                            val bundleObj = obj.optJSONObject("requesterBundle")
+                            if (bundleObj != null) {
+                                val requesterBundle = BootstrapPayload.deserializeTransportBundle(bundleObj)
+                                handleRekeyResendRequest(groupID, reqEpoch, requesterBundle)
+                            }
                         }
                         SEPMessageAck.MESSAGE_TYPE -> {
                             val ackEventID = obj.getString("eventID")
@@ -1941,6 +2310,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 put("signature", android.util.Base64.encodeToString(att.signature, android.util.Base64.NO_WRAP))
             })
         }
+        val bundle = update.senderTransportBundle
+        if (bundle != null) {
+            obj.put("senderTransportBundle", BootstrapPayload.serializeTransportBundle(bundle))
+        }
         return obj.toString()
     }
 
@@ -1978,13 +2351,19 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             )
         } else null
 
+        val transportBundle = if (obj.has("senderTransportBundle")) {
+            try { BootstrapPayload.deserializeTransportBundle(obj.getJSONObject("senderTransportBundle")) }
+            catch (_: Exception) { null }
+        } else null
+
         return SEPGroupStateUpdate(
             epoch = obj.getLong("epoch"),
             salt = salt,
             addedMembers = addedMembers,
             removedMemberKeys = removedKeys,
             commitment = commitment,
-            senderAttestation = attestation
+            senderAttestation = attestation,
+            senderTransportBundle = transportBundle
         )
     }
 

@@ -14,7 +14,13 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * in cleartext. For production deployments requiring full metadata protection,
  * integrate SQLCipher via `net.zetetic:android-database-sqlcipher`.
  */
-@Database(entities = [PersistedGroup::class, PersistedMessage::class, PersistedContactAlias::class], version = 4)
+@Database(
+    entities = [
+        PersistedGroup::class, PersistedMessage::class, PersistedContactAlias::class,
+        PersistedTransportBundle::class, PersistedPendingRekey::class
+    ],
+    version = 5
+)
 abstract class StellarChatDatabase : RoomDatabase() {
     abstract fun dao(): StellarChatDao
 
@@ -28,13 +34,38 @@ abstract class StellarChatDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS transport_bundles (
+                        groupID TEXT NOT NULL,
+                        blsPubkeyHex TEXT NOT NULL,
+                        encryptedBundle BLOB NOT NULL,
+                        PRIMARY KEY(groupID, blsPubkeyHex)
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS pending_rekeys (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        groupID TEXT NOT NULL,
+                        epoch INTEGER NOT NULL,
+                        encryptedEnvelope BLOB NOT NULL,
+                        unackedMemberKeysJSON TEXT NOT NULL,
+                        retryCount INTEGER NOT NULL DEFAULT 0,
+                        createdAt INTEGER NOT NULL DEFAULT 0,
+                        isRemovalEpoch INTEGER NOT NULL DEFAULT 0
+                    )
+                """.trimIndent())
+            }
+        }
+
         fun getInstance(context: Context): StellarChatDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     StellarChatDatabase::class.java,
                     "stellar_chat.db"
-                ).addMigrations(MIGRATION_3_4)
+                ).addMigrations(MIGRATION_3_4, MIGRATION_4_5)
                 .fallbackToDestructiveMigration()
                 .build().also { instance = it }
             }

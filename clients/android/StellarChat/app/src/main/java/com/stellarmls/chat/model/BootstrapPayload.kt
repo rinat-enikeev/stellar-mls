@@ -3,6 +3,7 @@ package com.stellarmls.chat.model
 import com.stellarmls.chat.crypto.KeyAttestation
 import com.stellarmls.mls.SEPCommitmentBuilder
 import com.stellarmls.mls.SEPGroupMemberLeaf
+import com.stellarmls.mls.SEPMemberTransportBundle
 import com.stellarmls.mls.SEPTier
 import org.json.JSONArray
 import org.json.JSONObject
@@ -24,7 +25,8 @@ data class BootstrapPayload(
     val tierRawValue: Int,
     val commitment: ByteArray?,
     val senderNostrPubkey: String,
-    val senderAttestation: KeyAttestation? = null
+    val senderAttestation: KeyAttestation? = null,
+    val senderTransportBundle: SEPMemberTransportBundle? = null
 ) {
     /** Convert to a ChatGroup for local storage.
      *  Members are re-sorted by compressed G1 key per SEP-XXXX §2.1
@@ -83,12 +85,20 @@ data class BootstrapPayload(
             attObj.put("signature", android.util.Base64.encodeToString(senderAttestation.signature, android.util.Base64.NO_WRAP))
             obj.put("senderAttestation", attObj)
         }
+        if (senderTransportBundle != null) {
+            obj.put("senderTransportBundle", serializeTransportBundle(senderTransportBundle))
+        }
         return obj.toString()
     }
 
     companion object {
-        /** Build a bootstrap payload from a ChatGroup, optionally including attestation. */
-        fun from(group: ChatGroup, senderPubkey: String, attestation: KeyAttestation? = null): BootstrapPayload {
+        /** Build a bootstrap payload from a ChatGroup, optionally including attestation and transport bundle. */
+        fun from(
+            group: ChatGroup,
+            senderPubkey: String,
+            attestation: KeyAttestation? = null,
+            transportBundle: SEPMemberTransportBundle? = null
+        ): BootstrapPayload {
             return BootstrapPayload(
                 groupID = group.groupIDData,
                 groupSecret = group.groupSecret,
@@ -100,7 +110,28 @@ data class BootstrapPayload(
                 tierRawValue = group.tier.id,
                 commitment = group.commitment,
                 senderNostrPubkey = senderPubkey,
-                senderAttestation = attestation
+                senderAttestation = attestation,
+                senderTransportBundle = transportBundle
+            )
+        }
+
+        fun serializeTransportBundle(bundle: SEPMemberTransportBundle): JSONObject {
+            return JSONObject().apply {
+                put("blsPubkey", android.util.Base64.encodeToString(bundle.blsPubkey, android.util.Base64.NO_WRAP))
+                put("stellarEd25519Pubkey", android.util.Base64.encodeToString(bundle.stellarEd25519Pubkey, android.util.Base64.NO_WRAP))
+                put("x25519InboxPubkey", android.util.Base64.encodeToString(bundle.x25519InboxPubkey, android.util.Base64.NO_WRAP))
+                put("version", bundle.version)
+                put("signature", android.util.Base64.encodeToString(bundle.signature, android.util.Base64.NO_WRAP))
+            }
+        }
+
+        fun deserializeTransportBundle(obj: JSONObject): SEPMemberTransportBundle {
+            return SEPMemberTransportBundle(
+                blsPubkey = android.util.Base64.decode(obj.getString("blsPubkey"), android.util.Base64.NO_WRAP),
+                stellarEd25519Pubkey = android.util.Base64.decode(obj.getString("stellarEd25519Pubkey"), android.util.Base64.NO_WRAP),
+                x25519InboxPubkey = android.util.Base64.decode(obj.getString("x25519InboxPubkey"), android.util.Base64.NO_WRAP),
+                version = obj.getInt("version"),
+                signature = android.util.Base64.decode(obj.getString("signature"), android.util.Base64.NO_WRAP)
             )
         }
 
@@ -130,6 +161,10 @@ data class BootstrapPayload(
                 )
             } else null
 
+            val transportBundle = if (obj.has("senderTransportBundle")) {
+                deserializeTransportBundle(obj.getJSONObject("senderTransportBundle"))
+            } else null
+
             return BootstrapPayload(
                 groupID = android.util.Base64.decode(obj.getString("groupID"), android.util.Base64.NO_WRAP),
                 groupSecret = android.util.Base64.decode(obj.getString("groupSecret"), android.util.Base64.NO_WRAP),
@@ -141,7 +176,8 @@ data class BootstrapPayload(
                 tierRawValue = obj.getInt("tierRawValue"),
                 commitment = commitment,
                 senderNostrPubkey = obj.getString("senderNostrPubkey"),
-                senderAttestation = attestation
+                senderAttestation = attestation,
+                senderTransportBundle = transportBundle
             )
         }
     }

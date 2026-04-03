@@ -14,7 +14,10 @@ final class PersistenceStore {
     private let context: ModelContext
 
     init() throws {
-        let schema = Schema([PersistedGroup.self, PersistedMessage.self, PersistedContactAlias.self])
+        let schema = Schema([
+            PersistedGroup.self, PersistedMessage.self, PersistedContactAlias.self,
+            PersistedTransportBundle.self, PersistedPendingRekey.self
+        ])
 
         // Store in a directory with complete file protection
         let appSupport = FileManager.default.urls(
@@ -40,7 +43,10 @@ final class PersistenceStore {
     /// N-15: In-memory fallback when on-disk persistence fails (e.g., disk full, corrupted DB).
     /// Data will not survive app restarts but the app remains usable.
     static func inMemory() -> PersistenceStore {
-        let schema = Schema([PersistedGroup.self, PersistedMessage.self, PersistedContactAlias.self])
+        let schema = Schema([
+            PersistedGroup.self, PersistedMessage.self, PersistedContactAlias.self,
+            PersistedTransportBundle.self, PersistedPendingRekey.self
+        ])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try! ModelContainer(for: schema, configurations: [config])
         let store = PersistenceStore(container: container)
@@ -192,6 +198,130 @@ final class PersistenceStore {
                 writer.deleteContactAlias(pubkey: pubkey)
             }
         }
+    }
+
+    // MARK: - Transport Bundles
+
+    func loadTransportBundles(groupID: String) -> [String: SEPMemberTransportBundle] {
+        let descriptor = FetchDescriptor<PersistedTransportBundle>(
+            predicate: #Predicate { $0.groupID == groupID }
+        )
+        guard let persisted = try? context.fetch(descriptor) else { return [:] }
+        var result: [String: SEPMemberTransportBundle] = [:]
+        for item in persisted {
+            if let bundleData = try? StorageEncryption.decrypt(item.encryptedBundle),
+               let bundle = try? JSONDecoder().decode(SEPMemberTransportBundle.self, from: bundleData) {
+                result[item.blsPubkeyHex] = bundle
+            }
+        }
+        return result
+    }
+
+    func saveTransportBundle(_ bundle: SEPMemberTransportBundle, groupID: String) {
+        guard let bundleData = try? JSONEncoder().encode(bundle),
+              let encrypted = try? StorageEncryption.encrypt(bundleData) else { return }
+        let hex = bundle.blsPubkey.map { String(format: "%02x", $0) }.joined()
+
+        // Upsert
+        let descriptor = FetchDescriptor<PersistedTransportBundle>(
+            predicate: #Predicate { $0.groupID == groupID && $0.blsPubkeyHex == hex }
+        )
+        if let existing = try? context.fetch(descriptor) {
+            for item in existing { context.delete(item) }
+        }
+        context.insert(PersistedTransportBundle(groupID: groupID, blsPubkeyHex: hex, encryptedBundle: encrypted))
+        try? context.save()
+    }
+
+    func saveTransportBundleAsync(_ bundle: SEPMemberTransportBundle, groupID: String) {
+        let bundle = bundle
+        let groupID = groupID
+        Self.writeQueue.async {
+            autoreleasepool {
+                guard let writer = try? PersistenceStore() else { return }
+                writer.saveTransportBundle(bundle, groupID: groupID)
+            }
+        }
+    }
+
+    func deleteTransportBundles(groupID: String) {
+        let descriptor = FetchDescriptor<PersistedTransportBundle>(
+            predicate: #Predicate { $0.groupID == groupID }
+        )
+        if let existing = try? context.fetch(descriptor) {
+            for item in existing { context.delete(item) }
+        }
+        try? context.save()
+    }
+
+    // MARK: - Pending Rekeys
+
+    func savePendingRekey(groupID: String, epoch: Int, envelope: Data, unackedKeys: [String], isRemovalEpoch: Bool) {
+        guard let encEnvelope = try? StorageEncryption.encrypt(envelope) else { return }
+        let keysJSON = (try? JSONEncoder().encode(unackedKeys)) ?? Data()
+        context.insert(PersistedPendingRekey(
+            groupID: groupID, epoch: epoch, encryptedEnvelope: encEnvelope,
+            unackedMemberKeysJSON: keysJSON, isRemovalEpoch: isRemovalEpoch
+        ))
+        try? context.save()
+    }
+
+    func loadPendingRekeys(groupID: String) -> [PersistedPendingRekey] {
+        let descriptor = FetchDescriptor<PersistedPendingRekey>(
+            predicate: #Predicate { $0.groupID == groupID }
+        )
+        return (try? context.fetch(descriptor)) ?? []
+    }
+
+    /// Remove a single member from the unacked set. Deletes the record if all members have acked.
+    func updatePendingRekeyAck(groupID: String, epoch: Int, ackedMemberHex: String) {
+        let descriptor = FetchDescriptor<PersistedPendingRekey>(
+            predicate: #Predicate { $0.groupID == groupID && $0.epoch == epoch }
+        )
+        guard let records = try? context.fetch(descriptor), let record = records.first else { return }
+        var keys = (try? JSONDecoder().decode([String].self, from: record.unackedMemberKeysJSON)) ?? []
+        keys.removeAll { $0 == ackedMemberHex }
+        if keys.isEmpty {
+            context.delete(record)
+        } else {
+            record.unackedMemberKeysJSON = (try? JSONEncoder().encode(keys)) ?? Data()
+        }
+        try? context.save()
+    }
+
+    /// Increment retry count and return the updated value.
+    @discardableResult
+    func incrementPendingRekeyRetry(groupID: String, epoch: Int) -> Int {
+        let descriptor = FetchDescriptor<PersistedPendingRekey>(
+            predicate: #Predicate { $0.groupID == groupID && $0.epoch == epoch }
+        )
+        guard let records = try? context.fetch(descriptor), let record = records.first else { return -1 }
+        record.retryCount += 1
+        try? context.save()
+        return record.retryCount
+    }
+
+    /// Load ALL pending rekeys across all groups.
+    func loadAllPendingRekeys() -> [PersistedPendingRekey] {
+        let descriptor = FetchDescriptor<PersistedPendingRekey>()
+        return (try? context.fetch(descriptor)) ?? []
+    }
+
+    func deletePendingRekey(groupID: String, epoch: Int) {
+        let descriptor = FetchDescriptor<PersistedPendingRekey>(
+            predicate: #Predicate { $0.groupID == groupID && $0.epoch == epoch }
+        )
+        if let existing = try? context.fetch(descriptor) {
+            for item in existing { context.delete(item) }
+        }
+        try? context.save()
+    }
+
+    func isRemovalEpoch(groupID: String, epoch: Int) -> Bool {
+        let descriptor = FetchDescriptor<PersistedPendingRekey>(
+            predicate: #Predicate { $0.groupID == groupID && $0.epoch == epoch && $0.isRemovalEpoch == true }
+        )
+        return ((try? context.fetchCount(descriptor)) ?? 0) > 0
     }
 
     // MARK: - Encryption Helpers

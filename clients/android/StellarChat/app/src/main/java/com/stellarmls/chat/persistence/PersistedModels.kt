@@ -1,5 +1,6 @@
 package com.stellarmls.chat.persistence
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -50,12 +51,48 @@ data class PersistedMessage(
     val timestamp: Long,              // cleartext (needed for sorting)
     val isMine: Boolean,              // cleartext
     val encryptedMediaAttachment: ByteArray? = null,
-    @androidx.room.ColumnInfo(defaultValue = "0")
+    @ColumnInfo(defaultValue = "0")
     val isSystemMessage: Boolean = false
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is PersistedMessage) return false
+        return id == other.id
+    }
+
+    override fun hashCode(): Int = id.hashCode()
+}
+
+@Entity(tableName = "transport_bundles", primaryKeys = ["groupID", "blsPubkeyHex"])
+data class PersistedTransportBundle(
+    val groupID: String,
+    val blsPubkeyHex: String,
+    val encryptedBundle: ByteArray
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is PersistedTransportBundle) return false
+        return groupID == other.groupID && blsPubkeyHex == other.blsPubkeyHex
+    }
+
+    override fun hashCode(): Int = 31 * groupID.hashCode() + blsPubkeyHex.hashCode()
+}
+
+@Entity(tableName = "pending_rekeys")
+data class PersistedPendingRekey(
+    @PrimaryKey val id: String,       // groupID-epoch
+    val groupID: String,
+    val epoch: Int,
+    val encryptedEnvelope: ByteArray,
+    val unackedMemberKeysJSON: String,
+    val retryCount: Int = 0,
+    val createdAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "0")
+    val isRemovalEpoch: Boolean = false
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is PersistedPendingRekey) return false
         return id == other.id
     }
 

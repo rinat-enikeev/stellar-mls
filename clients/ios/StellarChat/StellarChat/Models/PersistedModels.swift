@@ -60,6 +60,51 @@ final class PersistedContactAlias {
     }
 }
 
+/// Persisted transport bundle — maps a group member's BLS pubkey to their authenticated
+/// X25519 inbox encryption key. Encrypted at rest like other sensitive fields.
+@Model
+final class PersistedTransportBundle {
+    var groupID: String
+    var blsPubkeyHex: String
+    var encryptedBundle: Data   // encrypted JSON of SEPMemberTransportBundle
+
+    init(groupID: String, blsPubkeyHex: String, encryptedBundle: Data) {
+        self.groupID = groupID
+        self.blsPubkeyHex = blsPubkeyHex
+        self.encryptedBundle = encryptedBundle
+    }
+}
+
+/// Persisted pending rekey — tracks outgoing rekey envelopes awaiting acknowledgment.
+@Model
+final class PersistedPendingRekey {
+    var groupID: String
+    var epoch: Int
+    var encryptedEnvelope: Data          // encrypted SEPRekeyEnvelope JSON
+    var unackedMemberKeysJSON: Data      // JSON array of hex BLS pubkeys
+    var retryCount: Int
+    var createdAt: Date
+    var isRemovalEpoch: Bool
+
+    init(
+        groupID: String,
+        epoch: Int,
+        encryptedEnvelope: Data,
+        unackedMemberKeysJSON: Data,
+        retryCount: Int = 0,
+        createdAt: Date = Date(),
+        isRemovalEpoch: Bool = false
+    ) {
+        self.groupID = groupID
+        self.epoch = epoch
+        self.encryptedEnvelope = encryptedEnvelope
+        self.unackedMemberKeysJSON = unackedMemberKeysJSON
+        self.retryCount = retryCount
+        self.createdAt = createdAt
+        self.isRemovalEpoch = isRemovalEpoch
+    }
+}
+
 /// Persisted message with encrypted text content.
 /// Cleartext fields: id, groupID, senderPubkey, timestamp, isMine (all visible on relay anyway).
 /// Encrypted fields: text (the actual private message content), mediaAttachment.

@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import SwiftMLS
 
 /// Sends kind 34113 invitation events over Nostr relays and still listens for
 /// legacy kind 24113 events during migration.
@@ -18,6 +19,8 @@ final class InvitationTransport {
 
     /// Called when an invitation is successfully decrypted.
     var onInvitation: ((PendingInvitation) -> Void)?
+    /// Called when a rekey envelope is successfully decrypted.
+    var onRekeyEnvelope: ((SEPRekeyEnvelope) -> Void)?
     /// Called on transport-level errors.
     var onError: ((String) -> Void)?
 
@@ -174,13 +177,19 @@ final class InvitationTransport {
 
         do {
             let payloadData = try GroupCrypto.decryptInvitation(envelope, privateKey: privateKey)
-            let payload = try JSONDecoder().decode(BootstrapPayload.self, from: payloadData)
-            let invitation = PendingInvitation(
-                id: event.id,
-                payload: payload,
-                receivedAt: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0)
-            )
-            onInvitation?(invitation)
+            // Try to parse as rekey envelope first, then as invitation
+            if let rekeyEnvelope = try? JSONDecoder().decode(SEPRekeyEnvelope.self, from: payloadData),
+               rekeyEnvelope.type == SEPRekeyEnvelope.messageType {
+                onRekeyEnvelope?(rekeyEnvelope)
+            } else {
+                let payload = try JSONDecoder().decode(BootstrapPayload.self, from: payloadData)
+                let invitation = PendingInvitation(
+                    id: event.id,
+                    payload: payload,
+                    receivedAt: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0)
+                )
+                onInvitation?(invitation)
+            }
         } catch {
             #if DEBUG
             print("[Invite] Ignored event \(event.id.prefix(12)): \(error.localizedDescription)")

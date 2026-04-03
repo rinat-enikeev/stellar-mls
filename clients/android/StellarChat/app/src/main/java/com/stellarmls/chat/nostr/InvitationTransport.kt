@@ -63,6 +63,7 @@ class InvitationTransport(private val keyManager: KeyManager) {
     private val scope = CoroutineScope(Dispatchers.IO)
 
     var onInvitation: ((PendingInvitation) -> Unit)? = null
+    var onRekeyEnvelope: ((JSONObject) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
 
     fun connect(relayURLs: List<String>) {
@@ -153,15 +154,21 @@ class InvitationTransport(private val keyManager: KeyManager) {
 
             // Decrypt using X25519 ECDH
             val payloadBytes = GroupCrypto.decryptInvitation(envelopeJson, privateKey)
-            val payload = BootstrapPayload.fromJson(String(payloadBytes))
+            val payloadStr = String(payloadBytes)
+            val payloadObj = try { JSONObject(payloadStr) } catch (_: Exception) { null }
 
-            val invitation = PendingInvitation(
-                id = event.id,
-                payload = payload,
-                receivedAt = Date(event.displayMilliseconds)
-            )
-
-            onInvitation?.invoke(invitation)
+            // Dispatch: rekey envelope or invitation
+            if (payloadObj?.optString("type") == com.stellarmls.mls.SEPRekeyEnvelope.MESSAGE_TYPE) {
+                onRekeyEnvelope?.invoke(payloadObj)
+            } else {
+                val payload = BootstrapPayload.fromJson(payloadStr)
+                val invitation = PendingInvitation(
+                    id = event.id,
+                    payload = payload,
+                    receivedAt = Date(event.displayMilliseconds)
+                )
+                onInvitation?.invoke(invitation)
+            }
         } catch (e: Exception) {
             if (com.stellarmls.chat.BuildConfig.DEBUG) {
                 android.util.Log.d(

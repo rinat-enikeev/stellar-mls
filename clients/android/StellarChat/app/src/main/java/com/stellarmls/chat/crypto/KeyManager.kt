@@ -175,6 +175,34 @@ class KeyManager private constructor(private val prefs: android.content.SharedPr
         return signer.generateSignature()
     }
 
+    // -- Transport Bundle --
+
+    /** Create an authenticated transport bundle binding BLS, Stellar Ed25519, and X25519 inbox keys. */
+    fun createTransportBundle(): com.stellarmls.mls.SEPMemberTransportBundle {
+        val blsPub = blsPublicKey()
+        val bundle = com.stellarmls.mls.SEPMemberTransportBundle(
+            blsPubkey = blsPub,
+            stellarEd25519Pubkey = stellarPublicKey,
+            x25519InboxPubkey = keyAgreementPublicKey,
+            signature = ByteArray(0) // placeholder for message computation
+        )
+        val message = bundle.computeBindingMessage()
+        val signature = stellarSign(message)
+        return com.stellarmls.mls.SEPMemberTransportBundle(
+            blsPubkey = blsPub,
+            stellarEd25519Pubkey = stellarPublicKey,
+            x25519InboxPubkey = keyAgreementPublicKey,
+            signature = signature
+        )
+    }
+
+    /** Verify another member's transport bundle signature. */
+    fun verifyTransportBundle(bundle: com.stellarmls.mls.SEPMemberTransportBundle): Boolean {
+        if (!bundle.hasValidStructure) return false
+        val message = bundle.computeBindingMessage()
+        return verifyEd25519(bundle.stellarEd25519Pubkey, message, bundle.signature)
+    }
+
     /** BLS12-381 leaf hash for SEP Merkle tree (uses independent BLS key). */
     fun leafHash(): ByteArray = SEPCommitmentBuilder.computeLeafHash(blsSecretKey)
 

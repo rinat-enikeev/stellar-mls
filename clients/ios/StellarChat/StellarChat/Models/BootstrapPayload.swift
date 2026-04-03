@@ -16,9 +16,15 @@ struct BootstrapPayload: Codable, Equatable {
     let commitment: Data?
     let senderNostrPubkey: String
     let senderAttestation: KeyAttestation?
+    let senderTransportBundle: SEPMemberTransportBundle?
 
-    /// Build a bootstrap payload from a ChatGroup, including the sender's key attestation.
-    static func from(group: ChatGroup, senderPubkey: String, attestation: KeyAttestation? = nil) -> BootstrapPayload {
+    /// Build a bootstrap payload from a ChatGroup, including the sender's key attestation and transport bundle.
+    static func from(
+        group: ChatGroup,
+        senderPubkey: String,
+        attestation: KeyAttestation? = nil,
+        transportBundle: SEPMemberTransportBundle? = nil
+    ) -> BootstrapPayload {
         BootstrapPayload(
             groupID: Data(hexString: group.id),
             groupSecret: group.groupSecret,
@@ -30,7 +36,8 @@ struct BootstrapPayload: Codable, Equatable {
             tierRawValue: group.tier.rawValue,
             commitment: group.commitment,
             senderNostrPubkey: senderPubkey,
-            senderAttestation: attestation
+            senderAttestation: attestation,
+            senderTransportBundle: transportBundle
         )
     }
 

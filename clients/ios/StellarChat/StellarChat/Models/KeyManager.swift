@@ -158,6 +158,34 @@ final class KeyManager: Codable {
         return key.isValidSignature(signature, for: message)
     }
 
+    // MARK: - Transport Bundle
+
+    /// Create an authenticated transport bundle binding BLS, Stellar Ed25519, and X25519 inbox keys.
+    func createTransportBundle() throws -> SEPMemberTransportBundle {
+        let blsPub = try blsPublicKey
+        let bundle = SEPMemberTransportBundle(
+            blsPubkey: blsPub,
+            stellarEd25519Pubkey: stellarPublicKey,
+            x25519InboxPubkey: keyAgreementPublicKey,
+            signature: Data()  // placeholder, replaced below
+        )
+        let message = bundle.computeBindingMessage()
+        let signature = try stellarSign(message)
+        return SEPMemberTransportBundle(
+            blsPubkey: blsPub,
+            stellarEd25519Pubkey: stellarPublicKey,
+            x25519InboxPubkey: keyAgreementPublicKey,
+            signature: signature
+        )
+    }
+
+    /// Verify another member's transport bundle signature.
+    static func verifyTransportBundle(_ bundle: SEPMemberTransportBundle) -> Bool {
+        guard bundle.hasValidStructure else { return false }
+        let message = bundle.computeBindingMessage()
+        return verifyEd25519Signature(bundle.signature, for: message, publicKey: bundle.stellarEd25519Pubkey)
+    }
+
     // MARK: - BLS12-381 (Group Membership)
 
     /// BLS12-381 leaf hash for SEP Merkle tree membership.

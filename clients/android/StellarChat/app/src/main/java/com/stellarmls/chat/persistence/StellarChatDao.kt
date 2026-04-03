@@ -24,4 +24,13 @@ interface StellarChatDao {
 
     @Query("DELETE FROM messages WHERE groupID = :groupID")
     suspend fun deleteMessages(groupID: String)
+
+    @Query("SELECT * FROM contact_aliases")
+    suspend fun loadAllAliases(): List<PersistedContactAlias>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveContactAlias(alias: PersistedContactAlias)
+
+    @Query("DELETE FROM contact_aliases WHERE pubkey = :pubkey")
+    suspend fun deleteContactAlias(pubkey: String)
 }

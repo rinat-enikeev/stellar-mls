@@ -120,7 +120,9 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
             composable("contacts") {
                 ContactsScreen(
                     groups = groupListViewModel.groups,
-                    chatMessages = groupListViewModel.chatMessages
+                    chatMessages = groupListViewModel.chatMessages,
+                    contactAliasStore = groupListViewModel.contactAliasStore,
+                    dao = groupListViewModel.store.dao
                 )
             }
 
@@ -173,7 +175,8 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                     viewModel = chatViewModel,
                     onBack = { navController.popBackStack() },
                     onInvite = { navController.navigate("invite/$groupId") },
-                    onGroupInfo = { navController.navigate("groupinfo/$groupId") }
+                    onGroupInfo = { navController.navigate("groupinfo/$groupId") },
+                    contactAliasStore = groupListViewModel.contactAliasStore
                 )
             }
 
@@ -265,6 +268,7 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                 PendingInvitationsScreen(
                     invitations = groupListViewModel.pendingInvitations,
                     groupListViewModel = groupListViewModel,
+                    contactAliasStore = groupListViewModel.contactAliasStore,
                     onAccept = { invitation, verificationResult ->
                         val group = invitation.payload.toChatGroup()
                         // Mark as published if on-chain verification passed

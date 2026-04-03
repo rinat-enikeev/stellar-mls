@@ -42,7 +42,8 @@ struct ChatView: View {
                                     }
 
                                     let isGrouped = isGroupedWithPrevious(at: index)
-                                    MessageBubble(message: message, isGrouped: isGrouped, onRetry: {
+                                    let senderAlias = appState.contactAliasStore.displayName(for: message.senderPubkey)
+                                    MessageBubble(message: message, isGrouped: isGrouped, senderAlias: senderAlias, onRetry: {
                                         viewModel.retryMessage(id: message.id)
                                     })
                                     .id(message.id)
@@ -272,6 +273,7 @@ struct DateSeparator: View {
 struct MessageBubble: View {
     let message: ChatMessage
     var isGrouped: Bool = false
+    var senderAlias: String? = nil
     var onRetry: (() -> Void)?
 
     private static let todayTimeFormatter: DateFormatter = {
@@ -293,7 +295,7 @@ struct MessageBubble: View {
             // Avatar for received messages — only on first of a group
             if !message.isMine {
                 if !isGrouped {
-                    AvatarView(pubkey: message.senderPubkey)
+                    AvatarView(pubkey: message.senderPubkey, alias: senderAlias)
                 } else {
                     // Invisible spacer to keep alignment
                     Color.clear.frame(width: 28, height: 28)
@@ -302,7 +304,7 @@ struct MessageBubble: View {
 
             VStack(alignment: message.isMine ? .trailing : .leading, spacing: 2) {
                 if !message.isMine && !isGrouped {
-                    Text(String(message.senderPubkey.prefix(8)) + "...")
+                    Text(senderAlias ?? String(message.senderPubkey.prefix(8)) + "...")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -583,6 +585,7 @@ struct FullScreenImageView: View {
 
 struct AvatarView: View {
     let pubkey: String
+    var alias: String? = nil
 
     private static let palette: [Color] = [
         .red, .orange, .yellow, .green, .teal, .blue, .indigo, .purple, .pink, .brown
@@ -600,7 +603,10 @@ struct AvatarView: View {
     }
 
     private var initials: String {
-        String(pubkey.prefix(2)).uppercased()
+        if let alias, let first = alias.first {
+            return String(first).uppercased()
+        }
+        return String(pubkey.prefix(2)).uppercased()
     }
 
     private var avatarColor: Color {

@@ -103,7 +103,8 @@ fun ChatScreen(
     viewModel: ChatViewModel,
     onBack: () -> Unit,
     onInvite: () -> Unit,
-    onGroupInfo: () -> Unit = {}
+    onGroupInfo: () -> Unit = {},
+    contactAliasStore: com.stellarmls.chat.persistence.ContactAliasStore? = null
 ) {
     val groupName = viewModel.groupName
     val listState = rememberLazyListState()
@@ -210,8 +211,9 @@ fun ChatScreen(
                             }
 
                             val isGrouped = isGroupedWithPrevious(viewModel.messages, index)
+                            val senderAlias = contactAliasStore?.displayName(message.senderPubkey)
                             Box(modifier = Modifier.animateItem()) {
-                                MessageBubble(message, isGrouped, onRetry = {
+                                MessageBubble(message, isGrouped, senderAlias = senderAlias, onRetry = {
                                     viewModel.retryMessage(message.id)
                                 })
                             }
@@ -406,7 +408,7 @@ private fun formatDateSeparator(date: Date): String {
 }
 
 @Composable
-fun MessageBubble(message: ChatMessage, isGrouped: Boolean = false, onRetry: (() -> Unit)? = null) {
+fun MessageBubble(message: ChatMessage, isGrouped: Boolean = false, senderAlias: String? = null, onRetry: (() -> Unit)? = null) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -417,7 +419,7 @@ fun MessageBubble(message: ChatMessage, isGrouped: Boolean = false, onRetry: (()
         // Avatar for received messages
         if (!message.isMine) {
             if (!isGrouped) {
-                AvatarBadge(message.senderPubkey)
+                AvatarBadge(message.senderPubkey, alias = senderAlias)
             } else {
                 Spacer(modifier = Modifier.size(28.dp))
             }
@@ -429,7 +431,7 @@ fun MessageBubble(message: ChatMessage, isGrouped: Boolean = false, onRetry: (()
         ) {
             if (!message.isMine && !isGrouped) {
                 Text(
-                    text = message.senderPubkey.take(8) + "...",
+                    text = senderAlias ?: (message.senderPubkey.take(8) + "..."),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 8.dp, bottom = 2.dp)
@@ -718,7 +720,7 @@ fun FullScreenImageViewer(bitmap: Bitmap, onDismiss: () -> Unit) {
 }
 
 @Composable
-fun AvatarBadge(pubkey: String) {
+fun AvatarBadge(pubkey: String, alias: String? = null) {
     val palette = listOf(
         Color(0xFFE53935), Color(0xFFFF9800), Color(0xFFFDD835),
         Color(0xFF43A047), Color(0xFF00897B), Color(0xFF1E88E5),
@@ -727,7 +729,11 @@ fun AvatarBadge(pubkey: String) {
     )
     val index = pubkey.take(2).toIntOrNull(16) ?: 0
     val color = palette[index % palette.size]
-    val initials = pubkey.take(2).uppercase()
+    val initials = if (alias != null && alias.isNotEmpty()) {
+        alias.first().uppercase()
+    } else {
+        pubkey.take(2).uppercase()
+    }
 
     Surface(
         shape = CircleShape,

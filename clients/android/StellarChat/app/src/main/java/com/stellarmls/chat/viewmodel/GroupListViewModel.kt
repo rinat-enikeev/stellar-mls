@@ -29,6 +29,7 @@ import com.stellarmls.chat.nostr.InvitationTransport
 import com.stellarmls.chat.nostr.NostrMessageTransport
 import com.stellarmls.chat.onchain.OnChainService
 import com.stellarmls.chat.onchain.OnChainVerificationResult
+import com.stellarmls.chat.persistence.ContactAliasStore
 import com.stellarmls.chat.persistence.PersistenceStore
 import com.stellarmls.mls.SEPCommitmentBuilder
 import com.stellarmls.mls.SEPGroupMemberLeaf
@@ -67,6 +68,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     var activeGroupID: String? = null
 
     val store = PersistenceStore(application)
+    val contactAliasStore = ContactAliasStore()
 
     // Relay management
     val relayURLs = mutableStateListOf<String>()
@@ -163,6 +165,15 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
         // Initialize on-chain service if configured
         configureContract()
+
+        // Load contact aliases
+        viewModelScope.launch {
+            try {
+                contactAliasStore.load(store.dao)
+            } catch (e: Exception) {
+                Log.e("GroupListVM", "Failed to load contact aliases", e)
+            }
+        }
 
         // Load persisted groups, messages, and initialize salt history
         viewModelScope.launch {

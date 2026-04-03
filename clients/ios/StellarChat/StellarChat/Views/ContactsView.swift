@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ContactsView: View {
     @Environment(AppState.self) private var appState
+    @State private var aliasTarget: String?
+    @State private var aliasText = ""
 
     private var contacts: [(pubkey: String, groupNames: String, lastSeen: Date)] {
         var map: [String: (groups: Set<String>, lastSeen: Date)] = [:]
@@ -35,12 +37,13 @@ struct ContactsView: View {
                 )
             } else {
                 ForEach(contacts, id: \.pubkey) { contact in
+                    let alias = appState.contactAliasStore.displayName(for: contact.pubkey)
                     HStack(spacing: 12) {
-                        AvatarView(pubkey: contact.pubkey)
+                        AvatarView(pubkey: contact.pubkey, alias: alias)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(String(contact.pubkey.prefix(12)) + "...")
+                            Text(alias ?? String(contact.pubkey.prefix(12)) + "...")
                                 .font(.body)
-                                .monospaced()
+                                .monospaced(alias == nil)
                             Text(contact.groupNames)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -52,10 +55,42 @@ struct ContactsView: View {
                             .foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 4)
+                    .contextMenu {
+                        Button {
+                            aliasText = alias ?? ""
+                            aliasTarget = contact.pubkey
+                        } label: {
+                            Label("Set Name", systemImage: "pencil")
+                        }
+                        if alias != nil {
+                            Button(role: .destructive) {
+                                appState.contactAliasStore.removeAlias(pubkey: contact.pubkey)
+                            } label: {
+                                Label("Remove Name", systemImage: "trash")
+                            }
+                        }
+                    }
                 }
             }
         }
         .navigationTitle("Contacts")
+        .alert("Set Name", isPresented: .init(
+            get: { aliasTarget != nil },
+            set: { if !$0 { aliasTarget = nil } }
+        )) {
+            TextField("Display name", text: $aliasText)
+            Button("Save") {
+                if let pubkey = aliasTarget {
+                    appState.contactAliasStore.setAlias(pubkey: pubkey, name: aliasText)
+                }
+                aliasTarget = nil
+            }
+            Button("Cancel", role: .cancel) { aliasTarget = nil }
+        } message: {
+            if let pubkey = aliasTarget {
+                Text(String(pubkey.prefix(16)) + "...")
+            }
+        }
     }
 
     private func relativeTimestamp(_ date: Date) -> String {

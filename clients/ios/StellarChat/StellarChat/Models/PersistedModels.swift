@@ -45,6 +45,21 @@ final class PersistedGroup {
     }
 }
 
+/// Persisted contact alias — maps a Nostr pubkey to an encrypted human-readable name.
+/// Pubkey stays cleartext (it's already visible on relays) for lookups.
+@Model
+final class PersistedContactAlias {
+    @Attribute(.unique) var pubkey: String
+    var encryptedName: Data
+    var updatedAt: Date
+
+    init(pubkey: String, encryptedName: Data, updatedAt: Date) {
+        self.pubkey = pubkey
+        self.encryptedName = encryptedName
+        self.updatedAt = updatedAt
+    }
+}
+
 /// Persisted message with encrypted text content.
 /// Cleartext fields: id, groupID, senderPubkey, timestamp, isMine (all visible on relay anyway).
 /// Encrypted fields: text (the actual private message content), mediaAttachment.

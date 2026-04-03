@@ -43,6 +43,7 @@ import com.stellarmls.chat.viewmodel.GroupListViewModel
 fun PendingInvitationsScreen(
     invitations: List<PendingInvitation>,
     groupListViewModel: GroupListViewModel? = null,
+    contactAliasStore: com.stellarmls.chat.persistence.ContactAliasStore? = null,
     onAccept: (PendingInvitation, OnChainVerificationResult?) -> Unit,
     onDecline: (PendingInvitation) -> Unit,
     onBack: () -> Unit
@@ -104,6 +105,7 @@ fun PendingInvitationsScreen(
                         invitation = invitation,
                         verificationResult = verificationResults[invitation.id],
                         isVerifying = verifyingIDs.contains(invitation.id),
+                        senderAlias = contactAliasStore?.displayName(invitation.payload.senderNostrPubkey),
                         onAccept = { onAccept(invitation, verificationResults[invitation.id]) },
                         onDecline = { onDecline(invitation) }
                     )
@@ -118,6 +120,7 @@ private fun InvitationCard(
     invitation: PendingInvitation,
     verificationResult: OnChainVerificationResult?,
     isVerifying: Boolean,
+    senderAlias: String? = null,
     onAccept: () -> Unit,
     onDecline: () -> Unit
 ) {
@@ -130,7 +133,7 @@ private fun InvitationCard(
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                "From: ${payload.senderNostrPubkey.take(12)}...",
+                "From: ${senderAlias ?: (payload.senderNostrPubkey.take(12) + "...")}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

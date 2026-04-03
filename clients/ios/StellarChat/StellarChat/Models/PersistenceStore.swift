@@ -14,7 +14,7 @@ final class PersistenceStore {
     private let context: ModelContext
 
     init() throws {
-        let schema = Schema([PersistedGroup.self, PersistedMessage.self])
+        let schema = Schema([PersistedGroup.self, PersistedMessage.self, PersistedContactAlias.self])
 
         // Store in a directory with complete file protection
         let appSupport = FileManager.default.urls(
@@ -40,7 +40,7 @@ final class PersistenceStore {
     /// N-15: In-memory fallback when on-disk persistence fails (e.g., disk full, corrupted DB).
     /// Data will not survive app restarts but the app remains usable.
     static func inMemory() -> PersistenceStore {
-        let schema = Schema([PersistedGroup.self, PersistedMessage.self])
+        let schema = Schema([PersistedGroup.self, PersistedMessage.self, PersistedContactAlias.self])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try! ModelContainer(for: schema, configurations: [config])
         let store = PersistenceStore(container: container)
@@ -135,6 +135,61 @@ final class PersistenceStore {
             autoreleasepool {
                 guard let writer = try? PersistenceStore() else { return }
                 writer.saveGroup(group)
+            }
+        }
+    }
+
+    // MARK: - Contact Aliases
+
+    func loadContactAliases() -> [String: String] {
+        let descriptor = FetchDescriptor<PersistedContactAlias>()
+        guard let persisted = try? context.fetch(descriptor) else { return [:] }
+        var result: [String: String] = [:]
+        for alias in persisted {
+            if let name = try? StorageEncryption.decryptString(alias.encryptedName) {
+                result[alias.pubkey] = name
+            }
+        }
+        return result
+    }
+
+    func saveContactAlias(pubkey: String, name: String) {
+        guard let encName = try? StorageEncryption.encrypt(name) else { return }
+        // Upsert
+        let descriptor = FetchDescriptor<PersistedContactAlias>(
+            predicate: #Predicate { $0.pubkey == pubkey }
+        )
+        if let existing = try? context.fetch(descriptor) {
+            for item in existing { context.delete(item) }
+        }
+        context.insert(PersistedContactAlias(pubkey: pubkey, encryptedName: encName, updatedAt: Date()))
+        try? context.save()
+    }
+
+    func deleteContactAlias(pubkey: String) {
+        let descriptor = FetchDescriptor<PersistedContactAlias>(
+            predicate: #Predicate { $0.pubkey == pubkey }
+        )
+        if let existing = try? context.fetch(descriptor) {
+            for item in existing { context.delete(item) }
+        }
+        try? context.save()
+    }
+
+    func saveContactAliasAsync(pubkey: String, name: String) {
+        Self.writeQueue.async {
+            autoreleasepool {
+                guard let writer = try? PersistenceStore() else { return }
+                writer.saveContactAlias(pubkey: pubkey, name: name)
+            }
+        }
+    }
+
+    func deleteContactAliasAsync(pubkey: String) {
+        Self.writeQueue.async {
+            autoreleasepool {
+                guard let writer = try? PersistenceStore() else { return }
+                writer.deleteContactAlias(pubkey: pubkey)
             }
         }
     }

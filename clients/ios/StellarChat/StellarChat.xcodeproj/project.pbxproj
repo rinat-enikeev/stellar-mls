@@ -35,6 +35,7 @@
 		CF17A18CDF1209DC9F6CA369 /* OnChainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06014BB7573399F26644F9F6 /* OnChainService.swift */; };
 		CFC4BB79BE2BD8A37F35D9D2 /* VerificationBadgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1F7647C522D0F7D1F86CE17 /* VerificationBadgeView.swift */; };
 		D2E5C4CF0957DFE21E162979 /* SwiftMLS in Frameworks */ = {isa = PBXBuildFile; productRef = 48F22356AB515994AECC167E /* SwiftMLS */; };
+		C3D4E5F60718A9B0C1D2E3F4 /* ContactAliasStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3D4E5F60718A9B0C1D2E3F5 /* ContactAliasStore.swift */; };
 		D6847B5213B8820FA30819D7 /* StorageEncryption.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD61B2440CA5ED81C983DA87 /* StorageEncryption.swift */; };
 		D6C3C9E90F39CCA80D2DD029 /* GroupListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C2B0F0A2A137DC1BE419CC3 /* GroupListView.swift */; };
 		D80AA787557EC39AC88FF3F3 /* KeyAttestation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37304476C52093C0D34ECB92 /* KeyAttestation.swift */; };
@@ -62,6 +63,7 @@
 		03DDE39E8A2DC3CBF08D400C /* StellarChatTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = StellarChatTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		06014BB7573399F26644F9F6 /* OnChainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnChainService.swift; sourceTree = "<group>"; };
 		0E25D14293AC1BC6E3FB1E28 /* PersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStore.swift; sourceTree = "<group>"; };
+		C3D4E5F60718A9B0C1D2E3F5 /* ContactAliasStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactAliasStore.swift; sourceTree = "<group>"; };
 		1C987955167382BF0E0E251C /* SecurityLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityLog.swift; sourceTree = "<group>"; };
 		211AE30EB5115E4BB85D9084 /* swift-mls */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "swift-mls"; path = "../../../swift-mls"; sourceTree = SOURCE_ROOT; };
 		30F3176E6A6E2A7C75F9CB47 /* Phase3Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Phase3Tests.swift; sourceTree = "<group>"; };
@@ -157,6 +159,7 @@
 				4FCDBA22391412C6D05BB99E /* BlossomClient.swift */,
 				FA96977038D2F9F4EC31EF3D /* BootstrapPayload.swift */,
 				F8FD22552EBCF23A89DB7700 /* ChatGroup.swift */,
+				C3D4E5F60718A9B0C1D2E3F5 /* ContactAliasStore.swift */,
 				8210CED65D67082D16673F07 /* GroupCrypto.swift */,
 				8ACE473C3096412015326C52 /* ImageCache.swift */,
 				37304476C52093C0D34ECB92 /* KeyAttestation.swift */,
@@ -344,6 +347,7 @@
 				E54951E56532C7FBD90317DE /* ChatView.swift in Sources */,
 				16ADABAE1C78B394179DD74B /* ChatViewModel.swift in Sources */,
 				A1B2C3D4E5F60718A9B0C1D2 /* ContactsView.swift in Sources */,
+				C3D4E5F60718A9B0C1D2E3F4 /* ContactAliasStore.swift in Sources */,
 				09EC25786F839A9A840E509A /* ContentView.swift in Sources */,
 				B2C3D4E5F60718A9B0C1D2E3 /* SearchView.swift in Sources */,
 				01083F180D3E8311A7E002C6 /* CreateGroupView.swift in Sources */,

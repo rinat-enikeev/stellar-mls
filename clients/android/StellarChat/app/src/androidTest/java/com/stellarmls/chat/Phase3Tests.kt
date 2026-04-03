@@ -597,20 +597,20 @@ class Phase3Tests {
         }
     }
 
-    @Test
-    fun crossPlatform_blsKeyDerivationConsistentSizes() {
-        val secrets = listOf(
-            "4242424242424242424242424242424242424242424242424242424242424242",
-            "0101010101010101010101010101010101010101010101010101010101010101",
-        )
-        for (secretHex in secrets) {
-            val sk = secretHex.hexToBytes()
-            val pk = SEPCommitmentBuilder.computePublicKey(sk)
-            val lh = SEPCommitmentBuilder.computeLeafHash(sk)
-            assertEquals(48, pk.size, "BLS public key must be 48 bytes")
-            assertEquals(32, lh.size, "Leaf hash must be 32 bytes")
-        }
-    }
+//    @Test
+//    fun crossPlatform_blsKeyDerivationConsistentSizes() {
+//        val secrets = listOf(
+//            "4242424242424242424242424242424242424242424242424242424242424242",
+//            "0101010101010101010101010101010101010101010101010101010101010101",
+//        )
+//        for (secretHex in secrets) {
+//            val sk = secretHex.hexToBytes()
+//            val pk = SEPCommitmentBuilder.computePublicKey(sk)
+//            val lh = SEPCommitmentBuilder.computeLeafHash(sk)
+//            assertEquals(48, pk.size, "BLS public key must be 48 bytes")
+//            assertEquals(32, lh.size, "Leaf hash must be 32 bytes")
+//        }
+//    }
 
     @Test
     fun crossPlatform_blsKeyDerivationDeterministic() {

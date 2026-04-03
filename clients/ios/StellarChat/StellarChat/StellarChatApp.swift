@@ -32,6 +32,7 @@ final class AppState {
     var keyManager: KeyManager
     var groups: [ChatGroup] = []
     let store: PersistenceStore
+    var contactAliasStore: ContactAliasStore!
     /// Set by deep link handler; consumed by ContentView to navigate to join screen.
     var deepLinkInviteCode: String?
     let invitationTransport = InvitationTransport()
@@ -128,6 +129,7 @@ final class AppState {
         } else {
             self.store = PersistenceStore.inMemory()
         }
+        self.contactAliasStore = ContactAliasStore(store: store)
         self.groups = store.loadGroups()
         self.relayURLs = Self.loadRelayURLs()
         self.blossomServerURLs = Self.loadBlossomServerURLs()

@@ -12,7 +12,7 @@ import org.json.JSONObject
 import java.util.Date
 
 class PersistenceStore(context: Context) {
-    private val dao: StellarChatDao
+    internal val dao: StellarChatDao
 
     init {
         StorageEncryption.init(context)

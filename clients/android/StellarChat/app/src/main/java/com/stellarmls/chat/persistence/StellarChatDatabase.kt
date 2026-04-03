@@ -13,7 +13,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * in cleartext. For production deployments requiring full metadata protection,
  * integrate SQLCipher via `net.zetetic:android-database-sqlcipher`.
  */
-@Database(entities = [PersistedGroup::class, PersistedMessage::class], version = 2)
+@Database(entities = [PersistedGroup::class, PersistedMessage::class, PersistedContactAlias::class], version = 3)
 abstract class StellarChatDatabase : RoomDatabase() {
     abstract fun dao(): StellarChatDao
 

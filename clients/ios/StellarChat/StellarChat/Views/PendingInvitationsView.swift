@@ -25,9 +25,10 @@ struct PendingInvitationsView: View {
                                     .font(.headline)
 
                                 HStack {
-                                    Text("From: \(invitation.payload.senderNostrPubkey.prefix(12))...")
+                                    let senderAlias = appState.contactAliasStore.displayName(for: invitation.payload.senderNostrPubkey)
+                                    Text("From: \(senderAlias ?? String(invitation.payload.senderNostrPubkey.prefix(12)) + "...")")
                                         .font(.caption)
-                                        .monospaced()
+                                        .monospaced(senderAlias == nil)
                                         .foregroundStyle(.secondary)
                                 }
 

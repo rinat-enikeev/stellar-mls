@@ -26,6 +26,21 @@ data class PersistedGroup(
     override fun hashCode(): Int = id.hashCode()
 }
 
+@Entity(tableName = "contact_aliases")
+data class PersistedContactAlias(
+    @PrimaryKey val pubkey: String,
+    val encryptedName: ByteArray,
+    val updatedAt: Long
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is PersistedContactAlias) return false
+        return pubkey == other.pubkey
+    }
+
+    override fun hashCode(): Int = pubkey.hashCode()
+}
+
 @Entity(tableName = "messages")
 data class PersistedMessage(
     @PrimaryKey val id: String,

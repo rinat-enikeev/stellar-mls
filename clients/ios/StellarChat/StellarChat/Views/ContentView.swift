@@ -2,31 +2,39 @@ import SwiftMLS
 import SwiftUI
 
 struct ContentView: View {
+    private enum RootTab: Hashable {
+        case contacts
+        case chats
+        case search
+        case settings
+    }
+
     @Environment(AppState.self) private var appState
     @State private var showDeepLinkJoin = false
+    @State private var selectedTab: RootTab = .chats
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
 
     var body: some View {
-        TabView {
-            Tab("Contacts", systemImage: "person.2") {
+        TabView(selection: $selectedTab) {
+            Tab("Contacts", systemImage: "person.2", value: .contacts) {
                 NavigationStack {
                     ContactsView()
                 }
             }
 
-            Tab("Chats", systemImage: "bubble.left.and.bubble.right") {
+            Tab("Chats", systemImage: "bubble.left.and.bubble.right", value: .chats) {
                 NavigationStack {
                     GroupListView()
                 }
             }
 
-            Tab("Search", systemImage: "magnifyingglass", role: .search) {
+            Tab("Search", systemImage: "magnifyingglass", value: .search, role: .search) {
                 NavigationStack {
                     SearchView()
                 }
             }
 
-            Tab("Settings", systemImage: "gearshape") {
+            Tab("Settings", systemImage: "gearshape", value: .settings) {
                 NavigationStack {
                     SettingsView()
                 }

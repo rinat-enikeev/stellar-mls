@@ -132,7 +132,7 @@ final class NostrMessageTransport {
 
             let wrapperType = wrapperJSON["type"] as? String
 
-            if wrapperType == "image" || wrapperType == "video" {
+            if wrapperType == "image" || wrapperType == "video" || wrapperType == "audio" {
                 // Parse media attachment from wrapper JSON
                 let isMember = currentMembers.contains { $0.publicKeyCompressed == blsPubkey }
                 if isMember, let mediaDict = wrapperJSON["media"] as? [String: Any],

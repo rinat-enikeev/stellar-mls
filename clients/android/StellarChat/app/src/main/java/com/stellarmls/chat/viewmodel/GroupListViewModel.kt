@@ -1214,6 +1214,96 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /** Send an encrypted voice message in a group via Blossom. */
+    fun sendVoice(groupID: String, audioFile: java.io.File) {
+        val group = groups.find { it.id == groupID } ?: return
+
+        viewModelScope.launch {
+            try {
+                val audioData = withContext(Dispatchers.IO) { audioFile.readBytes() }
+                if (audioData.size > MediaCrypto.MAX_AUDIO_BYTES) {
+                    if (BuildConfig.DEBUG) Log.w("GroupListVM", "Audio too large: ${audioData.size} bytes")
+                    return@launch
+                }
+
+                val durationSecs = withContext(Dispatchers.Default) {
+                    MediaCrypto.audioMetadata(getApplication(), android.net.Uri.fromFile(audioFile))
+                } ?: return@launch
+
+                val (encryptedBlob, fileKey) = MediaCrypto.encryptMedia(audioData)
+
+                val blobHash = withContext(Dispatchers.IO) {
+                    BlossomClient.upload(encryptedBlob, blossomServerURLs.toList(), keyManager)
+                }
+
+                val media = com.stellarmls.chat.model.MediaAttachment(
+                    blobHash = blobHash,
+                    fileKey = fileKey,
+                    mimeType = "audio/aac",
+                    width = 0,
+                    height = 0,
+                    size = encryptedBlob.size,
+                    blossomServers = blossomServerURLs.toList(),
+                    encryptedThumbnail = null,
+                    duration = durationSecs
+                )
+
+                val mediaJson = org.json.JSONObject().apply {
+                    put("blobHash", media.blobHash)
+                    put("fileKey", android.util.Base64.encodeToString(media.fileKey, android.util.Base64.NO_WRAP))
+                    put("mimeType", media.mimeType)
+                    put("width", 0)
+                    put("height", 0)
+                    put("size", media.size)
+                    put("blossomServers", org.json.JSONArray(media.blossomServers))
+                    put("duration", durationSecs)
+                }
+                val wrapper = org.json.JSONObject().apply {
+                    put("v", 2)
+                    put("type", "audio")
+                    put("text", "Sent a voice message")
+                    put("media", mediaJson)
+                    put("senderBlsPubkey", android.util.Base64.encodeToString(
+                        keyManager.blsPublicKey(), android.util.Base64.NO_WRAP))
+                    put("ts", System.currentTimeMillis() / 1000)
+                }
+
+                val key = group.encryptionKey
+                val envelopeJson = com.stellarmls.chat.crypto.GroupCrypto.encrypt(wrapper.toString(), key)
+                val content = android.util.Base64.encodeToString(
+                    envelopeJson.toByteArray(), android.util.Base64.NO_WRAP)
+                val tags = listOf(listOf("t", group.topicTag))
+                val event = com.stellarmls.chat.crypto.NostrEventBuilder.build(
+                    kind = 44114, tags = tags, content = content, keyManager = keyManager)
+
+                transport.publish(event)
+
+                val msg = com.stellarmls.chat.model.ChatMessage(
+                    id = event.id,
+                    groupID = groupID,
+                    senderPubkey = keyManager.publicKeyHex,
+                    text = "Sent a voice message",
+                    timestamp = java.util.Date(event.displayMilliseconds),
+                    isMine = true,
+                    status = com.stellarmls.chat.model.MessageStatus.SENDING,
+                    mediaAttachment = media
+                )
+                val current = (chatMessages[groupID] ?: emptyList()) + msg
+                chatMessages[groupID] = current.sortedWith(
+                    compareBy<com.stellarmls.chat.model.ChatMessage> { it.timestamp }.thenBy { it.id })
+                seenMessageIDs.getOrPut(groupID) { mutableSetOf() }.add(event.id)
+                launch {
+                    try { store.saveMessage(msg) } catch (_: Exception) { }
+                }
+
+                // Clean up temp file
+                audioFile.delete()
+            } catch (e: Exception) {
+                if (BuildConfig.DEBUG) Log.e("GroupListVM", "sendVoice failed: ${e.message}")
+            }
+        }
+    }
+
     /** Set up handler for protocol messages received on the group channel. */
     private fun setupProtocolMessageHandler() {
         transport.onProtocolMessage = { groupID, json, eventID, senderPubkey ->

@@ -203,7 +203,7 @@ class NostrMessageTransport(
 
             if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.d("MsgTransport", "Decrypted OK group=${groupID.take(8)} wrapperType=$wrapperType members=${currentMembers.size}")
 
-            if (wrapperType == "image" || wrapperType == "video") {
+            if (wrapperType == "image" || wrapperType == "video" || wrapperType == "audio") {
                 // Image message — verify BLS pubkey is in member list (H-4)
                 val blsPubkey = android.util.Base64.decode(blsPubkeyB64, android.util.Base64.NO_WRAP)
                 val isMember = currentMembers.any { it.publicKeyCompressed.contentEquals(blsPubkey) }

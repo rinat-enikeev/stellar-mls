@@ -17,6 +17,7 @@ class ChatViewModel(
     var isSendingImage by mutableStateOf(false)
     var selectedVideoUri by mutableStateOf<Uri?>(null)
     var isSendingVideo by mutableStateOf(false)
+    var isSendingVoice by mutableStateOf(false)
 
     val messages: List<ChatMessage>
         get() = groupListViewModel.chatMessages[groupID] ?: emptyList()
@@ -66,6 +67,12 @@ class ChatViewModel(
         groupListViewModel.sendVideo(groupID, context, uri)
         selectedVideoUri = null
         isSendingVideo = false
+    }
+
+    fun sendVoice(audioFile: java.io.File) {
+        isSendingVoice = true
+        groupListViewModel.sendVoice(groupID, audioFile)
+        isSendingVoice = false
     }
 
     override fun onCleared() {

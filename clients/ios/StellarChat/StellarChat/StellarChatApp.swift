@@ -1128,6 +1128,97 @@ final class AppState {
         }
     }
 
+    /// Send an encrypted voice message in a group via Blossom.
+    func sendVoice(audioURL: URL, groupID: String) async throws {
+        guard let group = groups.first(where: { $0.id == groupID }) else { return }
+
+        let audioData = try Data(contentsOf: audioURL)
+        guard audioData.count <= MediaCrypto.maxAudioBytes else { return }
+
+        guard let audioDuration = await MediaCrypto.audioMetadata(audioURL) else { return }
+
+        // Encrypt audio with a fresh per-file key
+        let (encryptedBlob, fileKey) = try MediaCrypto.encryptMedia(audioData)
+
+        // Upload encrypted blob to Blossom
+        let blobHash = try await BlossomClient.upload(encryptedBlob, servers: blossomServerURLs, keyManager: keyManager)
+
+        let media = MediaAttachment(
+            blobHash: blobHash,
+            fileKey: fileKey,
+            mimeType: "audio/aac",
+            width: 0,
+            height: 0,
+            size: encryptedBlob.count,
+            blossomServers: blossomServerURLs.map(\.absoluteString),
+            encryptedThumbnail: nil,
+            duration: audioDuration
+        )
+
+        // Build v2 wrapper with type "audio"
+        let blsPubkey = try keyManager.blsPublicKey
+        let ts = Int64(Date().timeIntervalSince1970)
+        let mediaDict: [String: Any] = [
+            "blobHash": media.blobHash,
+            "fileKey": media.fileKey.base64EncodedString(),
+            "mimeType": media.mimeType,
+            "width": 0,
+            "height": 0,
+            "size": media.size,
+            "blossomServers": media.blossomServers,
+            "duration": audioDuration,
+        ]
+        let wrapper: [String: Any] = [
+            "v": 2,
+            "type": "audio",
+            "text": "Sent a voice message",
+            "senderBlsPubkey": blsPubkey.base64EncodedString(),
+            "ts": ts,
+            "media": mediaDict,
+        ]
+        let wrapperData = try JSONSerialization.data(withJSONObject: wrapper)
+        let wrapperText = String(data: wrapperData, encoding: .utf8)!
+
+        let envelope = try GroupCrypto.encrypt(wrapperText, key: group.encryptionKey)
+        let envelopeData = try JSONEncoder().encode(envelope)
+        let content = envelopeData.base64EncodedString()
+        let event = try NostrEvent.build(
+            kind: 44114, tags: [["t", group.topicTag]], content: content, keyManager: keyManager
+        )
+
+        // Optimistic UI
+        let msg = ChatMessage(
+            id: event.id,
+            groupID: groupID,
+            senderPubkey: keyManager.publicKeyHex,
+            text: "Sent a voice message",
+            timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
+            isMine: true,
+            status: .sending,
+            mediaAttachment: media
+        )
+        insertMessage(msg, into: groupID)
+        seenMessageIDs[groupID, default: []].insert(msg.id)
+        store.saveMessageAsync(msg)
+
+        // Publish to relays in the background
+        let transport = chatTransport
+        Task {
+            do {
+                try await transport.publishToRelays(event)
+            } catch {
+                await MainActor.run {
+                    if let idx = self.chatMessages[groupID]?.firstIndex(where: { $0.id == event.id }) {
+                        self.chatMessages[groupID]?[idx].status = .failed
+                    }
+                }
+            }
+        }
+
+        // Clean up temp file
+        try? FileManager.default.removeItem(at: audioURL)
+    }
+
     /// Set up the protocol message handler (runs once at init).
     private func setupProtocolHandler() {
         chatTransport.onProtocolMessage = { [weak self] json, event in

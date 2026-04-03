@@ -70,6 +70,7 @@ private enum class Tab(val route: String, val label: String, val icon: ImageVect
     Settings("settings", "Settings", Icons.Default.Settings)
 }
 
+private val defaultTab = Tab.Chats
 private val tabs = listOf(Tab.Contacts, Tab.Chats, Tab.Search, Tab.Settings)
 private val tabRoutes = tabs.map { it.route }.toSet()
 
@@ -114,7 +115,7 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
     ) { padding ->
         NavHost(
             navController = navController,
-            startDestination = "groups",
+            startDestination = defaultTab.route,
             modifier = Modifier.padding(padding)
         ) {
             composable("contacts") {

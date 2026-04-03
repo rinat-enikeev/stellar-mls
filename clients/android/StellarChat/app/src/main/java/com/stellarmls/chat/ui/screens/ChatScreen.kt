@@ -31,6 +31,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -48,6 +50,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -406,21 +409,25 @@ fun ChatScreen(
                     placeholder = { Text("Message...") },
                     singleLine = true
                 )
-                IconButton(
-                    onClick = {
-                        view.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM)
-                        viewModel.sendMessage()
-                    },
-                    enabled = viewModel.inputText.isNotBlank()
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Send",
-                        tint = if (viewModel.inputText.isNotBlank())
-                            MaterialTheme.colorScheme.primary
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant
+                if (viewModel.inputText.isBlank()) {
+                    com.stellarmls.chat.ui.components.VoiceRecordButton(
+                        hasBlossomServers = viewModel.hasBlossomServers,
+                        onSend = { file -> viewModel.sendVoice(file) },
+                        modifier = Modifier.padding(12.dp)
                     )
+                } else {
+                    IconButton(
+                        onClick = {
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM)
+                            viewModel.sendMessage()
+                        }
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Send",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
         }
@@ -541,10 +548,13 @@ fun MessageBubble(message: ChatMessage, isGrouped: Boolean = false, senderAlias:
                         else MaterialTheme.colorScheme.surfaceVariant
                     )
             ) {
-                if (message.mediaAttachment.mimeType.startsWith("video/")) {
-                    VideoBubbleContent(media = message.mediaAttachment)
-                } else {
-                    ImageBubbleContent(media = message.mediaAttachment)
+                when {
+                    message.mediaAttachment.mimeType.startsWith("audio/") ->
+                        VoiceBubbleContent(media = message.mediaAttachment, isMine = message.isMine)
+                    message.mediaAttachment.mimeType.startsWith("video/") ->
+                        VideoBubbleContent(media = message.mediaAttachment)
+                    else ->
+                        ImageBubbleContent(media = message.mediaAttachment)
                 }
                 Row(
                     modifier = Modifier
@@ -951,6 +961,128 @@ fun FullScreenVideoPlayer(videoFile: java.io.File, onDismiss: () -> Unit) {
                     modifier = Modifier.size(28.dp)
                 )
             }
+        }
+    }
+}
+
+@Composable
+fun VoiceBubbleContent(media: MediaAttachment, isMine: Boolean) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var isLoading by remember(media.blobHash) { mutableStateOf(false) }
+    var isPlaying by remember(media.blobHash) { mutableStateOf(false) }
+    var progress by remember(media.blobHash) { mutableFloatStateOf(0f) }
+    var audioData by remember(media.blobHash) { mutableStateOf<ByteArray?>(
+        com.stellarmls.chat.blossom.AudioCache.get(media.blobHash)
+    ) }
+    val mediaPlayer = remember { mutableStateOf<android.media.MediaPlayer?>(null) }
+
+    androidx.compose.runtime.DisposableEffect(media.blobHash) {
+        onDispose {
+            mediaPlayer.value?.release()
+            mediaPlayer.value = null
+        }
+    }
+
+    Row(
+        modifier = Modifier
+            .width(200.dp)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        IconButton(
+            onClick = {
+                if (isPlaying) {
+                    mediaPlayer.value?.pause()
+                    isPlaying = false
+                } else if (audioData != null) {
+                    playAudio(mediaPlayer, audioData!!, context,
+                        onProgress = { progress = it },
+                        onComplete = { isPlaying = false; progress = 0f })
+                    isPlaying = true
+                } else {
+                    scope.launch {
+                        isLoading = true
+                        try {
+                            val encrypted = withContext(Dispatchers.IO) {
+                                BlossomClient.download(media.blobHash, media.blossomServers)
+                            }
+                            val plain = withContext(Dispatchers.Default) {
+                                MediaCrypto.decryptMedia(encrypted, media.fileKey)
+                            }
+                            com.stellarmls.chat.blossom.AudioCache.put(media.blobHash, plain)
+                            audioData = plain
+                            isLoading = false
+                            playAudio(mediaPlayer, plain, context,
+                                onProgress = { progress = it },
+                                onComplete = { isPlaying = false; progress = 0f })
+                            isPlaying = true
+                        } catch (_: Exception) {
+                            isLoading = false
+                        }
+                    }
+                }
+            },
+            modifier = Modifier.size(36.dp)
+        ) {
+            if (isLoading) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+            } else {
+                Icon(
+                    if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    contentDescription = if (isPlaying) "Pause" else "Play",
+                    tint = if (isMine) Color.White else MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+
+        Column(modifier = Modifier.weight(1f)) {
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp)),
+                color = if (isMine) Color.White else MaterialTheme.colorScheme.primary,
+                trackColor = if (isMine) Color.White.copy(alpha = 0.3f)
+                    else MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = formatDuration(media.duration ?: 0),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (isMine) Color.White.copy(alpha = 0.7f)
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+private fun playAudio(
+    playerState: androidx.compose.runtime.MutableState<android.media.MediaPlayer?>,
+    data: ByteArray,
+    context: android.content.Context,
+    onProgress: (Float) -> Unit,
+    onComplete: () -> Unit
+) {
+    playerState.value?.release()
+    val tempFile = java.io.File(context.cacheDir, "voice_playback_${System.currentTimeMillis()}.m4a")
+    tempFile.writeBytes(data)
+    val player = android.media.MediaPlayer().apply {
+        setDataSource(tempFile.absolutePath)
+        prepare()
+        start()
+        setOnCompletionListener {
+            onComplete()
+            tempFile.delete()
+        }
+    }
+    playerState.value = player
+    kotlinx.coroutines.CoroutineScope(Dispatchers.Main).launch {
+        while (player.isPlaying) {
+            onProgress(player.currentPosition.toFloat() / player.duration)
+            kotlinx.coroutines.delay(100)
         }
     }
 }

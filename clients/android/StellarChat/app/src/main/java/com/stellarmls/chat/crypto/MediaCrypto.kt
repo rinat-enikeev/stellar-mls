@@ -159,6 +159,27 @@ object MediaCrypto {
     /**
      * Generate a thumbnail from the first frame of a video.
      */
+    /** Maximum audio size in bytes (10 MB). */
+    const val MAX_AUDIO_BYTES = 10_000_000
+
+    /**
+     * Extract audio duration in seconds from a content URI.
+     */
+    fun audioMetadata(context: Context, uri: Uri): Int? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(context, uri)
+            val durationMs = retriever.extractMetadata(
+                MediaMetadataRetriever.METADATA_KEY_DURATION
+            )?.toLongOrNull() ?: return null
+            (durationMs / 1000).toInt()
+        } catch (_: Exception) {
+            null
+        } finally {
+            retriever.release()
+        }
+    }
+
     fun generateVideoThumbnail(
         context: Context,
         uri: Uri,

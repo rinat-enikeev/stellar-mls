@@ -105,6 +105,7 @@ struct MediaAttachment: Codable {
     let duration: Int?             // video duration in seconds, nil for images
 
     var isVideo: Bool { mimeType.hasPrefix("video/") }
+    var isAudio: Bool { mimeType.hasPrefix("audio/") }
 }
 
 struct InviteCode: Codable {

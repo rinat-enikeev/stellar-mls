@@ -133,6 +133,18 @@ enum MediaCrypto {
         return thumbnail.jpegData(compressionQuality: thumbnailQuality)
     }
 
+    // MARK: - Audio Processing
+
+    /// Maximum audio size in bytes (10 MB).
+    static let maxAudioBytes = 10_000_000
+
+    /// Extract audio duration in seconds from a file URL.
+    static func audioMetadata(_ url: URL) async -> Int? {
+        let asset = AVURLAsset(url: url)
+        guard let duration = try? await asset.load(.duration) else { return nil }
+        return Int(CMTimeGetSeconds(duration))
+    }
+
     /// Compress a video to fit within maxBytes using AVAssetExportSession.
     /// Returns the compressed video data, or nil if compression fails.
     static func compressVideo(_ url: URL, maxBytes: Int = maxVideoBytes) async throws -> Data? {

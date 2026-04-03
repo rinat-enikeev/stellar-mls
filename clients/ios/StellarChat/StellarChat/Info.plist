@@ -35,5 +35,7 @@
 	</dict>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>StellarChat needs photo library access to share encrypted images in group chats.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>StellarChat needs microphone access to record voice messages.</string>
 </dict>
 </plist>

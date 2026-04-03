@@ -10,6 +10,7 @@ final class ChatViewModel {
     var isSendingImage = false
     var selectedVideoURL: URL?
     var isSendingVideo = false
+    var isSendingVoice = false
     private weak var appState: AppState?
 
     var messages: [ChatMessage] {
@@ -77,6 +78,18 @@ final class ChatViewModel {
             selectedVideoURL = nil
         } catch {
             print("[Blossom] sendVideo failed: \(error)")
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func sendVoice(audioURL: URL) async {
+        isSendingVoice = true
+        defer { isSendingVoice = false }
+
+        do {
+            try await appState?.sendVoice(audioURL: audioURL, groupID: groupID)
+        } catch {
+            print("[Blossom] sendVoice failed: \(error)")
             errorMessage = error.localizedDescription
         }
     }

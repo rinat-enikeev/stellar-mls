@@ -216,14 +216,19 @@ struct ChatView: View {
                         Task { await viewModel.sendMessage() }
                     }
 
-                Button {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    Task { await viewModel.sendMessage() }
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
+                if viewModel.inputText.trimmingCharacters(in: .whitespaces).isEmpty {
+                    VoiceRecordButton(hasBlossomServers: viewModel.hasBlossomServers) { audioURL in
+                        Task { await viewModel.sendVoice(audioURL: audioURL) }
+                    }
+                } else {
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        Task { await viewModel.sendMessage() }
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.title2)
+                    }
                 }
-                .disabled(viewModel.inputText.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .padding()
         }
@@ -393,7 +398,9 @@ struct MessageBubble: View {
                 }
                 HStack(alignment: .bottom, spacing: 4) {
                     if let media = message.mediaAttachment {
-                        if media.isVideo {
+                        if media.isAudio {
+                            VoiceBubbleContent(media: media, isMine: message.isMine)
+                        } else if media.isVideo {
                             VideoBubbleContent(media: media, isMine: message.isMine)
                         } else {
                             ImageBubbleContent(media: media, isMine: message.isMine)
@@ -760,6 +767,124 @@ struct VideoBubbleContent: View {
                 }
             } catch {
                 await MainActor.run { isLoading = false }
+            }
+        }
+    }
+}
+
+// MARK: - Voice Bubble
+
+struct VoiceBubbleContent: View {
+    let media: MediaAttachment
+    let isMine: Bool
+    @State private var audioPlayer: AVAudioPlayer?
+    @State private var isPlaying = false
+    @State private var isLoading = false
+    @State private var playbackProgress: Double = 0
+    @State private var progressTimer: Timer?
+    @State private var audioData: Data?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button {
+                if isPlaying {
+                    pause()
+                } else if audioData != nil {
+                    play()
+                } else {
+                    loadAndPlay()
+                }
+            } label: {
+                if isLoading {
+                    ProgressView()
+                        .frame(width: 32, height: 32)
+                } else {
+                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.title)
+                        .foregroundStyle(isMine ? .white : .blue)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(isMine ? Color.white.opacity(0.3) : Color.blue.opacity(0.2))
+                            .frame(height: 4)
+                        Capsule()
+                            .fill(isMine ? .white : .blue)
+                            .frame(width: geo.size.width * playbackProgress, height: 4)
+                    }
+                }
+                .frame(height: 4)
+
+                Text(formatDuration(media.duration ?? 0))
+                    .font(.caption2)
+                    .foregroundStyle(isMine ? .white.opacity(0.7) : .secondary)
+                    .monospacedDigit()
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(width: 200)
+        .onDisappear {
+            audioPlayer?.stop()
+            progressTimer?.invalidate()
+        }
+    }
+
+    private func loadAndPlay() {
+        if let cached = AudioCache.shared.data(for: media.blobHash) {
+            audioData = cached
+            play()
+            return
+        }
+
+        isLoading = true
+        Task {
+            do {
+                let servers = media.blossomServers.compactMap(URL.init(string:))
+                let encrypted = try await BlossomClient.download(blobHash: media.blobHash, servers: servers)
+                let plain = try MediaCrypto.decryptMedia(encrypted, key: media.fileKey)
+                AudioCache.shared.store(plain, for: media.blobHash)
+                await MainActor.run {
+                    audioData = plain
+                    isLoading = false
+                    play()
+                }
+            } catch {
+                await MainActor.run { isLoading = false }
+            }
+        }
+    }
+
+    private func play() {
+        guard let data = audioData else { return }
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback)
+            try AVAudioSession.sharedInstance().setActive(true)
+            audioPlayer = try AVAudioPlayer(data: data)
+            audioPlayer?.play()
+            isPlaying = true
+            startProgressTimer()
+        } catch { }
+    }
+
+    private func pause() {
+        audioPlayer?.pause()
+        isPlaying = false
+        progressTimer?.invalidate()
+    }
+
+    private func startProgressTimer() {
+        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+            guard let player = audioPlayer else { return }
+            if player.isPlaying {
+                playbackProgress = player.currentTime / player.duration
+            } else {
+                playbackProgress = 0
+                isPlaying = false
+                progressTimer?.invalidate()
             }
         }
     }

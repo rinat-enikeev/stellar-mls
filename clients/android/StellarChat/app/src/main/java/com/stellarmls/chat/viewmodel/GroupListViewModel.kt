@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.util.Log
 import com.stellarmls.chat.BuildConfig
+import com.stellarmls.chat.SecurityLog
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -802,36 +803,92 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    private fun cloneGroup(group: ChatGroup): ChatGroup {
+        return group.copy(
+            groupSecret = group.groupSecret.copyOf(),
+            members = group.members.toMutableList(),
+            salt = group.salt.copyOf(),
+            commitment = group.commitment?.copyOf()
+        )
+    }
+
+    private suspend fun publishMembershipUpdateIfNeeded(
+        oldGroup: ChatGroup,
+        newGroup: ChatGroup
+    ): Result<Unit> {
+        if (!oldGroup.isPublishedOnChain) return Result.success(Unit)
+
+        val service = onChainService
+            ?: return Result.failure(ChatError.ContractNotConfigured)
+
+        return try {
+            val response = withContext(Dispatchers.IO) {
+                service.publishCommitmentUpdate(
+                    groupIDData = oldGroup.groupIDData,
+                    oldMembers = oldGroup.members.toList(),
+                    oldEpoch = oldGroup.epoch,
+                    oldSalt = oldGroup.salt.copyOf(),
+                    newMembers = newGroup.members,
+                    newEpoch = newGroup.epoch,
+                    newSalt = newGroup.salt,
+                    blsSecretKey = keyManager.blsSecretKey,
+                    tier = oldGroup.tier
+                )
+            }
+            if (response.accepted) {
+                Result.success(Unit)
+            } else {
+                val reason = response.message ?: "Rejected"
+                SecurityLog.onChainOperationFailed("update_commitment", reason)
+                Result.failure(ChatError.OnChainPublishFailed(reason))
+            }
+        } catch (e: Exception) {
+            val reason = e.message ?: "Unknown error"
+            SecurityLog.onChainOperationFailed("update_commitment", reason)
+            Result.failure(ChatError.OnChainPublishFailed(reason))
+        }
+    }
+
     /** Remove a member from a group, broadcast state update, and rotate keys. */
-    fun removeMember(blsPubkey: ByteArray, groupID: String) {
-        val index = groups.indexOfFirst { it.id == groupID }
-        if (index < 0) return
-        val group = groups[index]
-
-        if (group.members.none { it.publicKeyCompressed.contentEquals(blsPubkey) }) return
-
-        // Capture old key for broadcasting
-        val previousKey = group.encryptionKey
-
-        group.members.removeAll { it.publicKeyCompressed.contentEquals(blsPubkey) }
-        group.epoch++
-        group.salt = SEPCommitmentBuilder.generateSalt()
-        group.recomputeCommitment()
-
-        groups[index] = group
-        storeSalt(groupID, group.epoch, group.salt)
-
-        transport.currentMembers.clear()
-        transport.currentMembers.addAll(groups.flatMap { it.members })
-
-        // Broadcast removal encrypted with the PREVIOUS key
-        val update = buildStateUpdate(group, removedMemberKeys = listOf(blsPubkey))
-        broadcastStateUpdate(group, update, overrideKey = previousKey)
-
-        transport.subscribe(group)
-
+    fun removeMember(blsPubkey: ByteArray, groupID: String, onResult: (Result<Unit>) -> Unit = {}) {
         viewModelScope.launch {
-            try { store.saveGroup(group) } catch (_: Exception) { }
+            val index = groups.indexOfFirst { it.id == groupID }
+            if (index < 0) {
+                onResult(Result.failure(ChatError.VerificationFailed("Group not found")))
+                return@launch
+            }
+
+            val currentGroup = cloneGroup(groups[index])
+            if (currentGroup.members.none { it.publicKeyCompressed.contentEquals(blsPubkey) }) {
+                onResult(Result.failure(ChatError.VerificationFailed("Member not found")))
+                return@launch
+            }
+
+            val previousKey = currentGroup.encryptionKey
+            val updatedGroup = cloneGroup(currentGroup)
+            updatedGroup.members.removeAll { it.publicKeyCompressed.contentEquals(blsPubkey) }
+            updatedGroup.epoch++
+            updatedGroup.salt = SEPCommitmentBuilder.generateSalt()
+            updatedGroup.recomputeCommitment()
+
+            val publishResult = publishMembershipUpdateIfNeeded(currentGroup, updatedGroup)
+            if (publishResult.isFailure) {
+                onResult(Result.failure(publishResult.exceptionOrNull()!!))
+                return@launch
+            }
+
+            groups[index] = updatedGroup
+            storeSalt(groupID, updatedGroup.epoch, updatedGroup.salt)
+
+            transport.currentMembers.clear()
+            transport.currentMembers.addAll(groups.flatMap { it.members })
+
+            val update = buildStateUpdate(updatedGroup, removedMemberKeys = listOf(blsPubkey))
+            broadcastStateUpdate(updatedGroup, update, overrideKey = previousKey)
+            transport.subscribe(updatedGroup)
+
+            try { store.saveGroup(updatedGroup) } catch (_: Exception) { }
+            onResult(Result.success(Unit))
         }
     }
 
@@ -857,63 +914,60 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Handle a member_joined announcement: add the joiner and broadcast updated state. */
     private fun handleMemberJoined(member: SEPGroupMemberLeaf, groupID: String) {
-        if (BuildConfig.DEBUG) android.util.Log.d("GroupListVM", "handleMemberJoined group=${groupID.take(8)}")
-        val index = groups.indexOfFirst { it.id == groupID }
-        if (index < 0) {
-            if (BuildConfig.DEBUG) android.util.Log.w("GroupListVM", "handleMemberJoined: group not found")
-            return
-        }
-        val group = groups[index]
-
-        // Skip if already a member
-        if (group.members.any { it.publicKeyCompressed.contentEquals(member.publicKeyCompressed) }) {
-            if (BuildConfig.DEBUG) android.util.Log.d("GroupListVM", "handleMemberJoined: already a member, skipping")
-            return
-        }
-
-        // Capture old encryption key BEFORE bumping epoch/salt.
-        // The state update must be encrypted with the current key so all
-        // existing members (including the joiner) can decrypt it.
-        val previousKey = group.encryptionKey
-
-        // Add the joiner with deterministic salt so all members converge
-        if (group.members.size >= group.tier.maxMembers) return
-        group.members.add(member)
-        group.members.sortWith { a, b ->
-            val aKey = a.publicKeyCompressed
-            val bKey = b.publicKeyCompressed
-            for (i in 0 until minOf(aKey.size, bKey.size)) {
-                val cmp = (aKey[i].toInt() and 0xFF) - (bKey[i].toInt() and 0xFF)
-                if (cmp != 0) return@sortWith cmp
-            }
-            aKey.size - bKey.size
-        }
-        group.epoch++
-        group.salt = SEPCommitmentBuilder.deriveSalt(group.salt, member.publicKeyCompressed)
-        group.recomputeCommitment()
-
-        groups[index] = group
-        storeSalt(groupID, group.epoch, group.salt)
         viewModelScope.launch {
-            try { store.saveGroup(group) } catch (_: Exception) { }
+            if (BuildConfig.DEBUG) android.util.Log.d("GroupListVM", "handleMemberJoined group=${groupID.take(8)}")
+            val index = groups.indexOfFirst { it.id == groupID }
+            if (index < 0) {
+                if (BuildConfig.DEBUG) android.util.Log.w("GroupListVM", "handleMemberJoined: group not found")
+                return@launch
+            }
+            val currentGroup = cloneGroup(groups[index])
+
+            if (currentGroup.members.any { it.publicKeyCompressed.contentEquals(member.publicKeyCompressed) }) {
+                if (BuildConfig.DEBUG) android.util.Log.d("GroupListVM", "handleMemberJoined: already a member, skipping")
+                return@launch
+            }
+
+            val previousKey = currentGroup.encryptionKey
+            val updatedGroup = cloneGroup(currentGroup)
+
+            if (updatedGroup.members.size >= updatedGroup.tier.maxMembers) return@launch
+            updatedGroup.members.add(member)
+            sortMembers(updatedGroup)
+            updatedGroup.epoch++
+            updatedGroup.salt = SEPCommitmentBuilder.deriveSalt(updatedGroup.salt, member.publicKeyCompressed)
+            updatedGroup.recomputeCommitment()
+
+            val publishResult = publishMembershipUpdateIfNeeded(currentGroup, updatedGroup)
+            if (publishResult.isFailure) {
+                if (BuildConfig.DEBUG) {
+                    android.util.Log.e(
+                        "GroupListVM",
+                        "handleMemberJoined: rejected published update for group=${groupID.take(8)}",
+                        publishResult.exceptionOrNull()
+                    )
+                }
+                return@launch
+            }
+
+            groups[index] = updatedGroup
+            storeSalt(groupID, updatedGroup.epoch, updatedGroup.salt)
+            try { store.saveGroup(updatedGroup) } catch (_: Exception) { }
+
+            transport.currentMembers.clear()
+            transport.currentMembers.addAll(groups.flatMap { it.members })
+
+            val update = SEPGroupStateUpdate(
+                epoch = updatedGroup.epoch,
+                salt = updatedGroup.salt,
+                addedMembers = listOf(member),
+                commitment = updatedGroup.commitment
+            )
+            broadcastStateUpdate(updatedGroup, update, overrideKey = previousKey)
+            if (BuildConfig.DEBUG) android.util.Log.d("GroupListVM", "broadcastStateUpdate SENT group=${groupID.take(8)} epoch=${updatedGroup.epoch} members=${updatedGroup.members.size}")
+
+            transport.subscribe(updatedGroup)
         }
-
-        // Refresh transport member list
-        transport.currentMembers.clear()
-        transport.currentMembers.addAll(groups.flatMap { it.members })
-
-        // Broadcast state update encrypted with the PREVIOUS key so everyone can read it
-        val update = SEPGroupStateUpdate(
-            epoch = group.epoch,
-            salt = group.salt,
-            addedMembers = listOf(member),
-            commitment = group.commitment
-        )
-        broadcastStateUpdate(group, update, overrideKey = previousKey)
-        if (BuildConfig.DEBUG) android.util.Log.d("GroupListVM", "broadcastStateUpdate SENT group=${groupID.take(8)} epoch=${group.epoch} members=${group.members.size}")
-
-        // Resubscribe with new key after epoch change
-        transport.subscribe(group)
     }
 
     /** Apply a group rename received via protocol message. */

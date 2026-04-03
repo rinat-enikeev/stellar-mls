@@ -465,13 +465,19 @@ final class AppState {
             tier: group.tier
         )
 
-        if response.accepted {
-            var updated = group
-            updated.isPublishedOnChain = true
-            updateGroup(updated)
-        } else {
+        if !response.accepted {
             throw ChatError.onChainPublishFailed(response.message ?? "Contract rejected update")
         }
+    }
+
+    private func publishMemberUpdateIfNeeded(oldGroup: ChatGroup, newGroup: ChatGroup) async throws {
+        guard oldGroup.isPublishedOnChain else { return }
+        try await publishMemberUpdate(
+            group: newGroup,
+            oldMembers: oldGroup.members,
+            oldEpoch: oldGroup.epoch,
+            oldSalt: oldGroup.salt
+        )
     }
 
     /// Verify a group's local state against its on-chain commitment.
@@ -734,32 +740,43 @@ final class AppState {
     }
 
     /// Remove a member from a group, broadcast the state update, and optionally update on-chain.
-    func removeMember(blsPubkey: Data, from groupID: String) {
-        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
-        var group = groups[index]
+    func removeMember(blsPubkey: Data, from groupID: String) async throws {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else {
+            throw ChatError.verificationFailed("Group not found")
+        }
+        let currentGroup = groups[index]
 
-        // Must be a current member
-        guard group.members.contains(where: { $0.publicKeyCompressed == blsPubkey }) else { return }
+        guard currentGroup.members.contains(where: { $0.publicKeyCompressed == blsPubkey }) else {
+            throw ChatError.verificationFailed("Member not found")
+        }
 
-        // Capture old key for broadcasting state update
-        let previousKey = group.encryptionKey
+        let previousKey = currentGroup.encryptionKey
 
-        group.members.removeAll { $0.publicKeyCompressed == blsPubkey }
-        group.epoch += 1
-        group.salt = SEPCommitmentBuilder.generateSalt()
-        try? group.recomputeCommitment()
+        var updatedGroup = currentGroup
+        updatedGroup.members.removeAll { $0.publicKeyCompressed == blsPubkey }
+        updatedGroup.epoch += 1
+        updatedGroup.salt = SEPCommitmentBuilder.generateSalt()
+        try updatedGroup.recomputeCommitment()
 
-        groups[index] = group
-        store.saveGroup(group)
-        storeSalt(groupID: groupID, epoch: group.epoch, salt: group.salt)
-        chatTransport.currentMembers = group.members
-        subscribeGroup(group)
+        do {
+            try await publishMemberUpdateIfNeeded(oldGroup: currentGroup, newGroup: updatedGroup)
+        } catch {
+            SecurityLog.onChainOperationFailed(operation: "update_commitment", reason: error.localizedDescription)
+            throw error
+        }
 
-        // Broadcast removal state update in the background — don't block the UI
-        let update = buildStateUpdate(group: group, removedMemberKeys: [blsPubkey])
-        Task {
-            try? await chatTransport.sendProtocolMessage(
-                update, topic: group.topicTag, key: previousKey, keyManager: keyManager)
+        groups[index] = updatedGroup
+        store.saveGroup(updatedGroup)
+        storeSalt(groupID: groupID, epoch: updatedGroup.epoch, salt: updatedGroup.salt)
+        chatTransport.currentMembers = updatedGroup.members
+        subscribeGroup(updatedGroup)
+
+        let update = buildStateUpdate(group: updatedGroup, removedMemberKeys: [blsPubkey])
+        do {
+            try await chatTransport.sendProtocolMessage(
+                update, topic: updatedGroup.topicTag, key: previousKey, keyManager: keyManager)
+        } catch {
+            SecurityLog.onChainOperationFailed(operation: "broadcast_state_update", reason: error.localizedDescription)
         }
     }
 
@@ -1420,47 +1437,59 @@ final class AppState {
     /// Handle a member_joined announcement: add the joiner and broadcast updated state.
     private func handleMemberJoined(_ joined: SEPMemberJoined, groupID: String) async {
         guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
-        var group = groups[index]
+        let currentGroup = groups[index]
 
         // Skip if already a member
-        guard !group.members.contains(where: { $0.publicKeyCompressed == joined.member.publicKeyCompressed }) else { return }
+        guard !currentGroup.members.contains(where: { $0.publicKeyCompressed == joined.member.publicKeyCompressed }) else { return }
 
         // Capture old encryption key BEFORE bumping epoch/salt.
         // The state update must be encrypted with the current key so all
         // existing members (including the joiner) can decrypt it.
-        let previousKey = group.encryptionKey
+        let previousKey = currentGroup.encryptionKey
 
         // Add the joiner
-        group.members.append(joined.member)
-        group.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
-        group.epoch += 1
-        group.salt = SEPCommitmentBuilder.deriveSalt(previousSalt: group.salt, memberKey: joined.member.publicKeyCompressed)
-        try? group.recomputeCommitment()
+        var updatedGroup = currentGroup
+        updatedGroup.members.append(joined.member)
+        updatedGroup.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
+        updatedGroup.epoch += 1
+        updatedGroup.salt = SEPCommitmentBuilder.deriveSalt(previousSalt: updatedGroup.salt, memberKey: joined.member.publicKeyCompressed)
 
-        groups[index] = group
-        store.saveGroup(group)
-        storeSalt(groupID: groupID, epoch: group.epoch, salt: group.salt)
+        do {
+            try updatedGroup.recomputeCommitment()
+            try await publishMemberUpdateIfNeeded(oldGroup: currentGroup, newGroup: updatedGroup)
+        } catch {
+            SecurityLog.onChainOperationFailed(operation: "update_commitment", reason: error.localizedDescription)
+            return
+        }
+
+        groups[index] = updatedGroup
+        store.saveGroup(updatedGroup)
+        storeSalt(groupID: groupID, epoch: updatedGroup.epoch, salt: updatedGroup.salt)
 
         // Sync transport member list so BLS authentication accepts the new member
-        chatTransport.currentMembers = group.members
+        chatTransport.currentMembers = updatedGroup.members
 
         // Broadcast state update so all members (including the joiner) converge.
         // Encrypted with the PREVIOUS key so everyone can read it.
         let update = SEPGroupStateUpdate(
-            epoch: group.epoch,
-            salt: group.salt,
+            epoch: updatedGroup.epoch,
+            salt: updatedGroup.salt,
             addedMembers: [joined.member],
-            commitment: group.commitment
+            commitment: updatedGroup.commitment
         )
-        try? await chatTransport.sendProtocolMessage(
-            update,
-            topic: group.topicTag,
-            key: previousKey,
-            keyManager: keyManager
-        )
+        do {
+            try await chatTransport.sendProtocolMessage(
+                update,
+                topic: updatedGroup.topicTag,
+                key: previousKey,
+                keyManager: keyManager
+            )
+        } catch {
+            SecurityLog.onChainOperationFailed(operation: "broadcast_state_update", reason: error.localizedDescription)
+        }
 
         // Resubscribe with the new encryption key after epoch change
-        subscribeGroup(group)
+        subscribeGroup(updatedGroup)
     }
 
     // MARK: - TURN Configuration

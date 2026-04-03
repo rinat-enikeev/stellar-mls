@@ -8,6 +8,7 @@ struct GroupInfoView: View {
     @State private var memberToRemove: SEPGroupMemberLeaf?
     @State private var showRemoveConfirmation = false
     @State private var removalStatus: String?
+    @State private var removalStatusIsError = false
     @State private var showRenameAlert = false
     @State private var newGroupName = ""
 
@@ -74,6 +75,7 @@ struct GroupInfoView: View {
                     Button {
                         appState.rotateGroupKey(groupID: group.id)
                         removalStatus = "Key rotated to epoch \(appState.groups.first(where: { $0.id == group.id })?.epoch ?? 0)."
+                        removalStatusIsError = false
                     } label: {
                         Text("Rotate Group Key")
                     }
@@ -86,7 +88,7 @@ struct GroupInfoView: View {
                     Section {
                         Text(status)
                             .font(.caption)
-                            .foregroundStyle(status.hasPrefix("Error") ? .red : .green)
+                            .foregroundStyle(removalStatusIsError ? .red : .green)
                     }
                 }
             }
@@ -115,6 +117,7 @@ struct GroupInfoView: View {
                 Button("Rename") {
                     appState.renameGroup(groupID: group.id, newName: newGroupName)
                     removalStatus = "Group renamed."
+                    removalStatusIsError = false
                 }
                 Button("Cancel", role: .cancel) {}
             }
@@ -127,8 +130,17 @@ struct GroupInfoView: View {
     }
 
     private func removeMember(_ member: SEPGroupMemberLeaf) {
-        appState.removeMember(blsPubkey: member.publicKeyCompressed, from: group.id)
-        removalStatus = "Member removed. Key rotated to epoch \(appState.groups.first(where: { $0.id == group.id })?.epoch ?? 0)."
+        Task {
+            do {
+                try await appState.removeMember(blsPubkey: member.publicKeyCompressed, from: group.id)
+                let epoch = appState.groups.first(where: { $0.id == group.id })?.epoch ?? 0
+                removalStatus = "Member removed. Key rotated to epoch \(epoch)."
+                removalStatusIsError = false
+            } catch {
+                removalStatus = error.localizedDescription
+                removalStatusIsError = true
+            }
+        }
     }
 }
 

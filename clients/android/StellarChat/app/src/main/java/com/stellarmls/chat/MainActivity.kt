@@ -272,8 +272,8 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                 GroupInfoScreen(
                     group = group,
                     myBlsPubkey = groupListViewModel.keyManager.blsPublicKey(),
-                    onRemoveMember = { blsPubkey ->
-                        groupListViewModel.removeMember(blsPubkey, groupId)
+                    onRemoveMember = { blsPubkey, onResult ->
+                        groupListViewModel.removeMember(blsPubkey, groupId, onResult)
                     },
                     onRotateKey = {
                         groupListViewModel.rotateGroupKey(groupId)

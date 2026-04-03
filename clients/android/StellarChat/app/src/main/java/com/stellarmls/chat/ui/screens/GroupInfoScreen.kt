@@ -43,13 +43,14 @@ import com.stellarmls.mls.SEPGroupMemberLeaf
 fun GroupInfoScreen(
     group: ChatGroup,
     myBlsPubkey: ByteArray,
-    onRemoveMember: (ByteArray) -> Unit,
+    onRemoveMember: (ByteArray, (Result<Unit>) -> Unit) -> Unit,
     onRotateKey: () -> Unit = {},
     onRenameGroup: (String) -> Unit = {},
     onBack: () -> Unit
 ) {
     var memberToRemove by remember { mutableStateOf<SEPGroupMemberLeaf?>(null) }
     var removalStatus by remember { mutableStateOf<String?>(null) }
+    var removalStatusIsError by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var newGroupName by remember { mutableStateOf(group.name) }
 
@@ -155,6 +156,7 @@ fun GroupInfoScreen(
                         onClick = {
                             onRotateKey()
                             removalStatus = "Key rotated."
+                            removalStatusIsError = false
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -173,7 +175,11 @@ fun GroupInfoScreen(
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     status,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = if (removalStatusIsError) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -187,8 +193,15 @@ fun GroupInfoScreen(
             text = { Text("The member will be removed and the group key will be rotated. They will not be able to decrypt future messages.") },
             confirmButton = {
                 TextButton(onClick = {
-                    onRemoveMember(member.publicKeyCompressed)
-                    removalStatus = "Member removed. Key rotated."
+                    onRemoveMember(member.publicKeyCompressed) { result ->
+                        if (result.isSuccess) {
+                            removalStatus = "Member removed. Key rotated."
+                            removalStatusIsError = false
+                        } else {
+                            removalStatus = result.exceptionOrNull()?.message ?: "Failed to remove member."
+                            removalStatusIsError = true
+                        }
+                    }
                     memberToRemove = null
                 }) {
                     Text("Remove", color = MaterialTheme.colorScheme.error)
@@ -218,6 +231,7 @@ fun GroupInfoScreen(
                 TextButton(onClick = {
                     onRenameGroup(newGroupName)
                     removalStatus = "Group renamed."
+                    removalStatusIsError = false
                     showRenameDialog = false
                 }) {
                     Text("Rename")

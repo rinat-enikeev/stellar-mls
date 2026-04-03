@@ -35,6 +35,9 @@ final class CallManager: NSObject {
     /// Set by AppState — sends signaling JSON over the group channel.
     var sendSignal: (([String: Any]) async throws -> Void)?
 
+    /// CallKit integration — set after init.
+    var callKit: CallKitProvider?
+
     private var peerConnection: RTCPeerConnection?
     private var localAudioTrack: RTCAudioTrack?
     private var capturer: RTCCameraVideoCapturer?
@@ -69,6 +72,7 @@ final class CallManager: NSObject {
             "sdp": offer.sdp,
         ]
         try await sendSignal?(signal)
+        callKit?.startOutgoingCall(callerName: "Call", hasVideo: video)
         startRingTimer()
     }
 
@@ -101,6 +105,7 @@ final class CallManager: NSObject {
                 let remoteDesc = RTCSessionDescription(type: .offer, sdp: sdp)
                 try? await peerConnection?.setRemoteDescription(remoteDesc)
             }
+            try? await callKit?.reportIncomingCall(callerName: "Incoming Call", hasVideo: isVideoCall)
             startRingTimer()
 
         case "answer":
@@ -113,6 +118,7 @@ final class CallManager: NSObject {
             state = .active
             startDurationTimer()
             configureAudioSession(speaker: isVideoCall)
+            callKit?.reportOutgoingCallConnected()
 
         case "ice":
             guard incomingCallId == callId else { return }
@@ -196,6 +202,8 @@ final class CallManager: NSObject {
         callDuration = 0
         isVideoCall = false
         isVideoEnabled = false
+
+        callKit?.reportCallEnded(reason: sendHangup ? .remoteEnded : .remoteEnded)
 
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
 

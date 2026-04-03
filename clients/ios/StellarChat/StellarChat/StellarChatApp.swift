@@ -41,6 +41,7 @@ final class AppState {
     // MARK: - Calls
 
     let callManager = CallManager()
+    private(set) var callKitProvider: CallKitProvider?
 
     // MARK: - Persistent Chat & Protocol Transport
 
@@ -170,6 +171,8 @@ final class AppState {
         setupChatHandler()
         setupProtocolHandler()
         setupCallSignalHandler()
+        callKitProvider = CallKitProvider(callManager: callManager)
+        callManager.callKit = callKitProvider
         Task { await connectAndSubscribeAllGroups() }
     }
 

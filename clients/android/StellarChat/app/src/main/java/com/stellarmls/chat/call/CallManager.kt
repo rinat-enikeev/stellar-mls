@@ -89,6 +89,7 @@ class CallManager(private val context: Context) {
         }, mediaConstraints(video))
 
         startRingTimer()
+        CallConnectionService.placeOutgoingCall(context, "Call", video)
     }
 
     // MARK: - Handle Incoming Signaling
@@ -125,6 +126,7 @@ class CallManager(private val context: Context) {
                         SessionDescription(SessionDescription.Type.OFFER, sdpStr)
                     )
                 }
+                CallConnectionService.reportIncomingCall(context, "Incoming Call", isVideoCall)
                 startRingTimer()
             }
             "answer" -> {
@@ -234,6 +236,8 @@ class CallManager(private val context: Context) {
         callDuration = 0
         isVideoCall = false
         isVideoEnabled = false
+
+        CallConnectionService.reportCallEnded()
 
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audioManager.mode = AudioManager.MODE_NORMAL

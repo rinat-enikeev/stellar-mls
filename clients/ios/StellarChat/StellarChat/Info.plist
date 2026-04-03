@@ -37,5 +37,9 @@
 	<string>StellarChat needs photo library access to share encrypted images in group chats.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>StellarChat needs microphone access to record voice messages.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>voip</string>
+	</array>
 </dict>
 </plist>

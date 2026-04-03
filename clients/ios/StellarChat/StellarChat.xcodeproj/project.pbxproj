@@ -16,6 +16,7 @@
 		1F2DC6C7FF3C465CBD31ABA9 /* PendingInvitationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6867C765FBB9480D9E0D9FC /* PendingInvitationsView.swift */; };
 		276E482D1A8B67CFB9B7ADF1 /* InvitationTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C958564E515954D41E226897 /* InvitationTransport.swift */; };
 		2DAB2E5F09CA9490F5C7CDF8 /* CallManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 485C53049C1128D91F1CA2DB /* CallManager.swift */; };
+		E3F4A5B6C7D8E9F0A1B2C3D4 /* CallKitProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4A5B6C7D8E9F0A1B2C3D4E5 /* CallKitProvider.swift */; };
 		33D3690E63750E20852336EE /* AudioCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57DB304E93E815412ABA6010 /* AudioCache.swift */; };
 		3EC81E8DA76069452870626F /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68F22F3B02C2C003269BA135 /* QRScannerView.swift */; };
 		459BB52914DCD2B789CA689C /* MediaCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBAE6FF501ED7880C298C7FC /* MediaCrypto.swift */; };
@@ -77,6 +78,7 @@
 		3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StellarStrKey.swift; sourceTree = "<group>"; };
 		4705F8234AA6022CD782348E /* PersistedModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistedModels.swift; sourceTree = "<group>"; };
 		485C53049C1128D91F1CA2DB /* CallManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallManager.swift; sourceTree = "<group>"; };
+		F4A5B6C7D8E9F0A1B2C3D4E5 /* CallKitProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallKitProvider.swift; sourceTree = "<group>"; };
 		4FCDBA22391412C6D05BB99E /* BlossomClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlossomClient.swift; sourceTree = "<group>"; };
 		57DB304E93E815412ABA6010 /* AudioCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioCache.swift; sourceTree = "<group>"; };
 		62FB83C87F9348F97EEDE0C8 /* StellarChatApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StellarChatApp.swift; sourceTree = "<group>"; };
@@ -194,6 +196,7 @@
 			isa = PBXGroup;
 			children = (
 				485C53049C1128D91F1CA2DB /* CallManager.swift */,
+				F4A5B6C7D8E9F0A1B2C3D4E5 /* CallKitProvider.swift */,
 				7E005C90D6C91D9810C11364 /* CallView.swift */,
 			);
 			path = Call;
@@ -373,6 +376,7 @@
 				E10FD8A2E1B0D8169A2BEB15 /* BlossomClient.swift in Sources */,
 				0029F253BA68E6B4CA11E864 /* BootstrapPayload.swift in Sources */,
 				2DAB2E5F09CA9490F5C7CDF8 /* CallManager.swift in Sources */,
+				E3F4A5B6C7D8E9F0A1B2C3D4 /* CallKitProvider.swift in Sources */,
 				C78434B5880A2483C3DAF9E9 /* CallView.swift in Sources */,
 				4E0468C0A25E658173F4E628 /* ChatGroup.swift in Sources */,
 				E54951E56532C7FBD90317DE /* ChatView.swift in Sources */,

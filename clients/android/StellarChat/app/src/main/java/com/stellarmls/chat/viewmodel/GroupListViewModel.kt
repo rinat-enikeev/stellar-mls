@@ -167,9 +167,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         transport = NostrMessageTransport(keyManager, relayURLs.toList())
         invitationTransport = InvitationTransport(keyManager)
 
-        // Initialize call manager
+        // Initialize call manager and telecom integration
         com.stellarmls.chat.call.CallManager.initialize(application)
         callManager = com.stellarmls.chat.call.CallManager(application)
+        com.stellarmls.chat.call.CallConnectionService.initialize(application, callManager)
 
         // Initialize on-chain service if configured
         configureContract()

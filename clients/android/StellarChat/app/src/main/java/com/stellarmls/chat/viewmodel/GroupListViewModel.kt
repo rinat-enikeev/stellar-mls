@@ -38,6 +38,7 @@ import com.stellarmls.mls.SEPGroupRenamed
 import com.stellarmls.mls.SEPGroupStateUpdate
 import com.stellarmls.mls.SEPKeyAttestationPayload
 import com.stellarmls.mls.SEPMemberJoined
+import com.stellarmls.mls.SEPRekey
 import com.stellarmls.mls.SEPMessageAck
 import com.stellarmls.mls.SEPTier
 import com.stellarmls.mls.SEPSaltRequest
@@ -800,12 +801,30 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         transport.currentMembers.clear()
         transport.currentMembers.addAll(groups.flatMap { it.members })
 
-        // Broadcast state update with PREVIOUS key
-        val update = buildStateUpdate(candidate, addedMembers, removedMemberKeys)
-        broadcastStateUpdate(candidate, update, overrideKey = previousKey)
+        // For member removal: use a poisoned (random) salt in the broadcast so the
+        // removed member cannot derive the new encryption key.
+        val isRemoval = removedMemberKeys.isNotEmpty()
+        val poisonedSalt = if (isRemoval) SEPCommitmentBuilder.generateSalt() else candidate.salt
 
-        // Resubscribe with new key
+        // Broadcast state update with PREVIOUS key
+        val broadcastCandidate = if (isRemoval) cloneGroup(candidate).also { it.salt = poisonedSalt } else candidate
+        val update = buildStateUpdate(broadcastCandidate, addedMembers, removedMemberKeys)
+        broadcastStateUpdate(broadcastCandidate, update, overrideKey = previousKey)
+
+        // Resubscribe with new key (uses the REAL salt)
         transport.subscribe(candidate)
+
+        // For removals: send re-key with real salt, encrypted with poisoned-salt key.
+        // Removed member's client has already unsubscribed, so only remaining members get this.
+        if (isRemoval) {
+            val poisonedKey = GroupCrypto.deriveMessageKey(candidate.groupSecret, candidate.epoch, poisonedSalt)
+            val rekeyJson = JSONObject().apply {
+                put("type", SEPRekey.MESSAGE_TYPE)
+                put("epoch", candidate.epoch)
+                put("salt", android.util.Base64.encodeToString(candidate.salt, android.util.Base64.NO_WRAP))
+            }.toString()
+            transport.sendProtocolMessage(candidate, rekeyJson, poisonedKey)
+        }
 
         // Persist to DB
         viewModelScope.launch {
@@ -958,6 +977,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 try { store.saveGroup(group) } catch (_: Exception) { }
             }
         } else {
+            // Check if WE were removed before applying
+            val selfRemoved = isSelfRemoved(update)
+
             // Normal case: update.epoch > group.epoch
             // For published groups: verify against chain before applying.
             if (group.isPublishedOnChain) {
@@ -997,10 +1019,15 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
                         groups[idx] = g
                         storeSalt(groupID, update.epoch, update.salt)
-                        syncTransportAndSubscribe(g)
-                        try { store.saveGroup(g) } catch (_: Exception) { }
 
-                        insertSystemMessagesForStateUpdate(update, groupID)
+                        if (selfRemoved) {
+                            transport.unsubscribe(g.topicTag)
+                            insertSystemMessage(groupID, "You were removed from this group", "self-removed", update.epoch)
+                        } else {
+                            syncTransportAndSubscribe(g)
+                            try { store.saveGroup(g) } catch (_: Exception) { }
+                            insertSystemMessagesForStateUpdate(update, groupID)
+                        }
                     }
                     return // Handled async
                 }
@@ -1014,13 +1041,17 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
             groups[index] = group
             storeSalt(groupID, update.epoch, update.salt)
-            syncTransportAndSubscribe(group)
 
-            viewModelScope.launch {
-                try { store.saveGroup(group) } catch (_: Exception) { }
+            if (selfRemoved) {
+                transport.unsubscribe(group.topicTag)
+                insertSystemMessage(groupID, "You were removed from this group", "self-removed", update.epoch)
+            } else {
+                syncTransportAndSubscribe(group)
+                viewModelScope.launch {
+                    try { store.saveGroup(group) } catch (_: Exception) { }
+                }
+                insertSystemMessagesForStateUpdate(update, groupID)
             }
-
-            insertSystemMessagesForStateUpdate(update, groupID)
         }
     }
 
@@ -1050,6 +1081,18 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             }
         }
         sortMembers(group)
+    }
+
+    /** Check if the current user's BLS pubkey is in the removal list. */
+    private fun isSelfRemoved(update: SEPGroupStateUpdate): Boolean {
+        val myLeaf = keyManager.memberLeaf()
+        return update.removedMemberKeys.any { it.contentEquals(myLeaf.publicKeyCompressed) }
+    }
+
+    /** Check if the current user is a member of the given group. */
+    fun isMember(group: ChatGroup): Boolean {
+        val myLeaf = keyManager.memberLeaf()
+        return group.members.any { it.publicKeyCompressed.contentEquals(myLeaf.publicKeyCompressed) }
     }
 
     /** Sync transport members and resubscribe group. */
@@ -1196,6 +1239,24 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 SecurityLog.onChainOperationFailed("member_add_transition", result.name)
             }
         }
+    }
+
+    /** Apply a re-key message: replace the poisoned salt with the real salt and resubscribe. */
+    private fun applyRekey(epoch: Long, salt: ByteArray, groupID: String) {
+        val index = groups.indexOfFirst { it.id == groupID }
+        if (index < 0) return
+        val group = groups[index]
+        if (group.epoch != epoch) return
+        if (group.salt.contentEquals(salt)) return
+        group.salt = salt
+        group.recomputeCommitment()
+        groups[index] = group
+        storeSalt(groupID, epoch, salt)
+        syncTransportAndSubscribe(group)
+        viewModelScope.launch {
+            try { store.saveGroup(group) } catch (_: Exception) { }
+        }
+        if (BuildConfig.DEBUG) Log.d("GroupListVM", "Applied re-key for epoch=$epoch group=${groupID.take(8)}")
     }
 
     /** Apply a group rename received via protocol message. */
@@ -1352,6 +1413,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
         val group = groups.find { it.id == groupID } ?: return
+
+        // Block sending if we're no longer a member
+        if (!isMember(group)) return
 
         // Use the deterministic NIP-01 event ID so the relay echo is deduplicated,
         // and the event's createdAt so timestamp matches what other clients see.
@@ -1772,6 +1836,11 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                             val saltB64 = obj.getString("salt")
                             val salt = android.util.Base64.decode(saltB64, android.util.Base64.NO_WRAP)
                             storeSalt(groupID, epoch, salt)
+                        }
+                        SEPRekey.MESSAGE_TYPE -> {
+                            val rekeyEpoch = obj.getLong("epoch")
+                            val rekeySalt = android.util.Base64.decode(obj.getString("salt"), android.util.Base64.NO_WRAP)
+                            applyRekey(rekeyEpoch, rekeySalt, groupID)
                         }
                         SEPGroupRenamed.MESSAGE_TYPE -> {
                             val newName = obj.getString("name")

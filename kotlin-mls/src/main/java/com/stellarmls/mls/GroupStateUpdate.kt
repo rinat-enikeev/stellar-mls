@@ -102,6 +102,30 @@ data class SEPKeyAttestationPayload(
 }
 
 /**
+ * Post-removal re-key message. Sent immediately after a member removal state update.
+ * Contains the real salt (the state update carries a poisoned/placeholder salt so the
+ * removed member cannot derive the new encryption key). Encrypted with the key derived
+ * from the poisoned salt — only members still subscribed will receive and process it.
+ */
+data class SEPRekey(
+    val type: String = MESSAGE_TYPE,
+    val epoch: Long,
+    val salt: ByteArray
+) {
+    companion object {
+        const val MESSAGE_TYPE = "sep_rekey"
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is SEPRekey) return false
+        return epoch == other.epoch && salt.contentEquals(other.salt)
+    }
+
+    override fun hashCode(): Int = 31 * epoch.hashCode() + salt.contentHashCode()
+}
+
+/**
  * Delivery acknowledgment sent when a member receives and decrypts a message.
  * Each device sends at most one ACK per original event ID.
  */

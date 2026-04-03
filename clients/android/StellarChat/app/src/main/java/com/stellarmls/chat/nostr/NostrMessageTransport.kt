@@ -110,6 +110,15 @@ class NostrMessageTransport(
         }
     }
 
+    /** Unsubscribe from a group's topic, cancelling all associated subscription jobs. */
+    fun unsubscribe(topicTag: String) {
+        val topicKey = "chat-$topicTag"
+        val toRemove = subscriptionJobs.keys.filter { it.startsWith(topicKey) }
+        for (key in toRemove) {
+            subscriptionJobs.remove(key)?.cancel()
+        }
+    }
+
     /** Send an encrypted chat message. Returns the published NostrEvent (with deterministic NIP-01 ID). */
     fun send(group: ChatGroup, text: String): NostrEvent {
         val key = group.encryptionKey

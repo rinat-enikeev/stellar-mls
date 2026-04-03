@@ -187,58 +187,66 @@ struct ChatView: View {
                 .padding(.vertical, 8)
             }
 
-            HStack(spacing: 12) {
-                PhotosPicker(selection: $selectedPhotoItem, matching: .any(of: [.images, .videos])) {
-                    Image(systemName: "photo")
-                        .font(.title3)
-                        .foregroundStyle(viewModel.hasBlossomServers ? .primary : .secondary)
-                }
-                .disabled(!viewModel.hasBlossomServers)
-                .onChange(of: selectedPhotoItem) { _, newItem in
-                    guard let newItem else { return }
-                    Task {
-                        let isVideo = newItem.supportedContentTypes.contains { $0.conforms(to: .movie) }
-                        if isVideo {
-                            if let data = try? await newItem.loadTransferable(type: Data.self) {
-                                let tempURL = FileManager.default.temporaryDirectory
-                                    .appendingPathComponent(UUID().uuidString + ".mp4")
-                                try? data.write(to: tempURL)
-                                viewModel.selectedVideoURL = tempURL
+            if let group = viewModel.group, !appState.isMember(of: group) {
+                Text("You were removed from this group")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+            } else {
+                HStack(spacing: 12) {
+                    PhotosPicker(selection: $selectedPhotoItem, matching: .any(of: [.images, .videos])) {
+                        Image(systemName: "photo")
+                            .font(.title3)
+                            .foregroundStyle(viewModel.hasBlossomServers ? .primary : .secondary)
+                    }
+                    .disabled(!viewModel.hasBlossomServers)
+                    .onChange(of: selectedPhotoItem) { _, newItem in
+                        guard let newItem else { return }
+                        Task {
+                            let isVideo = newItem.supportedContentTypes.contains { $0.conforms(to: .movie) }
+                            if isVideo {
+                                if let data = try? await newItem.loadTransferable(type: Data.self) {
+                                    let tempURL = FileManager.default.temporaryDirectory
+                                        .appendingPathComponent(UUID().uuidString + ".mp4")
+                                    try? data.write(to: tempURL)
+                                    viewModel.selectedVideoURL = tempURL
+                                }
+                            } else {
+                                if let data = try? await newItem.loadTransferable(type: Data.self) {
+                                    viewModel.selectedImageData = data
+                                }
                             }
-                        } else {
-                            if let data = try? await newItem.loadTransferable(type: Data.self) {
-                                viewModel.selectedImageData = data
-                            }
+                            selectedPhotoItem = nil
                         }
-                        selectedPhotoItem = nil
-                    }
-                }
-
-                TextField("Message", text: $viewModel.inputText)
-                    .textFieldStyle(.plain)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 20))
-                    .onSubmit {
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        Task { await viewModel.sendMessage() }
                     }
 
-                if viewModel.inputText.trimmingCharacters(in: .whitespaces).isEmpty {
-                    VoiceRecordButton(hasBlossomServers: viewModel.hasBlossomServers) { audioURL in
-                        Task { await viewModel.sendVoice(audioURL: audioURL) }
-                    }
-                } else {
-                    Button {
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        Task { await viewModel.sendMessage() }
-                    } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.title2)
+                    TextField("Message", text: $viewModel.inputText)
+                        .textFieldStyle(.plain)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 20))
+                        .onSubmit {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            Task { await viewModel.sendMessage() }
+                        }
+
+                    if viewModel.inputText.trimmingCharacters(in: .whitespaces).isEmpty {
+                        VoiceRecordButton(hasBlossomServers: viewModel.hasBlossomServers) { audioURL in
+                            Task { await viewModel.sendVoice(audioURL: audioURL) }
+                        }
+                    } else {
+                        Button {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            Task { await viewModel.sendMessage() }
+                        } label: {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.title2)
+                        }
                     }
                 }
+                .padding()
             }
-            .padding()
         }
         .navigationTitle(viewModel.group?.name ?? "Chat")
         .navigationBarTitleDisplayMode(.inline)

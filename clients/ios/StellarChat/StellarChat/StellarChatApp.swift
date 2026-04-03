@@ -683,9 +683,17 @@ final class AppState {
         // Sync transport
         chatTransport.currentMembers = groups.flatMap(\.members)
 
+        // For member removal: use a poisoned (random) salt in the broadcast so the
+        // removed member cannot derive the new encryption key. Send the real salt in
+        // a follow-up re-key message that only remaining (subscribed) members receive.
+        let isRemoval = !removedMemberKeys.isEmpty
+        let poisonedSalt = isRemoval ? SEPCommitmentBuilder.generateSalt() : candidate.salt
+
         // Broadcast state update encrypted with PREVIOUS key so all members can decrypt
+        var broadcastCandidate = candidate
+        if isRemoval { broadcastCandidate.salt = poisonedSalt }
         let update = buildStateUpdate(
-            group: candidate,
+            group: broadcastCandidate,
             addedMembers: addedMembers,
             removedMemberKeys: removedMemberKeys
         )
@@ -702,8 +710,31 @@ final class AppState {
             #endif
         }
 
-        // Resubscribe with new encryption key
+        // Resubscribe with new encryption key (uses the REAL salt)
         subscribeGroup(candidate)
+
+        // For removals: send re-key message with real salt, encrypted with the
+        // poisoned-salt-derived key. The removed member's client has already
+        // unsubscribed (via applyStateUpdate self-removal detection), so only
+        // remaining members receive this and update to the real salt.
+        if isRemoval {
+            let poisonedKey = GroupCrypto.deriveMessageKey(
+                groupSecret: candidate.groupSecret, epoch: candidate.epoch, salt: poisonedSalt
+            )
+            let rekey = SEPRekey(epoch: candidate.epoch, salt: candidate.salt)
+            do {
+                try await chatTransport.sendProtocolMessage(
+                    rekey,
+                    topic: candidate.topicTag,
+                    key: poisonedKey,
+                    keyManager: keyManager
+                )
+            } catch {
+                #if DEBUG
+                print("[EpochTransition] Failed to send re-key: \(error)")
+                #endif
+            }
+        }
 
         // Insert system message for the transition
         switch kind {
@@ -960,6 +991,9 @@ final class AppState {
                 }
             }
 
+            // Check if WE were removed before applying
+            let selfRemoved = isSelfRemoved(in: update)
+
             applyMemberDelta(update, to: &group)
             group.epoch = update.epoch
             group.salt = update.salt
@@ -976,21 +1010,40 @@ final class AppState {
             groups[index] = group
             store.saveGroup(group)
             storeSalt(groupID: groupID, epoch: update.epoch, salt: update.salt)
-            subscribeGroup(group)
 
-            // System messages for peer state updates
-            for added in update.addedMembers {
-                let name = memberDisplayName(blsPubkey: added.publicKeyCompressed)
-                insertSystemMessage(groupID: groupID, text: "\(name) joined the group", event: "member-add", epoch: update.epoch)
-            }
-            for removed in update.removedMemberKeys {
-                let name = memberDisplayName(blsPubkey: removed)
-                insertSystemMessage(groupID: groupID, text: "\(name) was removed from the group", event: "member-remove", epoch: update.epoch)
-            }
-            if update.addedMembers.isEmpty && update.removedMemberKeys.isEmpty {
-                insertSystemMessage(groupID: groupID, text: "Encryption key was rotated", event: "key-rotation", epoch: update.epoch)
+            if selfRemoved {
+                // Unsubscribe — do NOT resubscribe with the new key
+                chatTransport.unsubscribe(topic: group.topicTag)
+                insertSystemMessage(groupID: groupID, text: "You were removed from this group", event: "self-removed", epoch: update.epoch)
+            } else {
+                subscribeGroup(group)
+
+                // System messages for peer state updates
+                for added in update.addedMembers {
+                    let name = memberDisplayName(blsPubkey: added.publicKeyCompressed)
+                    insertSystemMessage(groupID: groupID, text: "\(name) joined the group", event: "member-add", epoch: update.epoch)
+                }
+                for removed in update.removedMemberKeys {
+                    let name = memberDisplayName(blsPubkey: removed)
+                    insertSystemMessage(groupID: groupID, text: "\(name) was removed from the group", event: "member-remove", epoch: update.epoch)
+                }
+                if update.addedMembers.isEmpty && update.removedMemberKeys.isEmpty {
+                    insertSystemMessage(groupID: groupID, text: "Encryption key was rotated", event: "key-rotation", epoch: update.epoch)
+                }
             }
         }
+    }
+
+    /// Check if the current user's BLS pubkey is in the removal list.
+    private func isSelfRemoved(in update: SEPGroupStateUpdate) -> Bool {
+        guard let myLeaf = try? keyManager.memberLeaf else { return false }
+        return update.removedMemberKeys.contains { $0 == myLeaf.publicKeyCompressed }
+    }
+
+    /// Check if the current user is a member of the given group.
+    func isMember(of group: ChatGroup) -> Bool {
+        guard let myLeaf = try? keyManager.memberLeaf else { return false }
+        return group.members.contains { $0.publicKeyCompressed == myLeaf.publicKeyCompressed }
     }
 
     /// Apply the member delta (adds/removes) from a state update to a group.
@@ -1056,6 +1109,24 @@ final class AppState {
     }
 
     /// Apply a group rename received from the protocol channel.
+    /// Apply a re-key message: replace the poisoned salt with the real salt and resubscribe.
+    func applyRekey(_ rekey: SEPRekey, to groupID: String) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        var group = groups[index]
+        guard rekey.epoch == group.epoch else { return }
+        // Only apply if the salt differs (i.e., we have the poisoned salt)
+        guard group.salt != rekey.salt else { return }
+        group.salt = rekey.salt
+        try? group.recomputeCommitment()
+        groups[index] = group
+        store.saveGroup(group)
+        storeSalt(groupID: groupID, epoch: rekey.epoch, salt: rekey.salt)
+        subscribeGroup(group)
+        #if DEBUG
+        print("[AppState] Applied re-key for epoch=\(rekey.epoch) group=\(groupID.prefix(8))")
+        #endif
+    }
+
     func applyGroupRenamed(_ renamed: SEPGroupRenamed, to groupID: String) {
         guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
         // ChatGroup.name is let — we need to create a new instance
@@ -1169,6 +1240,11 @@ final class AppState {
         guard let group = groups.first(where: { $0.id == groupID }) else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+
+        // Block sending if we're no longer a member
+        guard isMember(of: group) else {
+            throw ChatError.verificationFailed("You are no longer a member of this group")
+        }
 
         // Build the event synchronously so we have its deterministic ID for the local message.
         let blsPubkey = try keyManager.blsPublicKey
@@ -1658,6 +1734,10 @@ final class AppState {
                 case SEPSaltResponse.messageType:
                     if let response = try? decoder.decode(SEPSaltResponse.self, from: data) {
                         self.storeSalt(groupID: groupID, epoch: response.epoch, salt: response.salt)
+                    }
+                case SEPRekey.messageType:
+                    if let rekey = try? decoder.decode(SEPRekey.self, from: data) {
+                        self.applyRekey(rekey, to: groupID)
                     }
                 case SEPGroupRenamed.messageType:
                     if let renamed = try? decoder.decode(SEPGroupRenamed.self, from: data) {

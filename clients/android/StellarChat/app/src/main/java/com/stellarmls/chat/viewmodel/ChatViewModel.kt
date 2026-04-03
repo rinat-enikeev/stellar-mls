@@ -48,6 +48,12 @@ class ChatViewModel(
     val hasBlossomServers: Boolean
         get() = groupListViewModel.blossomServerURLs.isNotEmpty()
 
+    val isMember: Boolean
+        get() {
+            val g = group ?: return false
+            return groupListViewModel.isMember(g)
+        }
+
     /** ID of the first unread message when the chat was opened. */
     val firstUnreadMessageID: String?
 

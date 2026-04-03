@@ -124,6 +124,24 @@ public struct SEPGroupRenamed: Codable, Equatable, Sendable {
     }
 }
 
+/// Post-removal re-key message. Sent immediately after a member removal state update.
+/// Contains the real salt (the state update carries a poisoned/placeholder salt so the
+/// removed member cannot derive the new encryption key). Encrypted with the key derived
+/// from the poisoned salt — only members still subscribed will receive and process it.
+public struct SEPRekey: Codable, Equatable, Sendable {
+    public static let messageType = "sep_rekey"
+
+    public let type: String
+    public let epoch: UInt64
+    public let salt: Data
+
+    public init(epoch: UInt64, salt: Data) {
+        self.type = Self.messageType
+        self.epoch = epoch
+        self.salt = salt
+    }
+}
+
 /// Delivery acknowledgment sent when a member receives and decrypts a message.
 /// Each device sends at most one ACK per original event ID.
 public struct SEPMessageAck: Codable, Equatable, Sendable {

@@ -413,54 +413,69 @@ fun ChatScreen(
                 }
             }
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(
-                    onClick = {
-                        photoPickerLauncher.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
-                        )
-                    },
-                    enabled = viewModel.hasBlossomServers
+            if (!viewModel.isMember) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        Icons.Filled.Image,
-                        contentDescription = "Pick image",
-                        tint = if (viewModel.hasBlossomServers)
-                            MaterialTheme.colorScheme.primary
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    Text(
+                        text = "You were removed from this group",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                TextField(
-                    value = viewModel.inputText,
-                    onValueChange = { viewModel.inputText = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Message...") },
-                    singleLine = true
-                )
-                if (viewModel.inputText.isBlank()) {
-                    com.stellarmls.chat.ui.components.VoiceRecordButton(
-                        hasBlossomServers = viewModel.hasBlossomServers,
-                        onSend = { file -> viewModel.sendVoice(file) },
-                        modifier = Modifier.padding(12.dp)
-                    )
-                } else {
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     IconButton(
                         onClick = {
-                            view.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM)
-                            viewModel.sendMessage()
-                        }
+                            photoPickerLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                            )
+                        },
+                        enabled = viewModel.hasBlossomServers
                     ) {
                         Icon(
-                            Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "Send",
-                            tint = MaterialTheme.colorScheme.primary
+                            Icons.Filled.Image,
+                            contentDescription = "Pick image",
+                            tint = if (viewModel.hasBlossomServers)
+                                MaterialTheme.colorScheme.primary
+                            else
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                         )
+                    }
+                    TextField(
+                        value = viewModel.inputText,
+                        onValueChange = { viewModel.inputText = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Message...") },
+                        singleLine = true
+                    )
+                    if (viewModel.inputText.isBlank()) {
+                        com.stellarmls.chat.ui.components.VoiceRecordButton(
+                            hasBlossomServers = viewModel.hasBlossomServers,
+                            onSend = { file -> viewModel.sendVoice(file) },
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    } else {
+                        IconButton(
+                            onClick = {
+                                view.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM)
+                                viewModel.sendMessage()
+                            }
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Send",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
                 }
             }

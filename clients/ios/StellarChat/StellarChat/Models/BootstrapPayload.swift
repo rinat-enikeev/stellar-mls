@@ -1,7 +1,8 @@
 import Foundation
 import SwiftMLS
 
-/// NIP-XX bootstrap payload — the decrypted content of a kind 24113 invitation.
+/// NIP-XX bootstrap payload — the decrypted content of a SEP invitation event
+/// (kind 34113 in the current transport, with legacy 24113 receive support).
 /// Contains everything a recipient needs to join the group.
 struct BootstrapPayload: Codable, Equatable {
     let groupID: Data           // 32 bytes

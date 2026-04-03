@@ -56,7 +56,7 @@ public struct SEPInvitationSendOptions: Equatable, Sendable {
     public let additionalTags: [[String]]
 
     public init(
-        kind: Int = 24_113,
+        kind: Int = 34_113,
         createdAt: Int64? = nil,
         additionalTags: [[String]] = []
     ) {

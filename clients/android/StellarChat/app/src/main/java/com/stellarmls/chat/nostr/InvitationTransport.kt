@@ -19,7 +19,8 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Kind 24113 invitation send/receive over Nostr relays.
+ * Kind 34113 invitation send/receive over Nostr relays.
+ * Still listens for legacy kind 24113 events during migration.
  * Uses X25519 ECDH + AES-256-GCM for invitation encryption.
  */
 class InvitationTransport(private val keyManager: KeyManager) {

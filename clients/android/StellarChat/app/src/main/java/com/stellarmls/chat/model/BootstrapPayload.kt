@@ -9,7 +9,8 @@ import org.json.JSONObject
 import java.util.Date
 
 /**
- * NIP-XX bootstrap payload — the decrypted content of a kind 24113 invitation.
+ * NIP-XX bootstrap payload — the decrypted content of a SEP invitation event
+ * (kind 34113 in the current transport, with legacy 24113 receive support).
  * Contains everything a recipient needs to join the group.
  */
 data class BootstrapPayload(

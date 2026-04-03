@@ -1,7 +1,8 @@
 import CryptoKit
 import Foundation
 
-/// Sends and receives kind 24113 invitation events over Nostr relays.
+/// Sends kind 34113 invitation events over Nostr relays and still listens for
+/// legacy kind 24113 events during migration.
 @Observable
 final class InvitationTransport {
     private static let primaryKind = 34113

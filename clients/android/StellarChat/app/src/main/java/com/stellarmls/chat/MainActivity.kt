@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
@@ -117,7 +118,9 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
         NavHost(
             navController = navController,
             startDestination = defaultTab.route,
-            modifier = Modifier.padding(padding)
+            modifier = Modifier
+                .padding(padding)
+                .consumeWindowInsets(padding)
         ) {
             composable("contacts") {
                 ContactsScreen(

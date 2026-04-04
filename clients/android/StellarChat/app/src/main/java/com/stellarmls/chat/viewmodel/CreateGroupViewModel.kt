@@ -17,6 +17,7 @@ import com.stellarmls.chat.nostr.InvitationTransport
 import com.stellarmls.mls.SEPCommitmentBuilder
 import com.stellarmls.mls.SEPTier
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -219,7 +220,8 @@ class CreateGroupViewModel : ViewModel() {
         if (participantKeys.isEmpty()) return
         phase = CreationPhase.INVITING
 
-        for (key in participantKeys) {
+        for ((index, key) in participantKeys.withIndex()) {
+            if (index > 0) delay(500) // Space out relay publishes to avoid rate limiting
             invitationStatuses[key] = InvitationStatus.Sending
             try {
                 val pubkeyBytes = key.hexToBytes()

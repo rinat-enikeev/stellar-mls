@@ -137,13 +137,19 @@ final class InvitationTransport {
         )
 
         let conns = Array(connections.values)
-        let published = await withTaskGroup(of: Bool.self) { group in
+        let accepted = await withTaskGroup(of: Bool.self) { group in
             for conn in conns {
                 group.addTask {
                     do {
-                        try await conn.publish(event: event)
-                        return true
+                        let ok = try await conn.publishAndAwaitOK(event: event)
+                        #if DEBUG
+                        print("[Invite] publishAndAwaitOK: relay ok=\(ok) eventID=\(event.id.prefix(12))")
+                        #endif
+                        return ok
                     } catch {
+                        #if DEBUG
+                        print("[Invite] publishAndAwaitOK failed: \(error)")
+                        #endif
                         return false
                     }
                 }
@@ -155,7 +161,7 @@ final class InvitationTransport {
             return any
         }
 
-        if !published {
+        if !accepted {
             throw ChatError.relayPublishFailed
         }
     }
@@ -178,13 +184,15 @@ final class InvitationTransport {
         guard !conns.isEmpty else {
             throw ChatError.relayPublishFailed
         }
-        let published = await withTaskGroup(of: Bool.self) { group in
+        let accepted = await withTaskGroup(of: Bool.self) { group in
             for conn in conns {
                 group.addTask {
                     do {
-                        try await conn.publish(event: event)
-                        return true
+                        return try await conn.publishAndAwaitOK(event: event)
                     } catch {
+                        #if DEBUG
+                        print("[Invite] publishToRelays: relay publish failed: \(error)")
+                        #endif
                         return false
                     }
                 }
@@ -196,9 +204,9 @@ final class InvitationTransport {
             return any
         }
         #if DEBUG
-        print("[Invite] publishToRelays: eventID=\(event.id.prefix(12)) kind=\(event.kind) relays=\(conns.count) published=\(published)")
+        print("[Invite] publishToRelays: eventID=\(event.id.prefix(12)) kind=\(event.kind) relays=\(conns.count) accepted=\(accepted)")
         #endif
-        if !published {
+        if !accepted {
             throw ChatError.relayPublishFailed
         }
     }

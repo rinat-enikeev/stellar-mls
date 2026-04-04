@@ -55,7 +55,6 @@ fun InviteMemberScreen(
     val scope = rememberCoroutineScope()
     var recipientKey by remember { mutableStateOf("") }
     var status by remember { mutableStateOf<String?>(null) }
-    var isSending by remember { mutableStateOf(false) }
     var showScanner by remember { mutableStateOf(false) }
 
     if (showScanner) {
@@ -134,51 +133,31 @@ fun InviteMemberScreen(
 
             Button(
                 onClick = {
-                    isSending = true
                     status = null
-                    scope.launch {
-                        try {
-                            val pubkeyBytes = recipientKey.trim().hexToBytes()
-                            require(pubkeyBytes.size == 32) { "Key must be 32 bytes (64 hex chars)" }
-                            val payload = BootstrapPayload.from(group, keyManager.publicKeyHex)
-                            if (BuildConfig.DEBUG) {
-                                val root = SEPCommitmentBuilder.computeMerkleRoot(group.members, group.tier)
-                                val poseidon = SEPCommitmentBuilder.computePoseidonCommitment(root, group.epoch, group.salt)
-                                val firstMember = group.members.firstOrNull()
-                                Log.d(
-                                    "InviteMember",
-                                    "sendInvitation group=${group.groupIDData.debugHexPrefix(12)} " +
-                                        "epoch=${group.epoch} tier=${group.tier.id} members=${group.members.size} " +
-                                        "salt=${group.salt.debugHexPrefix(12)} " +
-                                        "payloadCommitment=${payload.commitment?.debugHexPrefix(12) ?: "none"} " +
-                                        "poseidon=${poseidon.debugHexPrefix(12)} " +
-                                        "firstPk=${firstMember?.publicKeyCompressed?.debugHexPrefix(12) ?: "none"} " +
-                                        "firstLeaf=${firstMember?.leafHash?.debugHexPrefix(12) ?: "none"}"
-                                )
-                            }
-                            withContext(Dispatchers.IO) {
-                                if (BuildConfig.DEBUG) {
-                                    val recipientInboxTag = com.stellarmls.chat.crypto.GroupCrypto.hiddenInboxTag(pubkeyBytes)
-                                    Log.d(
-                                        "InviteMember",
-                                        "recipientPubkey=${pubkeyBytes.debugHexPrefix(12)} recipientInboxTag=$recipientInboxTag"
-                                    )
+                    try {
+                        val pubkeyBytes = recipientKey.trim().hexToBytes()
+                        require(pubkeyBytes.size == 32) { "Key must be 32 bytes (64 hex chars)" }
+                        val payload = BootstrapPayload.from(group, keyManager.publicKeyHex)
+                        // Fire-and-forget: send in background
+                        scope.launch {
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    invitationTransport.sendInvitation(payload, pubkeyBytes, keyManager)
                                 }
-                                invitationTransport.sendInvitation(payload, pubkeyBytes, keyManager)
+                            } catch (e: Exception) {
+                                if (BuildConfig.DEBUG) Log.w("InviteMember", "send failed: ${e.message}")
                             }
-                            status = "Invitation sent!"
-                            Toast.makeText(context, "Invitation sent", Toast.LENGTH_SHORT).show()
-                        } catch (e: Exception) {
-                            status = "Error: ${e.message}"
-                        } finally {
-                            isSending = false
                         }
+                        status = "Invitation sent!"
+                        Toast.makeText(context, "Invitation sent", Toast.LENGTH_SHORT).show()
+                    } catch (e: Exception) {
+                        status = "Error: ${e.message}"
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = recipientKey.length == 64 && !isSending
+                enabled = recipientKey.length == 64
             ) {
-                Text(if (isSending) "Sending..." else "Send Invitation")
+                Text("Send Invitation")
             }
 
             status?.let { s ->

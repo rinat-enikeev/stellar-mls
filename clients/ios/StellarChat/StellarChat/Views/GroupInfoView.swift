@@ -16,7 +16,6 @@ struct GroupInfoView: View {
     // Invite member
     @State private var recipientInboxKey = ""
     @State private var inviteStatus: String?
-    @State private var isSendingInvite = false
     @State private var showScanner = false
 
     // Copy invite link
@@ -97,15 +96,9 @@ struct GroupInfoView: View {
                         Button {
                             sendInvitation()
                         } label: {
-                            HStack {
-                                Text("Send Invitation")
-                                if isSendingInvite {
-                                    Spacer()
-                                    ProgressView()
-                                }
-                            }
+                            Text("Send Invitation")
                         }
-                        .disabled(recipientInboxKey.count != 64 || isSendingInvite)
+                        .disabled(recipientInboxKey.count != 64)
 
                         if let inviteStatus {
                             Text(inviteStatus)
@@ -398,30 +391,22 @@ struct GroupInfoView: View {
             return
         }
 
-        isSendingInvite = true
         inviteStatus = nil
 
+        // Fire-and-forget: validate synchronously, send in background
+        let payload = BootstrapPayload.from(
+            group: group,
+            senderPubkey: appState.keyManager.publicKeyHex
+        )
         Task {
-            do {
-                let payload = BootstrapPayload.from(
-                    group: group,
-                    senderPubkey: appState.keyManager.publicKeyHex
-                )
-
-                await appState.invitationTransport.connect(to: appState.relayURLs)
-
-                try await appState.invitationTransport.sendInvitation(
-                    payload: payload,
-                    recipientKeyAgreementPubkey: recipientPubkeyData,
-                    keyManager: appState.keyManager
-                )
-
-                inviteStatus = "Sent! The recipient will see this in their pending invitations."
-            } catch {
-                inviteStatus = "Error: \(error.localizedDescription)"
-            }
-            isSendingInvite = false
+            await appState.invitationTransport.connect(to: appState.relayURLs)
+            try? await appState.invitationTransport.sendInvitation(
+                payload: payload,
+                recipientKeyAgreementPubkey: recipientPubkeyData,
+                keyManager: appState.keyManager
+            )
         }
+        inviteStatus = "Invitation sent!"
     }
 
     private func rotateKey() {

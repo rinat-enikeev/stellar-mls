@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import com.stellarmls.chat.model.ChatGroup
 import com.stellarmls.chat.model.EpochSnapshot
 import com.stellarmls.chat.model.toHex
+import com.stellarmls.chat.ui.components.QRScannerView
 import com.stellarmls.mls.SEPGroupMemberLeaf
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -87,8 +88,21 @@ fun GroupInfoScreen(
     // Invite member state
     var recipientKey by remember { mutableStateOf("") }
     var inviteStatus by remember { mutableStateOf<String?>(null) }
-    var isSendingInvite by remember { mutableStateOf(false) }
     var inviteLinkCopied by remember { mutableStateOf(false) }
+    var showScanner by remember { mutableStateOf(false) }
+
+    if (showScanner) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            QRScannerView { scannedCode ->
+                val trimmed = scannedCode.trim()
+                if (trimmed.length == 64 && trimmed.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
+                    recipientKey = trimmed
+                }
+                showScanner = false
+            }
+        }
+        return
+    }
 
     Scaffold(
         topBar = {
@@ -207,33 +221,39 @@ fun GroupInfoScreen(
                             textStyle = MaterialTheme.typography.bodySmall
                         )
                         Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedButton(
-                            onClick = {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                val clip = clipboard.primaryClip
-                                if (clip != null && clip.itemCount > 0) {
-                                    recipientKey = clip.getItemAt(0).text?.toString()?.trim() ?: ""
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Paste from Clipboard")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    val clip = clipboard.primaryClip
+                                    if (clip != null && clip.itemCount > 0) {
+                                        recipientKey = clip.getItemAt(0).text?.toString()?.trim() ?: ""
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Paste")
+                            }
+                            OutlinedButton(
+                                onClick = { showScanner = true },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Scan QR")
+                            }
                         }
                         Spacer(modifier = Modifier.height(8.dp))
                         Button(
                             onClick = {
-                                isSendingInvite = true
                                 inviteStatus = null
                                 onSendInvitation(recipientKey.trim()) { result ->
-                                    isSendingInvite = false
                                     result.onSuccess { inviteStatus = "Invitation sent!" }
                                     result.onFailure { inviteStatus = "Error: ${it.message}" }
                                 }
                             },
                             modifier = Modifier.fillMaxWidth(),
-                            enabled = recipientKey.trim().length == 64 && !isSendingInvite
+                            enabled = recipientKey.trim().length == 64
                         ) {
-                            Text(if (isSendingInvite) "Sending..." else "Send Invitation")
+                            Text("Send Invitation")
                         }
                         inviteStatus?.let { status ->
                             Spacer(modifier = Modifier.height(4.dp))

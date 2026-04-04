@@ -53,9 +53,9 @@ import com.stellarmls.mls.SEPTier
 import com.stellarmls.mls.SEPSaltRequest
 import com.stellarmls.mls.SEPSaltResponse
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.SecureRandom
@@ -186,7 +186,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     /** Kind-aware event router. Prevents wrong-transport bugs by routing based on event kind.
      *  kind 34113 → invitationTransport (inbox, per-recipient)
      *  kind 44114 → transport (group broadcast) */
-    private fun publishEvent(event: NostrEvent, relayURLs: List<String> = emptyList()) {
+    private suspend fun publishEvent(event: NostrEvent, relayURLs: List<String> = emptyList()) {
         when (event.kind) {
             34113 -> invitationTransport.publishToRelays(event, relayURLs)
             44114 -> transport.publish(event)
@@ -1828,7 +1828,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     viewModelScope.launch {
                         var invitedCount = 0
                         var failedCount = 0
-                        for (member in otherMembers) {
+                        for ((index, member) in otherMembers.withIndex()) {
+                            if (index > 0) delay(500) // Space out relay publishes to avoid rate limiting
                             val hex = member.publicKeyCompressed.toHex()
                             val bundle = originalBundles[hex]
                             if (bundle == null) { failedCount++; continue }
@@ -2056,24 +2057,28 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         transport.sendProtocolMessage(group, json.toString())
     }
 
-    /** Send an invitation for a group to a recipient identified by their X25519 inbox key hex. */
+    /** Send an invitation for a group to a recipient identified by their X25519 inbox key hex.
+     *  Fire-and-forget: validates inputs synchronously, then sends in background. */
     fun sendInvitation(groupID: String, recipientKeyHex: String, onResult: (Result<Unit>) -> Unit) {
-        viewModelScope.launch {
-            try {
-                val group = groups.find { it.id == groupID }
-                    ?: throw IllegalStateException("Group not found")
-                val pubkeyBytes = recipientKeyHex.hexToBytes()
-                require(pubkeyBytes.size == 32) { "Key must be 32 bytes (64 hex chars)" }
-                val payload = BootstrapPayload.from(group, keyManager.publicKeyHex)
-                withTimeout(15_000) {
+        try {
+            val group = groups.find { it.id == groupID }
+                ?: throw IllegalStateException("Group not found")
+            val pubkeyBytes = recipientKeyHex.hexToBytes()
+            require(pubkeyBytes.size == 32) { "Key must be 32 bytes (64 hex chars)" }
+            val payload = BootstrapPayload.from(group, keyManager.publicKeyHex)
+            // Fire-and-forget: send in background, report success immediately
+            viewModelScope.launch {
+                try {
                     withContext(Dispatchers.IO) {
                         invitationTransport.sendInvitation(payload, pubkeyBytes, keyManager)
                     }
+                } catch (e: Exception) {
+                    if (BuildConfig.DEBUG) Log.w("GroupListVM", "sendInvitation failed: ${e.message}")
                 }
-                onResult(Result.success(Unit))
-            } catch (e: Exception) {
-                onResult(Result.failure(e))
             }
+            onResult(Result.success(Unit))
+        } catch (e: Exception) {
+            onResult(Result.failure(e))
         }
     }
 

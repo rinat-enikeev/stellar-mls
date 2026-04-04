@@ -456,7 +456,8 @@ struct CreateGroupView: View {
         Task {
             await transport.connect(to: relayURLs)
 
-            for key in keys {
+            for (index, key) in keys.enumerated() {
+                if index > 0 { try? await Task.sleep(nanoseconds: 500_000_000) } // Space out relay publishes
                 do {
                     guard let pubkeyData = hexToData(key), pubkeyData.count == 32 else {
                         invitationStatuses[key] = .failed("Invalid key format")

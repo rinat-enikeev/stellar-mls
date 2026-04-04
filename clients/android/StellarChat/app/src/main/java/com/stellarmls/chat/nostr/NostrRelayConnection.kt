@@ -1,9 +1,11 @@
 package com.stellarmls.chat.nostr
 
 import com.stellarmls.chat.crypto.NostrEvent
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -33,6 +35,7 @@ class NostrRelayConnection(
     /** Called when connection state changes (connected or disconnected). */
     var onConnectionStateChange: ((Boolean) -> Unit)? = null
     @Volatile var isConnected = false
+    private val pendingOKs = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
 
     fun connect() {
         val request = Request.Builder().url(url).build()
@@ -79,6 +82,29 @@ class NostrRelayConnection(
             put(event.toJson())
         }
         webSocket?.send(frame.toString())
+    }
+
+    /** Publish and wait for relay OK confirmation. Returns true if accepted (or timeout). */
+    suspend fun publishAndAwaitOK(event: NostrEvent, timeoutMs: Long = 5000): Boolean {
+        val deferred = CompletableDeferred<Boolean>()
+        pendingOKs[event.id] = deferred
+
+        val frame = JSONArray().apply {
+            put("EVENT")
+            put(event.toJson())
+        }
+        val sent = webSocket?.send(frame.toString()) ?: false
+        if (!sent) {
+            pendingOKs.remove(event.id)
+            return false
+        }
+
+        return withTimeoutOrNull(timeoutMs) {
+            deferred.await()
+        } ?: run {
+            pendingOKs.remove(event.id)
+            true // Treat timeout as success — event was sent, relay just didn't respond
+        }
     }
 
     fun subscribe(subscriptionID: String, filter: JSONObject): Flow<NostrEvent> = callbackFlow {
@@ -129,6 +155,7 @@ class NostrRelayConnection(
                         val accepted = array.getBoolean(2)
                         val reason = if (array.length() >= 4) array.optString(3, "") else ""
                         if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.d("Relay", "OK from $url eventId=${eventId.take(12)} accepted=$accepted reason=$reason")
+                        pendingOKs.remove(eventId)?.complete(accepted)
                         onOK?.invoke(eventId, accepted)
                     }
                 }

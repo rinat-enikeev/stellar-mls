@@ -12,6 +12,7 @@ actor NostrRelayConnection {
     private(set) var isConnected = false
     private var continuations: [AsyncStream<NostrEvent>.Continuation] = []
     private var reconnectAttempts = 0
+    private var pendingOKContinuations: [String: CheckedContinuation<Bool, any Error>] = [:]
     private var pingTask: Task<Void, Never>?
     /// Callback for relay OK responses: (eventID, accepted).
     private var onOKCallback: ((String, Bool) -> Void)?
@@ -95,6 +96,46 @@ actor NostrRelayConnection {
             // First to finish wins — either send completes or timeout fires
             try await group.next()
             group.cancelAll()
+        }
+    }
+
+    /// Publish an event and wait for relay OK confirmation. Returns true if accepted (or timeout).
+    /// Registers the continuation BEFORE publishing to avoid missing fast OK responses.
+    func publishAndAwaitOK(event: NostrEvent) async throws -> Bool {
+        let eventID = event.id
+
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, any Error>) in
+            // Store continuation FIRST so OK response is never missed
+            self.pendingOKContinuations[eventID] = continuation
+
+            // Timeout: assume success if relay doesn't respond within 5s
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(5))
+                guard let self else { return }
+                await self.timeoutPendingOK(eventID: eventID)
+            }
+
+            // Publish asynchronously — if it fails, resume continuation with error
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.publish(event: event)
+                } catch {
+                    await self.failPendingOK(eventID: eventID, error: error)
+                }
+            }
+        }
+    }
+
+    private func timeoutPendingOK(eventID: String) {
+        if let continuation = pendingOKContinuations.removeValue(forKey: eventID) {
+            continuation.resume(returning: true)
+        }
+    }
+
+    private func failPendingOK(eventID: String, error: any Error) {
+        if let continuation = pendingOKContinuations.removeValue(forKey: eventID) {
+            continuation.resume(throwing: error)
         }
     }
 
@@ -229,6 +270,9 @@ actor NostrRelayConnection {
             if array.count >= 3,
                let eventID = array[1] as? String,
                let accepted = array[2] as? Bool {
+                if let continuation = pendingOKContinuations.removeValue(forKey: eventID) {
+                    continuation.resume(returning: accepted)
+                }
                 onOKCallback?(eventID, accepted)
             }
         case "NOTICE":

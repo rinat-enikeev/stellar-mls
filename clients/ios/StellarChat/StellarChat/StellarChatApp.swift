@@ -1614,7 +1614,8 @@ final class AppState {
                 guard let self else { return }
                 var invitedCount = 0
                 var failedCount = 0
-                for member in otherMembers {
+                for (index, member) in otherMembers.enumerated() {
+                    if index > 0 { try? await Task.sleep(nanoseconds: 500_000_000) } // Space out relay publishes
                     let hex = member.publicKeyCompressed.map { String(format: "%02x", $0) }.joined()
                     guard let bundle = originalBundles[hex] else { failedCount += 1; continue }
                     do {

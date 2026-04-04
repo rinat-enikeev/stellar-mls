@@ -9,6 +9,9 @@ import com.stellarmls.chat.model.PendingInvitation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
@@ -105,8 +108,8 @@ class InvitationTransport(private val keyManager: KeyManager) {
         }
     }
 
-    /** Send an invitation to a recipient via their inbox. Throws if no relay accepted. */
-    fun sendInvitation(
+    /** Send an invitation to a recipient via their inbox. Waits for relay OK confirmation. Throws if no relay accepted. */
+    suspend fun sendInvitation(
         payload: BootstrapPayload,
         recipientKeyAgreementPubkey: ByteArray,
         keyManager: KeyManager
@@ -136,22 +139,34 @@ class InvitationTransport(private val keyManager: KeyManager) {
         )
 
         check(connections.isNotEmpty()) { "No relay connections available for sendInvitation" }
-        var published = false
-        for (conn in connections) {
-            if (conn.isConnected) {
-                conn.publish(event)
-                published = true
-            }
+        val results = coroutineScope {
+            connections.filter { it.isConnected }.map { conn ->
+                async {
+                    try {
+                        val ok = conn.publishAndAwaitOK(event)
+                        if (com.stellarmls.chat.BuildConfig.DEBUG) {
+                            android.util.Log.d("InvitationTransport", "sendInvitation: ok=$ok eventID=${event.id.take(12)}")
+                        }
+                        ok
+                    } catch (e: Exception) {
+                        if (com.stellarmls.chat.BuildConfig.DEBUG) {
+                            android.util.Log.w("InvitationTransport", "sendInvitation: relay failed: ${e.message}")
+                        }
+                        false
+                    }
+                }
+            }.awaitAll()
         }
+        val accepted = results.any { it }
         if (com.stellarmls.chat.BuildConfig.DEBUG) {
-            android.util.Log.d("InvitationTransport", "sendInvitation: eventID=${event.id.take(12)} relays=${connections.size} published=$published")
+            android.util.Log.d("InvitationTransport", "sendInvitation: eventID=${event.id.take(12)} relays=${connections.size} accepted=$accepted")
         }
-        check(published) { "No connected relays accepted the invitation event" }
+        check(accepted) { "No connected relays accepted the invitation event" }
     }
 
-    /** Publish a pre-built event to all connected relays. Throws if no relay accepted the event.
+    /** Publish a pre-built event to all connected relays. Waits for relay OK confirmation. Throws if no relay accepted.
      *  Precondition: event.kind must be 34113 (inbox). Use NostrMessageTransport for 44114. */
-    fun publishToRelays(event: NostrEvent, relayURLs: List<String> = emptyList()) {
+    suspend fun publishToRelays(event: NostrEvent, relayURLs: List<String> = emptyList()) {
         check(event.kind == PRIMARY_KIND || event.kind == LEGACY_KIND) {
             "InvitationTransport received non-inbox event kind ${event.kind} — use NostrMessageTransport for group messages"
         }
@@ -167,17 +182,25 @@ class InvitationTransport(private val keyManager: KeyManager) {
         if (com.stellarmls.chat.BuildConfig.DEBUG) {
             android.util.Log.d("InvitationTransport", "publishToRelays: connections=${connections.size}")
         }
-        var published = false
-        for (conn in connections) {
-            if (conn.isConnected) {
-                conn.publish(event)
-                published = true
-            }
+        val results = coroutineScope {
+            connections.filter { it.isConnected }.map { conn ->
+                async {
+                    try {
+                        conn.publishAndAwaitOK(event)
+                    } catch (e: Exception) {
+                        if (com.stellarmls.chat.BuildConfig.DEBUG) {
+                            android.util.Log.w("InvitationTransport", "publishToRelays: relay failed: ${e.message}")
+                        }
+                        false
+                    }
+                }
+            }.awaitAll()
         }
+        val accepted = results.any { it }
         if (com.stellarmls.chat.BuildConfig.DEBUG) {
-            android.util.Log.d("InvitationTransport", "publishToRelays: eventID=${event.id.take(12)} kind=${event.kind} relays=${connections.size} published=$published")
+            android.util.Log.d("InvitationTransport", "publishToRelays: eventID=${event.id.take(12)} kind=${event.kind} relays=${connections.size} accepted=$accepted")
         }
-        if (!published) {
+        if (!accepted) {
             throw IllegalStateException("No connected relays accepted the event")
         }
     }

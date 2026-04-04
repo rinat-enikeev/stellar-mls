@@ -6,7 +6,6 @@ struct InviteMemberView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var recipientInboxKey = ""
     @State private var status: String?
-    @State private var isSending = false
     @State private var showScanner = false
 
     var body: some View {
@@ -60,7 +59,7 @@ struct InviteMemberView: View {
                         Button("Done") { dismiss() }
                     } else {
                         Button("Send") { sendInvitation() }
-                            .disabled(recipientInboxKey.count != 64 || isSending)
+                            .disabled(recipientInboxKey.count != 64)
                     }
                 }
             }
@@ -82,41 +81,22 @@ struct InviteMemberView: View {
             return
         }
 
-        isSending = true
         status = nil
 
+        // Fire-and-forget: validate synchronously, send in background
+        let payload = BootstrapPayload.from(
+            group: group,
+            senderPubkey: appState.keyManager.publicKeyHex
+        )
         Task {
-            do {
-                let payload = BootstrapPayload.from(
-                    group: group,
-                    senderPubkey: appState.keyManager.publicKeyHex
-                )
-                #if DEBUG
-                let firstMember = group.members.first
-                print(
-                    "[Invite] sendInvitation group=\(group.id.prefix(24)) " +
-                    "epoch=\(group.epoch) tier=\(group.tier.rawValue) members=\(group.members.count) " +
-                    "salt=\(group.salt.prefix(12).map { String(format: "%02x", $0) }.joined()) " +
-                    "payloadCommitment=\(payload.commitment?.prefix(12).map { String(format: "%02x", $0) }.joined() ?? "none") " +
-                    "firstPk=\(firstMember?.publicKeyCompressed.prefix(12).map { String(format: "%02x", $0) }.joined() ?? "none") " +
-                    "firstLeaf=\(firstMember?.leafHash.prefix(12).map { String(format: "%02x", $0) }.joined() ?? "none")"
-                )
-                #endif
-
-                await appState.invitationTransport.connect(to: appState.relayURLs)
-
-                try await appState.invitationTransport.sendInvitation(
-                    payload: payload,
-                    recipientKeyAgreementPubkey: recipientPubkeyData,
-                    keyManager: appState.keyManager
-                )
-
-                status = "Sent! The recipient will see this in their pending invitations."
-            } catch {
-                status = "Error: \(error.localizedDescription)"
-            }
-            isSending = false
+            await appState.invitationTransport.connect(to: appState.relayURLs)
+            try? await appState.invitationTransport.sendInvitation(
+                payload: payload,
+                recipientKeyAgreementPubkey: recipientPubkeyData,
+                keyManager: appState.keyManager
+            )
         }
+        status = "Invitation sent!"
     }
 
     private func hexToData(_ hex: String) -> Data? {

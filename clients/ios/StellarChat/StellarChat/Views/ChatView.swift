@@ -22,30 +22,6 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Fork banner
-            if let group = viewModel.group, group.forkedFromGroupID != nil {
-                VStack(spacing: 4) {
-                    HStack {
-                        Image(systemName: "arrow.triangle.branch")
-                        Text("Forked Group")
-                            .fontWeight(.medium)
-                        if let forkEpoch = group.forkedAtEpoch {
-                            Text("from epoch \(forkEpoch)")
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                    }
-                    Text("Messages before the fork are copied from the original group. New messages are independent.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .font(.caption)
-                .padding(.horizontal)
-                .padding(.vertical, 6)
-                .background(Color.purple.opacity(0.12))
-            }
-
             // Epoch pinning banner
             if let group = viewModel.group, let pinned = group.pinnedEpoch,
                let snapshot = appState.epochSnapshots[group.id]?[pinned] {
@@ -152,6 +128,14 @@ struct ChatView: View {
                             withAnimation(.easeOut(duration: 0.2)) {
                                 proxy.scrollTo("bottom-anchor", anchor: .bottom)
                             }
+                        }
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+                        scrollTask?.cancel()
+                        scrollTask = Task {
+                            try? await Task.sleep(for: .milliseconds(100))
+                            guard !Task.isCancelled else { return }
+                            proxy.scrollTo("bottom-anchor", anchor: .bottom)
                         }
                     }
                 }

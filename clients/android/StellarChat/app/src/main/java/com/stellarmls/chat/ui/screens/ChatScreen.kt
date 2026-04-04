@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -69,6 +71,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -133,6 +136,14 @@ fun ChatScreen(
     // Auto-scroll only when user is near bottom
     LaunchedEffect(viewModel.messages.size) {
         if (viewModel.messages.isNotEmpty() && isNearBottom.value) {
+            listState.animateScrollToItem(viewModel.messages.size - 1)
+        }
+    }
+
+    // Scroll to bottom when keyboard appears so latest messages stay visible
+    val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
+    LaunchedEffect(imeBottom) {
+        if (imeBottom > 0 && viewModel.messages.isNotEmpty() && isNearBottom.value) {
             listState.animateScrollToItem(viewModel.messages.size - 1)
         }
     }

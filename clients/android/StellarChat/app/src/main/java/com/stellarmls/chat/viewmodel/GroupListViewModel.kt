@@ -156,8 +156,13 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     private val saltRequestsResponded = java.util.Collections.newSetFromMap(
         java.util.concurrent.ConcurrentHashMap<String, Boolean>()
     )
-    /** Per-group pending epoch transition state. Blocks concurrent mutations. */
+    /** Per-group pending epoch transition state (for UI status). */
     private val pendingTransitions = java.util.concurrent.ConcurrentHashMap<String, PendingTransitionState>()
+    /** Per-group chain publish jobs — stored so they can be cancelled when a newer transition supersedes. */
+    private val chainPublishJobs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
+    /** Last successfully published on-chain state per group — used as proof baseline for the next chain publish. */
+    private data class ChainBaseline(val members: List<SEPGroupMemberLeaf>, val epoch: Long, val salt: ByteArray)
+    private val chainBaseline = java.util.concurrent.ConcurrentHashMap<String, ChainBaseline>()
 
     /** In-memory transport bundle directory: groupID → (blsPubkeyHex → bundle). */
     private val transportBundles = java.util.concurrent.ConcurrentHashMap<String, MutableMap<String, com.stellarmls.mls.SEPMemberTransportBundle>>()
@@ -882,6 +887,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 if (response.accepted) {
                     group.isPublishedOnChain = true
                     updateGroup(group)
+                    // Store on-chain baseline for future epoch transitions
+                    chainBaseline[group.id] = ChainBaseline(group.members.toList(), group.epoch, group.salt.copyOf())
                     onResult(Result.success(Unit))
                 } else {
                     onResult(Result.failure(
@@ -1017,11 +1024,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
         val currentGroup = cloneGroup(groups[index])
 
-        // Block concurrent epoch mutations
-        val pending = pendingTransitions[groupID]
-        if (pending is PendingTransitionState.AwaitingChainConfirmation) {
-            return EpochTransitionResult.SYNC_REQUIRED
-        }
+        // Note: we no longer block transitions when a chain publish is pending.
+        // Local transitions proceed immediately; chain publishes are cancelled and
+        // restarted with the latest state (coalesced).
 
         // Compute candidate next state
         var candidate = cloneGroup(currentGroup)
@@ -1088,6 +1093,55 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         candidate.isPublishedOnChain = currentGroup.isPublishedOnChain
         groups[index] = candidate
         storeSalt(groupID, candidate.epoch, candidate.salt)
+
+        // --- Async chain sync (non-blocking, coalesced) ---
+        // Launch BEFORE the Nostr broadcast so the chain publish isn't gated
+        // by relay round-trips.
+        if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain sync check: isPublishedOnChain=${currentGroup.isPublishedOnChain} onChainService=${onChainService != null} group=${groupID.take(8)} newEpoch=${candidate.epoch}")
+        if (currentGroup.isPublishedOnChain && onChainService != null) {
+            chainPublishJobs[groupID]?.cancel()
+            val targetEpoch = candidate.epoch
+            pendingTransitions[groupID] = PendingTransitionState.AwaitingChainConfirmation(targetEpoch)
+            val baseline = chainBaseline[groupID]
+            val baselineGroup = if (baseline != null) {
+                val g = cloneGroup(currentGroup)
+                g.members.clear()
+                g.members.addAll(baseline.members)
+                g.epoch = baseline.epoch
+                g.salt = baseline.salt
+                g
+            } else {
+                cloneGroup(currentGroup)
+            }
+            val chainCandidate = cloneGroup(candidate)
+            if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain sync STARTING: baselineEpoch=${baselineGroup.epoch} targetEpoch=$targetEpoch baselineMembers=${baselineGroup.members.size} candidateMembers=${chainCandidate.members.size} hasStoredBaseline=${baseline != null}")
+            chainPublishJobs[groupID] = viewModelScope.launch {
+                if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain sync Task EXECUTING for epoch=$targetEpoch group=${groupID.take(8)}")
+                try {
+                    val result = publishMembershipUpdateIfNeeded(baselineGroup, chainCandidate)
+                    if (result.isSuccess) {
+                        chainBaseline[groupID] = ChainBaseline(
+                            chainCandidate.members.toList(), chainCandidate.epoch, chainCandidate.salt.copyOf()
+                        )
+                        if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain sync SUCCEEDED epoch=${chainCandidate.epoch} group=${groupID.take(8)}")
+                    } else {
+                        if (BuildConfig.DEBUG) Log.e("GroupListVM", "Chain sync FAILED epoch=${chainCandidate.epoch} baselineEpoch=${baselineGroup.epoch} group=${groupID.take(8)} error=${result.exceptionOrNull()?.message}")
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain sync CANCELLED (superseded) epoch=${chainCandidate.epoch} group=${groupID.take(8)}")
+                } catch (e: Exception) {
+                    if (BuildConfig.DEBUG) Log.e("GroupListVM", "Chain sync FAILED epoch=${chainCandidate.epoch} baselineEpoch=${baselineGroup.epoch} group=${groupID.take(8)} error=${e.message}", e)
+                } finally {
+                    val current = pendingTransitions[groupID]
+                    if (current is PendingTransitionState.AwaitingChainConfirmation && current.targetEpoch == targetEpoch) {
+                        pendingTransitions[groupID] = PendingTransitionState.Idle
+                    }
+                    chainPublishJobs.remove(groupID)
+                }
+            }
+        } else {
+            if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain sync SKIPPED: isPublishedOnChain=${currentGroup.isPublishedOnChain} onChainService=${onChainService != null} group=${groupID.take(8)}")
+        }
 
         // Sync transport and ensure subscription uses the latest key.
         // This must happen BEFORE the secure rekey / legacy blocks so A can
@@ -1219,30 +1273,6 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             }
             is EpochTransitionKind.KeyRotation -> {
                 insertSystemMessage(groupID, "Encryption key was rotated", "key-rotation", candidate.epoch)
-            }
-        }
-
-        // --- Async chain sync (non-blocking) ---
-        // Local state and protocol messages are already applied/sent.
-        // Publish to chain in the background so the UI isn't blocked.
-        // Lock transitions during chain publish to prevent races.
-        if (currentGroup.isPublishedOnChain && onChainService != null) {
-            pendingTransitions[groupID] = PendingTransitionState.AwaitingChainConfirmation(candidate.epoch)
-            val chainCurrentGroup = cloneGroup(currentGroup)
-            val chainCandidate = cloneGroup(candidate)
-            viewModelScope.launch {
-                try {
-                    val result = publishMembershipUpdateIfNeeded(chainCurrentGroup, chainCandidate)
-                    if (result.isSuccess) {
-                        if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain sync succeeded for epoch=${chainCandidate.epoch}")
-                    } else {
-                        if (BuildConfig.DEBUG) Log.e("GroupListVM", "Chain sync failed (local state applied): ${result.exceptionOrNull()?.message}")
-                    }
-                } catch (e: Exception) {
-                    if (BuildConfig.DEBUG) Log.e("GroupListVM", "Chain sync error (local state applied): ${e.message}")
-                } finally {
-                    pendingTransitions[groupID] = PendingTransitionState.Idle
-                }
             }
         }
 

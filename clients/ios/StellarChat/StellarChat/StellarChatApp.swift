@@ -89,8 +89,12 @@ final class AppState {
     private var processedProtocolEventIDs: Set<String> = []
     /// Tracks (senderPubkey, epoch) pairs for salt request rate limiting (H-5).
     private var saltRequestsResponded: Set<String> = []
-    /// Per-group pending epoch transition state. Blocks concurrent mutations.
+    /// Per-group pending epoch transition state (for UI status).
     private var pendingTransitions: [String: PendingTransitionState] = [:]
+    /// Per-group chain publish tasks — stored so they can be cancelled when a newer transition supersedes.
+    private var chainPublishTasks: [String: Task<Void, Never>] = [:]
+    /// Last successfully published on-chain state per group — used as proof baseline for the next chain publish.
+    private var chainBaseline: [String: (members: [SEPGroupMemberLeaf], epoch: UInt64, salt: Data)] = [:]
     private static let maxDedupSetSize = 10_000
     /// Pending incoming messages awaiting batch insertion into chatMessages.
     private var pendingIncomingMessages: [(msg: ChatMessage, groupID: String, event: NostrEvent)] = []
@@ -480,6 +484,8 @@ final class AppState {
             var updated = group
             updated.isPublishedOnChain = true
             updateGroup(updated)
+            // Store on-chain baseline for future epoch transitions
+            chainBaseline[group.id] = (members: group.members, epoch: group.epoch, salt: group.salt)
             #if DEBUG
             print("[OnChain] publishGroupOnChain accepted group=\(group.id.prefix(8))")
             #endif
@@ -612,10 +618,9 @@ final class AppState {
         }
         let currentGroup = groups[index]
 
-        // Block concurrent epoch mutations for this group
-        if case .awaitingChainConfirmation = pendingTransitions[groupID] {
-            return .syncRequired
-        }
+        // Note: we no longer block transitions when a chain publish is pending.
+        // Local transitions proceed immediately; chain publishes are cancelled and
+        // restarted with the latest state (coalesced).
 
         // Compute candidate next state
         var candidate = currentGroup
@@ -699,6 +704,66 @@ final class AppState {
         groups[index] = candidate
         store.saveGroup(candidate)
         storeSalt(groupID: groupID, epoch: candidate.epoch, salt: candidate.salt)
+
+        // --- Async chain sync (non-blocking, coalesced) ---
+        // Launch BEFORE the Nostr broadcast so the chain publish isn't gated
+        // by relay round-trips. Cancel any in-flight publish and restart with
+        // the latest state.
+        #if DEBUG
+        print("[EpochTransition] Chain sync check: isPublishedOnChain=\(currentGroup.isPublishedOnChain) onChainService=\(onChainService != nil) group=\(groupID.prefix(8)) newEpoch=\(candidate.epoch)")
+        #endif
+        if currentGroup.isPublishedOnChain, onChainService != nil {
+            chainPublishTasks[groupID]?.cancel()
+            let targetEpoch = candidate.epoch
+            pendingTransitions[groupID] = .awaitingChainConfirmation(targetEpoch: targetEpoch)
+            let chainCandidate = candidate
+            let baseline = chainBaseline[groupID]
+                ?? (members: currentGroup.members, epoch: currentGroup.epoch, salt: currentGroup.salt)
+            #if DEBUG
+            print("[EpochTransition] Chain sync STARTING: baselineEpoch=\(baseline.epoch) targetEpoch=\(targetEpoch) baselineMembers=\(baseline.members.count) candidateMembers=\(chainCandidate.members.count) hasStoredBaseline=\(chainBaseline[groupID] != nil)")
+            #endif
+            chainPublishTasks[groupID] = Task {
+                #if DEBUG
+                print("[EpochTransition] Chain sync Task EXECUTING for epoch=\(targetEpoch) group=\(groupID.prefix(8))")
+                #endif
+                defer {
+                    if case .awaitingChainConfirmation(let t) = self.pendingTransitions[groupID], t == targetEpoch {
+                        self.pendingTransitions[groupID] = .idle
+                    }
+                    if self.chainPublishTasks[groupID]?.isCancelled != false {
+                        self.chainPublishTasks[groupID] = nil
+                    }
+                }
+                do {
+                    try await self.publishMemberUpdate(
+                        group: chainCandidate,
+                        oldMembers: baseline.members,
+                        oldEpoch: baseline.epoch,
+                        oldSalt: baseline.salt
+                    )
+                    self.chainBaseline[groupID] = (
+                        members: chainCandidate.members,
+                        epoch: chainCandidate.epoch,
+                        salt: chainCandidate.salt
+                    )
+                    #if DEBUG
+                    print("[EpochTransition] Chain sync SUCCEEDED epoch=\(chainCandidate.epoch) group=\(groupID.prefix(8))")
+                    #endif
+                } catch is CancellationError {
+                    #if DEBUG
+                    print("[EpochTransition] Chain sync CANCELLED (superseded) epoch=\(chainCandidate.epoch) group=\(groupID.prefix(8))")
+                    #endif
+                } catch {
+                    #if DEBUG
+                    print("[EpochTransition] Chain sync FAILED epoch=\(chainCandidate.epoch) baselineEpoch=\(baseline.epoch) group=\(groupID.prefix(8)) error=\(error)")
+                    #endif
+                }
+            }
+        } else {
+            #if DEBUG
+            print("[EpochTransition] Chain sync SKIPPED: isPublishedOnChain=\(currentGroup.isPublishedOnChain) onChainService=\(onChainService != nil) group=\(groupID.prefix(8))")
+            #endif
+        }
 
         // Sync transport and ensure subscription uses the latest key.
         // This must happen BEFORE the secure rekey / legacy blocks so A can
@@ -867,36 +932,6 @@ final class AppState {
             insertSystemMessage(groupID: groupID, text: "\(name) was removed from the group", event: "member-remove", epoch: candidate.epoch)
         case .keyRotation:
             insertSystemMessage(groupID: groupID, text: "Encryption key was rotated", event: "key-rotation", epoch: candidate.epoch)
-        }
-
-        // --- Async chain sync (non-blocking) ---
-        // Local state and protocol messages are already applied/sent.
-        // Publish to chain in the background so the UI isn't blocked.
-        if currentGroup.isPublishedOnChain, onChainService != nil {
-            // Lock transitions during chain publish to prevent races
-            pendingTransitions[groupID] = .awaitingChainConfirmation(targetEpoch: candidate.epoch)
-            let chainCandidate = candidate
-            let chainOldMembers = currentGroup.members
-            let chainOldEpoch = currentGroup.epoch
-            let chainOldSalt = currentGroup.salt
-            Task {
-                defer { self.pendingTransitions[groupID] = .idle }
-                do {
-                    try await self.publishMemberUpdate(
-                        group: chainCandidate,
-                        oldMembers: chainOldMembers,
-                        oldEpoch: chainOldEpoch,
-                        oldSalt: chainOldSalt
-                    )
-                    #if DEBUG
-                    print("[EpochTransition] Chain sync succeeded for epoch=\(chainCandidate.epoch)")
-                    #endif
-                } catch {
-                    #if DEBUG
-                    print("[EpochTransition] Chain sync failed (local state applied): \(error)")
-                    #endif
-                }
-            }
         }
 
         return .success

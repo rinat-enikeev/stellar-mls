@@ -125,6 +125,7 @@ struct ChatView: View {
                             }
                             .padding()
                         }
+                        .defaultScrollAnchor(.bottom)
 
                         if !isNearBottom {
                             Button {

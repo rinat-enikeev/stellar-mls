@@ -51,3 +51,9 @@ deploy/certbot/webroot/
 
 # Production env
 .env.production
+
+# iOS App Store release automation
+/clients/apple.env
+/clients/fastlane/.appstoreconnect_api_key.json
+/clients/fastlane/.export_options.plist
+/clients/vendor/

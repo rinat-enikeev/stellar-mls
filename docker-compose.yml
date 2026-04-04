@@ -1,3 +1,5 @@
+name: onym
+
 services:
   relayer:
     build:
@@ -42,10 +44,6 @@ services:
       - ./deploy/website:/var/www/website:ro
       - certbot-webroot:/var/www/certbot:ro
       - certbot-certs:/etc/letsencrypt:ro
-    depends_on:
-      - relayer
-      - nostr-relay
-      - blossom
     restart: unless-stopped
     networks:
       - internal
@@ -56,8 +54,6 @@ services:
       - certbot-webroot:/var/www/certbot
       - certbot-certs:/etc/letsencrypt
     entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done'"
-    depends_on:
-      - nginx
     networks:
       - internal
 

@@ -282,8 +282,10 @@ $SSH_CMD "if [ -d /opt/onym-chat/.git ]; then cd /opt/onym-chat && git pull; els
 # Overlay local deploy/ and docker-compose.yml on top of the clone
 # so uncommitted/unpushed changes are always applied
 info "Uploading local config files..."
-$SCP_CMD -r "$REPO_ROOT/docker-compose.yml" "root@$DROPLET_IP:/opt/onym-chat/docker-compose.yml" 2>/dev/null
-$SCP_CMD -r "$REPO_ROOT/deploy/" "root@$DROPLET_IP:/opt/onym-chat/deploy/" 2>/dev/null
+$SSH_CMD "rm -rf /opt/onym-chat/deploy"
+$SCP_CMD -r "$REPO_ROOT/deploy" "root@$DROPLET_IP:/opt/onym-chat/deploy" 2>/dev/null
+$SCP_CMD "$REPO_ROOT/docker-compose.yml" "root@$DROPLET_IP:/opt/onym-chat/docker-compose.yml" 2>/dev/null
+$SCP_CMD "$REPO_ROOT/relayer/Dockerfile" "root@$DROPLET_IP:/opt/onym-chat/relayer/Dockerfile" 2>/dev/null
 
 info "Uploading relayer .env..."
 $SCP_CMD "$REPO_ROOT/relayer/.env" "root@$DROPLET_IP:/opt/onym-chat/relayer/.env" 2>/dev/null
@@ -291,9 +293,6 @@ $SSH_CMD "sed -i 's/^RELAYER_BIND=.*/RELAYER_BIND=0.0.0.0:8080/' /opt/onym-chat/
 
 info "Pulling images and building containers (this may take a few minutes on first run)..."
 $SSH_CMD "cd /opt/onym-chat && docker compose pull --ignore-buildable && docker compose build --pull" 2>&1 | tail -5
-
-info "Starting nginx..."
-$SSH_CMD "cd /opt/onym-chat && docker compose up -d nginx" 2>&1 | tail -5
 
 # ─── Wait for DNS Propagation ─────────────────────────────────────────
 
@@ -325,11 +324,6 @@ echo ""
 
 info "Bootstrapping SSL certificates..."
 $SSH_CMD "cd /opt/onym-chat && bash deploy/certbot/init-certs.sh '$CERTBOT_EMAIL' '$DOMAIN'" 2>&1
-
-# ─── Start All Services ───────────────────────────────────────────────
-
-info "Starting all services..."
-$SSH_CMD "cd /opt/onym-chat && docker compose up -d" 2>&1 | tail -5
 
 # ─── Verify ────────────────────────────────────────────────────────────
 

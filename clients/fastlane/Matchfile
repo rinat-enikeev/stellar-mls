@@ -1,0 +1,9 @@
+git_url(ENV['MATCH_GIT_URL'])
+storage_mode('git')
+
+app_identifier([ENV['MATCH_APP_IDENTIFIER']])
+team_id(ENV['MATCH_TEAM_ID'])
+
+api_key_path(ENV['APP_STORE_CONNECT_API_KEY_PATH'])
+
+readonly(false)

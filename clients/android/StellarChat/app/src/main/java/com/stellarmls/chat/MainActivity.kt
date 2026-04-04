@@ -184,7 +184,10 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                         }
                         cm.startCall(video)
                     },
-                    contactAliasStore = groupListViewModel.contactAliasStore
+                    contactAliasStore = groupListViewModel.contactAliasStore,
+                    onUnpinEpoch = {
+                        groupListViewModel.unpinEpoch(groupId)
+                    }
                 )
 
                 // Show call screen overlay when a call is active
@@ -280,6 +283,13 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                     },
                     onRenameGroup = { newName ->
                         groupListViewModel.renameGroup(groupId, newName)
+                    },
+                    epochSnapshots = groupListViewModel.epochSnapshots[groupId] ?: emptyMap(),
+                    onPinEpoch = { epoch ->
+                        groupListViewModel.pinEpoch(groupId, epoch)
+                    },
+                    onUnpinEpoch = {
+                        groupListViewModel.unpinEpoch(groupId)
                     },
                     onBack = { navController.popBackStack() }
                 )

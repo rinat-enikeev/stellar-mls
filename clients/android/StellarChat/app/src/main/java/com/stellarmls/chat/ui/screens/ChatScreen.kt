@@ -114,7 +114,8 @@ fun ChatScreen(
     onInvite: () -> Unit,
     onGroupInfo: () -> Unit = {},
     onStartCall: (video: Boolean) -> Unit = {},
-    contactAliasStore: com.stellarmls.chat.persistence.ContactAliasStore? = null
+    contactAliasStore: com.stellarmls.chat.persistence.ContactAliasStore? = null,
+    onUnpinEpoch: (() -> Unit)? = null
 ) {
     val groupName = viewModel.groupName
     val listState = rememberLazyListState()
@@ -203,6 +204,30 @@ fun ChatScreen(
                 .padding(padding)
                 .imePadding()
         ) {
+            // Epoch pin banner
+            val pinnedEpoch = viewModel.group?.pinnedEpoch
+            if (pinnedEpoch != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFFFFF3E0)) // orange-tinted background
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Pinned to epoch $pinnedEpoch",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFE65100),
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        onClick = { onUnpinEpoch?.invoke() }
+                    ) {
+                        Text("Unpin", color = Color(0xFFE65100))
+                    }
+                }
+            }
+
             if (viewModel.messages.isEmpty()) {
                 // Empty state
                 Column(

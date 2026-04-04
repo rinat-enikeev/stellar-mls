@@ -73,6 +73,53 @@ struct GroupInfoView: View {
                     }
                 }
 
+                // Epoch History (epoch branching)
+                if let snapshots = appState.epochSnapshots[group.id], !snapshots.isEmpty {
+                    Section("Epoch History") {
+                        let currentGroup = appState.groups.first(where: { $0.id == group.id })
+                        let pinnedEpoch = currentGroup?.pinnedEpoch
+                        let sorted = snapshots.values.sorted { $0.epoch > $1.epoch }
+
+                        if pinnedEpoch != nil {
+                            Button {
+                                appState.unpinEpoch(groupID: group.id)
+                            } label: {
+                                Label("Follow Latest Epoch", systemImage: "arrow.uturn.forward")
+                            }
+                        }
+
+                        ForEach(sorted, id: \.epoch) { snapshot in
+                            Button {
+                                if pinnedEpoch == snapshot.epoch {
+                                    appState.unpinEpoch(groupID: group.id)
+                                } else {
+                                    appState.pinEpoch(groupID: group.id, epoch: snapshot.epoch)
+                                }
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Epoch \(snapshot.epoch)")
+                                            .font(.subheadline)
+                                            .fontWeight(.medium)
+                                        Text(snapshot.changeDescription)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Text("\(snapshot.members.count) members")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    if pinnedEpoch == snapshot.epoch {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.blue)
+                                    }
+                                }
+                            }
+                            .foregroundStyle(.primary)
+                        }
+                    }
+                }
+
                 Section {
                     Button {
                         Task {

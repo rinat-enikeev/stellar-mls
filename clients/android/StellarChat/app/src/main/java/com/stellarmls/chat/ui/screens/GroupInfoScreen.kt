@@ -1,5 +1,6 @@
 package com.stellarmls.chat.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,12 +13,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PersonRemove
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -35,8 +39,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.stellarmls.chat.model.ChatGroup
+import com.stellarmls.chat.model.EpochSnapshot
 import com.stellarmls.chat.model.toHex
 import com.stellarmls.mls.SEPGroupMemberLeaf
 
@@ -48,6 +55,9 @@ fun GroupInfoScreen(
     onRemoveMember: (ByteArray, (Result<Unit>) -> Unit) -> Unit,
     onRotateKey: () -> Unit = {},
     onRenameGroup: (String) -> Unit = {},
+    epochSnapshots: Map<Long, EpochSnapshot> = emptyMap(),
+    onPinEpoch: (Long) -> Unit = {},
+    onUnpinEpoch: () -> Unit = {},
     onBack: () -> Unit
 ) {
     var memberToRemove by remember { mutableStateOf<SEPGroupMemberLeaf?>(null) }
@@ -175,6 +185,67 @@ fun GroupInfoScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 4.dp)
                     )
+                }
+            }
+
+            // Epoch History section
+            if (epochSnapshots.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Epoch History", style = MaterialTheme.typography.titleMedium)
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        if (group.pinnedEpoch != null) {
+                            Button(
+                                onClick = { onUnpinEpoch() },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Follow Latest Epoch")
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+
+                        val sortedSnapshots = epochSnapshots.entries.sortedByDescending { it.key }
+                        for ((epoch, snapshot) in sortedSnapshots) {
+                            val isPinned = group.pinnedEpoch == epoch
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(
+                                        if (isPinned) MaterialTheme.colorScheme.primaryContainer
+                                        else Color.Transparent
+                                    )
+                                    .clickable {
+                                        if (isPinned) onUnpinEpoch() else onPinEpoch(epoch)
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        "Epoch $epoch",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Text(
+                                        "${snapshot.changeDescription} - ${snapshot.members.size} members",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                if (isPinned) {
+                                    Icon(
+                                        Icons.Filled.Check,
+                                        contentDescription = "Pinned",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

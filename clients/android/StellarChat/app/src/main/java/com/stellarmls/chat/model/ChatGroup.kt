@@ -28,7 +28,9 @@ data class ChatGroup(
     var tier: SEPTier = SEPTier.LARGE,
     var isPublishedOnChain: Boolean = false,
     /** Unix timestamp of the last received event, used for offline catch-up. */
-    var lastEventTimestamp: Long = 0
+    var lastEventTimestamp: Long = 0,
+    /** When non-null, the user is pinned to this historical epoch for viewing/sending. */
+    var pinnedEpoch: Long? = null
 ) {
     /** Group ID as raw bytes (hex string → ByteArray). */
     val groupIDData: ByteArray get() = id.hexToBytes()
@@ -86,7 +88,9 @@ data class ChatMessage(
     val isMine: Boolean,
     val status: MessageStatus = MessageStatus.SENT,
     val mediaAttachment: MediaAttachment? = null,
-    val isSystemMessage: Boolean = false
+    val isSystemMessage: Boolean = false,
+    /** The epoch under which this message was encrypted (from the event's epoch tag). */
+    val epoch: Long? = null
 )
 
 /** Encrypted media attachment metadata, embedded inside E2EE message envelopes. */
@@ -107,6 +111,27 @@ data class MediaAttachment(
         return blobHash == other.blobHash
     }
     override fun hashCode(): Int = blobHash.hashCode()
+}
+
+/** Captures group state at a specific epoch for epoch branching.
+ *  Users can pin to a historical epoch to continue communicating with removed members. */
+data class EpochSnapshot(
+    val epoch: Long,
+    val members: List<SEPGroupMemberLeaf>,
+    val salt: ByteArray,
+    val groupSecret: ByteArray,
+    val changeDescription: String
+) {
+    val topicTag: String get() = GroupCrypto.hiddenGroupTopic(groupSecret)
+    fun encryptionKey(): ByteArray = GroupCrypto.deriveMessageKey(groupSecret, epoch, salt)
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is EpochSnapshot) return false
+        return epoch == other.epoch && groupSecret.contentEquals(other.groupSecret)
+    }
+
+    override fun hashCode(): Int = 31 * epoch.hashCode() + groupSecret.contentHashCode()
 }
 
 data class InviteCode(

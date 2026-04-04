@@ -70,9 +70,17 @@ final class NostrMessageTransport {
     }
 
     /// Subscribe to messages for a group topic on all connected relays.
-    /// Subscribe to messages for a group topic on all connected relays.
-    /// - Parameter sinceTimestamp: Unix timestamp for catch-up. Defaults to 5 minutes ago.
-    func subscribe(topic: String, groupID: String, key: SymmetricKey, sinceTimestamp: Int64? = nil) {
+    /// - Parameters:
+    ///   - keyResolver: Resolves an encryption key for a specific epoch. Used for multi-epoch decryption.
+    ///   - defaultKey: Fallback key for messages without an epoch tag (legacy messages).
+    ///   - sinceTimestamp: Unix timestamp for catch-up. Defaults to 5 minutes ago.
+    func subscribe(
+        topic: String,
+        groupID: String,
+        keyResolver: @escaping (UInt64) -> SymmetricKey?,
+        defaultKey: SymmetricKey,
+        sinceTimestamp: Int64? = nil
+    ) {
         let topicKey = "chat-\(topic)"
 
         // Cancel existing subscription task for this topic
@@ -104,7 +112,7 @@ final class NostrMessageTransport {
                             // Spawn a detached task per event so crypto/JSON parsing
                             // runs concurrently and doesn't block the relay stream.
                             Task.detached { [weak self] in
-                                self?.handleIncomingEvent(event, groupID: groupID, key: key)
+                                self?.handleIncomingEvent(event, groupID: groupID, keyResolver: keyResolver, defaultKey: defaultKey)
                             }
                         }
                     }
@@ -115,13 +123,28 @@ final class NostrMessageTransport {
     }
 
     /// Process a single incoming Nostr event: decrypt, unwrap BLS, route to chat or protocol handler.
-    private func handleIncomingEvent(_ event: NostrEvent, groupID: String, key: SymmetricKey) {
+    private func handleIncomingEvent(
+        _ event: NostrEvent,
+        groupID: String,
+        keyResolver: @escaping (UInt64) -> SymmetricKey?,
+        defaultKey: SymmetricKey
+    ) {
         guard let envelopeData = Data(base64Encoded: event.content) else {
             return
         }
         guard let envelope = try? JSONDecoder().decode(SealedEnvelope.self, from: envelopeData) else {
             return
         }
+
+        // Resolve decryption key: prefer epoch-tagged key, fall back to default
+        let epochTag = event.tags.first(where: { $0.first == "epoch" }).flatMap { $0.dropFirst().first }
+        let key: SymmetricKey
+        if let epochStr = epochTag, let epoch = UInt64(epochStr), let resolved = keyResolver(epoch) {
+            key = resolved
+        } else {
+            key = defaultKey
+        }
+
         do {
             let plaintext = try GroupCrypto.decrypt(envelope, key: key)
             guard let wrapperData = plaintext.data(using: .utf8),

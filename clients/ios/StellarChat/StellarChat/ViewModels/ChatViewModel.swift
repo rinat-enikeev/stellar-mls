@@ -14,7 +14,11 @@ final class ChatViewModel {
     private weak var appState: AppState?
 
     var messages: [ChatMessage] {
-        appState?.chatMessages[groupID] ?? []
+        let all = appState?.chatMessages[groupID] ?? []
+        guard let pinned = appState?.groups.first(where: { $0.id == groupID })?.pinnedEpoch else {
+            return all
+        }
+        return all.filter { $0.epoch == pinned || $0.isSystemMessage }
     }
 
     var group: ChatGroup? {

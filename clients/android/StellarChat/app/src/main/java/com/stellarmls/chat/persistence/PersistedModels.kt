@@ -16,7 +16,8 @@ data class PersistedGroup(
     val encryptedSalt: ByteArray,
     val encryptedCommitment: ByteArray?,
     val tierRawValue: Int,            // cleartext
-    val isPublishedOnChain: Boolean = false
+    val isPublishedOnChain: Boolean = false,
+    val pinnedEpoch: Int? = null
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -52,7 +53,8 @@ data class PersistedMessage(
     val isMine: Boolean,              // cleartext
     val encryptedMediaAttachment: ByteArray? = null,
     @ColumnInfo(defaultValue = "0")
-    val isSystemMessage: Boolean = false
+    val isSystemMessage: Boolean = false,
+    val epoch: Int? = null
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -97,4 +99,22 @@ data class PersistedPendingRekey(
     }
 
     override fun hashCode(): Int = id.hashCode()
+}
+
+@Entity(tableName = "epoch_snapshots", primaryKeys = ["groupID", "epoch"])
+data class PersistedEpochSnapshot(
+    val groupID: String,
+    val epoch: Int,
+    val encryptedMembers: ByteArray,
+    val encryptedSalt: ByteArray,
+    val encryptedGroupSecret: ByteArray,
+    val changeDescription: String
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is PersistedEpochSnapshot) return false
+        return groupID == other.groupID && epoch == other.epoch
+    }
+
+    override fun hashCode(): Int = 31 * groupID.hashCode() + epoch
 }

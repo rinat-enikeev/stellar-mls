@@ -24,6 +24,30 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Epoch pinning banner
+            if let group = viewModel.group, let pinned = group.pinnedEpoch {
+                let memberCount = appState.epochSnapshots[group.id]?[pinned]?.members.count ?? 0
+                HStack {
+                    Image(systemName: "arrow.triangle.branch")
+                    Text("Pinned to epoch \(pinned)")
+                        .fontWeight(.medium)
+                    if memberCount > 0 {
+                        Text("\(memberCount) members")
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Unpin") {
+                        appState.unpinEpoch(groupID: group.id)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .font(.caption)
+                .padding(.horizontal)
+                .padding(.vertical, 6)
+                .background(Color.orange.opacity(0.15))
+            }
+
             if viewModel.messages.isEmpty {
                 Spacer()
                 ContentUnavailableView(

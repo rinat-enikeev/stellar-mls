@@ -4,6 +4,7 @@ import android.content.Context
 import com.stellarmls.chat.crypto.StorageEncryption
 import com.stellarmls.chat.model.ChatGroup
 import com.stellarmls.chat.model.ChatMessage
+import com.stellarmls.chat.model.EpochSnapshot
 import com.stellarmls.chat.model.toHex
 import com.stellarmls.mls.SEPGroupMemberLeaf
 import com.stellarmls.mls.SEPTier
@@ -30,6 +31,7 @@ class PersistenceStore(context: Context) {
     suspend fun deleteGroup(id: String) {
         dao.deleteGroup(id)
         dao.deleteMessages(id)
+        dao.deleteEpochSnapshots(id)
     }
 
     suspend fun loadMessages(groupID: String): List<ChatMessage> {
@@ -143,7 +145,8 @@ class PersistenceStore(context: Context) {
             encryptedSalt = StorageEncryption.encrypt(group.salt),
             encryptedCommitment = group.commitment?.let { StorageEncryption.encrypt(it) },
             tierRawValue = group.tier.id,
-            isPublishedOnChain = group.isPublishedOnChain
+            isPublishedOnChain = group.isPublishedOnChain,
+            pinnedEpoch = group.pinnedEpoch?.toInt()
         )
     }
 
@@ -170,7 +173,8 @@ class PersistenceStore(context: Context) {
             salt = salt,
             commitment = commitment,
             tier = tier,
-            isPublishedOnChain = persisted.isPublishedOnChain
+            isPublishedOnChain = persisted.isPublishedOnChain,
+            pinnedEpoch = persisted.pinnedEpoch?.toLong()
         )
     }
 
@@ -187,7 +191,8 @@ class PersistenceStore(context: Context) {
             timestamp = message.timestamp.time,
             isMine = message.isMine,
             encryptedMediaAttachment = encMedia,
-            isSystemMessage = message.isSystemMessage
+            isSystemMessage = message.isSystemMessage,
+            epoch = message.epoch?.toInt()
         )
     }
 
@@ -206,7 +211,8 @@ class PersistenceStore(context: Context) {
             timestamp = Date(persisted.timestamp),
             isMine = persisted.isMine,
             mediaAttachment = media,
-            isSystemMessage = persisted.isSystemMessage
+            isSystemMessage = persisted.isSystemMessage,
+            epoch = persisted.epoch?.toLong()
         )
     }
 
@@ -243,6 +249,57 @@ class PersistenceStore(context: Context) {
                 ?.let { android.util.Base64.decode(it, android.util.Base64.NO_WRAP) },
             duration = obj.optInt("duration", -1).takeIf { it >= 0 }
         )
+    }
+
+    // -- Epoch Snapshot persistence --
+
+    suspend fun saveEpochSnapshot(snapshot: EpochSnapshot, groupID: String) {
+        val membersJson = serializeMembers(snapshot.members)
+        dao.saveEpochSnapshot(PersistedEpochSnapshot(
+            groupID = groupID,
+            epoch = snapshot.epoch.toInt(),
+            encryptedMembers = StorageEncryption.encrypt(membersJson.toByteArray()),
+            encryptedSalt = StorageEncryption.encrypt(snapshot.salt),
+            encryptedGroupSecret = StorageEncryption.encrypt(snapshot.groupSecret),
+            changeDescription = snapshot.changeDescription
+        ))
+    }
+
+    suspend fun loadEpochSnapshots(groupID: String): Map<Long, EpochSnapshot> {
+        val result = mutableMapOf<Long, EpochSnapshot>()
+        for (persisted in dao.loadEpochSnapshots(groupID)) {
+            try {
+                val members = deserializeMembers(
+                    String(StorageEncryption.decrypt(persisted.encryptedMembers))
+                )
+                val salt = StorageEncryption.decrypt(persisted.encryptedSalt)
+                val groupSecret = StorageEncryption.decrypt(persisted.encryptedGroupSecret)
+                result[persisted.epoch.toLong()] = EpochSnapshot(
+                    epoch = persisted.epoch.toLong(),
+                    members = members,
+                    salt = salt,
+                    groupSecret = groupSecret,
+                    changeDescription = persisted.changeDescription
+                )
+            } catch (_: Exception) { }
+        }
+        return result
+    }
+
+    suspend fun deleteEpochSnapshots(groupID: String) {
+        dao.deleteEpochSnapshots(groupID)
+    }
+
+    /** Keep only the most recent [maxCount] snapshots for a group. */
+    suspend fun trimEpochSnapshots(groupID: String, maxCount: Int) {
+        val all = dao.loadEpochSnapshots(groupID) // ordered by epoch DESC
+        if (all.size > maxCount) {
+            // Delete all, then re-insert the most recent ones
+            dao.deleteEpochSnapshots(groupID)
+            for (snapshot in all.take(maxCount)) {
+                dao.saveEpochSnapshot(snapshot)
+            }
+        }
     }
 
     // -- Member serialization (JSON with base64-encoded byte arrays) --

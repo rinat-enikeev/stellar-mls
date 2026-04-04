@@ -68,4 +68,14 @@ interface StellarChatDao {
 
     @Query("SELECT COUNT(*) FROM pending_rekeys WHERE groupID = :groupID AND epoch = :epoch AND isRemovalEpoch = 1")
     suspend fun isRemovalEpoch(groupID: String, epoch: Int): Int
+
+    // Epoch snapshots
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveEpochSnapshot(snapshot: PersistedEpochSnapshot)
+
+    @Query("SELECT * FROM epoch_snapshots WHERE groupID = :groupID ORDER BY epoch DESC")
+    suspend fun loadEpochSnapshots(groupID: String): List<PersistedEpochSnapshot>
+
+    @Query("DELETE FROM epoch_snapshots WHERE groupID = :groupID")
+    suspend fun deleteEpochSnapshots(groupID: String)
 }

@@ -16,7 +16,8 @@ final class PersistenceStore {
     init() throws {
         let schema = Schema([
             PersistedGroup.self, PersistedMessage.self, PersistedContactAlias.self,
-            PersistedTransportBundle.self, PersistedPendingRekey.self
+            PersistedTransportBundle.self, PersistedPendingRekey.self,
+            PersistedEpochSnapshot.self
         ])
 
         // Store in a directory with complete file protection
@@ -45,7 +46,8 @@ final class PersistenceStore {
     static func inMemory() -> PersistenceStore {
         let schema = Schema([
             PersistedGroup.self, PersistedMessage.self, PersistedContactAlias.self,
-            PersistedTransportBundle.self, PersistedPendingRekey.self
+            PersistedTransportBundle.self, PersistedPendingRekey.self,
+            PersistedEpochSnapshot.self
         ])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try! ModelContainer(for: schema, configurations: [config])
@@ -324,6 +326,82 @@ final class PersistenceStore {
         return ((try? context.fetchCount(descriptor)) ?? 0) > 0
     }
 
+    // MARK: - Epoch Snapshots
+
+    func saveEpochSnapshot(_ snapshot: EpochSnapshot, groupID: String) {
+        guard let encMembers = try? StorageEncryption.encrypt(JSONEncoder().encode(snapshot.members)),
+              let encSalt = try? StorageEncryption.encrypt(snapshot.salt),
+              let encSecret = try? StorageEncryption.encrypt(snapshot.groupSecret)
+        else { return }
+
+        // Upsert
+        let epoch = Int(snapshot.epoch)
+        let descriptor = FetchDescriptor<PersistedEpochSnapshot>(
+            predicate: #Predicate { $0.groupID == groupID && $0.epoch == epoch }
+        )
+        if let existing = try? context.fetch(descriptor) {
+            for item in existing { context.delete(item) }
+        }
+        let persisted = PersistedEpochSnapshot(
+            groupID: groupID,
+            epoch: epoch,
+            encryptedMembers: encMembers,
+            encryptedSalt: encSalt,
+            encryptedGroupSecret: encSecret,
+            changeDescription: snapshot.changeDescription
+        )
+        context.insert(persisted)
+        try? context.save()
+    }
+
+    func saveEpochSnapshotAsync(_ snapshot: EpochSnapshot, groupID: String) {
+        Self.writeQueue.async { [self] in saveEpochSnapshot(snapshot, groupID: groupID) }
+    }
+
+    func loadEpochSnapshots(groupID: String) -> [UInt64: EpochSnapshot] {
+        let descriptor = FetchDescriptor<PersistedEpochSnapshot>(
+            predicate: #Predicate { $0.groupID == groupID },
+            sortBy: [SortDescriptor(\.epoch, order: .forward)]
+        )
+        guard let persisted = try? context.fetch(descriptor) else { return [:] }
+        var result: [UInt64: EpochSnapshot] = [:]
+        for p in persisted {
+            guard let membersData = try? StorageEncryption.decrypt(p.encryptedMembers),
+                  let members = try? JSONDecoder().decode([SEPGroupMemberLeaf].self, from: membersData),
+                  let salt = try? StorageEncryption.decrypt(p.encryptedSalt),
+                  let secret = try? StorageEncryption.decrypt(p.encryptedGroupSecret)
+            else { continue }
+            let epoch = UInt64(p.epoch)
+            result[epoch] = EpochSnapshot(
+                epoch: epoch, members: members, salt: salt,
+                groupSecret: secret, changeDescription: p.changeDescription
+            )
+        }
+        return result
+    }
+
+    func deleteEpochSnapshots(groupID: String) {
+        let descriptor = FetchDescriptor<PersistedEpochSnapshot>(
+            predicate: #Predicate { $0.groupID == groupID }
+        )
+        if let existing = try? context.fetch(descriptor) {
+            for item in existing { context.delete(item) }
+        }
+        try? context.save()
+    }
+
+    /// Trim epoch snapshots to keep only the most recent `maxCount` per group.
+    func trimEpochSnapshots(groupID: String, maxCount: Int) {
+        let descriptor = FetchDescriptor<PersistedEpochSnapshot>(
+            predicate: #Predicate { $0.groupID == groupID },
+            sortBy: [SortDescriptor(\.epoch, order: .forward)]
+        )
+        guard let existing = try? context.fetch(descriptor), existing.count > maxCount else { return }
+        let toRemove = existing.prefix(existing.count - maxCount)
+        for item in toRemove { context.delete(item) }
+        try? context.save()
+    }
+
     // MARK: - Encryption Helpers
 
     private func encryptGroup(_ group: ChatGroup) -> PersistedGroup? {
@@ -356,7 +434,8 @@ final class PersistenceStore {
             encryptedSalt: encSalt,
             encryptedCommitment: encCommitment,
             tierRawValue: group.tier.rawValue,
-            isPublishedOnChain: group.isPublishedOnChain
+            isPublishedOnChain: group.isPublishedOnChain,
+            pinnedEpoch: group.pinnedEpoch.map { Int($0) }
         )
     }
 
@@ -392,6 +471,7 @@ final class PersistenceStore {
             tier: SEPTier(rawValue: persisted.tierRawValue) ?? .small
         )
         group.isPublishedOnChain = persisted.isPublishedOnChain
+        group.pinnedEpoch = persisted.pinnedEpoch.map { UInt64($0) }
         return group
     }
 
@@ -413,7 +493,8 @@ final class PersistenceStore {
             timestamp: message.timestamp,
             isMine: message.isMine,
             encryptedMediaAttachment: encMedia,
-            isSystemMessage: message.isSystemMessage
+            isSystemMessage: message.isSystemMessage,
+            epoch: message.epoch.map { Int($0) }
         )
     }
 
@@ -435,7 +516,8 @@ final class PersistenceStore {
             timestamp: persisted.timestamp,
             isMine: persisted.isMine,
             mediaAttachment: media,
-            isSystemMessage: persisted.isSystemMessage ?? false
+            isSystemMessage: persisted.isSystemMessage ?? false,
+            epoch: persisted.epoch.map { UInt64($0) }
         )
     }
 }

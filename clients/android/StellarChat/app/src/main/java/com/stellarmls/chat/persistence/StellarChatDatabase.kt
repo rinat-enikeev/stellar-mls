@@ -17,9 +17,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 @Database(
     entities = [
         PersistedGroup::class, PersistedMessage::class, PersistedContactAlias::class,
-        PersistedTransportBundle::class, PersistedPendingRekey::class
+        PersistedTransportBundle::class, PersistedPendingRekey::class,
+        PersistedEpochSnapshot::class
     ],
-    version = 5
+    version = 6
 )
 abstract class StellarChatDatabase : RoomDatabase() {
     abstract fun dao(): StellarChatDao
@@ -59,13 +60,34 @@ abstract class StellarChatDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add pinnedEpoch column to groups
+                db.execSQL("ALTER TABLE groups ADD COLUMN pinnedEpoch INTEGER")
+                // Add epoch column to messages
+                db.execSQL("ALTER TABLE messages ADD COLUMN epoch INTEGER")
+                // Create epoch_snapshots table
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS epoch_snapshots (
+                        groupID TEXT NOT NULL,
+                        epoch INTEGER NOT NULL,
+                        encryptedMembers BLOB NOT NULL,
+                        encryptedSalt BLOB NOT NULL,
+                        encryptedGroupSecret BLOB NOT NULL,
+                        changeDescription TEXT NOT NULL,
+                        PRIMARY KEY(groupID, epoch)
+                    )
+                """.trimIndent())
+            }
+        }
+
         fun getInstance(context: Context): StellarChatDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     StellarChatDatabase::class.java,
                     "stellar_chat.db"
-                ).addMigrations(MIGRATION_3_4, MIGRATION_4_5)
+                ).addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .fallbackToDestructiveMigration()
                 .build().also { instance = it }
             }

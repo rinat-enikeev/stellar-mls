@@ -17,6 +17,7 @@ final class PersistedGroup {
     var encryptedCommitment: Data?
     var tierRawValue: Int
     var isPublishedOnChain: Bool
+    var pinnedEpoch: Int?
 
     init(
         id: String,
@@ -29,7 +30,8 @@ final class PersistedGroup {
         encryptedSalt: Data,
         encryptedCommitment: Data?,
         tierRawValue: Int,
-        isPublishedOnChain: Bool = false
+        isPublishedOnChain: Bool = false,
+        pinnedEpoch: Int? = nil
     ) {
         self.id = id
         self.encryptedName = encryptedName
@@ -42,6 +44,7 @@ final class PersistedGroup {
         self.encryptedCommitment = encryptedCommitment
         self.tierRawValue = tierRawValue
         self.isPublishedOnChain = isPublishedOnChain
+        self.pinnedEpoch = pinnedEpoch
     }
 }
 
@@ -105,6 +108,34 @@ final class PersistedPendingRekey {
     }
 }
 
+/// Persisted epoch snapshot — captures group state at a specific epoch for epoch branching.
+/// Encrypted fields: members, salt, groupSecret (all sensitive).
+@Model
+final class PersistedEpochSnapshot {
+    var groupID: String
+    var epoch: Int
+    var encryptedMembers: Data
+    var encryptedSalt: Data
+    var encryptedGroupSecret: Data
+    var changeDescription: String
+
+    init(
+        groupID: String,
+        epoch: Int,
+        encryptedMembers: Data,
+        encryptedSalt: Data,
+        encryptedGroupSecret: Data,
+        changeDescription: String
+    ) {
+        self.groupID = groupID
+        self.epoch = epoch
+        self.encryptedMembers = encryptedMembers
+        self.encryptedSalt = encryptedSalt
+        self.encryptedGroupSecret = encryptedGroupSecret
+        self.changeDescription = changeDescription
+    }
+}
+
 /// Persisted message with encrypted text content.
 /// Cleartext fields: id, groupID, senderPubkey, timestamp, isMine (all visible on relay anyway).
 /// Encrypted fields: text (the actual private message content), mediaAttachment.
@@ -118,6 +149,7 @@ final class PersistedMessage {
     var isMine: Bool
     var encryptedMediaAttachment: Data?
     var isSystemMessage: Bool?
+    var epoch: Int?
 
     init(
         id: String,
@@ -127,7 +159,8 @@ final class PersistedMessage {
         timestamp: Date,
         isMine: Bool,
         encryptedMediaAttachment: Data? = nil,
-        isSystemMessage: Bool = false
+        isSystemMessage: Bool = false,
+        epoch: Int? = nil
     ) {
         self.id = id
         self.groupID = groupID
@@ -137,5 +170,6 @@ final class PersistedMessage {
         self.isMine = isMine
         self.encryptedMediaAttachment = encryptedMediaAttachment
         self.isSystemMessage = isSystemMessage
+        self.epoch = epoch
     }
 }

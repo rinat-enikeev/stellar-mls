@@ -166,6 +166,11 @@ final class AppState {
     /// M-17: Persisted to UserDefaults so salt history survives app restarts.
     private var saltHistory: [String: [UInt64: Data]] = [:]
 
+    /// Per-group epoch snapshots for epoch branching (git-like epoch switching).
+    /// Captures members + salt + groupSecret at each epoch transition.
+    var epochSnapshots: [String: [UInt64: EpochSnapshot]] = [:]
+    private static let epochSnapshotWindow = 64
+
     /// In-memory transport bundle directory: groupID → (blsPubkeyHex → bundle).
     /// Used for secure per-member inbox rekey during removals.
     private var transportBundles: [String: [String: SEPMemberTransportBundle]] = [:]
@@ -228,6 +233,11 @@ final class AppState {
         saltHistory = Self.loadSaltHistory()
         for group in groups {
             storeSalt(groupID: group.id, epoch: group.epoch, salt: group.salt)
+        }
+
+        // Load epoch snapshots for epoch branching
+        for group in groups {
+            epochSnapshots[group.id] = store.loadEpochSnapshots(groupID: group.id)
         }
 
         // Load persisted chat messages and transport bundles for all groups
@@ -440,6 +450,7 @@ final class AppState {
         )
         try group.recomputeCommitment()
         addGroup(group)
+        captureEpochSnapshot(group: group, changeDescription: "Group created")
         ensureOwnTransportBundle(groupID: groupIDHex)
 
         let code = InviteCode(
@@ -699,6 +710,20 @@ final class AppState {
             try? rekeyCandidate.recomputeCommitment()
             candidate = rekeyCandidate
         }
+
+        // Capture epoch snapshot BEFORE persisting the new state
+        let snapshotDescription: String
+        switch kind {
+        case .memberAdd(let member):
+            let name = memberDisplayName(blsPubkey: member.publicKeyCompressed)
+            snapshotDescription = "\(name) joined the group"
+        case .memberRemove(let blsPubkey):
+            let name = memberDisplayName(blsPubkey: blsPubkey)
+            snapshotDescription = "\(name) was removed from the group"
+        case .keyRotation:
+            snapshotDescription = "Encryption key was rotated"
+        }
+        captureEpochSnapshot(group: currentGroup, changeDescription: snapshotDescription)
 
         // --- Persist locally FIRST (optimistic), then sync chain in background ---
         candidate.isPublishedOnChain = currentGroup.isPublishedOnChain
@@ -1045,6 +1070,133 @@ final class AppState {
         saltHistory[groupID]?[epoch]
     }
 
+    // MARK: - Epoch Snapshots (epoch branching)
+
+    /// Capture an epoch snapshot for branching. Call BEFORE advancing to a new epoch.
+    func captureEpochSnapshot(group: ChatGroup, changeDescription: String) {
+        let snapshot = EpochSnapshot(
+            epoch: group.epoch,
+            members: group.members,
+            salt: group.salt,
+            groupSecret: group.groupSecret,
+            changeDescription: changeDescription
+        )
+        if epochSnapshots[group.id] == nil {
+            epochSnapshots[group.id] = [:]
+        }
+        epochSnapshots[group.id]?[group.epoch] = snapshot
+        // Cap to window size
+        if let history = epochSnapshots[group.id], history.count > Self.epochSnapshotWindow {
+            let sortedKeys = history.keys.sorted()
+            let toRemove = sortedKeys.prefix(history.count - Self.epochSnapshotWindow)
+            for key in toRemove { epochSnapshots[group.id]?.removeValue(forKey: key) }
+        }
+        store.saveEpochSnapshotAsync(snapshot, groupID: group.id)
+        store.trimEpochSnapshots(groupID: group.id, maxCount: Self.epochSnapshotWindow)
+    }
+
+    /// Resolve an encryption key for a specific epoch of a group (for multi-epoch decryption).
+    func epochKey(groupID: String, epoch: UInt64) -> SymmetricKey? {
+        // Try epoch snapshot first (has groupSecret which may differ across rekey boundaries)
+        if let snapshot = epochSnapshots[groupID]?[epoch] {
+            return snapshot.encryptionKey()
+        }
+        // Fallback: use current group's groupSecret + salt history
+        guard let group = groups.first(where: { $0.id == groupID }),
+              let salt = getSalt(groupID: groupID, epoch: epoch) else { return nil }
+        return GroupCrypto.deriveMessageKey(groupSecret: group.groupSecret, epoch: epoch, salt: salt)
+    }
+
+    // MARK: - Epoch Pinning
+
+    /// Pin the user's view to a specific epoch (epoch branching).
+    /// Sending uses the pinned epoch's key/topic, member list shows the pinned epoch's members.
+    /// Protocol processing always tracks the latest epoch.
+    func pinEpoch(groupID: String, epoch: UInt64) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        groups[index].pinnedEpoch = epoch
+        store.saveGroup(groups[index])
+
+        // If pinned epoch has a different groupSecret (secure rekey boundary),
+        // subscribe to the old topic too so messages are visible.
+        if let snapshot = epochSnapshots[groupID]?[epoch] {
+            let pinnedTopic = snapshot.topicTag
+            let currentTopic = groups[index].topicTag
+            if pinnedTopic != currentTopic {
+                let gid = groupID
+                chatTransport.subscribe(
+                    topic: pinnedTopic,
+                    groupID: gid,
+                    keyResolver: { [weak self] e in self?.epochKey(groupID: gid, epoch: e) },
+                    defaultKey: snapshot.encryptionKey(),
+                    sinceTimestamp: groups[index].lastEventTimestamp > 0 ? groups[index].lastEventTimestamp : nil
+                )
+            }
+        }
+
+        // Update member list to include pinned epoch members
+        updateCurrentMembers()
+    }
+
+    /// Unpin and return to following the latest epoch.
+    func unpinEpoch(groupID: String) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        let oldPinnedEpoch = groups[index].pinnedEpoch
+        groups[index].pinnedEpoch = nil
+        store.saveGroup(groups[index])
+
+        // Unsubscribe from old topic if it was across a rekey boundary
+        if let oldEpoch = oldPinnedEpoch,
+           let snapshot = epochSnapshots[groupID]?[oldEpoch] {
+            let pinnedTopic = snapshot.topicTag
+            let currentTopic = groups[index].topicTag
+            if pinnedTopic != currentTopic {
+                chatTransport.unsubscribe(topic: pinnedTopic)
+            }
+        }
+
+        updateCurrentMembers()
+    }
+
+    /// Update transport's currentMembers to union of all groups' current + pinned epoch members.
+    private func updateCurrentMembers() {
+        var allMembers = groups.flatMap(\.members)
+        for group in groups {
+            if let pinned = group.pinnedEpoch,
+               let snapshot = epochSnapshots[group.id]?[pinned] {
+                for member in snapshot.members {
+                    if !allMembers.contains(where: { $0.publicKeyCompressed == member.publicKeyCompressed }) {
+                        allMembers.append(member)
+                    }
+                }
+            }
+        }
+        chatTransport.currentMembers = allMembers
+    }
+
+    /// The effective encryption key for sending in a group (respects pinnedEpoch).
+    func effectiveEncryptionKey(for group: ChatGroup) -> SymmetricKey {
+        if let pinned = group.pinnedEpoch,
+           let snapshot = epochSnapshots[group.id]?[pinned] {
+            return snapshot.encryptionKey()
+        }
+        return group.encryptionKey
+    }
+
+    /// The effective topic tag for sending in a group (respects pinnedEpoch).
+    func effectiveTopicTag(for group: ChatGroup) -> String {
+        if let pinned = group.pinnedEpoch,
+           let snapshot = epochSnapshots[group.id]?[pinned] {
+            return snapshot.topicTag
+        }
+        return group.topicTag
+    }
+
+    /// The effective epoch for sending in a group (respects pinnedEpoch).
+    func effectiveEpoch(for group: ChatGroup) -> UInt64 {
+        group.pinnedEpoch ?? group.epoch
+    }
+
     // MARK: - Salt History Persistence (M-17)
 
     private static func loadSaltHistory() -> [String: [UInt64: Data]] {
@@ -1128,6 +1280,19 @@ final class AppState {
 
         // Stale update — ignore
         guard update.epoch >= group.epoch else { return }
+
+        // Capture epoch snapshot before any mutation
+        let changeDesc: String
+        if !update.removedMemberKeys.isEmpty {
+            let names = update.removedMemberKeys.map { memberDisplayName(blsPubkey: $0) }.joined(separator: ", ")
+            changeDesc = "\(names) was removed from the group"
+        } else if !update.addedMembers.isEmpty {
+            let names = update.addedMembers.map { memberDisplayName(blsPubkey: $0.publicKeyCompressed) }.joined(separator: ", ")
+            changeDesc = "\(names) joined the group"
+        } else {
+            changeDesc = "Encryption key was rotated"
+        }
+        captureEpochSnapshot(group: group, changeDescription: changeDesc)
 
         // Verify sender attestation BEFORE mutating state
         if let att = update.senderAttestation {
@@ -1670,13 +1835,16 @@ final class AppState {
                 guard !(self.seenMessageIDs[groupID]?.contains(event.id) ?? false) else { return }
                 self.seenMessageIDs[groupID, default: []].insert(event.id)
 
+                let epochTag = event.tags.first(where: { $0.first == "epoch" }).flatMap { $0.dropFirst().first }
+                let epoch = epochTag.flatMap { UInt64($0) }
                 let msg = ChatMessage(
                     id: event.id,
                     groupID: groupID,
                     senderPubkey: event.pubkey,
                     text: plaintext,
                     timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
-                    isMine: event.pubkey == self.keyManager.publicKeyHex
+                    isMine: event.pubkey == self.keyManager.publicKeyHex,
+                    epoch: epoch
                 )
                 self.queueIncomingMessage(msg, groupID: groupID, event: event)
             }
@@ -1692,6 +1860,8 @@ final class AppState {
                 guard !(self.seenMessageIDs[groupID]?.contains(event.id) ?? false) else { return }
                 self.seenMessageIDs[groupID, default: []].insert(event.id)
 
+                let epochTag = event.tags.first(where: { $0.first == "epoch" }).flatMap { $0.dropFirst().first }
+                let epoch = epochTag.flatMap { UInt64($0) }
                 let msg = ChatMessage(
                     id: event.id,
                     groupID: groupID,
@@ -1699,7 +1869,8 @@ final class AppState {
                     text: plaintext,
                     timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
                     isMine: event.pubkey == self.keyManager.publicKeyHex,
-                    mediaAttachment: media
+                    mediaAttachment: media,
+                    epoch: epoch
                 )
                 self.queueIncomingMessage(msg, groupID: groupID, event: event)
             }
@@ -1743,11 +1914,14 @@ final class AppState {
         ]
         let wrapperData = try JSONSerialization.data(withJSONObject: wrapper)
         let authenticatedText = String(data: wrapperData, encoding: .utf8)!
-        let envelope = try GroupCrypto.encrypt(authenticatedText, key: group.encryptionKey)
+        let sendKey = effectiveEncryptionKey(for: group)
+        let sendTopic = effectiveTopicTag(for: group)
+        let sendEpoch = effectiveEpoch(for: group)
+        let envelope = try GroupCrypto.encrypt(authenticatedText, key: sendKey)
         let envelopeData = try JSONEncoder().encode(envelope)
         let content = envelopeData.base64EncodedString()
         let event = try NostrEvent.build(
-            kind: 44114, tags: [["t", group.topicTag]], content: content, keyManager: keyManager
+            kind: 44114, tags: [["t", sendTopic], ["epoch", "\(sendEpoch)"]], content: content, keyManager: keyManager
         )
 
         // Optimistic UI: show the message locally BEFORE waiting for relay publish.
@@ -1758,7 +1932,8 @@ final class AppState {
             text: trimmed,
             timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
             isMine: true,
-            status: .sending
+            status: .sending,
+            epoch: sendEpoch
         )
         insertMessage(msg, into: groupID)
         seenMessageIDs[groupID, default: []].insert(msg.id)
@@ -1800,11 +1975,14 @@ final class AppState {
                 ]
                 let wrapperData = try JSONSerialization.data(withJSONObject: wrapper)
                 let authenticatedText = String(data: wrapperData, encoding: .utf8)!
-                let envelope = try GroupCrypto.encrypt(authenticatedText, key: group.encryptionKey)
+                let sendKey = self.effectiveEncryptionKey(for: group)
+                let sendTopic = self.effectiveTopicTag(for: group)
+                let sendEpoch = self.effectiveEpoch(for: group)
+                let envelope = try GroupCrypto.encrypt(authenticatedText, key: sendKey)
                 let envelopeData = try JSONEncoder().encode(envelope)
                 let content = envelopeData.base64EncodedString()
                 let event = try NostrEvent.build(
-                    kind: 44114, tags: [["t", group.topicTag]], content: content, keyManager: keyManager
+                    kind: 44114, tags: [["t", sendTopic], ["epoch", "\(sendEpoch)"]], content: content, keyManager: keyManager
                 )
                 try await chatTransport.publishToRelays(event)
                 await MainActor.run {
@@ -1813,7 +1991,8 @@ final class AppState {
                         let old = self.chatMessages[groupID]![i]
                         self.chatMessages[groupID]?[i] = ChatMessage(
                             id: event.id, groupID: old.groupID, senderPubkey: old.senderPubkey,
-                            text: old.text, timestamp: old.timestamp, isMine: old.isMine, status: .sent
+                            text: old.text, timestamp: old.timestamp, isMine: old.isMine, status: .sent,
+                            epoch: sendEpoch
                         )
                     }
                 }
@@ -1890,11 +2069,14 @@ final class AppState {
         let wrapperText = String(data: wrapperData, encoding: .utf8)!
 
         // Build the Nostr event locally
-        let envelope = try GroupCrypto.encrypt(wrapperText, key: group.encryptionKey)
+        let sendKey = effectiveEncryptionKey(for: group)
+        let sendTopic = effectiveTopicTag(for: group)
+        let sendEpoch = effectiveEpoch(for: group)
+        let envelope = try GroupCrypto.encrypt(wrapperText, key: sendKey)
         let envelopeData = try JSONEncoder().encode(envelope)
         let content = envelopeData.base64EncodedString()
         let event = try NostrEvent.build(
-            kind: 44114, tags: [["t", group.topicTag]], content: content, keyManager: keyManager
+            kind: 44114, tags: [["t", sendTopic], ["epoch", "\(sendEpoch)"]], content: content, keyManager: keyManager
         )
 
         // Optimistic UI: show locally before relay publish
@@ -1906,7 +2088,8 @@ final class AppState {
             timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
             isMine: true,
             status: .sending,
-            mediaAttachment: media
+            mediaAttachment: media,
+            epoch: sendEpoch
         )
         insertMessage(msg, into: groupID)
         seenMessageIDs[groupID, default: []].insert(msg.id)
@@ -1994,11 +2177,14 @@ final class AppState {
         let wrapperText = String(data: wrapperData, encoding: .utf8)!
 
         // Build the Nostr event locally
-        let envelope = try GroupCrypto.encrypt(wrapperText, key: group.encryptionKey)
+        let sendKey = effectiveEncryptionKey(for: group)
+        let sendTopic = effectiveTopicTag(for: group)
+        let sendEpoch = effectiveEpoch(for: group)
+        let envelope = try GroupCrypto.encrypt(wrapperText, key: sendKey)
         let envelopeData = try JSONEncoder().encode(envelope)
         let content = envelopeData.base64EncodedString()
         let event = try NostrEvent.build(
-            kind: 44114, tags: [["t", group.topicTag]], content: content, keyManager: keyManager
+            kind: 44114, tags: [["t", sendTopic], ["epoch", "\(sendEpoch)"]], content: content, keyManager: keyManager
         )
 
         // Optimistic UI: show locally before relay publish
@@ -2010,7 +2196,8 @@ final class AppState {
             timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
             isMine: true,
             status: .sending,
-            mediaAttachment: media
+            mediaAttachment: media,
+            epoch: sendEpoch
         )
         insertMessage(msg, into: groupID)
         seenMessageIDs[groupID, default: []].insert(msg.id)
@@ -2313,15 +2500,19 @@ final class AppState {
 
     /// Subscribe a single group on the persistent transport (chat + protocol).
     private func subscribeGroup(_ group: ChatGroup) {
-        chatTransport.currentMembers = groups.flatMap(\.members)
+        updateCurrentMembers()
         #if DEBUG
         let keyData = group.encryptionKey.withUnsafeBytes { Data($0) }
         print("[AppState] subscribeGroup id=\(group.id.prefix(8)) epoch=\(group.epoch) key=\(keyData.prefix(6).base64EncodedString()) salt=\(group.salt.prefix(6).base64EncodedString())")
         #endif
+        let groupID = group.id
         chatTransport.subscribe(
             topic: group.topicTag,
-            groupID: group.id,
-            key: group.encryptionKey,
+            groupID: groupID,
+            keyResolver: { [weak self] epoch in
+                self?.epochKey(groupID: groupID, epoch: epoch)
+            },
+            defaultKey: group.encryptionKey,
             sinceTimestamp: group.lastEventTimestamp > 0 ? group.lastEventTimestamp : nil
         )
     }

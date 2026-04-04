@@ -20,7 +20,14 @@ class ChatViewModel(
     var isSendingVoice by mutableStateOf(false)
 
     val messages: List<ChatMessage>
-        get() = groupListViewModel.chatMessages[groupID] ?: emptyList()
+        get() {
+            val allMessages = groupListViewModel.chatMessages[groupID] ?: emptyList()
+            val pinned = group?.pinnedEpoch ?: return allMessages
+            // When pinned, only show messages from that epoch or system messages
+            return allMessages.filter { msg ->
+                msg.isSystemMessage || msg.epoch == pinned
+            }
+        }
 
     val group: com.stellarmls.chat.model.ChatGroup?
         get() = groupListViewModel.groups.find { it.id == groupID }

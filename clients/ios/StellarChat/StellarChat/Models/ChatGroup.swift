@@ -18,6 +18,9 @@ struct ChatGroup: Identifiable, Codable {
     var isPublishedOnChain: Bool = false
     /// Unix timestamp of the last received event, used for offline catch-up.
     var lastEventTimestamp: Int64 = 0
+    /// When set, the user is pinned to this epoch (epoch branching).
+    /// nil = follow latest epoch (default behavior).
+    var pinnedEpoch: UInt64?
 
     /// Nostr subscription topic tag for this group.
     /// Derivation (SEP-XXXX §3.1): `topicTag = hex(SHA-256("sep-topic-v1" || groupSecret)[0..8])`
@@ -64,6 +67,23 @@ struct ChatGroup: Identifiable, Codable {
     }
 }
 
+/// Captures group state at a specific epoch for epoch branching.
+struct EpochSnapshot: Codable {
+    let epoch: UInt64
+    let members: [SEPGroupMemberLeaf]
+    let salt: Data
+    let groupSecret: Data
+    let changeDescription: String
+
+    var topicTag: String {
+        GroupCrypto.hiddenGroupTopic(groupSecret: groupSecret)
+    }
+
+    func encryptionKey() -> SymmetricKey {
+        GroupCrypto.deriveMessageKey(groupSecret: groupSecret, epoch: epoch, salt: salt)
+    }
+}
+
 enum MessageStatus: String, Codable {
     case sending
     case sent
@@ -81,8 +101,10 @@ struct ChatMessage: Identifiable, Codable {
     var status: MessageStatus
     let mediaAttachment: MediaAttachment?
     var isSystemMessage: Bool
+    /// The epoch this message was sent on (for epoch branching filtering).
+    var epoch: UInt64?
 
-    init(id: String, groupID: String, senderPubkey: String, text: String, timestamp: Date, isMine: Bool, status: MessageStatus = .sent, mediaAttachment: MediaAttachment? = nil, isSystemMessage: Bool = false) {
+    init(id: String, groupID: String, senderPubkey: String, text: String, timestamp: Date, isMine: Bool, status: MessageStatus = .sent, mediaAttachment: MediaAttachment? = nil, isSystemMessage: Bool = false, epoch: UInt64? = nil) {
         self.id = id
         self.groupID = groupID
         self.senderPubkey = senderPubkey
@@ -92,6 +114,7 @@ struct ChatMessage: Identifiable, Codable {
         self.status = status
         self.mediaAttachment = mediaAttachment
         self.isSystemMessage = isSystemMessage
+        self.epoch = epoch
     }
 }
 

@@ -54,11 +54,11 @@ class NostrMessageTransport(
     /** Called when any relay's connection state changes. */
     var onConnectionChange: (() -> Unit)? = null
 
-    var onMessage: ((groupID: String, senderPubkey: String, text: String, eventID: String, timestamp: Long) -> Unit)? = null
+    var onMessage: ((groupID: String, senderPubkey: String, text: String, eventID: String, timestamp: Long, epoch: Long?) -> Unit)? = null
     /** Called when a decrypted message is a protocol message (state update, salt request/response). */
     var onProtocolMessage: ((groupID: String, json: String, eventID: String, senderPubkey: String) -> Unit)? = null
     /** Called when a decrypted message is an image message with media attachment. */
-    var onImageMessage: ((groupID: String, text: String, media: com.stellarmls.chat.model.MediaAttachment, eventID: String, senderPubkey: String, timestamp: Long) -> Unit)? = null
+    var onImageMessage: ((groupID: String, text: String, media: com.stellarmls.chat.model.MediaAttachment, eventID: String, senderPubkey: String, timestamp: Long, epoch: Long?) -> Unit)? = null
     /** Callback for received call signaling messages (offer, answer, ice, hangup, busy, reject). */
     var onCallSignal: ((groupID: String, callJson: JSONObject, senderPubkey: ByteArray, eventID: String) -> Unit)? = null
     /** Callback for relay OK responses: (eventID, accepted). Used for delivery status. */
@@ -88,7 +88,11 @@ class NostrMessageTransport(
         _connections.clear()
     }
 
-    fun subscribe(group: ChatGroup, sinceTimestamp: Long? = null) {
+    fun subscribe(
+        group: ChatGroup,
+        keyResolver: ((Long) -> ByteArray?)? = null,
+        sinceTimestamp: Long? = null
+    ) {
         val topicKey = "chat-${group.topicTag}"
 
         // Cancel existing subscriptions for this topic
@@ -108,13 +112,13 @@ class NostrMessageTransport(
             put("since", since)
         }
 
-        val key = group.encryptionKey
+        val defaultKey = group.encryptionKey
         val groupID = group.id
 
         // Subscribe to ALL connections concurrently (each gets its own coroutine)
         for (conn in connections) {
             val job = conn.subscribe(subID, filter)
-                .onEach { event -> handleIncomingEvent(event, groupID, key) }
+                .onEach { event -> handleIncomingEvent(event, groupID, defaultKey, keyResolver) }
                 .launchIn(scope)
             subscriptionJobs["$topicKey-${conn.hashCode()}"] = job
         }
@@ -130,8 +134,14 @@ class NostrMessageTransport(
     }
 
     /** Send an encrypted chat message. Returns the published NostrEvent (with deterministic NIP-01 ID). */
-    fun send(group: ChatGroup, text: String): NostrEvent {
-        val key = group.encryptionKey
+    fun send(
+        group: ChatGroup,
+        text: String,
+        overrideKey: ByteArray? = null,
+        overrideTopicTag: String? = null,
+        epoch: Long? = null
+    ): NostrEvent {
+        val key = overrideKey ?: group.encryptionKey
         // v2 wrapper: includes version, type discriminator, and sender timestamp
         val wrapper = JSONObject().apply {
             put("v", 2)
@@ -146,9 +156,13 @@ class NostrMessageTransport(
         val content = android.util.Base64.encodeToString(
             envelopeJson.toByteArray(), android.util.Base64.NO_WRAP)
 
-        val tags = listOf(
-            listOf("t", group.topicTag)
+        val topicTag = overrideTopicTag ?: group.topicTag
+        val tags = mutableListOf(
+            listOf("t", topicTag)
         )
+        if (epoch != null) {
+            tags.add(listOf("epoch", epoch.toString()))
+        }
 
         val event = NostrEventBuilder.build(
             kind = 44114,
@@ -228,7 +242,23 @@ class NostrMessageTransport(
     }
 
     /** Process a single incoming Nostr event: decrypt, unwrap BLS, route to chat or protocol handler. */
-    private fun handleIncomingEvent(event: NostrEvent, groupID: String, key: ByteArray) {
+    private fun handleIncomingEvent(
+        event: NostrEvent,
+        groupID: String,
+        defaultKey: ByteArray,
+        keyResolver: ((Long) -> ByteArray?)? = null
+    ) {
+        // Extract epoch tag from event
+        val epochTag = event.tags.firstOrNull { it.size >= 2 && it[0] == "epoch" }
+        val eventEpoch = epochTag?.get(1)?.toLongOrNull()
+
+        // Resolve decryption key: try epoch-specific key first, fall back to default
+        val key = if (eventEpoch != null && keyResolver != null) {
+            keyResolver(eventEpoch) ?: defaultKey
+        } else {
+            defaultKey
+        }
+
         try {
             val envelopeJson = String(
                 android.util.Base64.decode(event.content, android.util.Base64.NO_WRAP))
@@ -292,7 +322,7 @@ class NostrMessageTransport(
                         ?.let { android.util.Base64.decode(it, android.util.Base64.NO_WRAP) },
                     duration = duration
                 )
-                onImageMessage?.invoke(groupID, innerText, media, event.id, event.pubkey, event.displayMilliseconds)
+                onImageMessage?.invoke(groupID, innerText, media, event.id, event.pubkey, event.displayMilliseconds, eventEpoch)
             } else {
                 // Check inner text for protocol messages (state updates, salt, etc.)
                 if (isProtocolMessage(innerText)) {
@@ -306,7 +336,7 @@ class NostrMessageTransport(
                     val isMember = currentMembers.any { it.publicKeyCompressed.contentEquals(blsPubkey) }
                     if (isMember) {
                         onMessage?.invoke(groupID, event.pubkey, innerText,
-                            event.id, event.displayMilliseconds)
+                            event.id, event.displayMilliseconds, eventEpoch)
                     } else {
                         if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.w("MsgTransport", "BLS rejected: members=${currentMembers.size}")
                         com.stellarmls.chat.SecurityLog.nonMemberMessageRejected(groupID)

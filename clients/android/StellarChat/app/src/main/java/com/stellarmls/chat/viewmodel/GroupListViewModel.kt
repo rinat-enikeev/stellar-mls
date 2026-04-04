@@ -22,6 +22,7 @@ import com.stellarmls.chat.model.BootstrapPayload
 import com.stellarmls.chat.model.ChatError
 import com.stellarmls.chat.model.ChatGroup
 import com.stellarmls.chat.model.ChatMessage
+import com.stellarmls.chat.model.EpochSnapshot
 import com.stellarmls.chat.model.MediaAttachment
 import com.stellarmls.chat.model.MessageStatus
 import com.stellarmls.chat.model.InviteCode
@@ -167,6 +168,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     /** In-memory transport bundle directory: groupID → (blsPubkeyHex → bundle). */
     private val transportBundles = java.util.concurrent.ConcurrentHashMap<String, MutableMap<String, com.stellarmls.mls.SEPMemberTransportBundle>>()
 
+    /** Epoch snapshots for epoch branching: groupID → (epoch → snapshot). */
+    val epochSnapshots = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.ConcurrentHashMap<Long, EpochSnapshot>>()
+
     // Calls
     lateinit var callManager: com.stellarmls.chat.call.CallManager
         private set
@@ -289,6 +293,13 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                             transportBundles[group.id] = bundles.toMutableMap()
                         }
                     } catch (_: Exception) { }
+                    // Load epoch snapshots
+                    try {
+                        val snapshots = store.loadEpochSnapshots(group.id)
+                        if (snapshots.isNotEmpty()) {
+                            epochSnapshots[group.id] = java.util.concurrent.ConcurrentHashMap(snapshots)
+                        }
+                    } catch (_: Exception) { }
                 }
             } catch (e: Exception) {
                 Log.e("GroupListVM", "Failed to load groups from store", e)
@@ -327,7 +338,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
             // Subscribe all persisted groups for chat + protocol messages
             for (group in groups) {
-                transport.subscribe(group)
+                transport.subscribe(
+                    group = group,
+                    keyResolver = { epoch -> epochKey(group.id, epoch) }
+                )
             }
         }
     }
@@ -347,10 +361,12 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             chatMessages[group.id] = emptyList()
             seenMessageIDs[group.id] = java.util.Collections.synchronizedSet(mutableSetOf())
             // Update transport members
-            transport.currentMembers.clear()
-            transport.currentMembers.addAll(groups.flatMap { it.members })
+            updateCurrentMembers(group.id)
             connectIfNeeded()
-            transport.subscribe(group)
+            transport.subscribe(
+                group = group,
+                keyResolver = { epoch -> epochKey(group.id, epoch) }
+            )
             viewModelScope.launch {
                 try { store.saveGroup(group) } catch (_: Exception) { }
             }
@@ -371,6 +387,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         groups.removeAll { it.id == id }
         chatMessages.remove(id)
         seenMessageIDs.remove(id)
+        epochSnapshots.remove(id)
         viewModelScope.launch {
             try { store.deleteGroup(id) } catch (_: Exception) { }
         }
@@ -407,6 +424,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
             addGroup(group)
             ensureOwnTransportBundle(group.id)
+            // Capture initial epoch snapshot
+            captureEpochSnapshot(group, "Group created")
             return Pair(group, invite.encode())
         } catch (_: Exception) {
             return null
@@ -494,6 +513,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
 
         val oldTopicTag = group.topicTag
+
+        // Capture epoch snapshot BEFORE mutation for epoch branching
+        captureEpochSnapshot(group, "Secure rekey (member removed)")
 
         // Install new secrets
         group = group.copy(
@@ -843,6 +865,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
 
         private const val SALT_HISTORY_WINDOW = 64
+        /** Maximum number of epoch snapshots retained per group. */
+        private const val EPOCH_SNAPSHOT_WINDOW = 64
         /** N-8: Max entries for dedup sets to prevent unbounded memory growth. */
         private const val MAX_DEDUP_SET_SIZE = 10_000
     }
@@ -966,6 +990,107 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         return saltHistory[groupID]?.get(epoch)
     }
 
+    // -- Epoch Branching --
+
+    /** Capture a snapshot of the group's current state before an epoch transition. */
+    fun captureEpochSnapshot(group: ChatGroup, changeDescription: String) {
+        val snapshot = EpochSnapshot(
+            epoch = group.epoch,
+            members = group.members.toList(),
+            salt = group.salt.copyOf(),
+            groupSecret = group.groupSecret.copyOf(),
+            changeDescription = changeDescription
+        )
+        val groupSnapshots = epochSnapshots.getOrPut(group.id) { java.util.concurrent.ConcurrentHashMap() }
+        groupSnapshots[snapshot.epoch] = snapshot
+
+        // Trim in-memory to EPOCH_SNAPSHOT_WINDOW
+        if (groupSnapshots.size > EPOCH_SNAPSHOT_WINDOW) {
+            val oldest = groupSnapshots.keys.sorted().take(groupSnapshots.size - EPOCH_SNAPSHOT_WINDOW)
+            for (key in oldest) { groupSnapshots.remove(key) }
+        }
+
+        // Persist
+        viewModelScope.launch {
+            try {
+                store.saveEpochSnapshot(snapshot, group.id)
+                store.trimEpochSnapshots(group.id, EPOCH_SNAPSHOT_WINDOW)
+            } catch (_: Exception) { }
+        }
+    }
+
+    /** Resolve encryption key for a historical epoch from snapshots. */
+    fun epochKey(groupID: String, epoch: Long): ByteArray? {
+        return epochSnapshots[groupID]?.get(epoch)?.encryptionKey()
+    }
+
+    /** Pin the user to a historical epoch. */
+    fun pinEpoch(groupID: String, epoch: Long) {
+        val index = groups.indexOfFirst { it.id == groupID }
+        if (index < 0) return
+        val group = groups[index]
+        group.pinnedEpoch = epoch
+        groups[index] = group
+        // Re-subscribe to use the pinned epoch's topic if different
+        updateCurrentMembers(groupID)
+        viewModelScope.launch {
+            try { store.saveGroup(group) } catch (_: Exception) { }
+        }
+    }
+
+    /** Unpin the user from a historical epoch, returning to the latest. */
+    fun unpinEpoch(groupID: String) {
+        val index = groups.indexOfFirst { it.id == groupID }
+        if (index < 0) return
+        val group = groups[index]
+        group.pinnedEpoch = null
+        groups[index] = group
+        updateCurrentMembers(groupID)
+        viewModelScope.launch {
+            try { store.saveGroup(group) } catch (_: Exception) { }
+        }
+    }
+
+    /** The effective encryption key, considering pinned epoch. */
+    fun effectiveEncryptionKey(group: ChatGroup): ByteArray {
+        val pinned = group.pinnedEpoch ?: return group.encryptionKey
+        return epochKey(group.id, pinned) ?: group.encryptionKey
+    }
+
+    /** The effective topic tag, considering pinned epoch. */
+    fun effectiveTopicTag(group: ChatGroup): String {
+        val pinned = group.pinnedEpoch ?: return group.topicTag
+        val snapshot = epochSnapshots[group.id]?.get(pinned)
+        return snapshot?.topicTag ?: group.topicTag
+    }
+
+    /** The effective epoch value for tagging outgoing messages. */
+    fun effectiveEpoch(group: ChatGroup): Long {
+        return group.pinnedEpoch ?: group.epoch
+    }
+
+    /** Update transport currentMembers to include pinned epoch members in the union. */
+    private fun updateCurrentMembers(groupID: String) {
+        transport.currentMembers.clear()
+        val allMembers = mutableListOf<SEPGroupMemberLeaf>()
+        for (g in groups) {
+            allMembers.addAll(g.members)
+            // Include members from pinned epoch snapshot
+            val pinned = g.pinnedEpoch
+            if (pinned != null) {
+                val snapshot = epochSnapshots[g.id]?.get(pinned)
+                if (snapshot != null) {
+                    for (m in snapshot.members) {
+                        if (allMembers.none { it.publicKeyCompressed.contentEquals(m.publicKeyCompressed) }) {
+                            allMembers.add(m)
+                        }
+                    }
+                }
+            }
+        }
+        transport.currentMembers.addAll(allMembers)
+    }
+
     // -- State Update Protocol --
 
     /** Build a state update message for broadcasting after a membership change. */
@@ -1027,6 +1152,14 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         // Note: we no longer block transitions when a chain publish is pending.
         // Local transitions proceed immediately; chain publishes are cancelled and
         // restarted with the latest state (coalesced).
+
+        // Capture epoch snapshot BEFORE mutation
+        val changeDesc = when (kind) {
+            is EpochTransitionKind.MemberAdd -> "Member added"
+            is EpochTransitionKind.MemberRemove -> "Member removed"
+            is EpochTransitionKind.KeyRotation -> "Key rotated"
+        }
+        captureEpochSnapshot(currentGroup, changeDesc)
 
         // Compute candidate next state
         var candidate = cloneGroup(currentGroup)
@@ -1146,8 +1279,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         // Sync transport and ensure subscription uses the latest key.
         // This must happen BEFORE the secure rekey / legacy blocks so A can
         // at least communicate on the current state even if the blocks fail.
-        transport.currentMembers.clear()
-        transport.currentMembers.addAll(groups.flatMap { it.members })
+        updateCurrentMembers(groupID)
         if (useSecureRekey) {
             // Secure rekey: unsubscribe old topic now, subscribe new topic
             if (!BuildConfig.DEBUG) transport.unsubscribe(currentGroup.topicTag)
@@ -1358,6 +1490,14 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         // Stale update — ignore
         if (update.epoch < group.epoch) return
 
+        // Capture epoch snapshot BEFORE mutation for epoch branching
+        val changeDesc = when {
+            update.removedMemberKeys.isNotEmpty() -> "Member removed"
+            update.addedMembers.isNotEmpty() -> "Member added"
+            else -> "Key rotated"
+        }
+        captureEpochSnapshot(group, changeDesc)
+
         // Verify sender attestation BEFORE mutating state
         val senderAtt = update.senderAttestation
         if (senderAtt != null) {
@@ -1521,9 +1661,11 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Sync transport members and resubscribe group. */
     private fun syncTransportAndSubscribe(group: ChatGroup) {
-        transport.currentMembers.clear()
-        transport.currentMembers.addAll(groups.flatMap { it.members })
-        transport.subscribe(group)
+        updateCurrentMembers(group.id)
+        transport.subscribe(
+            group = group,
+            keyResolver = { epoch -> epochKey(group.id, epoch) }
+        )
     }
 
     /** Rotate the group key via chain-confirmed epoch transition. */
@@ -1742,7 +1884,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Set up handler for incoming chat messages — stores in chatMessages, persists to store. */
     private fun setupChatMessageHandler() {
-        transport.onMessage = { groupID, senderPubkey, text, eventID, timestampMs ->
+        transport.onMessage = { groupID, senderPubkey, text, eventID, timestampMs, epoch ->
             val seen = seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }
             if (seen.add(eventID)) {
                 val msg = ChatMessage(
@@ -1751,7 +1893,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     senderPubkey = senderPubkey,
                     text = text,
                     timestamp = Date(timestampMs),
-                    isMine = senderPubkey == keyManager.publicKeyHex
+                    isMine = senderPubkey == keyManager.publicKeyHex,
+                    epoch = epoch
                 )
                 // Append to trigger Compose recomposition. Arrival order prevents
                 // messages received after epoch transition from jumping into the middle.
@@ -1789,7 +1932,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Set up handler for incoming image messages — stores in chatMessages with media attachment. */
     private fun setupImageMessageHandler() {
-        transport.onImageMessage = { groupID, text, media, eventID, senderPubkey, timestampMs ->
+        transport.onImageMessage = { groupID, text, media, eventID, senderPubkey, timestampMs, epoch ->
             val seen = seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }
             if (seen.add(eventID)) {
                 val msg = ChatMessage(
@@ -1799,7 +1942,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     text = text,
                     timestamp = Date(timestampMs),
                     isMine = senderPubkey == keyManager.publicKeyHex,
-                    mediaAttachment = media
+                    mediaAttachment = media,
+                    epoch = epoch
                 )
                 chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
                 viewModelScope.launch {
@@ -1856,9 +2000,19 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         // Block sending if we're no longer a member
         if (!isMember(group)) return
 
+        // Use effective key/topic/epoch when pinned to a historical epoch
+        val key = effectiveEncryptionKey(group)
+        val topicTag = effectiveTopicTag(group)
+        val epoch = effectiveEpoch(group)
+
         // Use the deterministic NIP-01 event ID so the relay echo is deduplicated,
         // and the event's createdAt so timestamp matches what other clients see.
-        val event = transport.send(group, trimmed)
+        val event = transport.send(
+            group, trimmed,
+            overrideKey = key,
+            overrideTopicTag = topicTag,
+            epoch = epoch
+        )
 
         val msg = ChatMessage(
             id = event.id,
@@ -1867,7 +2021,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             text = trimmed,
             timestamp = Date(event.displayMilliseconds),
             isMine = true,
-            status = MessageStatus.SENDING
+            status = MessageStatus.SENDING,
+            epoch = epoch
         )
         chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
         seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }.add(event.id)
@@ -1888,7 +2043,12 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         updated[idx] = failedMsg.copy(status = MessageStatus.SENDING)
         chatMessages[groupID] = updated
 
-        val event = transport.send(group, failedMsg.text)
+        val event = transport.send(
+            group, failedMsg.text,
+            overrideKey = effectiveEncryptionKey(group),
+            overrideTopicTag = effectiveTopicTag(group),
+            epoch = effectiveEpoch(group)
+        )
         // Update the message ID to the new event and mark as SENDING (OK handler will set SENT/FAILED)
         val current = chatMessages[groupID]?.toMutableList() ?: return
         val i = current.indexOfFirst { it.id == messageID }
@@ -1954,12 +2114,15 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     put("ts", System.currentTimeMillis() / 1000)
                 }
 
-                val key = group.encryptionKey
-                val envelopeJson = GroupCrypto.encrypt(wrapper.toString(), key)
+                val effKey = effectiveEncryptionKey(group)
+                val effTopicTag = effectiveTopicTag(group)
+                val effEpoch = effectiveEpoch(group)
+                val envelopeJson = GroupCrypto.encrypt(wrapper.toString(), effKey)
                 val content = android.util.Base64.encodeToString(
                     envelopeJson.toByteArray(), android.util.Base64.NO_WRAP)
 
-                val tags = listOf(listOf("t", group.topicTag))
+                val tags = mutableListOf(listOf("t", effTopicTag))
+                tags.add(listOf("epoch", effEpoch.toString()))
                 val event = NostrEventBuilder.build(
                     kind = 44114,
                     tags = tags,
@@ -1978,7 +2141,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     timestamp = Date(event.displayMilliseconds),
                     isMine = true,
                     status = MessageStatus.SENDING,
-                    mediaAttachment = media
+                    mediaAttachment = media,
+                    epoch = effEpoch
                 )
                 chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
                 seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }.add(event.id)
@@ -2061,12 +2225,15 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     put("ts", System.currentTimeMillis() / 1000)
                 }
 
-                val key = group.encryptionKey
-                val envelopeJson = GroupCrypto.encrypt(wrapper.toString(), key)
+                val effKey = effectiveEncryptionKey(group)
+                val effTopicTag = effectiveTopicTag(group)
+                val effEpoch = effectiveEpoch(group)
+                val envelopeJson = GroupCrypto.encrypt(wrapper.toString(), effKey)
                 val content = android.util.Base64.encodeToString(
                     envelopeJson.toByteArray(), android.util.Base64.NO_WRAP)
 
-                val tags = listOf(listOf("t", group.topicTag))
+                val tags = mutableListOf(listOf("t", effTopicTag))
+                tags.add(listOf("epoch", effEpoch.toString()))
                 val event = NostrEventBuilder.build(
                     kind = 44114,
                     tags = tags,
@@ -2084,7 +2251,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     timestamp = Date(event.displayMilliseconds),
                     isMine = true,
                     status = MessageStatus.SENDING,
-                    mediaAttachment = media
+                    mediaAttachment = media,
+                    epoch = effEpoch
                 )
                 chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
                 seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }.add(event.id)
@@ -2151,11 +2319,14 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     put("ts", System.currentTimeMillis() / 1000)
                 }
 
-                val key = group.encryptionKey
-                val envelopeJson = com.stellarmls.chat.crypto.GroupCrypto.encrypt(wrapper.toString(), key)
+                val effKey = effectiveEncryptionKey(group)
+                val effTopicTag = effectiveTopicTag(group)
+                val effEpoch = effectiveEpoch(group)
+                val envelopeJson = com.stellarmls.chat.crypto.GroupCrypto.encrypt(wrapper.toString(), effKey)
                 val content = android.util.Base64.encodeToString(
                     envelopeJson.toByteArray(), android.util.Base64.NO_WRAP)
-                val tags = listOf(listOf("t", group.topicTag))
+                val tags = mutableListOf(listOf("t", effTopicTag))
+                tags.add(listOf("epoch", effEpoch.toString()))
                 val event = com.stellarmls.chat.crypto.NostrEventBuilder.build(
                     kind = 44114, tags = tags, content = content, keyManager = keyManager)
 
@@ -2169,7 +2340,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     timestamp = java.util.Date(event.displayMilliseconds),
                     isMine = true,
                     status = com.stellarmls.chat.model.MessageStatus.SENDING,
-                    mediaAttachment = media
+                    mediaAttachment = media,
+                    epoch = effEpoch
                 )
                 val current = (chatMessages[groupID] ?: emptyList()) + msg
                 chatMessages[groupID] = current.sortedWith(
@@ -2201,11 +2373,11 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             put("ts", System.currentTimeMillis() / 1000)
             put("call", callJson)
         }
-        val key = group.encryptionKey
+        val key = effectiveEncryptionKey(group)
         val envelopeJson = GroupCrypto.encrypt(wrapper.toString(), key)
         val content = android.util.Base64.encodeToString(
             envelopeJson.toByteArray(), android.util.Base64.NO_WRAP)
-        val tags = listOf(listOf("t", group.topicTag))
+        val tags = listOf(listOf("t", effectiveTopicTag(group)))
         val event = NostrEventBuilder.build(
             kind = 44114, tags = tags, content = content, keyManager = keyManager)
         transport.publish(event)
@@ -2319,8 +2491,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                                     viewModelScope.launch { try { store.saveGroup(g) } catch (_: Exception) { } }
                                     if (!BuildConfig.DEBUG) transport.unsubscribe(g.topicTag)
                                     // Rebuild currentMembers so BLS check rejects our own messages too
-                                    transport.currentMembers.clear()
-                                    transport.currentMembers.addAll(groups.flatMap { it.members })
+                                    updateCurrentMembers(groupID)
                                 }
                                 insertSystemMessage(groupID, "You were removed from this group", "self-removed", noticeEpoch)
                                 if (BuildConfig.DEBUG) Log.d("GroupListVM", "Self-removed from group=${groupID.take(8)} epoch=$noticeEpoch")

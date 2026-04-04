@@ -14,20 +14,30 @@ Members prove they belong to a group without revealing who they are. The blockch
 | `kotlin-mls/` | Kotlin | SDK for Android — JNI bridge, proof generation, commitment builder |
 | `clients/ios/` | Swift (SwiftUI) | Reference chat app with group creation, invitations, on-chain verification, encrypted persistence |
 | `clients/android/` | Kotlin (Compose) | Reference chat app — feature-parity with iOS, Room persistence, EncryptedSharedPreferences |
-| `relayer/` | Rust | Fee-decoupling HTTP relayer — signs and submits transactions so users don't need funded accounts |
+| `relayer/` | Rust (Axum) | Fee-decoupling HTTP relayer — signs and submits transactions so users don't need funded accounts |
+| `deploy/` | Docker / Nginx / Shell | Self-hosted infrastructure: Nostr relay (strfry), Blossom media server, SSL, landing page |
 | `scripts/` | Shell | Build automation (XCFramework, Android NDK, testnet/mainnet deployment) |
 | `docs/` | Markdown | SEP specification, design docs, phase implementation guides, security audit reports |
 
 ## Architecture
 
 ```
+                    ┌─────────────────────────────────────┐
+                    │       nginx (SSL termination)       │
+                    │       ports 80, 443                 │
+                    └──┬──────┬──────┬──────┬─────────────┘
+                       │      ��      │      │
+          onym.chat    │relay.│nostr.│blossom.
+          (website)    │      │      │
+              ▼        ▼      ▼      ▼
+         /website/  relayer  strfry  blossom-server
+                    :8080    :7777   :3000
+                       │
+                       ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  Mobile Apps (iOS / Android)                                │
 │  SwiftUI / Jetpack Compose                                  │
 │  Group management, invitations, encrypted chat              │
-├─────────────────────────────────────────────────────────────┤
-│  Nostr Relays (kind 24113 invitations, kind 24114 messages) │
-│  Encrypted transport. Protocol messages + chat.             │
 ├─────────────────────────────────────────────────────────────┤
 │  SDKs (SwiftMLS / kotlin-mls)                               │
 │  Proof generation, commitment building, contract client     │
@@ -48,6 +58,163 @@ The prover generates a Groth16 proof that:
 3. The Merkle root is bound into an on-chain commitment: `Poseidon(Poseidon(root, epoch), salt)`
 
 The contract stores only opaque 32-byte commitments and epoch counters. Proof verification uses 4 BLS12-381 host function calls (MSM + add + negate + multi-pairing check).
+
+---
+
+## Quick start
+
+### Prerequisites
+
+- Rust 1.75+ with `cargo`
+- Xcode 15+ (for iOS)
+- Android Studio with NDK 27+ (for Android)
+- `stellar` CLI (for contract deployment)
+- Docker and Docker Compose (for self-hosted infrastructure)
+
+### 1. Clone and configure
+
+```bash
+git clone https://github.com/rinat-enikeev/stellar-mls.git
+cd stellar-mls
+
+# Set up the relayer environment
+cp relayer/.env.example relayer/.env
+# Edit relayer/.env with your Stellar secret key, contract ID, etc.
+```
+
+### 2. Build the Rust core
+
+```bash
+# Run all tests (circuits, prover, Merkle, commitment, ceremony)
+cargo test
+
+# Build the XCFramework for iOS (requires Apple silicon or Intel Mac)
+./scripts/build-xcframework.sh
+# Output: build/SEPMLSFFI.xcframework
+
+# Build JNI libraries for Android (requires NDK)
+./scripts/build-android.sh
+cp -r build/android/jniLibs/ clients/android/StellarChat/app/src/main/jniLibs/
+```
+
+### 3. Build the Soroban contract
+
+```bash
+stellar contract build --manifest-path contracts/sep-xxxx/Cargo.toml
+cd contracts/sep-xxxx && cargo test
+```
+
+### 4. Build the mobile apps
+
+Both apps read configuration from environment files at build time:
+
+- **`relayer/.env`** — Stellar contract ID, RPC endpoint, relayer bind address
+- **`.env`** (root) — `DOMAIN` field, used to derive self-hosted server URLs
+
+If `DOMAIN=onym.chat` is set in `.env`, the apps automatically configure:
+- `wss://nostr.onym.chat` as the primary Nostr relay
+- `https://blossom.onym.chat` as the primary Blossom server
+- `https://relay.onym.chat` as the Stellar relayer URL
+
+If `DOMAIN` is not set, apps fall back to public Nostr relays and the local relayer address from `relayer/.env`.
+
+#### iOS
+
+```bash
+cd clients/ios/StellarChat
+
+# Generate Xcode project (requires xcodegen)
+xcodegen generate
+
+# Build
+xcodebuild build -scheme StellarChat \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro Max' \
+  -derivedDataPath /tmp/StellarChatBuild
+```
+
+The pre-build script in `project.yml` auto-generates `RelayerDefaults.generated.swift` from the env files. This file is gitignored.
+
+#### Android
+
+```bash
+cd clients/android/StellarChat
+
+# Build
+./gradlew :app:assembleDebug
+
+# Run instrumented tests (requires emulator or device)
+./gradlew :app:connectedAndroidTest
+```
+
+`build.gradle.kts` reads both env files at build time and injects values into `BuildConfig`. Only `DOMAIN` is read from the root `.env` — secrets like API keys are never included in the app binary.
+
+---
+
+## Self-hosted infrastructure
+
+The `deploy/` directory and `docker-compose.yml` provide a complete self-hosted stack:
+
+| Service | Image | Internal port | Subdomain |
+|---------|-------|--------------|-----------|
+| **relayer** | Built from `relayer/Dockerfile` | 8080 | `relay.{domain}` |
+| **nostr-relay** | `dockurr/strfry` | 7777 | `nostr.{domain}` |
+| **blossom** | `ghcr.io/hzrd149/blossom-server` | 3000 | `blossom.{domain}` |
+| **nginx** | `nginx:1.27-alpine` | 80, 443 | All subdomains |
+| **certbot** | `certbot/certbot` | — | Auto-renews SSL certs |
+
+Nginx terminates SSL for all four subdomains and reverse-proxies to internal services. The `nostr.{domain}` vhost handles WebSocket upgrades for persistent Nostr connections. The `blossom.{domain}` vhost allows up to 100 MB uploads.
+
+### Run locally with Docker
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+### Deploy to Digital Ocean
+
+A one-command deployment script provisions a droplet, configures DNS, obtains SSL certificates, and starts all services:
+
+```bash
+./deploy/digitalocean/deploy.sh
+```
+
+The script prompts for:
+- **Digital Ocean API key** — creates and manages the droplet
+- **Cloudflare API token** — creates DNS A records for the four subdomains
+- **Domain** — your root domain (e.g. `onym.chat`)
+- **Email** — for Let's Encrypt certificate registration
+
+All inputs are saved to `.env` (gitignored) so re-running the script continues where it left off. The script is idempotent — it reuses existing droplets and skips completed steps.
+
+**What it creates:**
+- Ubuntu 24.04 droplet (`s-2vcpu-4gb`, ~$24/mo)
+- DNS A records for `{domain}`, `relay.{domain}`, `nostr.{domain}`, `blossom.{domain}`
+- Let's Encrypt SSL certificates (auto-renewed by the certbot container)
+
+**After deployment:**
+- `https://{domain}` — landing page
+- `https://relay.{domain}` — Stellar fee-decoupling relayer
+- `wss://nostr.{domain}` ��� Nostr relay (strfry)
+- `https://blossom.{domain}` — Blossom media storage
+
+### SSL bootstrap
+
+The `deploy/certbot/init-certs.sh` script handles the chicken-and-egg problem where nginx needs certificates to start but certbot needs nginx to serve ACME challenges:
+
+1. Creates self-signed placeholder certificates
+2. Starts nginx
+3. Requests real Let's Encrypt certificates via webroot challenge
+4. Reloads nginx with real certificates
+5. Starts all remaining services
+
+This runs automatically as part of `deploy.sh`, but can be run manually:
+
+```bash
+./deploy/certbot/init-certs.sh you@example.com onym.chat
+```
+
+---
 
 ## Repository layout
 
@@ -74,14 +241,36 @@ stellar-mls/
 ├── clients/
 │   ├── ios/StellarChat/       iOS app (27 Swift files, ~4,460 lines)
 │   └── android/StellarChat/   Android app (40 Kotlin files, ~5,270 lines)
-├── relayer/                   Fee-decoupling HTTP relayer (axum + stellar CLI)
+├── relayer/                   Fee-decoupling HTTP relayer (Axum + stellar CLI)
+├── deploy/
+│   ├── nginx/                 Reverse proxy configs (SSL, WebSocket, subdomains)
+│   ├── strfry/                Nostr relay configuration
+│   ├��─ certbot/               SSL certificate bootstrap script
+│   ├── digitalocean/          One-command deployment script
+│   └── website/               Landing page (single HTML file)
+├── docker-compose.yml         Service orchestration (5 containers)
 ├── scripts/
 │   ├── build-xcframework.sh   Apple targets → XCFramework
 │   ├── build-android.sh       Android NDK cross-compilation
-│   ├── deploy-mainnet.sh      One-command mainnet/testnet contract deployment
+│   ├── deploy-mainnet.sh      One-command mainnet contract deployment
 │   └── deploy_sep_xxxx_testnet.sh  Contract deployment + integration test
-└── docs/                      15 documents (spec, design, audit reports)
+└── docs/                      27 documents (spec, design, audit reports)
 ```
+
+## Configuration files
+
+| File | Purpose | Gitignored |
+|------|---------|-----------|
+| `relayer/.env` | Stellar secret key, contract ID, RPC URL, bind address | Yes |
+| `relayer/.env.example` | Template for `relayer/.env` | No |
+| `.env` | Domain, deployment credentials (DO, Cloudflare), droplet state | Yes |
+| `.env.production.example` | Template for `.env` | No |
+
+Both mobile apps read these at build time:
+- `relayer/.env` → contract endpoint, contract ID, relayer URL, auth token
+- `.env` → `DOMAIN` only (derives Nostr relay, Blossom, and relayer URLs)
+
+---
 
 ## Contract ABI
 
@@ -127,95 +316,25 @@ Key attestations bind BLS to Ed25519: `Ed25519_sign(SHA-256("SEP-XXXX:key-bindin
 
 ---
 
-## Building
-
-### Prerequisites
-
-- Rust 1.75+ with `cargo`
-- Xcode 15+ (for iOS/macOS)
-- Android Studio with NDK 27+ (for Android)
-- `stellar` CLI (for contract deployment)
-
-### Rust core
-
-```bash
-# Run all tests (circuits, prover, Merkle, commitment, ceremony)
-cargo test
-
-# Build static library for local Swift development
-cd swift-mls && ./scripts/build-rust-bridge.sh
-```
-
-### Soroban contract
-
-```bash
-# Build WASM
-stellar contract build --manifest-path contracts/sep-xxxx/Cargo.toml
-
-# Run contract tests
-cd contracts/sep-xxxx && cargo test
-```
-
-### Swift SDK
-
-```bash
-cd swift-mls
-
-# Build and test (requires Rust bridge to be built first)
-swift build && swift test
-```
-
-### Kotlin SDK + Android app
-
-```bash
-cd clients/android/StellarChat
-
-# Build native library for Android (requires NDK)
-../../scripts/build-android.sh
-
-# Copy JNI libs into app
-cp -r ../../build/android/jniLibs/ app/src/main/jniLibs/
-
-# Build app
-./gradlew :app:assembleDebug
-
-# Run instrumented tests (requires emulator or device)
-./gradlew :app:connectedAndroidTest
-```
-
-### XCFramework (release distribution)
-
-```bash
-# Requires: rustup target add aarch64-apple-darwin x86_64-apple-darwin \
-#           aarch64-apple-ios aarch64-apple-ios-sim
-./scripts/build-xcframework.sh
-# Output: build/SEPMLSFFI.xcframework
-```
-
-### Testnet deployment
-
-```bash
-# Requires: stellar CLI, funded testnet account
-./scripts/deploy_sep_xxxx_testnet.sh
-# Deploys contract, generates fixtures, runs full integration test
-```
-
 ## Testing
 
 ```bash
-# Everything
-cargo test                                    # Rust core (109 tests)
-cd contracts/sep-xxxx && cargo test           # Contract
-cd swift-mls && swift test                    # Swift SDK
-cd clients/android/StellarChat && \
-  ./gradlew :app:connectedAndroidTest         # Android (33 instrumented tests)
+# Rust core (109 tests)
+cargo test
+
+# Soroban contract
+cd contracts/sep-xxxx && cargo test
+
+# Swift SDK
+cd swift-mls && swift test
+
+# Android instrumented tests (33 tests, requires emulator or device)
+cd clients/android/StellarChat && ./gradlew :app:connectedAndroidTest
 ```
 
 ---
 
-## Using Stellar MLS in the real world
-
-This section walks through what it takes to go from this repository to a deployed, working private group membership system.
+## Production deployment guide
 
 ### Step 1: Run a trusted setup ceremony
 
@@ -259,42 +378,30 @@ stellar contract invoke \
 
 After initialization, the admin address is only used for contract upgrades — it has no special privileges for group operations. Any valid proof grants access.
 
-### Step 3: Deploy a relayer (recommended)
+### Step 3: Deploy the infrastructure
 
-Without a relayer, the Stellar account paying transaction fees is visible on-chain. This leaks the identity of whoever submits a group operation, undermining the privacy model.
+```bash
+# Configure the relayer
+cp relayer/.env.example relayer/.env
+# Edit relayer/.env with your contract ID, secret key, and RPC URL
 
-A relayer is a simple HTTP service that:
-1. Receives the same JSON payload clients would send to Soroban RPC
-2. Wraps it in a Stellar transaction signed with the relayer's keypair
-3. Submits to the network and returns the result
+# Option A: One-command Digital Ocean deployment
+./deploy/digitalocean/deploy.sh
 
-The relayer never sees member identities — it just pays fees on behalf of clients. Deploy it behind a rate limiter and optionally require a bearer token for authentication.
+# Option B: Manual Docker deployment on any server
+docker compose build
+./deploy/certbot/init-certs.sh you@example.com yourdomain.com
+docker compose up -d
+```
 
-**Relayer API contract:**
-- `POST /` with `Content-Type: application/json`
-- Body: `{ "contractID": "...", "function": "create_group", "payload": {...} }`
-- Response: same as Soroban RPC response
-- Optional: `Authorization: Bearer <token>` header
+### Step 4: Build and distribute mobile apps
 
-**Relayer payload validation (required):**
-The relayer MUST validate payloads before submitting to prevent abuse as a fee-paying proxy for arbitrary transactions:
-- **Whitelist contract address**: Only accept invocations targeting the specific SEP contract ID
-- **Whitelist function names**: Only allow `create_group`, `update_commitment`, `verify_membership`, `deactivate_group`
-- **Validate proof structure**: Verify the proof field is exactly 384 bytes (96 + 192 + 96) before submission
-- **Rate limiting**: Limit requests per bearer token and per IP address
-- **Payload size cap**: Reject payloads exceeding a reasonable size threshold (e.g., 8 KB)
+```bash
+# Set the domain so apps point to your infrastructure
+echo "DOMAIN=yourdomain.com" > .env
 
-Both mobile SDKs have built-in relayer transport (`SEPRelayerTransport` on iOS, `OkHttpRelayerTransport` on Android). Configure the relayer URL in the app settings and all contract operations route through it transparently.
-
-### Step 4: Set up Nostr relays
-
-Group communication (invitations, encrypted messages, protocol updates) flows over Nostr relays using two event kinds:
-- **kind 24113** — encrypted invitations (X25519 ECDH + AES-256-GCM)
-- **kind 24114** — encrypted group messages and protocol messages (AES-256-GCM with shared group key)
-
-You can use public relays (`wss://relay.damus.io`, `wss://nos.lol`) or run your own. The relay sees encrypted ciphertext and opaque tags — it cannot read message content or determine group membership.
-
-For better privacy, run your own relay and access it over Tor. For reliability, configure multiple relays — both apps support multi-relay fanout.
+# Build iOS and Android apps — they pick up the domain automatically
+```
 
 ### Step 5: Integrate the SDK into your app
 
@@ -313,16 +420,13 @@ Create a group:
 ```swift
 import SwiftMLS
 
-// Generate a proving key (or load from bundle)
 let provingKey = try SEPProofGenerator.generateTestingProvingKey(tier: .small)
 
-// Build the member list
 let myLeaf = SEPGroupMemberLeaf(
-    publicKeyCompressed: myBLSPublicKey,  // 48 bytes
+    publicKeyCompressed: myBLSPublicKey,
     leafHash: SEPCommitmentBuilder.computeLeafHash(secretKey: myBLSSecretKey)
 )
 
-// Generate a proof
 let proofBundle = try SEPProofGenerator.generateMembershipProof(
     provingKey: provingKey,
     members: [myLeaf],
@@ -332,23 +436,19 @@ let proofBundle = try SEPProofGenerator.generateMembershipProof(
     tier: .small
 )
 
-// Submit to the contract (direct or via relayer)
-let transport = URLSessionSEPContractTransport(endpoint: sorobanRPCURL)
-// or: SEPRelayerTransport(config: SEPRelayerConfig(relayerURL: relayerURL))
+let transport = SEPRelayerTransport(config: SEPRelayerConfig(relayerURL: relayerURL))
 let client = SEPContractClient(contractID: contractID, transport: transport)
 
 let response = try await client.createGroup(SEPCreateGroupRequest(
     groupID: groupIDData,
     commitment: proofBundle.publicInputs.commitment,
-    proof: uncompressedProof,  // 384 bytes, decompressed via proofToContractFormat
+    proof: uncompressedProof,
     publicInputs: proofBundle.publicInputs,
     tier: UInt32(SEPTier.small.rawValue)
 ))
 ```
 
 #### Android (Kotlin)
-
-Add the `kotlin-mls` module as a dependency:
 
 ```kotlin
 // settings.gradle.kts
@@ -365,16 +465,13 @@ Create a group:
 ```kotlin
 import com.stellarmls.mls.*
 
-// Generate a proving key (or load from assets)
 val provingKey = SEPProofGenerator.generateTestingProvingKey(SEPTier.SMALL)
 
-// Build the member list
 val myLeaf = SEPGroupMemberLeaf(
     publicKeyCompressed = SEPCommitmentBuilder.computePublicKey(myBLSSecretKey),
     leafHash = SEPCommitmentBuilder.computeLeafHash(myBLSSecretKey)
 )
 
-// Generate a proof
 val proofBundle = SEPProofGenerator.generateMembershipProof(
     provingKey = provingKey,
     members = listOf(myLeaf),
@@ -384,9 +481,7 @@ val proofBundle = SEPProofGenerator.generateMembershipProof(
     tier = SEPTier.SMALL
 )
 
-// Submit via OnChainService (handles proof format conversion)
-val service = OnChainService(contractID, sorobanRPCEndpoint)
-// or: OnChainService(contractID, relayerURL, authToken)
+val service = OnChainService(contractID, relayerURL, authToken)
 val response = service.publishGroupCreation(
     groupIDData = groupID,
     members = listOf(myLeaf),
@@ -398,8 +493,6 @@ val response = service.publishGroupCreation(
 ```
 
 ### Step 6: Verify groups against the chain
-
-Users should verify their local group state matches what's on-chain. The SDKs provide this:
 
 ```swift
 // iOS
@@ -425,7 +518,9 @@ val result = onChainService.verifyCommitment(
 // result: Verified, EpochMismatch, CommitmentMismatch, NotPublished, Inactive, Error
 ```
 
-### Security checklist for production deployment
+---
+
+## Security checklist
 
 | Item | Why it matters |
 |------|---------------|
@@ -439,7 +534,7 @@ val result = onChainService.verifyCommitment(
 | Rotate groups periodically | Limits the window if a key is compromised |
 | Verify on-chain state on join | Don't trust invitation payloads — verify commitment against the contract |
 
-### What the system guarantees
+## What the system guarantees
 
 - **Membership privacy**: The contract never learns who is in any group. Proofs reveal nothing about the prover.
 - **Proof binding**: Every group operation (create, update, deactivate) requires a valid ZK proof. No one modifies a group without proving membership.
@@ -447,7 +542,7 @@ val result = onChainService.verifyCommitment(
 - **Constant verification cost**: Same 4 host function calls regardless of group size.
 - **End-to-end encryption**: All communication over Nostr is AES-256-GCM encrypted. Relays see ciphertext only.
 
-### What the system does NOT guarantee
+## What the system does NOT guarantee
 
 - **Fee-payer anonymity** without a relayer (use one)
 - **Traffic analysis resistance** (timing and event patterns are observable on Nostr)
@@ -471,12 +566,11 @@ val result = onChainService.verifyCommitment(
 | [`docs/relay-design-doc.md`](docs/relay-design-doc.md) | Relay architecture and confidentiality |
 | [`docs/nip-private-group-transport.md`](docs/nip-private-group-transport.md) | NIP proposal for Nostr group transport |
 | [`docs/testnet-deployment.md`](docs/testnet-deployment.md) | Testnet deployment guide |
-| [`docs/mainnet-deployment.md`](docs/mainnet-deployment.md) | **Mainnet deployment guide** (contract + relayer + app config) |
+| [`docs/mainnet-deployment.md`](docs/mainnet-deployment.md) | Mainnet deployment guide (contract + relayer + app config) |
 | [`docs/real-world-gap-analysis.md`](docs/real-world-gap-analysis.md) | Gap analysis for production deployment |
 | [`docs/audit-report.md`](docs/audit-report.md) | Security audit report |
 | [`docs/audit-report-v2.md`](docs/audit-report-v2.md) | Security audit report (round 2) |
 | [`docs/audit-critical.md`](docs/audit-critical.md) | Critical audit findings and resolutions |
-| [`docs/audit-c1-c9-findings.md`](docs/audit-c1-c9-findings.md) | Detailed C1–C9 findings |
 
 ## License
 

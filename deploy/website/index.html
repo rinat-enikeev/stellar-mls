@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Onym — Private Group Chat with Zero-Knowledge Proofs</title>
+    <meta name="description" content="Truly private group messaging. Prove you belong without revealing who you are. Built on Stellar with zero-knowledge proofs.">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --surface: #12121a;
+            --border: #1e1e2e;
+            --text: #e4e4ef;
+            --text-dim: #8888a0;
+            --accent: #6c5ce7;
+            --accent-glow: #a29bfe;
+            --green: #00b894;
+            --blue: #0984e3;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Navigation */
+        nav {
+            padding: 20px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        nav .container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text);
+            text-decoration: none;
+            letter-spacing: -0.5px;
+        }
+        .logo span { color: var(--accent-glow); }
+        nav a.gh-link {
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+        nav a.gh-link:hover { color: var(--text); }
+
+        /* Hero */
+        .hero {
+            padding: 100px 0 80px;
+            text-align: center;
+        }
+        .hero-badge {
+            display: inline-block;
+            padding: 6px 16px;
+            border-radius: 20px;
+            border: 1px solid var(--border);
+            color: var(--accent-glow);
+            font-size: 0.8rem;
+            font-weight: 500;
+            margin-bottom: 24px;
+            letter-spacing: 0.5px;
+        }
+        .hero h1 {
+            font-size: clamp(2.5rem, 6vw, 4rem);
+            font-weight: 800;
+            line-height: 1.1;
+            margin-bottom: 20px;
+            letter-spacing: -1.5px;
+        }
+        .hero h1 em {
+            font-style: normal;
+            background: linear-gradient(135deg, var(--accent), var(--accent-glow));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .hero p {
+            font-size: 1.2rem;
+            color: var(--text-dim);
+            max-width: 600px;
+            margin: 0 auto 40px;
+        }
+        .hero-buttons {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 28px;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .btn-primary {
+            background: var(--accent);
+            color: #fff;
+        }
+        .btn-primary:hover {
+            background: var(--accent-glow);
+            transform: translateY(-1px);
+        }
+        .btn-secondary {
+            background: var(--surface);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+        .btn-secondary:hover {
+            border-color: var(--accent);
+            transform: translateY(-1px);
+        }
+        .btn svg {
+            width: 20px;
+            height: 20px;
+            fill: currentColor;
+        }
+
+        /* How It Works */
+        .section {
+            padding: 80px 0;
+        }
+        .section-title {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--accent-glow);
+            margin-bottom: 12px;
+        }
+        .section h2 {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 48px;
+            letter-spacing: -0.5px;
+        }
+
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px;
+        }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 32px;
+            transition: border-color 0.2s;
+        }
+        .card:hover { border-color: var(--accent); }
+        .card-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+        }
+        .card-icon.zk { background: rgba(108, 92, 231, 0.15); }
+        .card-icon.stellar { background: rgba(9, 132, 227, 0.15); }
+        .card-icon.e2e { background: rgba(0, 184, 148, 0.15); }
+        .card h3 {
+            font-size: 1.15rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .card p {
+            color: var(--text-dim);
+            font-size: 0.95rem;
+        }
+
+        /* Features */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 20px;
+        }
+        .feature {
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+            padding: 20px;
+            border-radius: 12px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+        }
+        .feature-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-glow);
+            margin-top: 8px;
+            flex-shrink: 0;
+        }
+        .feature h4 {
+            font-size: 0.95rem;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .feature p {
+            color: var(--text-dim);
+            font-size: 0.85rem;
+        }
+
+        /* Architecture */
+        .arch {
+            text-align: center;
+            padding: 60px 0;
+        }
+        .arch-diagram {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin-top: 40px;
+        }
+        .arch-box {
+            padding: 18px 28px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+        .arch-box.app { border-color: var(--green); color: var(--green); }
+        .arch-box.nostr { border-color: var(--accent-glow); color: var(--accent-glow); }
+        .arch-box.stellar { border-color: var(--blue); color: var(--blue); }
+        .arch-arrow {
+            color: var(--text-dim);
+            font-size: 1.5rem;
+        }
+
+        /* Open Source */
+        .oss {
+            text-align: center;
+            padding: 60px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            margin-bottom: 80px;
+        }
+        .oss h2 {
+            font-size: 1.8rem;
+            margin-bottom: 12px;
+        }
+        .oss p {
+            color: var(--text-dim);
+            margin-bottom: 24px;
+            max-width: 500px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .oss .btn { margin: 0 8px; }
+
+        /* Footer */
+        footer {
+            padding: 32px 0;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+        }
+        footer a {
+            color: var(--text-dim);
+            text-decoration: none;
+        }
+        footer a:hover { color: var(--text); }
+        .footer-links {
+            display: flex;
+            gap: 24px;
+            justify-content: center;
+            margin-bottom: 12px;
+        }
+
+        @media (max-width: 640px) {
+            .hero { padding: 60px 0 50px; }
+            .section { padding: 50px 0; }
+            .hero-buttons { flex-direction: column; align-items: center; }
+            .arch-diagram { flex-direction: column; }
+            .arch-arrow { transform: rotate(90deg); }
+        }
+    </style>
+</head>
+<body>
+
+<nav>
+    <div class="container">
+        <a href="/" class="logo">onym<span>.</span>chat</a>
+        <a href="https://github.com/rinat-enikeev/stellar-mls" class="gh-link">GitHub</a>
+    </div>
+</nav>
+
+<section class="hero">
+    <div class="container">
+        <div class="hero-badge">Built on Stellar + Nostr</div>
+        <h1>Private group chat.<br><em>Zero-knowledge proofs.</em></h1>
+        <p>Prove you belong to a group without revealing who you are. No phone number. No email. No identity. Just math.</p>
+        <div class="hero-buttons">
+            <a href="#" class="btn btn-primary">
+                <svg viewBox="0 0 24 24"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+                App Store
+            </a>
+            <a href="#" class="btn btn-secondary">
+                <svg viewBox="0 0 24 24"><path d="M3.609 1.814L13.792 12 3.61 22.186a.996.996 0 01-.61-.92V2.734a1 1 0 01.609-.92zm10.89 10.893l2.302 2.302-10.937 6.333 8.635-8.635zm3.199-3.199l2.807 1.626a1 1 0 010 1.732l-2.807 1.626L15.206 12l2.492-2.492zM5.864 2.658L16.8 8.99l-2.302 2.302-8.634-8.634z"/></svg>
+                Google Play
+            </a>
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="section-title">How it works</div>
+        <h2>Privacy by cryptography, not policy</h2>
+        <div class="cards">
+            <div class="card">
+                <div class="card-icon zk">&#x1f512;</div>
+                <h3>Zero-Knowledge Proofs</h3>
+                <p>Groth16 proofs let you prove group membership without revealing your identity. The blockchain only stores opaque cryptographic commitments — never names, keys, or member lists.</p>
+            </div>
+            <div class="card">
+                <div class="card-icon stellar">&#x2b50;</div>
+                <h3>Stellar Blockchain</h3>
+                <p>Group state is anchored on Stellar via a Soroban smart contract. A fee-paying relayer means participants never need funded accounts — just create, join, and chat.</p>
+            </div>
+            <div class="card">
+                <div class="card-icon e2e">&#x1f510;</div>
+                <h3>End-to-End Encrypted</h3>
+                <p>All messages are AES-256-GCM encrypted and transported over Nostr. Relay servers see only ciphertext and topic tags. Media files use content-addressed Blossom storage.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="section-title">Features</div>
+        <h2>What makes Onym different</h2>
+        <div class="features-grid">
+            <div class="feature">
+                <div class="feature-dot"></div>
+                <div>
+                    <h4>No identity required</h4>
+                    <p>No phone number, no email, no account. Your membership is a cryptographic proof.</p>
+                </div>
+            </div>
+            <div class="feature">
+                <div class="feature-dot"></div>
+                <div>
+                    <h4>Cross-platform</h4>
+                    <p>Native iOS and Android apps with full feature parity.</p>
+                </div>
+            </div>
+            <div class="feature">
+                <div class="feature-dot"></div>
+                <div>
+                    <h4>Constant-size proofs</h4>
+                    <p>A 2,048-member group costs the same to verify as a 2-member group.</p>
+                </div>
+            </div>
+            <div class="feature">
+                <div class="feature-dot"></div>
+                <div>
+                    <h4>Media sharing</h4>
+                    <p>Images, video, and voice messages via Blossom content-addressed storage.</p>
+                </div>
+            </div>
+            <div class="feature">
+                <div class="feature-dot"></div>
+                <div>
+                    <h4>On-chain verification</h4>
+                    <p>Anyone can verify group state on Stellar — the contract is open and auditable.</p>
+                </div>
+            </div>
+            <div class="feature">
+                <div class="feature-dot"></div>
+                <div>
+                    <h4>Self-hostable</h4>
+                    <p>Run your own relay, Nostr server, and Blossom storage. Full sovereignty.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="section arch">
+    <div class="container">
+        <div class="section-title">Architecture</div>
+        <h2>Simple. Decentralized. Verifiable.</h2>
+        <div class="arch-diagram">
+            <div class="arch-box app">Mobile App</div>
+            <div class="arch-arrow">&rarr;</div>
+            <div class="arch-box nostr">Nostr Relay<br><small style="font-weight:400;opacity:0.7">encrypted messages</small></div>
+            <div class="arch-arrow">&rarr;</div>
+            <div class="arch-box stellar">Stellar<br><small style="font-weight:400;opacity:0.7">ZK proof verification</small></div>
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="oss">
+            <h2>Open Source</h2>
+            <p>Onym is fully open source under the MIT license. Audit the code, run your own infrastructure, contribute.</p>
+            <a href="https://github.com/rinat-enikeev/stellar-mls" class="btn btn-primary">View on GitHub</a>
+        </div>
+    </div>
+</section>
+
+<footer>
+    <div class="container">
+        <div class="footer-links">
+            <a href="https://github.com/rinat-enikeev/stellar-mls">GitHub</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls/tree/main/docs">Docs</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls/blob/main/LICENSE">MIT License</a>
+        </div>
+        <p>onym.chat</p>
+    </div>
+</footer>
+
+</body>
+</html>

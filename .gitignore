@@ -44,3 +44,10 @@ relayer/.env
 
 # Generated build-time defaults from relayer/.env
 clients/ios/StellarChat/StellarChat/RelayerDefaults.generated.swift
+
+# Certbot generated data
+deploy/certbot/conf/
+deploy/certbot/webroot/
+
+# Production env
+.env.production

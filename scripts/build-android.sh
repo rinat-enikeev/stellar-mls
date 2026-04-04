@@ -51,15 +51,8 @@ fi
 
 API_LEVEL=26  # minSdk from the app
 
-# Create cargo config for cross-compilation
-mkdir -p "$REPO_ROOT/.cargo"
-cat > "$REPO_ROOT/.cargo/config.toml" <<EOF
-[target.aarch64-linux-android]
-linker = "$TOOLCHAIN/aarch64-linux-android${API_LEVEL}-clang"
-
-[target.x86_64-linux-android]
-linker = "$TOOLCHAIN/x86_64-linux-android${API_LEVEL}-clang"
-EOF
+AARCH64_LINKER="$TOOLCHAIN/aarch64-linux-android${API_LEVEL}-clang"
+X86_64_LINKER="$TOOLCHAIN/x86_64-linux-android${API_LEVEL}-clang"
 
 LIB_NAME="libsep_xxxx_circuits.so"
 
@@ -67,11 +60,26 @@ build_target() {
     local target="$1"
     local abi="$2"
     echo "==> Building release for $target ($abi)"
-    cargo build \
-        --manifest-path "$REPO_ROOT/Cargo.toml" \
-        --release \
-        --target "$target" \
-        --lib
+    case "$target" in
+        aarch64-linux-android)
+            CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$AARCH64_LINKER" cargo build \
+                --manifest-path "$REPO_ROOT/Cargo.toml" \
+                --release \
+                --target "$target" \
+                --lib
+            ;;
+        x86_64-linux-android)
+            CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$X86_64_LINKER" cargo build \
+                --manifest-path "$REPO_ROOT/Cargo.toml" \
+                --release \
+                --target "$target" \
+                --lib
+            ;;
+        *)
+            echo "ERROR: Unsupported target $target" >&2
+            exit 1
+            ;;
+    esac
     mkdir -p "$OUT_DIR/jniLibs/$abi"
     cp "$REPO_ROOT/target/$target/release/$LIB_NAME" "$OUT_DIR/jniLibs/$abi/$LIB_NAME"
 }

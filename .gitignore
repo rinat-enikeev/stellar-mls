@@ -37,6 +37,7 @@ xcuserdata/
 local.properties
 .kotlin/
 .gradle/
+/.cargo/config.toml
 
 # Relayer secrets
 .env

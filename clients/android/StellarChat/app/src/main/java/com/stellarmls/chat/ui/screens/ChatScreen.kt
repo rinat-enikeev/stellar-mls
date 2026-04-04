@@ -20,8 +20,6 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -71,7 +69,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -124,27 +121,17 @@ fun ChatScreen(
     val groupName = viewModel.groupName
     val listState = rememberLazyListState()
 
-    // Track whether user is near the bottom of the list
+    // With reverseLayout=true, index 0 is the bottom (newest message)
     val isNearBottom = remember {
         derivedStateOf {
-            val layoutInfo = listState.layoutInfo
-            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            lastVisible >= layoutInfo.totalItemsCount - 3
+            listState.firstVisibleItemIndex <= 2
         }
     }
 
     // Auto-scroll only when user is near bottom
     LaunchedEffect(viewModel.messages.size) {
         if (viewModel.messages.isNotEmpty() && isNearBottom.value) {
-            listState.animateScrollToItem(viewModel.messages.size - 1)
-        }
-    }
-
-    // Scroll to bottom when keyboard appears so latest messages stay visible
-    val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
-    LaunchedEffect(imeBottom) {
-        if (imeBottom > 0 && viewModel.messages.isNotEmpty() && isNearBottom.value) {
-            listState.animateScrollToItem(viewModel.messages.size - 1)
+            listState.animateScrollToItem(0)
         }
     }
 
@@ -310,9 +297,12 @@ fun ChatScreen(
                             .fillMaxSize()
                             .padding(horizontal = 16.dp),
                         state = listState,
+                        reverseLayout = true,
                         verticalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
-                        itemsIndexed(viewModel.messages, key = { _, msg -> msg.id }) { index, message ->
+                        itemsIndexed(viewModel.messages.asReversed(), key = { _, msg -> msg.id }) { reversedIndex, message ->
+                            val index = viewModel.messages.size - 1 - reversedIndex
+
                             // Date separator
                             if (shouldShowDateSeparator(viewModel.messages, index)) {
                                 DateSeparator(message.timestamp)
@@ -342,7 +332,7 @@ fun ChatScreen(
                             onClick = {
                                 scope.launch {
                                     if (viewModel.messages.isNotEmpty()) {
-                                        listState.animateScrollToItem(viewModel.messages.size - 1)
+                                        listState.animateScrollToItem(0)
                                     }
                                 }
                             },

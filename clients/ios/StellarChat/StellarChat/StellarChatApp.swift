@@ -177,13 +177,20 @@ final class AppState {
 
     private static let saltHistoryKey = "com.stellarmls.chat.saltHistory"
 
-    private static let defaultRelays: [URL] = [
-        URL(string: "wss://relay.damus.io")!,
-        URL(string: "wss://nos.lol")!,
-        URL(string: "wss://relay.nostr.band")!,
-        URL(string: "wss://relay.snort.social")!,
-        URL(string: "wss://nostr.wine")!,
-    ]
+    private static let defaultRelays: [URL] = {
+        var relays: [URL] = []
+        if let url = URL(string: RelayerDefaults.defaultNostrRelay), !RelayerDefaults.defaultNostrRelay.isEmpty {
+            relays.append(url)
+        }
+        relays.append(contentsOf: [
+            URL(string: "wss://relay.damus.io")!,
+            URL(string: "wss://nos.lol")!,
+            URL(string: "wss://relay.nostr.band")!,
+            URL(string: "wss://relay.snort.social")!,
+            URL(string: "wss://nostr.wine")!,
+        ])
+        return relays
+    }()
 
     init() {
         do {
@@ -2860,7 +2867,14 @@ final class AppState {
     // MARK: - Blossom Server Persistence
 
     private static let blossomServerURLsKey = "com.stellarmls.chat.blossomServerURLs"
-    private static let defaultBlossomServers = [URL(string: "https://nostr.download")!]
+    private static let defaultBlossomServers: [URL] = {
+        var servers: [URL] = []
+        if let url = URL(string: RelayerDefaults.defaultBlossomServer), !RelayerDefaults.defaultBlossomServer.isEmpty {
+            servers.append(url)
+        }
+        servers.append(URL(string: "https://nostr.download")!)
+        return servers
+    }()
 
     private static func loadBlossomServerURLs() -> [URL] {
         guard let strings = UserDefaults.standard.stringArray(forKey: blossomServerURLsKey),

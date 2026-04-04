@@ -35,15 +35,38 @@ android {
                 }
             }
         }
+
+        // Read root .env for DOMAIN only (do NOT ship secrets like API keys)
+        val rootEnvFile = rootProject.file("../../../.env")
+        var domain = ""
+        if (rootEnvFile.exists()) {
+            rootEnvFile.readLines().forEach { line ->
+                val trimmed = line.trim()
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) return@forEach
+                val eqIdx = trimmed.indexOf('=')
+                if (eqIdx > 0) {
+                    val key = trimmed.substring(0, eqIdx)
+                    val value = trimmed.substring(eqIdx + 1).trim().removeSurrounding("\"")
+                    if (key == "DOMAIN") domain = value
+                }
+            }
+        }
+
         val relayerBind = envMap["RELAYER_BIND"] ?: ""
-        val defaultRelayerURL = if (relayerBind.isNotEmpty()) "http://$relayerBind" else ""
+        val defaultRelayerURL = if (domain.isNotEmpty()) "https://relay.$domain"
+            else if (relayerBind.isNotEmpty()) "http://$relayerBind"
+            else ""
         val authTokens = envMap["RELAYER_AUTH_TOKENS"] ?: ""
         val firstToken = authTokens.split(",").firstOrNull()?.trim() ?: ""
+        val defaultNostrRelay = if (domain.isNotEmpty()) "wss://nostr.$domain" else ""
+        val defaultBlossomServer = if (domain.isNotEmpty()) "https://blossom.$domain" else ""
 
         buildConfigField("String", "DEFAULT_CONTRACT_ENDPOINT", "\"${envMap["RELAYER_RPC_URL"] ?: ""}\"")
         buildConfigField("String", "DEFAULT_CONTRACT_ID", "\"${envMap["RELAYER_CONTRACT_ID"] ?: ""}\"")
         buildConfigField("String", "DEFAULT_RELAYER_URL", "\"$defaultRelayerURL\"")
         buildConfigField("String", "DEFAULT_RELAYER_AUTH_TOKEN", "\"$firstToken\"")
+        buildConfigField("String", "DEFAULT_NOSTR_RELAY", "\"$defaultNostrRelay\"")
+        buildConfigField("String", "DEFAULT_BLOSSOM_SERVER", "\"$defaultBlossomServer\"")
     }
 
     buildTypes {

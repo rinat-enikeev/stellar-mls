@@ -1,5 +1,6 @@
 package com.stellarmls.chat.nostr
 
+import com.stellarmls.chat.BuildConfig
 import com.stellarmls.chat.crypto.GroupCrypto
 import com.stellarmls.chat.crypto.KeyManager
 import com.stellarmls.chat.crypto.NostrEvent
@@ -34,13 +35,16 @@ import java.util.concurrent.CopyOnWriteArrayList
  */
 class NostrMessageTransport(
     private val keyManager: KeyManager,
-    private val relayURLs: List<String> = listOf(
-        "wss://relay.damus.io",
-        "wss://nos.lol",
-        "wss://relay.nostr.band",
-        "wss://relay.snort.social",
-        "wss://nostr.wine"
-    )
+    private val relayURLs: List<String> = buildList {
+        if (BuildConfig.DEFAULT_NOSTR_RELAY.isNotEmpty()) add(BuildConfig.DEFAULT_NOSTR_RELAY)
+        addAll(listOf(
+            "wss://relay.damus.io",
+            "wss://nos.lol",
+            "wss://relay.nostr.band",
+            "wss://relay.snort.social",
+            "wss://nostr.wine"
+        ))
+    }
 ) {
     private val _connections = mutableListOf<NostrRelayConnection>()
     /** Read-only access to relay connections for sending raw events (e.g., inbox rekeys). */

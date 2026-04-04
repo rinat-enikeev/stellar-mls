@@ -202,6 +202,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         if (savedRelays != null) {
             relayURLs.addAll(savedRelays.split(",").filter { it.isNotBlank() })
         } else {
+            if (BuildConfig.DEFAULT_NOSTR_RELAY.isNotEmpty()) {
+                relayURLs.add(BuildConfig.DEFAULT_NOSTR_RELAY)
+            }
             relayURLs.addAll(listOf(
                 "wss://relay.damus.io",
                 "wss://nos.lol",
@@ -216,6 +219,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         if (savedBlossom != null) {
             blossomServerURLs.addAll(savedBlossom.split(",").filter { it.isNotBlank() })
         } else {
+            if (BuildConfig.DEFAULT_BLOSSOM_SERVER.isNotEmpty()) {
+                blossomServerURLs.add(BuildConfig.DEFAULT_BLOSSOM_SERVER)
+            }
             blossomServerURLs.add("https://nostr.download")
         }
 

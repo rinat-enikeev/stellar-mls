@@ -1,5 +1,6 @@
 package com.stellarmls.chat.model
 
+import com.stellarmls.chat.BuildConfig
 import com.stellarmls.chat.crypto.GroupCrypto
 import com.stellarmls.mls.SEPCommitmentBuilder
 import com.stellarmls.mls.SEPGroupMemberLeaf
@@ -13,13 +14,16 @@ data class ChatGroup(
     val name: String,
     val groupSecret: ByteArray, // 32-byte shared secret
     val createdAt: Date = Date(),
-    val relayHints: List<String> = listOf(
-        "wss://relay.damus.io",
-        "wss://nos.lol",
-        "wss://relay.nostr.band",
-        "wss://relay.snort.social",
-        "wss://nostr.wine"
-    ),
+    val relayHints: List<String> = buildList {
+        if (BuildConfig.DEFAULT_NOSTR_RELAY.isNotEmpty()) add(BuildConfig.DEFAULT_NOSTR_RELAY)
+        addAll(listOf(
+            "wss://relay.damus.io",
+            "wss://nos.lol",
+            "wss://relay.nostr.band",
+            "wss://relay.snort.social",
+            "wss://nostr.wine"
+        ))
+    },
     // SEP membership state
     var members: MutableList<SEPGroupMemberLeaf> = mutableListOf(),
     var epoch: Long = 0,

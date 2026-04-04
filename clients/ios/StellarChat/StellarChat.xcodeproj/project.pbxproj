@@ -9,7 +9,6 @@
 /* Begin PBXBuildFile section */
 		0029F253BA68E6B4CA11E864 /* BootstrapPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA96977038D2F9F4EC31EF3D /* BootstrapPayload.swift */; };
 		01083F180D3E8311A7E002C6 /* CreateGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF781055530F3AF0953DE842 /* CreateGroupView.swift */; };
-		F0A1B2C3D4E5F60718293A4B /* ForkGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F607182930A4B5 /* ForkGroupView.swift */; };
 		09EC25786F839A9A840E509A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E292A37C859D6BE12BE2376 /* ContentView.swift */; };
 		1567BD34990CE37FB89521DF /* VideoCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1FB5F184FBA9633C01BDFBC /* VideoCache.swift */; };
 		16ADABAE1C78B394179DD74B /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76C1E6E24CEC0349F3C9A60A /* ChatViewModel.swift */; };
@@ -18,6 +17,7 @@
 		276E482D1A8B67CFB9B7ADF1 /* InvitationTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C958564E515954D41E226897 /* InvitationTransport.swift */; };
 		2DAB2E5F09CA9490F5C7CDF8 /* CallManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 485C53049C1128D91F1CA2DB /* CallManager.swift */; };
 		33D3690E63750E20852336EE /* AudioCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57DB304E93E815412ABA6010 /* AudioCache.swift */; };
+		3B5518BB5C6DB07F6628E7BD /* ForkGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC5B1B630CCFBA76B3C56C87 /* ForkGroupView.swift */; };
 		3EC81E8DA76069452870626F /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68F22F3B02C2C003269BA135 /* QRScannerView.swift */; };
 		459BB52914DCD2B789CA689C /* MediaCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBAE6FF501ED7880C298C7FC /* MediaCrypto.swift */; };
 		4B45989EA613CA80A4D8FFCB /* ContactsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A14AE9A1C9F0583137C7797 /* ContactsView.swift */; };
@@ -99,13 +99,13 @@
 		A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A4A3E005A9C5AF2DE5743188 /* CallKitProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallKitProvider.swift; sourceTree = "<group>"; };
 		B0884F32E9A807B2566DD234 /* NostrRelayConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrRelayConnection.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F607182930A4B5 /* ForkGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForkGroupView.swift; sourceTree = "<group>"; };
 		BF781055530F3AF0953DE842 /* CreateGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateGroupView.swift; sourceTree = "<group>"; };
 		C1FB5F184FBA9633C01BDFBC /* VideoCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCache.swift; sourceTree = "<group>"; };
 		C6867C765FBB9480D9E0D9FC /* PendingInvitationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingInvitationsView.swift; sourceTree = "<group>"; };
 		C958564E515954D41E226897 /* InvitationTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InvitationTransport.swift; sourceTree = "<group>"; };
 		CEE93134C2D32A03E89226B8 /* NostrMessageTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrMessageTransport.swift; sourceTree = "<group>"; };
 		E8D38B6A8AA5A166074EA951 /* InviteMemberView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InviteMemberView.swift; sourceTree = "<group>"; };
+		EC5B1B630CCFBA76B3C56C87 /* ForkGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForkGroupView.swift; sourceTree = "<group>"; };
 		F0C2E0A174CC0B050D6BADB3 /* QRCodeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeView.swift; sourceTree = "<group>"; };
 		F0F0E18BDAE3BFB365657BA8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		F1F7647C522D0F7D1F86CE17 /* VerificationBadgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerificationBadgeView.swift; sourceTree = "<group>"; };
@@ -147,7 +147,7 @@
 				7A14AE9A1C9F0583137C7797 /* ContactsView.swift */,
 				6E292A37C859D6BE12BE2376 /* ContentView.swift */,
 				BF781055530F3AF0953DE842 /* CreateGroupView.swift */,
-				A1B2C3D4E5F607182930A4B5 /* ForkGroupView.swift */,
+				EC5B1B630CCFBA76B3C56C87 /* ForkGroupView.swift */,
 				7446E889E7A95E042201A70D /* GroupInfoView.swift */,
 				7C2B0F0A2A137DC1BE419CC3 /* GroupListView.swift */,
 				E8D38B6A8AA5A166074EA951 /* InviteMemberView.swift */,
@@ -383,7 +383,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "ENV_FILE=\"${SRCROOT}/../../../relayer/.env\"\nOUT=\"${SRCROOT}/StellarChat/RelayerDefaults.generated.swift\"\nEP=\"\"; CID=\"\"; BIND=\"\"; AUTH=\"\"\nif [ -f \"$ENV_FILE\" ]; then\n  while IFS= read -r line || [ -n \"$line\" ]; do\n    case \"$line\" in \\#*|\"\") continue ;; esac\n    key=\"${line%%=*}\"; val=\"${line#*=}\"\n    val=\"${val%\\\"}\"; val=\"${val#\\\"}\"\n    case \"$key\" in\n      RELAYER_RPC_URL) EP=\"$val\" ;;\n      RELAYER_CONTRACT_ID) CID=\"$val\" ;;\n      RELAYER_BIND) BIND=\"$val\" ;;\n      RELAYER_AUTH_TOKENS) AUTH=\"${val%%,*}\" ;;\n    esac\n  done < \"$ENV_FILE\"\nfi\n[ -n \"$BIND\" ] && BIND=\"http://$BIND\"\ncat > \"$OUT\" << SWIFT\n// Auto-generated from relayer/.env — do not edit\nenum RelayerDefaults {\n    static let contractEndpoint = \"$EP\"\n    static let contractID = \"$CID\"\n    static let relayerURL = \"$BIND\"\n    static let relayerAuthToken = \"$AUTH\"\n}\nSWIFT\n";
+			shellScript = "ENV_FILE=\"${SRCROOT}/../../../relayer/.env\"\nROOT_ENV=\"${SRCROOT}/../../../.env\"\nOUT=\"${SRCROOT}/StellarChat/RelayerDefaults.generated.swift\"\nEP=\"\"; CID=\"\"; BIND=\"\"; AUTH=\"\"; DOMAIN=\"\"\nif [ -f \"$ENV_FILE\" ]; then\n  while IFS= read -r line || [ -n \"$line\" ]; do\n    case \"$line\" in \\#*|\"\") continue ;; esac\n    key=\"${line%%=*}\"; val=\"${line#*=}\"\n    val=\"${val%\\\"}\"; val=\"${val#\\\"}\"\n    case \"$key\" in\n      RELAYER_RPC_URL) EP=\"$val\" ;;\n      RELAYER_CONTRACT_ID) CID=\"$val\" ;;\n      RELAYER_BIND) BIND=\"$val\" ;;\n      RELAYER_AUTH_TOKENS) AUTH=\"${val%%,*}\" ;;\n    esac\n  done < \"$ENV_FILE\"\nfi\nif [ -f \"$ROOT_ENV\" ]; then\n  while IFS= read -r line || [ -n \"$line\" ]; do\n    case \"$line\" in \\#*|\"\") continue ;; esac\n    key=\"${line%%=*}\"; val=\"${line#*=}\"\n    val=\"${val%\\\"}\"; val=\"${val#\\\"}\"\n    case \"$key\" in\n      DOMAIN) DOMAIN=\"$val\" ;;\n    esac\n  done < \"$ROOT_ENV\"\nfi\nNOSTR=\"\"; BLOSSOM=\"\"; RELAY=\"\"\nif [ -n \"$DOMAIN\" ]; then\n  NOSTR=\"wss://nostr.$DOMAIN\"\n  BLOSSOM=\"https://blossom.$DOMAIN\"\n  RELAY=\"https://relay.$DOMAIN\"\nelif [ -n \"$BIND\" ]; then\n  RELAY=\"http://$BIND\"\nfi\ncat > \"$OUT\" << SWIFT\n// Auto-generated from .env + relayer/.env — do not edit\nenum RelayerDefaults {\n    static let contractEndpoint = \"$EP\"\n    static let contractID = \"$CID\"\n    static let relayerURL = \"$RELAY\"\n    static let relayerAuthToken = \"$AUTH\"\n    static let defaultNostrRelay = \"$NOSTR\"\n    static let defaultBlossomServer = \"$BLOSSOM\"\n}\nSWIFT\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -413,7 +413,7 @@
 				4B45989EA613CA80A4D8FFCB /* ContactsView.swift in Sources */,
 				09EC25786F839A9A840E509A /* ContentView.swift in Sources */,
 				01083F180D3E8311A7E002C6 /* CreateGroupView.swift in Sources */,
-				F0A1B2C3D4E5F60718293A4B /* ForkGroupView.swift in Sources */,
+				3B5518BB5C6DB07F6628E7BD /* ForkGroupView.swift in Sources */,
 				B5836D3E7760359CFB8C42AC /* GroupCrypto.swift in Sources */,
 				833FF1A77449454BF4ADC801 /* GroupInfoView.swift in Sources */,
 				D6C3C9E90F39CCA80D2DD029 /* GroupListView.swift in Sources */,

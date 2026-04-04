@@ -1028,6 +1028,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             is EpochTransitionKind.MemberAdd -> {
                 val member = kind.member
                 if (candidate.members.any { it.publicKeyCompressed.contentEquals(member.publicKeyCompressed) }) {
+                    // Already a member — ensure system message exists (dedup-safe)
+                    val name = memberDisplayName(member.publicKeyCompressed)
+                    insertSystemMessage(groupID, "$name joined the group", "member-add", currentGroup.epoch)
                     return EpochTransitionResult.SUCCESS
                 }
                 if (candidate.members.size >= candidate.tier.maxMembers) {

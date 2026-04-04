@@ -621,7 +621,10 @@ final class AppState {
         switch kind {
         case .memberAdd(let member):
             guard !candidate.members.contains(where: { $0.publicKeyCompressed == member.publicKeyCompressed }) else {
-                return .success // Already a member
+                // Already a member — ensure system message exists (dedup-safe)
+                let name = memberDisplayName(blsPubkey: member.publicKeyCompressed)
+                insertSystemMessage(groupID: groupID, text: "\(name) joined the group", event: "member-add", epoch: currentGroup.epoch)
+                return .success
             }
             guard candidate.members.count < candidate.tier.maxMembers else {
                 return .chainRejected(reason: "Group is full")

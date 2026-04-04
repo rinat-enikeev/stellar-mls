@@ -54,3 +54,24 @@ targets:
     dependencies:
       - target: StellarChat
       - package: SwiftMLS
+
+schemes:
+  StellarChat:
+    build:
+      targets:
+        StellarChat: all
+        StellarChatTests: [test]
+    run:
+      config: Debug
+      environmentVariables:
+        OS_ACTIVITY_MODE: disable
+    test:
+      config: Debug
+      targets:
+        - StellarChatTests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

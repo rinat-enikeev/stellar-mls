@@ -214,8 +214,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
 
         // Load default group tier
-        val savedTierId = contractPrefs.getInt("default_tier", SEPTier.LARGE.id)
-        defaultGroupTier = SEPTier.entries.find { it.id == savedTierId } ?: SEPTier.LARGE
+        val savedTierId = if (contractPrefs.contains("default_tier")) contractPrefs.getInt("default_tier", SEPTier.MEDIUM.id) else SEPTier.MEDIUM.id
+        defaultGroupTier = SEPTier.entries.find { it.id == savedTierId } ?: SEPTier.MEDIUM
 
         // Load contract + relayer config (fall back to build-time defaults from relayer/.env)
         contractEndpoint = contractPrefs.getString("endpoint", null)

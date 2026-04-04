@@ -204,7 +204,8 @@ final class AppState {
             ?? RelayerDefaults.contractEndpoint
         self.contractID = UserDefaults.standard.string(forKey: Self.contractIDKey)
             ?? RelayerDefaults.contractID
-        self.defaultGroupTier = SEPTier(rawValue: UserDefaults.standard.integer(forKey: Self.defaultGroupTierKey)) ?? .large
+        let savedTierRaw = UserDefaults.standard.object(forKey: Self.defaultGroupTierKey) as? Int
+        self.defaultGroupTier = savedTierRaw.flatMap { SEPTier(rawValue: $0) } ?? .medium
         self.relayerURL = UserDefaults.standard.string(forKey: Self.relayerURLKey)
             ?? RelayerDefaults.relayerURL
         // N-5: Load auth token from Keychain; migrate from UserDefaults if present

@@ -27,6 +27,10 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
+/**
+ * NostrMessageTransport: handles kind 44114 (topic-addressed, group broadcast).
+ * Do NOT use this transport for kind 34113 (inbox) — use InvitationTransport.
+ */
 class NostrMessageTransport(
     private val keyManager: KeyManager,
     private val relayURLs: List<String> = listOf(
@@ -153,8 +157,15 @@ class NostrMessageTransport(
             keyManager = keyManager
         )
 
+        var published = false
         for (conn in connections) {
-            conn.publish(event)
+            if (conn.isConnected) {
+                conn.publish(event)
+                published = true
+            }
+        }
+        if (com.stellarmls.chat.BuildConfig.DEBUG && !published) {
+            android.util.Log.w("MsgTransport", "send: no connected relays accepted eventID=${event.id.take(12)}")
         }
 
         return event
@@ -184,16 +195,35 @@ class NostrMessageTransport(
             keyManager = keyManager
         )
 
-        if (com.stellarmls.chat.BuildConfig.DEBUG) android.util.Log.d("MsgTransport", "sendProtocol to ${connections.size} relays")
+        var published = false
         for (conn in connections) {
-            conn.publish(event)
+            if (conn.isConnected) {
+                conn.publish(event)
+                published = true
+            }
+        }
+        if (com.stellarmls.chat.BuildConfig.DEBUG) {
+            android.util.Log.d("MsgTransport", "sendProtocol: eventID=${event.id.take(12)} relays=${connections.size} published=$published")
         }
     }
 
-    /** Publish a pre-built event to all connected relays. */
+    /** Publish a pre-built event to all connected relays.
+     *  Precondition: event.kind must be 44114 (group). Use InvitationTransport for 34113. */
     fun publish(event: NostrEvent) {
+        if (com.stellarmls.chat.BuildConfig.DEBUG) {
+            check(event.kind == 44114 || event.kind == 24114) {
+                "MessageTransport received non-chat event kind ${event.kind} — use InvitationTransport for inbox events"
+            }
+        }
+        var published = false
         for (conn in connections) {
-            conn.publish(event)
+            if (conn.isConnected) {
+                conn.publish(event)
+                published = true
+            }
+        }
+        if (com.stellarmls.chat.BuildConfig.DEBUG && !published) {
+            android.util.Log.w("MsgTransport", "publish: no connected relays accepted eventID=${event.id.take(12)}")
         }
     }
 

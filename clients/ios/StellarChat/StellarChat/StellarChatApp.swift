@@ -601,7 +601,7 @@ final class AppState {
         previousKey: SymmetricKey
     ) async -> EpochTransitionResult {
         #if DEBUG
-        print(">>> EPOCH TRANSITION START kind=\(kind) group=\(groupID.prefix(8))")
+        print("[EpochTransition] START kind=\(kind) group=\(groupID.prefix(8))")
         #endif
         guard let index = groups.firstIndex(where: { $0.id == groupID }) else {
             return .chainRejected(reason: "Group not found")
@@ -708,6 +708,9 @@ final class AppState {
         }
 
         if useSecureRekey {
+            #if DEBUG
+            print("[Rekey] START groupID=\(groupID.prefix(8)) epoch=\(candidate.epoch) members=\(candidate.members.count) secure=true")
+            #endif
 
             // 1. Broadcast SEPRemovalNotice on old channel (no secrets)
             let notice = SEPRemovalNotice(
@@ -725,15 +728,15 @@ final class AppState {
                     try await self.chatTransport.sendProtocolMessage(
                         notice, topic: noticeTopic, key: noticeKey, keyManager: self.keyManager
                     )
-                    #if DEBUG
-                    print(">>> REMOVAL NOTICE SENT OK")
-                    #endif
                 } catch {
                     #if DEBUG
-                    print(">>> REMOVAL NOTICE FAILED: \(error)")
+                    print("[Rekey] NOTICE_FAILED groupID=\(groupID.prefix(8)) epoch=\(candidate.epoch) error=\(error)")
                     #endif
                 }
             }
+            #if DEBUG
+            print("[Rekey] NOTICE_SENT groupID=\(groupID.prefix(8)) epoch=\(candidate.epoch) (fire-and-forget)")
+            #endif
 
             // 2. Build SEPRekeyEnvelope with fresh secrets
             let myBundle = try! keyManager.createTransportBundle()
@@ -754,45 +757,59 @@ final class AppState {
             )
 
             // 3. Send per-member rekey envelopes via inbox
+            // CRITICAL PATH: rekey envelope delivery — bounded 30s timeout
             let envelopeData = try! JSONEncoder().encode(envelope)
-            #if DEBUG
-            print(">>> REKEY LOOP: \(candidate.members.count) members, envelopeLen=\(envelopeData.count)")
-            #endif
+            let totalCount = candidate.members.count
+            var sentCount = 0
+
+            // Capture @MainActor-isolated values before entering task group
+            let bundles = transportBundles[groupID] ?? [:]
+            let signingKey = keyManager.ed25519SigningKey
+            let km = keyManager
+            let urls = relayURLs
+
+            let rekeyDeadline = Date().addingTimeInterval(30)
+
             for member in candidate.members {
+                // Bail if timeout exceeded — retry mechanism handles the rest
+                if Date() > rekeyDeadline {
+                    #if DEBUG
+                    print("[Rekey] TIMEOUT groupID=\(groupID.prefix(8)) epoch=\(candidate.epoch) sent=\(sentCount)/\(totalCount) — retry handles rest")
+                    #endif
+                    break
+                }
+
                 let hex = member.publicKeyCompressed.map { String(format: "%02x", $0) }.joined()
-                let hasBundle = transportBundles[groupID]?[hex] != nil
-                let isSelf = (try? keyManager.memberLeaf)?.publicKeyCompressed == member.publicKeyCompressed
-                #if DEBUG
-                print(">>> REKEY MEMBER \(hex.prefix(8)): hasBundle=\(hasBundle) isSelf=\(isSelf)")
-                #endif
-                guard let bundle = transportBundles[groupID]?[hex] else { continue }
+                guard let bundle = bundles[hex] else { continue }
                 // Don't send to self
-                if let myLeaf = try? keyManager.memberLeaf,
+                if let myLeaf = try? km.memberLeaf,
                    myLeaf.publicKeyCompressed == member.publicKeyCompressed { continue }
                 do {
                     let sealed = try GroupCrypto.encryptInvitation(
                         envelopeData,
                         recipientKeyAgreementPubkey: bundle.x25519InboxPubkey,
-                        senderSigningKey: keyManager.ed25519SigningKey
+                        senderSigningKey: signingKey
                     )
                     let sealedData = try JSONEncoder().encode(sealed)
                     let content = sealedData.base64EncodedString()
                     let recipientInboxTag = GroupCrypto.hiddenInboxTag(recipientPublicKey: bundle.x25519InboxPubkey)
                     let tags = InvitationTransport.eventTags(recipientInboxTag: recipientInboxTag)
-                    let event = try NostrEvent.build(kind: 34113, tags: tags, content: content, keyManager: keyManager)
+                    let event = try NostrEvent.build(kind: 34113, tags: tags, content: content, keyManager: km)
+                    try await publishEvent(event, relayURLs: urls)
+                    sentCount += 1
                     #if DEBUG
-                    print("[EpochTransition] Sending inbox rekey to \(hex.prefix(8)) inboxTag=\(recipientInboxTag) eventID=\(event.id.prefix(12)) contentLen=\(content.count)")
-                    #endif
-                    try await invitationTransport.publishToRelays(event, relayURLs: relayURLs)
-                    #if DEBUG
-                    print("[EpochTransition] Published inbox rekey to \(hex.prefix(8)) OK")
+                    print("[Rekey] ENVELOPE_SENT groupID=\(groupID.prefix(8)) epoch=\(candidate.epoch) recipient=\(hex.prefix(8)) eventID=\(event.id.prefix(12)) relays=\(urls.count)")
                     #endif
                 } catch {
                     #if DEBUG
-                    print("[EpochTransition] Failed to send inbox rekey to \(hex.prefix(8)): \(error)")
+                    print("[Rekey] ENVELOPE_FAILED groupID=\(groupID.prefix(8)) epoch=\(candidate.epoch) recipient=\(hex.prefix(8)) error=\(error)")
                     #endif
                 }
             }
+
+            #if DEBUG
+            print("[Rekey] COMPLETE groupID=\(groupID.prefix(8)) epoch=\(candidate.epoch) sent=\(sentCount)/\(totalCount)")
+            #endif
 
             // Track as removal epoch for salt request filtering
             store.savePendingRekey(
@@ -942,6 +959,21 @@ final class AppState {
         return members.allSatisfy { member in
             let hex = member.publicKeyCompressed.map { String(format: "%02x", $0) }.joined()
             return bundles[hex] != nil
+        }
+    }
+
+    /// Kind-aware event router. Prevents wrong-transport bugs by routing based on event kind.
+    /// - kind 34113 → invitationTransport (inbox, per-recipient)
+    /// - kind 44114 → chatTransport (group broadcast)
+    private func publishEvent(_ event: NostrEvent, relayURLs: [URL] = []) async throws {
+        switch event.kind {
+        case 34113:
+            try await invitationTransport.publishToRelays(event, relayURLs: relayURLs)
+        case 44114:
+            try await chatTransport.publishToRelays(event)
+        default:
+            assertionFailure("publishEvent: unknown event kind \(event.kind)")
+            throw ChatError.relayPublishFailed
         }
     }
 
@@ -1315,6 +1347,10 @@ final class AppState {
             return
         }
 
+        #if DEBUG
+        print("[Rekey] RECEIVED groupID=\(groupIDHex.prefix(8)) epoch=\(envelope.epoch) sender=\(senderHex.prefix(8))")
+        #endif
+
         let oldTopicTag = group.topicTag
 
         // Apply member changes from envelope
@@ -1365,7 +1401,8 @@ final class AppState {
         }
 
         #if DEBUG
-        print("[AppState] Applied secure rekey envelope epoch=\(envelope.epoch) group=\(groupIDHex.prefix(8))")
+        let newTopic = group.topicTag
+        print("[Rekey] INSTALLED groupID=\(groupIDHex.prefix(8)) epoch=\(envelope.epoch) newTopic=\(newTopic.prefix(8))")
         #endif
 
         // Send ack on the NEW group topic
@@ -1412,7 +1449,7 @@ final class AppState {
                 let recipientInboxTag = GroupCrypto.hiddenInboxTag(recipientPublicKey: req.requesterBundle.x25519InboxPubkey)
                 let tags = InvitationTransport.eventTags(recipientInboxTag: recipientInboxTag)
                 let event = try NostrEvent.build(kind: 34113, tags: tags, content: content, keyManager: keyManager)
-                try await invitationTransport.publishToRelays(event, relayURLs: relayURLs)
+                try await publishEvent(event, relayURLs: relayURLs)
                 #if DEBUG
                 print("[AppState] Re-sent rekey envelope epoch=\(req.epoch) to requester")
                 #endif
@@ -1471,7 +1508,7 @@ final class AppState {
                     let recipientInboxTag = GroupCrypto.hiddenInboxTag(recipientPublicKey: bundle.x25519InboxPubkey)
                     let tags = InvitationTransport.eventTags(recipientInboxTag: recipientInboxTag)
                     let event = try NostrEvent.build(kind: 34113, tags: tags, content: content, keyManager: keyManager)
-                    try await invitationTransport.publishToRelays(event, relayURLs: relayURLs)
+                    try await publishEvent(event, relayURLs: relayURLs)
                 } catch {
                     #if DEBUG
                     print("[AppState] Resend failed for \(hex.prefix(8)): \(error)")
@@ -1521,6 +1558,59 @@ final class AppState {
             try? await chatTransport.sendProtocolMessage(
                 renamed, topic: group.topicTag, key: group.encryptionKey, keyManager: keyManager)
         }
+    }
+
+    // MARK: - Rekey Health & Diagnostics
+
+    /// Phase 6.2: Check for groups with stale rekey state. Called on app foreground.
+    func rekeyHealthCheck() {
+        for group in groups {
+            let bundleCount = transportBundles[group.id]?.count ?? 0
+            let memberCount = group.members.count
+
+            // Check: missing bundles
+            if bundleCount < memberCount {
+                #if DEBUG
+                print("[RekeyHealth] WARN groupID=\(group.id.prefix(8)) bundles=\(bundleCount)/\(memberCount) — some members missing transport bundles")
+                #endif
+            }
+        }
+
+        // Check: pending rekeys older than 5 minutes
+        let allPendingRekeys = store.loadAllPendingRekeys()
+        for rekey in allPendingRekeys {
+            let age = Date().timeIntervalSince(rekey.createdAt)
+            if age > 300 {
+                #if DEBUG
+                print("[RekeyHealth] WARN groupID=\(rekey.groupID.prefix(8)) epoch=\(rekey.epoch) pending for \(Int(age))s — triggering resend")
+                #endif
+                Task {
+                    await resendPendingRekeys()
+                }
+                break
+            }
+        }
+    }
+
+    /// Phase 6.3: Dump transport and group diagnostics for debugging.
+    func dumpDiagnostics() async {
+        #if DEBUG
+        print("=== StellarChat Diagnostics ===")
+        print("Groups: \(groups.count)")
+        for group in groups {
+            let bundleCount = transportBundles[group.id]?.count ?? 0
+            print("  group=\(group.id.prefix(8)) epoch=\(group.epoch) members=\(group.members.count) bundles=\(bundleCount) topic=\(group.topicTag.prefix(8))")
+        }
+        let allPendingRekeys = store.loadAllPendingRekeys()
+        print("Pending rekeys: \(allPendingRekeys.count)")
+        for rekey in allPendingRekeys {
+            print("  group=\(rekey.groupID.prefix(8)) epoch=\(rekey.epoch) retries=\(rekey.retryCount) age=\(Int(Date().timeIntervalSince(rekey.createdAt)))s")
+        }
+        let chatConnected = await chatTransport.isAnyRelayConnected
+        print("Chat transport: connected=\(chatConnected) relays=\(chatTransport.connectedRelayCount)")
+        print("Invitation transport: connections active")
+        print("=== End Diagnostics ===")
+        #endif
     }
 
     // MARK: - Persistent Chat & Protocol Transport

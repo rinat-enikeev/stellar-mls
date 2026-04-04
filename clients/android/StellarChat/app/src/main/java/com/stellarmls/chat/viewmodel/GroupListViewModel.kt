@@ -16,6 +16,7 @@ import com.stellarmls.chat.crypto.GroupCrypto
 import com.stellarmls.chat.crypto.KeyAttestation
 import com.stellarmls.chat.crypto.KeyManager
 import com.stellarmls.chat.crypto.MediaCrypto
+import com.stellarmls.chat.crypto.NostrEvent
 import com.stellarmls.chat.crypto.NostrEventBuilder
 import com.stellarmls.chat.model.BootstrapPayload
 import com.stellarmls.chat.model.ChatError
@@ -170,6 +171,17 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         private set
     lateinit var invitationTransport: InvitationTransport
         private set
+
+    /** Kind-aware event router. Prevents wrong-transport bugs by routing based on event kind.
+     *  kind 34113 → invitationTransport (inbox, per-recipient)
+     *  kind 44114 → transport (group broadcast) */
+    private fun publishEvent(event: NostrEvent, relayURLs: List<String> = emptyList()) {
+        when (event.kind) {
+            34113 -> invitationTransport.publishToRelays(event, relayURLs)
+            44114 -> transport.publish(event)
+            else -> error("publishEvent: unknown event kind ${event.kind}")
+        }
+    }
 
     private var connected = false
 
@@ -438,7 +450,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         val groupIDBytes = android.util.Base64.decode(obj.getString("groupID"), android.util.Base64.NO_WRAP)
         val groupIDHex = groupIDBytes.toHex()
         val epoch = obj.getLong("epoch")
-        if (BuildConfig.DEBUG) Log.d("GroupListVM", "applyRekeyEnvelope: group=${groupIDHex.take(8)} epoch=$epoch")
+        if (BuildConfig.DEBUG) Log.d("Rekey", "RECEIVED groupID=${groupIDHex.take(8)} epoch=$epoch")
         val index = groups.indexOfFirst { it.id == groupIDHex }
         if (index < 0) {
             if (BuildConfig.DEBUG) Log.w("GroupListVM", "applyRekeyEnvelope: group not found ${groupIDHex.take(8)}")
@@ -520,7 +532,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             insertSystemMessage(groupIDHex, "$name was removed from the group", "member-remove", epoch)
         }
 
-        if (BuildConfig.DEBUG) Log.d("GroupListVM", "Applied secure rekey envelope epoch=$epoch group=${groupIDHex.take(8)}")
+        if (BuildConfig.DEBUG) Log.d("Rekey", "INSTALLED groupID=${groupIDHex.take(8)} epoch=$epoch newTopic=${group.topicTag.take(8)}")
 
         // Send ack on the NEW topic
         val myBls = keyManager.blsPublicKey()
@@ -564,7 +576,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 val recipientInboxTag = GroupCrypto.hiddenInboxTag(requesterBundle.x25519InboxPubkey)
                 val tags = InvitationTransport.eventTags(recipientInboxTag)
                 val event = com.stellarmls.chat.crypto.NostrEventBuilder.build(34113, tags, contentBase64, keyManager)
-                invitationTransport.publishToRelays(event, relayURLs.toList())
+                publishEvent(event, relayURLs.toList())
                 if (BuildConfig.DEBUG) Log.d("GroupListVM", "Re-sent rekey envelope epoch=$epoch to requester")
             } catch (e: Exception) {
                 if (BuildConfig.DEBUG) Log.e("GroupListVM", "Resend request failed: ${e.message}")
@@ -621,12 +633,54 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     val recipientInboxTag = GroupCrypto.hiddenInboxTag(bundle.x25519InboxPubkey)
                     val tags = InvitationTransport.eventTags(recipientInboxTag)
                     val event = com.stellarmls.chat.crypto.NostrEventBuilder.build(34113, tags, contentBase64, keyManager)
-                    invitationTransport.publishToRelays(event, relayURLs.toList())
+                    publishEvent(event, relayURLs.toList())
                 } catch (e: Exception) {
                     if (BuildConfig.DEBUG) Log.e("GroupListVM", "Resend failed for ${hex.take(8)}: ${e.message}")
                 }
             }
             try { store.incrementPendingRekeyRetry(record.groupID, record.epoch) } catch (_: Exception) { }
+        }
+    }
+
+    /** Phase 6.2: Check for groups with stale rekey state. Called on app foreground. */
+    fun rekeyHealthCheck() {
+        for (group in groups) {
+            val bundleCount = transportBundles[group.id]?.size ?: 0
+            val memberCount = group.members.size
+            if (bundleCount < memberCount) {
+                if (BuildConfig.DEBUG) Log.w("RekeyHealth", "WARN groupID=${group.id.take(8)} bundles=$bundleCount/$memberCount — missing transport bundles")
+            }
+        }
+        viewModelScope.launch {
+            val allPending = try { store.loadAllPendingRekeys() } catch (_: Exception) { return@launch }
+            for (rekey in allPending) {
+                val ageMs = System.currentTimeMillis() - rekey.createdAt
+                if (ageMs > 300_000) {
+                    if (BuildConfig.DEBUG) Log.w("RekeyHealth", "WARN groupID=${rekey.groupID.take(8)} epoch=${rekey.epoch} pending for ${ageMs/1000}s — triggering resend")
+                    resendPendingRekeys()
+                    break
+                }
+            }
+        }
+    }
+
+    /** Phase 6.3: Dump transport and group diagnostics for debugging. */
+    fun dumpDiagnostics() {
+        if (!BuildConfig.DEBUG) return
+        Log.d("Diagnostics", "=== StellarChat Diagnostics ===")
+        Log.d("Diagnostics", "Groups: ${groups.size}")
+        for (group in groups) {
+            val bundleCount = transportBundles[group.id]?.size ?: 0
+            Log.d("Diagnostics", "  group=${group.id.take(8)} epoch=${group.epoch} members=${group.members.size} bundles=$bundleCount topic=${group.topicTag.take(8)}")
+        }
+        viewModelScope.launch {
+            val allPending = try { store.loadAllPendingRekeys() } catch (_: Exception) { emptyList() }
+            Log.d("Diagnostics", "Pending rekeys: ${allPending.size}")
+            for (rekey in allPending) {
+                Log.d("Diagnostics", "  group=${rekey.groupID.take(8)} epoch=${rekey.epoch} retries=${rekey.retryCount} age=${(System.currentTimeMillis() - rekey.createdAt)/1000}s")
+            }
+            Log.d("Diagnostics", "Chat transport: connected=${transport.isAnyRelayConnected} relays=${transport.connections.size}")
+            Log.d("Diagnostics", "=== End Diagnostics ===")
         }
     }
 
@@ -1042,6 +1096,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
 
         if (useSecureRekey) {
+            if (BuildConfig.DEBUG) Log.d("Rekey", "START groupID=${groupID.take(8)} epoch=${candidate.epoch} members=${candidate.members.size} secure=true")
+            var sentCount = 0
 
             // 1. Broadcast SEPRemovalNotice on old channel (no secrets)
             val noticeJson = JSONObject().apply {
@@ -1055,7 +1111,15 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     put("commitment", android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP))
                 }
             }.toString()
-            transport.sendProtocolMessage(currentGroup, noticeJson, previousKey)
+            // Fire-and-forget: removal notice is non-critical courtesy — must NOT block rekey delivery
+            viewModelScope.launch {
+                try {
+                    transport.sendProtocolMessage(currentGroup, noticeJson, previousKey)
+                    if (BuildConfig.DEBUG) Log.d("Rekey", "NOTICE_SENT groupID=${groupID.take(8)} epoch=${candidate.epoch} (fire-and-forget)")
+                } catch (e: Exception) {
+                    if (BuildConfig.DEBUG) Log.w("Rekey", "Removal notice failed (non-critical): ${e.message}")
+                }
+            }
 
             // 2. Build rekey envelope JSON
             val myBundle = keyManager.createTransportBundle()
@@ -1098,11 +1162,14 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     val recipientInboxTag = GroupCrypto.hiddenInboxTag(bundle.x25519InboxPubkey)
                     val tags = InvitationTransport.eventTags(recipientInboxTag)
                     val event = com.stellarmls.chat.crypto.NostrEventBuilder.build(34113, tags, contentBase64, keyManager)
-                    invitationTransport.publishToRelays(event, relayURLs.toList())
+                    publishEvent(event, relayURLs.toList())
+                    sentCount++
+                    if (BuildConfig.DEBUG) Log.d("Rekey", "ENVELOPE_SENT groupID=${groupID.take(8)} epoch=${candidate.epoch} recipient=${hex.take(8)} eventID=${event.id.take(12)}")
                 } catch (e: Exception) {
-                    if (BuildConfig.DEBUG) Log.e("GroupListVM", "Failed to send inbox rekey to ${hex.take(8)}: ${e.message}")
+                    if (BuildConfig.DEBUG) Log.e("Rekey", "ENVELOPE_FAILED groupID=${groupID.take(8)} epoch=${candidate.epoch} recipient=${hex.take(8)} error=${e.message}")
                 }
             }
+            if (BuildConfig.DEBUG) Log.d("Rekey", "COMPLETE groupID=${groupID.take(8)} epoch=${candidate.epoch} sent=$sentCount/${candidate.members.size}")
 
             // Persist new group state SYNCHRONOUSLY before subscribing/publishing,
             // so a crash can't leave us on a stale groupSecret while recipients

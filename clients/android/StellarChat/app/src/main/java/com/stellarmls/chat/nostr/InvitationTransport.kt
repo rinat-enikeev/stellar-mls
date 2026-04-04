@@ -19,7 +19,8 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Kind 34113 invitation send/receive over Nostr relays.
+ * InvitationTransport: handles kind 34113 (inbox-addressed, per-recipient).
+ * Do NOT use this transport for kind 44114 (group broadcast) — use NostrMessageTransport.
  * Still listens for legacy kind 24113 events during migration.
  * Uses X25519 ECDH + AES-256-GCM for invitation encryption.
  */
@@ -104,7 +105,7 @@ class InvitationTransport(private val keyManager: KeyManager) {
         }
     }
 
-    /** Send an invitation to a recipient via their inbox. */
+    /** Send an invitation to a recipient via their inbox. Throws if no relay accepted. */
     fun sendInvitation(
         payload: BootstrapPayload,
         recipientKeyAgreementPubkey: ByteArray,
@@ -134,24 +135,50 @@ class InvitationTransport(private val keyManager: KeyManager) {
             keyManager = keyManager
         )
 
+        check(connections.isNotEmpty()) { "No relay connections available for sendInvitation" }
+        var published = false
         for (conn in connections) {
-            conn.publish(event)
+            if (conn.isConnected) {
+                conn.publish(event)
+                published = true
+            }
         }
+        if (com.stellarmls.chat.BuildConfig.DEBUG) {
+            android.util.Log.d("InvitationTransport", "sendInvitation: eventID=${event.id.take(12)} relays=${connections.size} published=$published")
+        }
+        check(published) { "No connected relays accepted the invitation event" }
     }
 
-    /** Publish a pre-built event to all connected relays. */
+    /** Publish a pre-built event to all connected relays. Throws if no relay accepted the event.
+     *  Precondition: event.kind must be 34113 (inbox). Use NostrMessageTransport for 44114. */
     fun publishToRelays(event: NostrEvent, relayURLs: List<String> = emptyList()) {
+        check(event.kind == PRIMARY_KIND || event.kind == LEGACY_KIND) {
+            "InvitationTransport received non-inbox event kind ${event.kind} — use NostrMessageTransport for group messages"
+        }
         if (connections.isEmpty() && relayURLs.isNotEmpty()) {
             if (com.stellarmls.chat.BuildConfig.DEBUG) {
                 android.util.Log.d("InvitationTransport", "publishToRelays: no connections — connecting to ${relayURLs.size} relays")
             }
             connect(relayURLs)
         }
+        if (connections.isEmpty()) {
+            throw IllegalStateException("No relay connections available for publish")
+        }
         if (com.stellarmls.chat.BuildConfig.DEBUG) {
             android.util.Log.d("InvitationTransport", "publishToRelays: connections=${connections.size}")
         }
+        var published = false
         for (conn in connections) {
-            conn.publish(event)
+            if (conn.isConnected) {
+                conn.publish(event)
+                published = true
+            }
+        }
+        if (com.stellarmls.chat.BuildConfig.DEBUG) {
+            android.util.Log.d("InvitationTransport", "publishToRelays: eventID=${event.id.take(12)} kind=${event.kind} relays=${connections.size} published=$published")
+        }
+        if (!published) {
+            throw IllegalStateException("No connected relays accepted the event")
         }
     }
 

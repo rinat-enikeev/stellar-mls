@@ -1,5 +1,41 @@
 package com.stellarmls.mls
 
+// MARK: - Protocol Message Type Registry
+//
+// CHECKLIST: When adding a new protocol message type:
+// 1. Add it to SEPMessageType below
+// 2. Define the data class in this file
+// 3. Add to isProtocolMessage on both platforms (iOS NostrMessageTransport, Android NostrMessageTransport)
+// 4. If it modifies membership: add to applyMemberChanges on BOTH platforms
+// 5. Add dispatch case in the main protocol message handler on both platforms
+// 6. Add cross-platform test vector in docs/cross-platform-test-vectors.json
+
+/**
+ * Exhaustive registry of all SEP protocol message types.
+ * Every MESSAGE_TYPE constant in this file MUST have a corresponding entry here.
+ */
+enum class SEPMessageType(val wireValue: String, val modifiesMembership: Boolean) {
+    STATE_UPDATE("sep_state_update", modifiesMembership = true),
+    MEMBER_JOINED("sep_member_joined", modifiesMembership = true),
+    SALT_REQUEST("sep_salt_request", modifiesMembership = false),
+    SALT_RESPONSE("sep_salt_response", modifiesMembership = false),
+    GROUP_RENAMED("sep_group_renamed", modifiesMembership = false),
+    REKEY("sep_rekey", modifiesMembership = false),
+    MESSAGE_ACK("sep_message_ack", modifiesMembership = false),
+    REMOVAL_NOTICE("sep_removal_notice", modifiesMembership = true),
+    REKEY_ENVELOPE("sep_rekey_envelope", modifiesMembership = false),
+    REKEY_ACK("sep_rekey_ack", modifiesMembership = false),
+    REKEY_RESEND_REQUEST("sep_rekey_resend_request", modifiesMembership = false);
+
+    companion object {
+        private val byWireValue = entries.associateBy { it.wireValue }
+        fun fromWireValue(value: String): SEPMessageType? = byWireValue[value]
+
+        /** All message types that require applyMemberChanges handling. */
+        val membershipModifying: Set<SEPMessageType> = entries.filter { it.modifiesMembership }.toSet()
+    }
+}
+
 // MARK: - Group State Update Protocol Messages
 
 /**

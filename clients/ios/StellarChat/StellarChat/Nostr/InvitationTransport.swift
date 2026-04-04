@@ -2,8 +2,9 @@ import CryptoKit
 import Foundation
 import SwiftMLS
 
-/// Sends kind 34113 invitation events over Nostr relays and still listens for
-/// legacy kind 24113 events during migration.
+/// InvitationTransport: handles kind 34113 (inbox-addressed, per-recipient).
+/// Do NOT use this transport for kind 44114 (group broadcast) — use NostrMessageTransport.
+/// Still listens for legacy kind 24113 events during migration.
 @Observable
 final class InvitationTransport {
     private static let primaryKind = 34113
@@ -154,13 +155,16 @@ final class InvitationTransport {
             return any
         }
 
-        if !published && !conns.isEmpty {
+        if !published {
             throw ChatError.relayPublishFailed
         }
     }
 
     /// Publish a pre-built event to all connected relays (concurrently).
+    /// - Precondition: event.kind must be 34113 (inbox). Use NostrMessageTransport for 44114.
     func publishToRelays(_ event: NostrEvent, relayURLs: [URL] = []) async throws {
+        assert(event.kind == Self.primaryKind || event.kind == Self.legacyKind,
+               "InvitationTransport received non-inbox event kind \(event.kind) — use NostrMessageTransport for group messages")
         if connections.isEmpty && !relayURLs.isEmpty {
             #if DEBUG
             print("[Invite] publishToRelays: no connections — connecting to \(relayURLs.count) relays")
@@ -192,7 +196,7 @@ final class InvitationTransport {
             return any
         }
         #if DEBUG
-        print("[Invite] publishToRelays: published=\(published)")
+        print("[Invite] publishToRelays: eventID=\(event.id.prefix(12)) kind=\(event.kind) relays=\(conns.count) published=\(published)")
         #endif
         if !published {
             throw ChatError.relayPublishFailed

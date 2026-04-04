@@ -2,7 +2,8 @@ import CryptoKit
 import Foundation
 import SwiftMLS
 
-/// Sends and receives encrypted group messages over Nostr relays.
+/// NostrMessageTransport: handles kind 44114 (topic-addressed, group broadcast).
+/// Do NOT use this transport for kind 34113 (inbox) — use InvitationTransport.
 @Observable
 final class NostrMessageTransport {
     private var connections: [URL: NostrRelayConnection] = [:]
@@ -325,10 +326,15 @@ final class NostrMessageTransport {
     }
 
     /// Publish a pre-built event to all connected relays concurrently.
-    /// Succeeds if at least one relay accepts. Throws only if all fail.
+    /// Succeeds if at least one relay accepts. Throws if all fail or no connections exist.
+    /// - Precondition: event.kind must be 44114 (group). Use InvitationTransport for 34113.
     func publishToRelays(_ event: NostrEvent) async throws {
+        assert(event.kind == 44114 || event.kind == 24114,
+               "MessageTransport received non-chat event kind \(event.kind) — use InvitationTransport for inbox events")
         let conns = Array(connections.values)
-        guard !conns.isEmpty else { return }
+        guard !conns.isEmpty else {
+            throw ChatError.relayPublishFailed
+        }
 
         let published = await withTaskGroup(of: Bool.self) { group in
             for conn in conns {

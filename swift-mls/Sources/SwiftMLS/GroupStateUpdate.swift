@@ -1,6 +1,45 @@
 import CryptoKit
 import Foundation
 
+// MARK: - Protocol Message Type Registry
+//
+// CHECKLIST: When adding a new protocol message type:
+// 1. Add a case to SEPMessageType below
+// 2. Define the struct in this file
+// 3. Add to isProtocolMessage on both platforms (iOS NostrMessageTransport, Android NostrMessageTransport)
+// 4. If it modifies membership: add to applyMemberChanges on BOTH platforms
+// 5. Add dispatch case in the main protocol message handler on both platforms
+// 6. Add cross-platform test vector in docs/cross-platform-test-vectors.json
+
+/// Exhaustive registry of all SEP protocol message types.
+/// Use exhaustive `switch` on this enum so adding a new type produces a compile error
+/// until all handlers are updated.
+public enum SEPMessageType: String, CaseIterable, Sendable {
+    case stateUpdate = "sep_state_update"
+    case memberJoined = "sep_member_joined"
+    case saltRequest = "sep_salt_request"
+    case saltResponse = "sep_salt_response"
+    case groupRenamed = "sep_group_renamed"
+    case rekey = "sep_rekey"
+    case messageAck = "sep_message_ack"
+    case removalNotice = "sep_removal_notice"
+    case rekeyEnvelope = "sep_rekey_envelope"
+    case rekeyAck = "sep_rekey_ack"
+    case rekeyResendRequest = "sep_rekey_resend_request"
+
+    /// Whether this message type modifies group membership and MUST be handled
+    /// in applyMemberChanges on both platforms.
+    public var modifiesMembership: Bool {
+        switch self {
+        case .memberJoined, .stateUpdate, .removalNotice:
+            return true
+        case .saltRequest, .saltResponse, .groupRenamed, .rekey,
+             .messageAck, .rekeyEnvelope, .rekeyAck, .rekeyResendRequest:
+            return false
+        }
+    }
+}
+
 // MARK: - Group State Update Protocol Messages
 
 /// Distributed via the encrypted group channel (kind 24114) after a membership change.

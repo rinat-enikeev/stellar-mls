@@ -23,13 +23,14 @@ final class NostrMessageTransport {
     }
 
     /// Callback for received and decrypted plain-text chat messages.
-    /// Parameters: (plaintext, event, senderVerified: true if BLS pubkey is in member list)
-    var onMessage: ((String, NostrEvent) -> Void)?
+    /// Parameters: (groupID, plaintext, event)
+    var onMessage: ((String, String, NostrEvent) -> Void)?
     /// Callback for received image messages with media attachment metadata.
-    /// Parameters: (text fallback, media attachment, event)
-    var onImageMessage: ((String, MediaAttachment, NostrEvent) -> Void)?
+    /// Parameters: (groupID, text fallback, media attachment, event)
+    var onImageMessage: ((String, String, MediaAttachment, NostrEvent) -> Void)?
     /// Callback for received protocol messages (state updates, salt requests/responses).
-    var onProtocolMessage: ((String, NostrEvent) -> Void)?
+    /// Parameters: (groupID, json, event)
+    var onProtocolMessage: ((String, String, NostrEvent) -> Void)?
     /// Callback for received call signaling messages (offer, answer, ice, hangup, busy, reject).
     /// Parameters: (groupID, call JSON dict, senderBlsPubkey, event)
     var onCallSignal: ((String, [String: Any], Data, NostrEvent) -> Void)?
@@ -202,17 +203,17 @@ final class NostrMessageTransport {
                         encryptedThumbnail: encryptedThumbnail,
                         duration: duration
                     )
-                    onImageMessage?(innerText, media, event)
+                    onImageMessage?(groupID, innerText, media, event)
                 } else if !isMember {
                     SecurityLog.nonMemberMessageRejected(groupID: groupID)
                 }
             } else if SEPProtocolMessage.parse(innerText) != nil {
                 applyMemberChanges(from: innerText)
-                onProtocolMessage?(innerText, event)
+                onProtocolMessage?(groupID, innerText, event)
             } else {
                 let isMember = currentMembers.contains { $0.publicKeyCompressed == blsPubkey }
                 if isMember {
-                    onMessage?(innerText, event)
+                    onMessage?(groupID, innerText, event)
                 } else {
                     SecurityLog.nonMemberMessageRejected(groupID: groupID)
                 }

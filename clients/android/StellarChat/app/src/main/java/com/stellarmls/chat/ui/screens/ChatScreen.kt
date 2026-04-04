@@ -51,6 +51,8 @@ import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -115,7 +117,8 @@ fun ChatScreen(
     onGroupInfo: () -> Unit = {},
     onStartCall: (video: Boolean) -> Unit = {},
     contactAliasStore: com.stellarmls.chat.persistence.ContactAliasStore? = null,
-    onUnpinEpoch: (() -> Unit)? = null
+    onUnpinEpoch: (() -> Unit)? = null,
+    groupListViewModel: com.stellarmls.chat.viewmodel.GroupListViewModel? = null
 ) {
     val groupName = viewModel.groupName
     val listState = rememberLazyListState()
@@ -206,25 +209,48 @@ fun ChatScreen(
         ) {
             // Epoch pin banner
             val pinnedEpoch = viewModel.group?.pinnedEpoch
-            if (pinnedEpoch != null) {
-                Row(
+            val group = viewModel.group
+            if (pinnedEpoch != null && group != null) {
+                val snapshot = groupListViewModel?.epochSnapshots?.get(group.id)?.get(pinnedEpoch)
+                val isPrivateBranch = snapshot != null && !snapshot.groupSecret.contentEquals(group.groupSecret)
+                val bgColor = if (isPrivateBranch) Color(0xFFE8F5E9) else Color(0xFFFFF3E0)
+                val fgColor = if (isPrivateBranch) Color(0xFF2E7D32) else Color(0xFFE65100)
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color(0xFFFFF3E0)) // orange-tinted background
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .background(bgColor)
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
                 ) {
-                    Text(
-                        "Pinned to epoch $pinnedEpoch",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFE65100),
-                        modifier = Modifier.weight(1f)
-                    )
-                    TextButton(
-                        onClick = { onUnpinEpoch?.invoke() }
-                    ) {
-                        Text("Unpin", color = Color(0xFFE65100))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = if (isPrivateBranch)
+                                Icons.Default.Lock else Icons.Default.FilterList,
+                            contentDescription = null,
+                            tint = fgColor,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "Epoch $pinnedEpoch" + if (snapshot != null) " \u2022 ${snapshot.members.size} members" else "",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium,
+                            color = fgColor,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(
+                            onClick = { onUnpinEpoch?.invoke() }
+                        ) {
+                            Text("Unpin", color = fgColor)
+                        }
                     }
+                    Text(
+                        if (isPrivateBranch)
+                            "Private branch \u2014 only members from this epoch can read and write here"
+                        else
+                            "Filtered view \u2014 messages are still visible to all group members",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = fgColor.copy(alpha = 0.7f)
+                    )
                 }
             }
 

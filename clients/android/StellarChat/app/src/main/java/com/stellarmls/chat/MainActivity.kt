@@ -187,7 +187,8 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                     contactAliasStore = groupListViewModel.contactAliasStore,
                     onUnpinEpoch = {
                         groupListViewModel.unpinEpoch(groupId)
-                    }
+                    },
+                    groupListViewModel = groupListViewModel
                 )
 
                 // Show call screen overlay when a call is active

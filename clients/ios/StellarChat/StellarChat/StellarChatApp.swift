@@ -1441,6 +1441,17 @@ final class AppState {
         return group.members.contains { $0.publicKeyCompressed == myLeaf.publicKeyCompressed }
     }
 
+    /// Check if the current user can send in this group (considers pinned epoch).
+    func canSend(in group: ChatGroup) -> Bool {
+        guard let myLeaf = try? keyManager.memberLeaf else { return false }
+        // If pinned, check the pinned epoch's member list
+        if let pinned = group.pinnedEpoch,
+           let snapshot = epochSnapshots[group.id]?[pinned] {
+            return snapshot.members.contains { $0.publicKeyCompressed == myLeaf.publicKeyCompressed }
+        }
+        return group.members.contains { $0.publicKeyCompressed == myLeaf.publicKeyCompressed }
+    }
+
     /// Apply the member delta (adds/removes) from a state update to a group.
     private func applyMemberDelta(_ update: SEPGroupStateUpdate, to group: inout ChatGroup) {
         for removed in update.removedMemberKeys {
@@ -1825,12 +1836,10 @@ final class AppState {
 
     /// Set up the chat message handler on the persistent transport (runs once at init).
     private func setupChatHandler() {
-        chatTransport.onMessage = { [weak self] plaintext, event in
+        chatTransport.onMessage = { [weak self] groupID, plaintext, event in
             guard let self else { return }
             Task { @MainActor in
-                let topicTag = event.tags.first(where: { $0.first == "t" }).flatMap { $0.dropFirst().first }
-                guard let group = self.groups.first(where: { $0.topicTag == topicTag }) else { return }
-                let groupID = group.id
+                guard self.groups.contains(where: { $0.id == groupID }) else { return }
 
                 guard !(self.seenMessageIDs[groupID]?.contains(event.id) ?? false) else { return }
                 self.seenMessageIDs[groupID, default: []].insert(event.id)
@@ -1850,12 +1859,10 @@ final class AppState {
             }
         }
 
-        chatTransport.onImageMessage = { [weak self] plaintext, media, event in
+        chatTransport.onImageMessage = { [weak self] groupID, plaintext, media, event in
             guard let self else { return }
             Task { @MainActor in
-                let topicTag = event.tags.first(where: { $0.first == "t" }).flatMap { $0.dropFirst().first }
-                guard let group = self.groups.first(where: { $0.topicTag == topicTag }) else { return }
-                let groupID = group.id
+                guard self.groups.contains(where: { $0.id == groupID }) else { return }
 
                 guard !(self.seenMessageIDs[groupID]?.contains(event.id) ?? false) else { return }
                 self.seenMessageIDs[groupID, default: []].insert(event.id)
@@ -1900,8 +1907,8 @@ final class AppState {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        // Block sending if we're no longer a member
-        guard isMember(of: group) else {
+        // Block sending if we're no longer a member (considers pinned epoch)
+        guard canSend(in: group) else {
             throw ChatError.verificationFailed("You are no longer a member of this group")
         }
 
@@ -2344,7 +2351,7 @@ final class AppState {
 
     /// Set up the protocol message handler (runs once at init).
     private func setupProtocolHandler() {
-        chatTransport.onProtocolMessage = { [weak self] json, event in
+        chatTransport.onProtocolMessage = { [weak self] groupID, json, event in
             guard let self,
                   let data = json.data(using: .utf8) else { return }
 
@@ -2356,14 +2363,10 @@ final class AppState {
                 }
                 self.processedProtocolEventIDs.insert(event.id)
 
+                guard self.groups.contains(where: { $0.id == groupID }) else { return }
+
                 let decoder = JSONDecoder()
                 let msgType = SEPProtocolMessage.parse(json)
-
-                // Find which group this event belongs to (by matching topic tag)
-                let topicTag = event.tags.first(where: { $0.first == "t" }).flatMap { $0.dropFirst().first }
-                guard let groupID = self.groups.first(where: { $0.topicTag == topicTag })?.id else {
-                    return
-                }
                 #if DEBUG
                 print("[AppState] Protocol msg type=\(msgType ?? "nil") group=\(groupID.prefix(8))")
                 #endif

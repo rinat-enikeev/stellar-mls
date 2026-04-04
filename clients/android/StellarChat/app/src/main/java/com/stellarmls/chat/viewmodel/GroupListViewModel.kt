@@ -1031,8 +1031,28 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         val group = groups[index]
         group.pinnedEpoch = epoch
         groups[index] = group
-        // Re-subscribe to use the pinned epoch's topic if different
         updateCurrentMembers(groupID)
+
+        // If pinned epoch has a different groupSecret (secure rekey boundary),
+        // subscribe to the old topic so messages are visible.
+        val snapshot = epochSnapshots[groupID]?.get(epoch)
+        if (snapshot != null) {
+            val pinnedTopic = snapshot.topicTag
+            val currentTopic = group.topicTag
+            if (pinnedTopic != currentTopic) {
+                val pinnedGroup = group.copy(
+                    groupSecret = snapshot.groupSecret,
+                    salt = snapshot.salt,
+                    epoch = snapshot.epoch
+                )
+                transport.subscribe(
+                    group = pinnedGroup,
+                    keyResolver = { e -> epochKey(groupID, e) },
+                    sinceTimestamp = if (group.lastEventTimestamp > 0) group.lastEventTimestamp else null
+                )
+            }
+        }
+
         viewModelScope.launch {
             try { store.saveGroup(group) } catch (_: Exception) { }
         }
@@ -1043,9 +1063,19 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         val index = groups.indexOfFirst { it.id == groupID }
         if (index < 0) return
         val group = groups[index]
+        val oldPinned = group.pinnedEpoch
         group.pinnedEpoch = null
         groups[index] = group
         updateCurrentMembers(groupID)
+
+        // Unsubscribe from old topic if it was across a rekey boundary
+        if (oldPinned != null) {
+            val snapshot = epochSnapshots[groupID]?.get(oldPinned)
+            if (snapshot != null && snapshot.topicTag != group.topicTag) {
+                transport.unsubscribe(snapshot.topicTag)
+            }
+        }
+
         viewModelScope.launch {
             try { store.saveGroup(group) } catch (_: Exception) { }
         }
@@ -1659,6 +1689,19 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         return group.members.any { it.publicKeyCompressed.contentEquals(myLeaf.publicKeyCompressed) }
     }
 
+    /** Check if the current user can send in this group (considers pinned epoch). */
+    fun canSendInGroup(group: ChatGroup): Boolean {
+        val myLeaf = keyManager.memberLeaf()
+        val pinned = group.pinnedEpoch
+        if (pinned != null) {
+            val snapshot = epochSnapshots[group.id]?.get(pinned)
+            if (snapshot != null) {
+                return snapshot.members.any { it.publicKeyCompressed.contentEquals(myLeaf.publicKeyCompressed) }
+            }
+        }
+        return group.members.any { it.publicKeyCompressed.contentEquals(myLeaf.publicKeyCompressed) }
+    }
+
     /** Sync transport members and resubscribe group. */
     private fun syncTransportAndSubscribe(group: ChatGroup) {
         updateCurrentMembers(group.id)
@@ -1997,8 +2040,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         if (trimmed.isEmpty()) return
         val group = groups.find { it.id == groupID } ?: return
 
-        // Block sending if we're no longer a member
-        if (!isMember(group)) return
+        // Block sending if we're no longer a member (considers pinned epoch)
+        if (!canSendInGroup(group)) return
 
         // Use effective key/topic/epoch when pinned to a historical epoch
         val key = effectiveEncryptionKey(group)

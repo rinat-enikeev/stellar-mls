@@ -12,13 +12,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PersonRemove
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -112,7 +115,12 @@ fun GroupInfoScreen(
                     InfoRow("Members", group.members.size.toString())
                     InfoRow("Tier", group.tier.displayName)
                     if (group.isPublishedOnChain) {
-                        InfoRow("On-Chain", "Verified")
+                        val removed = group.members.none { it.publicKeyCompressed.contentEquals(myBlsPubkey) }
+                        if (removed) {
+                            InfoRow("On-Chain", "Diverged \u26A0\uFE0F")
+                        } else {
+                            InfoRow("On-Chain", "Verified")
+                        }
                     }
                 }
             }
@@ -210,6 +218,7 @@ fun GroupInfoScreen(
                         val sortedSnapshots = epochSnapshots.entries.sortedByDescending { it.key }
                         for ((epoch, snapshot) in sortedSnapshots) {
                             val isPinned = group.pinnedEpoch == epoch
+                            val isRekeyBoundary = !snapshot.groupSecret.contentEquals(group.groupSecret)
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -224,15 +233,28 @@ fun GroupInfoScreen(
                                     .padding(horizontal = 12.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                Icon(
+                                    if (isRekeyBoundary) Icons.Filled.Lock else Icons.Filled.Circle,
+                                    contentDescription = null,
+                                    tint = if (isRekeyBoundary) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         "Epoch $epoch",
                                         style = MaterialTheme.typography.bodyMedium
                                     )
                                     Text(
-                                        "${snapshot.changeDescription} - ${snapshot.members.size} members",
+                                        snapshot.changeDescription,
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        "${snapshot.members.size} members" +
+                                            if (isRekeyBoundary) " \u2022 private branch" else "",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (isRekeyBoundary) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                                 if (isPinned) {
@@ -245,6 +267,14 @@ fun GroupInfoScreen(
                                 }
                             }
                         }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "Switch to a previous epoch to communicate with members who were present at that point. " +
+                                "Epochs marked with \uD83D\uDD12 use a different encryption key \u2014 only members from that epoch can read messages there.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }

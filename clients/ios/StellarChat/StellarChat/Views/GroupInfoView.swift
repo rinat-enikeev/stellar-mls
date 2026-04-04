@@ -35,9 +35,20 @@ struct GroupInfoView: View {
                     LabeledContent("Members") { Text("\(group.members.count)") }
                     LabeledContent("Tier") { Text(group.tier.displayName) }
                     if group.isPublishedOnChain {
+                        let removed = !appState.isMember(of: group)
                         LabeledContent("On-Chain") {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
+                            if removed {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.orange)
+                                    Text("Diverged")
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                }
+                            } else {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                            }
                         }
                     }
                 }
@@ -75,9 +86,10 @@ struct GroupInfoView: View {
 
                 // Epoch History (epoch branching)
                 if let snapshots = appState.epochSnapshots[group.id], !snapshots.isEmpty {
-                    Section("Epoch History") {
+                    Section {
                         let currentGroup = appState.groups.first(where: { $0.id == group.id })
                         let pinnedEpoch = currentGroup?.pinnedEpoch
+                        let currentSecret = currentGroup?.groupSecret
                         let sorted = snapshots.values.sorted { $0.epoch > $1.epoch }
 
                         if pinnedEpoch != nil {
@@ -89,6 +101,7 @@ struct GroupInfoView: View {
                         }
 
                         ForEach(sorted, id: \.epoch) { snapshot in
+                            let isRekeyBoundary = currentSecret != nil && snapshot.groupSecret != currentSecret!
                             Button {
                                 if pinnedEpoch == snapshot.epoch {
                                     appState.unpinEpoch(groupID: group.id)
@@ -97,6 +110,10 @@ struct GroupInfoView: View {
                                 }
                             } label: {
                                 HStack {
+                                    Image(systemName: isRekeyBoundary ? "lock.shield" : "circle")
+                                        .font(.caption)
+                                        .foregroundStyle(isRekeyBoundary ? .green : .secondary)
+                                        .frame(width: 20)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text("Epoch \(snapshot.epoch)")
                                             .font(.subheadline)
@@ -104,9 +121,15 @@ struct GroupInfoView: View {
                                         Text(snapshot.changeDescription)
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
-                                        Text("\(snapshot.members.count) members")
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
+                                        HStack(spacing: 4) {
+                                            Text("\(snapshot.members.count) members")
+                                            if isRekeyBoundary {
+                                                Text("- private branch")
+                                                    .foregroundStyle(.green)
+                                            }
+                                        }
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
                                     }
                                     Spacer()
                                     if pinnedEpoch == snapshot.epoch {
@@ -117,6 +140,10 @@ struct GroupInfoView: View {
                             }
                             .foregroundStyle(.primary)
                         }
+                    } header: {
+                        Text("Epoch History")
+                    } footer: {
+                        Text("Switch to a previous epoch to communicate with members who were present at that point. Epochs marked with \(Image(systemName: "lock.shield")) use a different encryption key — only members from that epoch can read messages there.")
                     }
                 }
 

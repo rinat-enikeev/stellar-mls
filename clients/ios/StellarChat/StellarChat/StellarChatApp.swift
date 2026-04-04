@@ -1506,10 +1506,8 @@ final class AppState {
     func forkGroup(
         originalGroupID: String,
         excludingMembers: [Data],
-        forkName: String? = nil,
-        onProgress: @escaping @MainActor (String) -> Void = { _ in }
+        forkName: String? = nil
     ) async throws -> ChatGroup {
-        await onProgress("Creating group...")
         guard let originalGroup = groups.first(where: { $0.id == originalGroupID }) else {
             throw ChatError.verificationFailed("Group not found")
         }
@@ -1568,7 +1566,6 @@ final class AppState {
         ensureOwnTransportBundle(groupID: newGroupIDHex)
 
         // Copy messages from the original group up to the fork epoch
-        await onProgress("Copying messages...")
         let originalMessages = chatMessages[originalGroupID] ?? []
         let forkEpoch = forkSnapshot.epoch
         let copiedMessages: [ChatMessage] = originalMessages.compactMap { msg in
@@ -1598,49 +1595,53 @@ final class AppState {
             : "Group forked from \(originalGroup.name). Excluded: \(excludedNames)."
         insertSystemMessage(groupID: newGroupIDHex, text: sysText, event: "group-forked", epoch: 0)
 
-        // Send invitations to fork members using transport bundles from the original group
-        let otherMembers = forkMembers.filter { $0.publicKeyCompressed != myKey }
-        let totalToInvite = otherMembers.count
-        if totalToInvite > 0 {
-            await onProgress("Sending invitations (0/\(totalToInvite))...")
-        }
-        let originalBundles = transportBundles[originalGroupID] ?? store.loadTransportBundles(groupID: originalGroupID)
-        let payload = BootstrapPayload.from(group: forkedGroup, senderPubkey: keyManager.publicKeyHex)
-        var invitedCount = 0
-        var failedCount = 0
-        for member in otherMembers {
-            let hex = member.publicKeyCompressed.map { String(format: "%02x", $0) }.joined()
-            guard let bundle = originalBundles[hex] else { failedCount += 1; continue }
-            do {
-                try await invitationTransport.sendInvitation(
-                    payload: payload,
-                    recipientKeyAgreementPubkey: bundle.x25519InboxPubkey,
-                    keyManager: keyManager
-                )
-                invitedCount += 1
-            } catch {
-                failedCount += 1
-                #if DEBUG
-                print("[AppState] forkGroup: failed to invite \(hex.prefix(8)): \(error)")
-                #endif
-            }
-            await onProgress("Sending invitations (\(invitedCount)/\(totalToInvite))...")
-        }
-        if invitedCount > 0 && failedCount > 0 {
-            insertSystemMessage(groupID: newGroupIDHex, text: "Sent \(invitedCount) invitation\(invitedCount == 1 ? "" : "s"), \(failedCount) failed.", event: "fork-invitations-sent", epoch: 0)
-        } else if invitedCount > 0 {
-            insertSystemMessage(groupID: newGroupIDHex, text: "Sent invitations to \(invitedCount) member\(invitedCount == 1 ? "" : "s").", event: "fork-invitations-sent", epoch: 0)
-        }
-
-        // Publish on-chain (fire-and-forget, don't block fork creation)
+        // Publish on-chain (fire-and-forget)
         if isContractConfigured {
-            await onProgress("Publishing to blockchain...")
             Task { try? await publishGroupOnChain(forkedGroup) }
         }
 
         #if DEBUG
-        print("[AppState] forkGroup created=\(newGroupIDHex.prefix(8)) from=\(originalGroupID.prefix(8)) epoch=\(forkSnapshot.epoch) members=\(forkMembers.count) invited=\(invitedCount) failed=\(failedCount)")
+        print("[AppState] forkGroup created=\(newGroupIDHex.prefix(8)) from=\(originalGroupID.prefix(8)) epoch=\(forkSnapshot.epoch) members=\(forkMembers.count)")
         #endif
+
+        // Send invitations in background (fire-and-forget) — don't block fork creation
+        let otherMembers = forkMembers.filter { $0.publicKeyCompressed != myKey }
+        if !otherMembers.isEmpty {
+            let originalBundles = transportBundles[originalGroupID] ?? store.loadTransportBundles(groupID: originalGroupID)
+            let payload = BootstrapPayload.from(group: forkedGroup, senderPubkey: keyManager.publicKeyHex)
+            let forkID = newGroupIDHex
+            Task { [weak self] in
+                guard let self else { return }
+                var invitedCount = 0
+                var failedCount = 0
+                for member in otherMembers {
+                    let hex = member.publicKeyCompressed.map { String(format: "%02x", $0) }.joined()
+                    guard let bundle = originalBundles[hex] else { failedCount += 1; continue }
+                    do {
+                        try await self.invitationTransport.sendInvitation(
+                            payload: payload,
+                            recipientKeyAgreementPubkey: bundle.x25519InboxPubkey,
+                            keyManager: self.keyManager
+                        )
+                        invitedCount += 1
+                    } catch {
+                        failedCount += 1
+                        #if DEBUG
+                        print("[AppState] forkGroup: failed to invite \(hex.prefix(8)): \(error)")
+                        #endif
+                    }
+                }
+                await MainActor.run {
+                    if invitedCount > 0 && failedCount > 0 {
+                        self.insertSystemMessage(groupID: forkID, text: "Sent \(invitedCount) invitation\(invitedCount == 1 ? "" : "s"), \(failedCount) failed.", event: "fork-invitations-sent", epoch: 0)
+                    } else if invitedCount > 0 {
+                        self.insertSystemMessage(groupID: forkID, text: "Sent invitations to \(invitedCount) member\(invitedCount == 1 ? "" : "s").", event: "fork-invitations-sent", epoch: 0)
+                    } else if failedCount > 0 {
+                        self.insertSystemMessage(groupID: forkID, text: "Failed to send \(failedCount) invitation\(failedCount == 1 ? "" : "s").", event: "fork-invitations-sent", epoch: 0)
+                    }
+                }
+            }
+        }
 
         return forkedGroup
     }
@@ -2513,7 +2514,7 @@ final class AppState {
 
     /// Set up the protocol message handler (runs once at init).
     private func setupProtocolHandler() {
-        chatTransport.onProtocolMessage = { [weak self] groupID, json, event in
+        chatTransport.onProtocolMessage = { [weak self] groupID, json, event, senderBlsPubkeyHex in
             guard let self,
                   let data = json.data(using: .utf8) else { return }
 
@@ -2595,10 +2596,8 @@ final class AppState {
                             (try? self.keyManager.blsPublicKey) == removed
                         }
                         if selfRemoved {
-                            // Look up remover's BLS pubkey from transport bundles via Nostr Ed25519 key
-                            let removerBlsHex = self.transportBundles[groupID]?.first(where: { (_, bundle) in
-                                bundle.stellarEd25519Pubkey.map { String(format: "%02x", $0) }.joined() == event.pubkey
-                            })?.key
+                            // Use BLS pubkey from the message wrapper (extracted by transport)
+                            let removerBlsHex = senderBlsPubkeyHex
                             if let idx = self.groups.firstIndex(where: { $0.id == groupID }) {
                                 var g = self.groups[idx]
                                 // Capture epoch snapshot BEFORE mutation so fork can find all members

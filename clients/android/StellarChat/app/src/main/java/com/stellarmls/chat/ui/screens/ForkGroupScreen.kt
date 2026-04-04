@@ -49,7 +49,7 @@ fun ForkGroupScreen(
     myBlsPubkey: ByteArray,
     epochSnapshots: Map<Long, EpochSnapshot>,
     removedByPubkeyHex: String? = null,
-    onCreateFork: (excludingMembers: List<ByteArray>, forkName: String?, onProgress: (String) -> Unit, onResult: (Result<ChatGroup>) -> Unit) -> Unit,
+    onCreateFork: (excludingMembers: List<ByteArray>, forkName: String?, onResult: (Result<ChatGroup>) -> Unit) -> Unit,
     onNavigateToGroup: (String) -> Unit,
     onBack: () -> Unit
 ) {
@@ -72,7 +72,6 @@ fun ForkGroupScreen(
         }
     }
     var isCreating by remember { mutableStateOf(false) }
-    var progressText by remember { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var createdGroup by remember { mutableStateOf<ChatGroup?>(null) }
 
@@ -222,14 +221,11 @@ fun ForkGroupScreen(
                     onClick = {
                         isCreating = true
                         errorMessage = null
-                        progressText = null
                         onCreateFork(
                             excludedMembers.values.toList(),
-                            forkName.trim().takeIf { it.isNotEmpty() },
-                            { progress -> progressText = progress }
+                            forkName.trim().takeIf { it.isNotEmpty() }
                         ) { result ->
                             isCreating = false
-                            progressText = null
                             result.onSuccess { createdGroup = it }
                             result.onFailure { errorMessage = it.message ?: "Failed to create fork" }
                         }
@@ -238,14 +234,11 @@ fun ForkGroupScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     if (isCreating) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.onPrimary
-                            )
-                            Text(progressText ?: "Creating...")
-                        }
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
                     } else {
                         Text("Create Fork")
                     }

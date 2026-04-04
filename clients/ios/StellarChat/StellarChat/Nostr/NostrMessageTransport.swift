@@ -29,8 +29,8 @@ final class NostrMessageTransport {
     /// Parameters: (groupID, text fallback, media attachment, event)
     var onImageMessage: ((String, String, MediaAttachment, NostrEvent) -> Void)?
     /// Callback for received protocol messages (state updates, salt requests/responses).
-    /// Parameters: (groupID, json, event)
-    var onProtocolMessage: ((String, String, NostrEvent) -> Void)?
+    /// Parameters: (groupID, json, event, senderBlsPubkeyHex)
+    var onProtocolMessage: ((String, String, NostrEvent, String?) -> Void)?
     /// Callback for received call signaling messages (offer, answer, ice, hangup, busy, reject).
     /// Parameters: (groupID, call JSON dict, senderBlsPubkey, event)
     var onCallSignal: ((String, [String: Any], Data, NostrEvent) -> Void)?
@@ -209,7 +209,8 @@ final class NostrMessageTransport {
                 }
             } else if SEPProtocolMessage.parse(innerText) != nil {
                 applyMemberChanges(from: innerText)
-                onProtocolMessage?(groupID, innerText, event)
+                let senderBlsHex = blsPubkey.map { String(format: "%02x", $0) }.joined()
+                onProtocolMessage?(groupID, innerText, event, senderBlsHex)
             } else {
                 let isMember = currentMembers.contains { $0.publicKeyCompressed == blsPubkey }
                 if isMember {

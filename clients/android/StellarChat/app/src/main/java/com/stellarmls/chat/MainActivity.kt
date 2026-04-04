@@ -333,8 +333,8 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                     myBlsPubkey = groupListViewModel.keyManager.blsPublicKey(),
                     epochSnapshots = groupListViewModel.epochSnapshots[groupId] ?: emptyMap(),
                     removedByPubkeyHex = group.removedByPubkeyHex,
-                    onCreateFork = { excludingMembers, forkName, onProgress, onResult ->
-                        groupListViewModel.forkGroup(groupId, excludingMembers, forkName, onProgress, onResult)
+                    onCreateFork = { excludingMembers, forkName, onResult ->
+                        groupListViewModel.forkGroup(groupId, excludingMembers, forkName, onResult = onResult)
                     },
                     onNavigateToGroup = { newGroupId ->
                         navController.navigate("chat/$newGroupId") {

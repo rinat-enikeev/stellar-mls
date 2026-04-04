@@ -1736,12 +1736,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         originalGroupID: String,
         excludingMembers: List<ByteArray>,
         forkName: String? = null,
-        onProgress: (String) -> Unit = {},
         onResult: (Result<ChatGroup>) -> Unit
     ) {
         viewModelScope.launch {
             try {
-                onProgress("Creating group...")
                 val originalGroup = groups.find { it.id == originalGroupID }
                     ?: throw ChatError.VerificationFailed("Group not found")
                 val myLeaf = keyManager.memberLeaf()
@@ -1797,9 +1795,6 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                         groupID = forkedGroup.id
                     )
                 }
-                if (copiedMessages.isNotEmpty()) {
-                    onProgress("Copying ${copiedMessages.size} messages...")
-                }
                 chatMessages[forkedGroup.id] = copiedMessages.toMutableList()
                 withContext(Dispatchers.IO) {
                     for (msg in copiedMessages) {
@@ -1814,60 +1809,53 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     "Group forked from ${originalGroup.name}. Excluded: $excludedNames."
                 insertSystemMessage(forkedGroup.id, sysText, "group-forked", 0)
 
-                // Send invitations to fork members using transport bundles from the original group
-                val otherMembers = forkMembers.filter { !it.publicKeyCompressed.contentEquals(myKey) }
-                val totalToInvite = otherMembers.size
-                if (totalToInvite > 0) {
-                    onProgress("Sending invitations (0/$totalToInvite)...")
-                }
-                val originalBundles = store.loadTransportBundles(originalGroupID)
-                val payload = com.stellarmls.chat.model.BootstrapPayload.from(
-                    forkedGroup, keyManager.publicKeyHex
-                )
-                var invitedCount = 0
-                var failedCount = 0
-                for (member in otherMembers) {
-                    val hex = member.publicKeyCompressed.toHex()
-                    val bundle = originalBundles[hex]
-                    if (bundle == null) {
-                        failedCount++
-                        continue
-                    }
-                    try {
-                        withTimeout(15_000) {
-                            withContext(Dispatchers.IO) {
-                                invitationTransport.sendInvitation(
-                                    payload, bundle.x25519InboxPubkey, keyManager
-                                )
-                            }
-                        }
-                        invitedCount++
-                    } catch (e: Exception) {
-                        failedCount++
-                        if (BuildConfig.DEBUG) Log.w("GroupListVM", "forkGroup: failed to invite $hex: ${e.message}")
-                    }
-                    onProgress("Sending invitations ($invitedCount/$totalToInvite)...")
-                }
-                val inviteMsg = when {
-                    invitedCount > 0 && failedCount > 0 ->
-                        "Sent $invitedCount invitation${if (invitedCount == 1) "" else "s"}, $failedCount failed."
-                    invitedCount > 0 ->
-                        "Sent invitations to $invitedCount member${if (invitedCount == 1) "" else "s"}."
-                    else -> null
-                }
-                if (inviteMsg != null) {
-                    insertSystemMessage(forkedGroup.id, inviteMsg, "fork-invitations-sent", 0)
-                }
-
-                // Publish on-chain if configured
+                // Publish on-chain if configured (fire-and-forget)
                 if (isContractConfigured && onChainService != null) {
-                    onProgress("Publishing to blockchain...")
                     publishGroupOnChain(forkedGroup) { /* best-effort */ }
                 }
 
-                if (BuildConfig.DEBUG) Log.d("GroupListVM", "forkGroup created=${forkedGroup.id.take(8)} from=${originalGroupID.take(8)} epoch=${forkSnapshot.epoch} members=${forkMembers.size} invited=$invitedCount failed=$failedCount")
+                if (BuildConfig.DEBUG) Log.d("GroupListVM", "forkGroup created=${forkedGroup.id.take(8)} from=${originalGroupID.take(8)} epoch=${forkSnapshot.epoch} members=${forkMembers.size}")
 
                 onResult(Result.success(forkedGroup))
+
+                // Send invitations in background (fire-and-forget) — don't block fork creation
+                val otherMembers = forkMembers.filter { !it.publicKeyCompressed.contentEquals(myKey) }
+                if (otherMembers.isNotEmpty()) {
+                    val originalBundles = store.loadTransportBundles(originalGroupID)
+                    val payload = com.stellarmls.chat.model.BootstrapPayload.from(
+                        forkedGroup, keyManager.publicKeyHex
+                    )
+                    viewModelScope.launch {
+                        var invitedCount = 0
+                        var failedCount = 0
+                        for (member in otherMembers) {
+                            val hex = member.publicKeyCompressed.toHex()
+                            val bundle = originalBundles[hex]
+                            if (bundle == null) { failedCount++; continue }
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    invitationTransport.sendInvitation(payload, bundle.x25519InboxPubkey, keyManager)
+                                }
+                                invitedCount++
+                            } catch (e: Exception) {
+                                failedCount++
+                                if (BuildConfig.DEBUG) Log.w("GroupListVM", "forkGroup: failed to invite $hex: ${e.message}")
+                            }
+                        }
+                        val inviteMsg = when {
+                            invitedCount > 0 && failedCount > 0 ->
+                                "Sent $invitedCount invitation${if (invitedCount == 1) "" else "s"}, $failedCount failed."
+                            invitedCount > 0 ->
+                                "Sent invitations to $invitedCount member${if (invitedCount == 1) "" else "s"}."
+                            failedCount > 0 ->
+                                "Failed to send $failedCount invitation${if (failedCount == 1) "" else "s"}."
+                            else -> null
+                        }
+                        if (inviteMsg != null) {
+                            insertSystemMessage(forkedGroup.id, inviteMsg, "fork-invitations-sent", 0)
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 onResult(Result.failure(e))
             }
@@ -2624,7 +2612,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Set up handler for protocol messages received on the group channel. */
     private fun setupProtocolMessageHandler() {
-        transport.onProtocolMessage = { groupID, json, eventID, senderPubkey ->
+        transport.onProtocolMessage = { groupID, json, eventID, senderPubkey, senderBlsPubkeyHex ->
             // Replay protection: skip already-processed protocol events (H-7)
             // N-8: Evict oldest entries when set exceeds max size
             val isNew = synchronized(processedProtocolEventIDs) {
@@ -2708,10 +2696,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                             }
                             if (selfRemoved) {
                                 val noticeEpoch = obj.getLong("epoch")
-                                // Look up remover's BLS pubkey from transport bundles via Nostr Ed25519 key
-                                val removerBlsHex = transportBundles[groupID]?.entries?.firstOrNull { (_, bundle) ->
-                                    bundle.stellarEd25519Pubkey.toHex() == senderPubkey
-                                }?.key
+                                // Use BLS pubkey from the message wrapper (extracted by transport)
+                                val removerBlsHex = senderBlsPubkeyHex
                                 val idx = groups.indexOfFirst { it.id == groupID }
                                 if (idx >= 0) {
                                     var g = cloneGroup(groups[idx])

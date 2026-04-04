@@ -5,6 +5,7 @@ import com.stellarmls.chat.crypto.KeyManager
 import com.stellarmls.chat.crypto.NostrEvent
 import com.stellarmls.chat.crypto.NostrEventBuilder
 import com.stellarmls.chat.model.ChatGroup
+import com.stellarmls.chat.model.toHex
 import com.stellarmls.mls.SEPGroupMemberLeaf
 import com.stellarmls.mls.SEPGroupRenamed
 import com.stellarmls.mls.SEPGroupStateUpdate
@@ -56,7 +57,7 @@ class NostrMessageTransport(
 
     var onMessage: ((groupID: String, senderPubkey: String, text: String, eventID: String, timestamp: Long, epoch: Long?) -> Unit)? = null
     /** Called when a decrypted message is a protocol message (state update, salt request/response). */
-    var onProtocolMessage: ((groupID: String, json: String, eventID: String, senderPubkey: String) -> Unit)? = null
+    var onProtocolMessage: ((groupID: String, json: String, eventID: String, senderPubkey: String, senderBlsPubkeyHex: String?) -> Unit)? = null
     /** Called when a decrypted message is an image message with media attachment. */
     var onImageMessage: ((groupID: String, text: String, media: com.stellarmls.chat.model.MediaAttachment, eventID: String, senderPubkey: String, timestamp: Long, epoch: Long?) -> Unit)? = null
     /** Callback for received call signaling messages (offer, answer, ice, hangup, busy, reject). */
@@ -329,7 +330,8 @@ class NostrMessageTransport(
                     // Update currentMembers SYNCHRONOUSLY before processing the next event,
                     // so that chat messages arriving right after are not rejected.
                     applyMemberChanges(innerText)
-                    onProtocolMessage?.invoke(groupID, innerText, event.id, event.pubkey)
+                    val senderBlsHex = try { android.util.Base64.decode(blsPubkeyB64, android.util.Base64.NO_WRAP).toHex() } catch (_: Exception) { null }
+                    onProtocolMessage?.invoke(groupID, innerText, event.id, event.pubkey, senderBlsHex)
                 } else {
                     // Chat message — verify BLS pubkey is in member list (H-4)
                     val blsPubkey = android.util.Base64.decode(blsPubkeyB64, android.util.Base64.NO_WRAP)

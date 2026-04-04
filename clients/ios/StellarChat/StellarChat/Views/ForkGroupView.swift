@@ -8,7 +8,6 @@ struct ForkGroupView: View {
     @State private var forkName: String = ""
     @State private var excludedMembers: Set<Data> = []
     @State private var isCreating = false
-    @State private var progressText: String?
     @State private var errorMessage: String?
     @State private var createdGroup: ChatGroup?
 
@@ -125,13 +124,7 @@ struct ForkGroupView: View {
                             createFork()
                         } label: {
                             if isCreating {
-                                HStack(spacing: 4) {
-                                    ProgressView()
-                                    if let progressText {
-                                        Text(progressText)
-                                            .font(.caption2)
-                                    }
-                                }
+                                ProgressView()
                             } else {
                                 Text("Create Fork")
                             }
@@ -164,21 +157,18 @@ struct ForkGroupView: View {
     private func createFork() {
         isCreating = true
         errorMessage = nil
-        progressText = nil
         Task {
             do {
                 let group = try await appState.forkGroup(
                     originalGroupID: originalGroup.id,
                     excludingMembers: Array(excludedMembers),
-                    forkName: forkName.trimmingCharacters(in: .whitespaces).isEmpty ? nil : forkName,
-                    onProgress: { text in progressText = text }
+                    forkName: forkName.trimmingCharacters(in: .whitespaces).isEmpty ? nil : forkName
                 )
                 createdGroup = group
             } catch {
                 errorMessage = error.localizedDescription
             }
             isCreating = false
-            progressText = nil
         }
     }
 }

@@ -205,6 +205,14 @@ fun GroupListScreen(
                                             style = MaterialTheme.typography.titleMedium
                                         )
                                     }
+                                    // Fork badge
+                                    if (group.forkedFromGroupID != null) {
+                                        Text(
+                                            text = "\u2442",
+                                            color = Color(0xFF7B1FA2),
+                                            style = MaterialTheme.typography.titleMedium
+                                        )
+                                    }
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {

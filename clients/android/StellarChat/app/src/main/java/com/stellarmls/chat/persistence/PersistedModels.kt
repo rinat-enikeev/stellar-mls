@@ -17,7 +17,10 @@ data class PersistedGroup(
     val encryptedCommitment: ByteArray?,
     val tierRawValue: Int,            // cleartext
     val isPublishedOnChain: Boolean = false,
-    val pinnedEpoch: Int? = null
+    val pinnedEpoch: Int? = null,
+    val forkedFromGroupID: String? = null,
+    val forkedAtEpoch: Int? = null,
+    val removedByPubkeyHex: String? = null
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

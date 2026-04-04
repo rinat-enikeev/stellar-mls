@@ -32,6 +32,7 @@ import androidx.navigation.navArgument
 import com.stellarmls.chat.ui.screens.ChatScreen
 import com.stellarmls.chat.ui.screens.ContactsScreen
 import com.stellarmls.chat.ui.screens.CreateGroupScreen
+import com.stellarmls.chat.ui.screens.ForkGroupScreen
 import com.stellarmls.chat.ui.screens.GroupInfoScreen
 import com.stellarmls.chat.ui.screens.GroupListScreen
 import com.stellarmls.chat.ui.screens.InviteMemberScreen
@@ -175,7 +176,6 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                 ChatScreen(
                     viewModel = chatViewModel,
                     onBack = { navController.popBackStack() },
-                    onInvite = { navController.navigate("invite/$groupId") },
                     onGroupInfo = { navController.navigate("groupinfo/$groupId") },
                     onStartCall = { video ->
                         val cm = groupListViewModel.callManager
@@ -188,7 +188,10 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                     onUnpinEpoch = {
                         groupListViewModel.unpinEpoch(groupId)
                     },
-                    groupListViewModel = groupListViewModel
+                    groupListViewModel = groupListViewModel,
+                    onForkGroup = if (groupListViewModel.canForkGroup(
+                        groupListViewModel.groups.find { it.id == groupId } ?: return@composable
+                    )) {{ navController.navigate("fork/$groupId") }} else null
                 )
 
                 // Show call screen overlay when a call is active
@@ -273,6 +276,20 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                 val groupId = backStackEntry.arguments?.getString("groupId") ?: return@composable
                 val group = groupListViewModel.groups.find { it.id == groupId } ?: return@composable
 
+                val inviteCode = remember(group.id, group.epoch) {
+                    com.stellarmls.chat.model.InviteCode(
+                        groupID = group.groupIDData,
+                        groupSecret = group.groupSecret,
+                        name = group.name,
+                        relayHints = group.relayHints,
+                        members = group.members.toList(),
+                        epoch = group.epoch,
+                        salt = group.salt,
+                        commitment = group.commitment,
+                        tierRawValue = group.tier.id
+                    )
+                }
+
                 GroupInfoScreen(
                     group = group,
                     myBlsPubkey = groupListViewModel.keyManager.blsPublicKey(),
@@ -291,6 +308,38 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                     },
                     onUnpinEpoch = {
                         groupListViewModel.unpinEpoch(groupId)
+                    },
+                    canForkGroup = groupListViewModel.canForkGroup(group),
+                    onForkGroup = {
+                        navController.navigate("fork/$groupId")
+                    },
+                    onSendInvitation = { recipientKeyHex, onResult ->
+                        groupListViewModel.sendInvitation(groupId, recipientKeyHex, onResult)
+                    },
+                    inviteLink = "stellarchat://join?code=${inviteCode.encode()}",
+                    onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable(
+                "fork/{groupId}",
+                arguments = listOf(navArgument("groupId") { type = NavType.StringType })
+            ) { backStackEntry ->
+                val groupId = backStackEntry.arguments?.getString("groupId") ?: return@composable
+                val group = groupListViewModel.groups.find { it.id == groupId } ?: return@composable
+
+                ForkGroupScreen(
+                    originalGroup = group,
+                    myBlsPubkey = groupListViewModel.keyManager.blsPublicKey(),
+                    epochSnapshots = groupListViewModel.epochSnapshots[groupId] ?: emptyMap(),
+                    removedByPubkeyHex = group.removedByPubkeyHex,
+                    onCreateFork = { excludingMembers, forkName, onProgress, onResult ->
+                        groupListViewModel.forkGroup(groupId, excludingMembers, forkName, onProgress, onResult)
+                    },
+                    onNavigateToGroup = { newGroupId ->
+                        navController.navigate("chat/$newGroupId") {
+                            popUpTo("fork/$groupId") { inclusive = true }
+                        }
                     },
                     onBack = { navController.popBackStack() }
                 )

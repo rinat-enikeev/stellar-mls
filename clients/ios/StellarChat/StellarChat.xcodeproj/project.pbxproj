@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0029F253BA68E6B4CA11E864 /* BootstrapPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA96977038D2F9F4EC31EF3D /* BootstrapPayload.swift */; };
 		01083F180D3E8311A7E002C6 /* CreateGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF781055530F3AF0953DE842 /* CreateGroupView.swift */; };
+		F0A1B2C3D4E5F60718293A4B /* ForkGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F607182930A4B5 /* ForkGroupView.swift */; };
 		09EC25786F839A9A840E509A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E292A37C859D6BE12BE2376 /* ContentView.swift */; };
 		1567BD34990CE37FB89521DF /* VideoCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1FB5F184FBA9633C01BDFBC /* VideoCache.swift */; };
 		16ADABAE1C78B394179DD74B /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76C1E6E24CEC0349F3C9A60A /* ChatViewModel.swift */; };
@@ -98,6 +99,7 @@
 		A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A4A3E005A9C5AF2DE5743188 /* CallKitProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallKitProvider.swift; sourceTree = "<group>"; };
 		B0884F32E9A807B2566DD234 /* NostrRelayConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrRelayConnection.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F607182930A4B5 /* ForkGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForkGroupView.swift; sourceTree = "<group>"; };
 		BF781055530F3AF0953DE842 /* CreateGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateGroupView.swift; sourceTree = "<group>"; };
 		C1FB5F184FBA9633C01BDFBC /* VideoCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCache.swift; sourceTree = "<group>"; };
 		C6867C765FBB9480D9E0D9FC /* PendingInvitationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingInvitationsView.swift; sourceTree = "<group>"; };
@@ -145,6 +147,7 @@
 				7A14AE9A1C9F0583137C7797 /* ContactsView.swift */,
 				6E292A37C859D6BE12BE2376 /* ContentView.swift */,
 				BF781055530F3AF0953DE842 /* CreateGroupView.swift */,
+				A1B2C3D4E5F607182930A4B5 /* ForkGroupView.swift */,
 				7446E889E7A95E042201A70D /* GroupInfoView.swift */,
 				7C2B0F0A2A137DC1BE419CC3 /* GroupListView.swift */,
 				E8D38B6A8AA5A166074EA951 /* InviteMemberView.swift */,
@@ -410,6 +413,7 @@
 				4B45989EA613CA80A4D8FFCB /* ContactsView.swift in Sources */,
 				09EC25786F839A9A840E509A /* ContentView.swift in Sources */,
 				01083F180D3E8311A7E002C6 /* CreateGroupView.swift in Sources */,
+				F0A1B2C3D4E5F60718293A4B /* ForkGroupView.swift in Sources */,
 				B5836D3E7760359CFB8C42AC /* GroupCrypto.swift in Sources */,
 				833FF1A77449454BF4ADC801 /* GroupInfoView.swift in Sources */,
 				D6C3C9E90F39CCA80D2DD029 /* GroupListView.swift in Sources */,

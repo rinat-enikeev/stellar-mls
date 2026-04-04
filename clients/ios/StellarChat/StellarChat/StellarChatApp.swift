@@ -1393,6 +1393,11 @@ final class AppState {
             if let commitment = update.commitment {
                 group.commitment = commitment
             }
+            if selfRemoved {
+                group.removedByPubkeyHex = update.senderAttestation.map {
+                    $0.blsPubkey.map { String(format: "%02x", $0) }.joined()
+                }
+            }
 
             // Discard any pending local transition that's now superseded
             if case .awaitingChainConfirmation(let target) = pendingTransitions[groupID],
@@ -1409,7 +1414,8 @@ final class AppState {
                 #if !DEBUG
                 chatTransport.unsubscribe(topic: group.topicTag)
                 #endif
-                insertSystemMessage(groupID: groupID, text: "You were removed from this group", event: "self-removed", epoch: update.epoch)
+                let removerName = update.senderAttestation.map { memberDisplayName(blsPubkey: $0.blsPubkey) } ?? "unknown"
+                insertSystemMessage(groupID: groupID, text: "You were removed from this group by \(removerName)", event: "self-removed", epoch: update.epoch)
             } else {
                 subscribeGroup(group)
 
@@ -1481,6 +1487,162 @@ final class AppState {
         #if DEBUG
         print("[AppState] rotateGroupKey result=\(result) group=\(groupID.prefix(8))")
         #endif
+    }
+
+    // MARK: - Fork Group
+
+    /// Whether a removed member can fork this group (epoch snapshots exist where they were a member).
+    func canForkGroup(_ group: ChatGroup) -> Bool {
+        guard !isMember(of: group) else { return false }
+        guard let myLeaf = try? keyManager.memberLeaf else { return false }
+        guard let snapshots = epochSnapshots[group.id] else { return false }
+        return snapshots.values.contains { snapshot in
+            snapshot.members.contains { $0.publicKeyCompressed == myLeaf.publicKeyCompressed }
+        }
+    }
+
+    /// Fork a group from the latest epoch where the current user was a member,
+    /// excluding specified members. Creates a new, cryptographically independent group.
+    func forkGroup(
+        originalGroupID: String,
+        excludingMembers: [Data],
+        forkName: String? = nil,
+        onProgress: @escaping @MainActor (String) -> Void = { _ in }
+    ) async throws -> ChatGroup {
+        await onProgress("Creating group...")
+        guard let originalGroup = groups.first(where: { $0.id == originalGroupID }) else {
+            throw ChatError.verificationFailed("Group not found")
+        }
+        guard let myLeaf = try? keyManager.memberLeaf else {
+            throw ChatError.noKey
+        }
+        guard let snapshots = epochSnapshots[originalGroupID] else {
+            throw ChatError.verificationFailed("No epoch snapshots available")
+        }
+
+        // Find the latest epoch where the user was a member
+        let myKey = myLeaf.publicKeyCompressed
+        guard let forkSnapshot = snapshots.values
+            .filter({ snapshot in snapshot.members.contains { $0.publicKeyCompressed == myKey } })
+            .max(by: { $0.epoch < $1.epoch })
+        else {
+            throw ChatError.verificationFailed("No epoch found where you were a member")
+        }
+
+        // Generate new group ID and secret
+        var groupIDBytes = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, 32, &groupIDBytes)
+        let newGroupIDHex = Data(groupIDBytes).map { String(format: "%02x", $0) }.joined()
+
+        var secretBytes = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, 32, &secretBytes)
+        let newGroupSecret = Data(secretBytes)
+
+        // Build member list: snapshot members minus excluded, ensuring self is included
+        var forkMembers = forkSnapshot.members.filter { member in
+            !excludingMembers.contains(member.publicKeyCompressed)
+        }
+        if !forkMembers.contains(where: { $0.publicKeyCompressed == myKey }) {
+            forkMembers.append(myLeaf)
+        }
+        forkMembers.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
+
+        let name = forkName ?? "Fork of \(originalGroup.name)"
+        var forkedGroup = ChatGroup(
+            id: newGroupIDHex,
+            name: name,
+            groupSecret: newGroupSecret,
+            createdAt: Date(),
+            relayHints: originalGroup.relayHints,
+            members: forkMembers,
+            epoch: 0,
+            salt: SEPCommitmentBuilder.generateSalt(),
+            tier: originalGroup.tier
+        )
+        forkedGroup.forkedFromGroupID = originalGroupID
+        forkedGroup.forkedAtEpoch = forkSnapshot.epoch
+        try forkedGroup.recomputeCommitment()
+
+        addGroup(forkedGroup)
+        captureEpochSnapshot(group: forkedGroup, changeDescription: "Forked from \(originalGroup.name) at epoch \(forkSnapshot.epoch)")
+        ensureOwnTransportBundle(groupID: newGroupIDHex)
+
+        // Copy messages from the original group up to the fork epoch
+        await onProgress("Copying messages...")
+        let originalMessages = chatMessages[originalGroupID] ?? []
+        let forkEpoch = forkSnapshot.epoch
+        let copiedMessages: [ChatMessage] = originalMessages.compactMap { msg in
+            // Include messages at or before the fork epoch
+            if let msgEpoch = msg.epoch, msgEpoch > forkEpoch { return nil }
+            return ChatMessage(
+                id: "fork-\(msg.id)",
+                groupID: newGroupIDHex,
+                senderPubkey: msg.senderPubkey,
+                text: msg.text,
+                timestamp: msg.timestamp,
+                isMine: msg.isMine,
+                status: msg.status,
+                mediaAttachment: msg.mediaAttachment,
+                isSystemMessage: msg.isSystemMessage,
+                epoch: msg.epoch
+            )
+        }
+        chatMessages[newGroupIDHex] = copiedMessages
+        for msg in copiedMessages {
+            store.saveMessageAsync(msg)
+        }
+
+        let excludedNames = excludingMembers.map { memberDisplayName(blsPubkey: $0) }.joined(separator: ", ")
+        let sysText = excludedNames.isEmpty
+            ? "Group forked from \(originalGroup.name)."
+            : "Group forked from \(originalGroup.name). Excluded: \(excludedNames)."
+        insertSystemMessage(groupID: newGroupIDHex, text: sysText, event: "group-forked", epoch: 0)
+
+        // Send invitations to fork members using transport bundles from the original group
+        let otherMembers = forkMembers.filter { $0.publicKeyCompressed != myKey }
+        let totalToInvite = otherMembers.count
+        if totalToInvite > 0 {
+            await onProgress("Sending invitations (0/\(totalToInvite))...")
+        }
+        let originalBundles = transportBundles[originalGroupID] ?? store.loadTransportBundles(groupID: originalGroupID)
+        let payload = BootstrapPayload.from(group: forkedGroup, senderPubkey: keyManager.publicKeyHex)
+        var invitedCount = 0
+        var failedCount = 0
+        for member in otherMembers {
+            let hex = member.publicKeyCompressed.map { String(format: "%02x", $0) }.joined()
+            guard let bundle = originalBundles[hex] else { failedCount += 1; continue }
+            do {
+                try await invitationTransport.sendInvitation(
+                    payload: payload,
+                    recipientKeyAgreementPubkey: bundle.x25519InboxPubkey,
+                    keyManager: keyManager
+                )
+                invitedCount += 1
+            } catch {
+                failedCount += 1
+                #if DEBUG
+                print("[AppState] forkGroup: failed to invite \(hex.prefix(8)): \(error)")
+                #endif
+            }
+            await onProgress("Sending invitations (\(invitedCount)/\(totalToInvite))...")
+        }
+        if invitedCount > 0 && failedCount > 0 {
+            insertSystemMessage(groupID: newGroupIDHex, text: "Sent \(invitedCount) invitation\(invitedCount == 1 ? "" : "s"), \(failedCount) failed.", event: "fork-invitations-sent", epoch: 0)
+        } else if invitedCount > 0 {
+            insertSystemMessage(groupID: newGroupIDHex, text: "Sent invitations to \(invitedCount) member\(invitedCount == 1 ? "" : "s").", event: "fork-invitations-sent", epoch: 0)
+        }
+
+        // Publish on-chain (fire-and-forget, don't block fork creation)
+        if isContractConfigured {
+            await onProgress("Publishing to blockchain...")
+            Task { try? await publishGroupOnChain(forkedGroup) }
+        }
+
+        #if DEBUG
+        print("[AppState] forkGroup created=\(newGroupIDHex.prefix(8)) from=\(originalGroupID.prefix(8)) epoch=\(forkSnapshot.epoch) members=\(forkMembers.count) invited=\(invitedCount) failed=\(failedCount)")
+        #endif
+
+        return forkedGroup
     }
 
     /// Remove a member from a group via chain-confirmed transition.
@@ -2433,10 +2595,17 @@ final class AppState {
                             (try? self.keyManager.blsPublicKey) == removed
                         }
                         if selfRemoved {
+                            // Look up remover's BLS pubkey from transport bundles via Nostr Ed25519 key
+                            let removerBlsHex = self.transportBundles[groupID]?.first(where: { (_, bundle) in
+                                bundle.stellarEd25519Pubkey.map { String(format: "%02x", $0) }.joined() == event.pubkey
+                            })?.key
                             if let idx = self.groups.firstIndex(where: { $0.id == groupID }) {
                                 var g = self.groups[idx]
+                                // Capture epoch snapshot BEFORE mutation so fork can find all members
+                                self.captureEpochSnapshot(group: g, changeDescription: "Member removed (you)")
                                 // Update epoch and remove self from member list
                                 g.epoch = notice.epoch
+                                g.removedByPubkeyHex = removerBlsHex
                                 if let myBls = try? self.keyManager.blsPublicKey {
                                     g.members.removeAll { $0.publicKeyCompressed == myBls }
                                 }
@@ -2447,7 +2616,8 @@ final class AppState {
                                 #endif
                                 self.chatTransport.currentMembers = self.groups.flatMap(\.members)
                             }
-                            self.insertSystemMessage(groupID: groupID, text: "You were removed from this group", event: "self-removed", epoch: notice.epoch)
+                            let removerName = self.contactAliasStore?.displayName(for: event.pubkey) ?? (String(event.pubkey.prefix(8)) + "...")
+                            self.insertSystemMessage(groupID: groupID, text: "You were removed from this group by \(removerName)", event: "self-removed", epoch: notice.epoch)
                             #if DEBUG
                             print("[AppState] Self-removed from group=\(groupID.prefix(8)) epoch=\(notice.epoch)")
                             #endif

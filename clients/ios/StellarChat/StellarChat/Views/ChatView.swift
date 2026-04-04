@@ -6,7 +6,6 @@ import UniformTypeIdentifiers
 struct ChatView: View {
     @Bindable var viewModel: ChatViewModel
     @Environment(AppState.self) private var appState
-    @State private var showInvite = false
     @State private var showGroupInfo = false
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var scrollTask: Task<Void, Never>?
@@ -19,11 +18,34 @@ struct ChatView: View {
     @State private var videoThumbnail: UIImage?
     @State private var videoDuration: Int?
     @State private var showCallScreen = false
-
-    @State private var inviteLinkCopied = false
+    @State private var showForkSheet = false
 
     var body: some View {
         VStack(spacing: 0) {
+            // Fork banner
+            if let group = viewModel.group, group.forkedFromGroupID != nil {
+                VStack(spacing: 4) {
+                    HStack {
+                        Image(systemName: "arrow.triangle.branch")
+                        Text("Forked Group")
+                            .fontWeight(.medium)
+                        if let forkEpoch = group.forkedAtEpoch {
+                            Text("from epoch \(forkEpoch)")
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    Text("Messages before the fork are copied from the original group. New messages are independent.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .font(.caption)
+                .padding(.horizontal)
+                .padding(.vertical, 6)
+                .background(Color.purple.opacity(0.12))
+            }
+
             // Epoch pinning banner
             if let group = viewModel.group, let pinned = group.pinnedEpoch,
                let snapshot = appState.epochSnapshots[group.id]?[pinned] {
@@ -219,11 +241,22 @@ struct ChatView: View {
             }
 
             if let group = viewModel.group, !appState.canSend(in: group) {
-                Text("You were removed from this group")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding()
+                VStack(spacing: 8) {
+                    Text("You were removed from this group")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    if appState.canForkGroup(group) {
+                        Button {
+                            showForkSheet = true
+                        } label: {
+                            Label("Fork Group", systemImage: "arrow.triangle.branch")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
             } else {
                 HStack(spacing: 12) {
                     PhotosPicker(selection: $selectedPhotoItem, matching: .any(of: [.images, .videos])) {
@@ -299,42 +332,17 @@ struct ChatView: View {
                     } label: {
                         Image(systemName: "person.3")
                     }
-                    Button {
-                        showInvite = true
-                    } label: {
-                        Image(systemName: "person.badge.plus")
-                    }
-                    Button {
-                        if let group = viewModel.group {
-                            let code = InviteCode(
-                                groupID: group.groupIDData,
-                                groupSecret: group.groupSecret,
-                                name: group.name,
-                                relayHints: group.relayHints.map(\.absoluteString),
-                                members: group.members,
-                                epoch: group.epoch,
-                                salt: group.salt,
-                                commitment: group.commitment,
-                                tierRawValue: group.tier.rawValue
-                            )
-                            UIPasteboard.general.string = "stellarchat://join?code=\(code.encode())"
-                            inviteLinkCopied = true
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { inviteLinkCopied = false }
-                        }
-                    } label: {
-                        Image(systemName: inviteLinkCopied ? "checkmark" : "link")
-                    }
                 }
-            }
-        }
-        .sheet(isPresented: $showInvite) {
-            if let group = viewModel.group {
-                InviteMemberView(group: group)
             }
         }
         .sheet(isPresented: $showGroupInfo) {
             if let group = viewModel.group {
                 GroupInfoView(group: group)
+            }
+        }
+        .sheet(isPresented: $showForkSheet) {
+            if let group = viewModel.group {
+                ForkGroupView(originalGroup: group)
             }
         }
         .fullScreenCover(isPresented: $showCallScreen) {

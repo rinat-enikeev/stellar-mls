@@ -13,6 +13,26 @@ struct GroupInfoView: View {
     @State private var showRenameAlert = false
     @State private var newGroupName = ""
 
+    // Invite member
+    @State private var recipientInboxKey = ""
+    @State private var inviteStatus: String?
+    @State private var isSendingInvite = false
+    @State private var showScanner = false
+
+    // Copy invite link
+    @State private var inviteLinkCopied = false
+
+    // Epoch pin confirmation
+    @State private var epochToPin: UInt64?
+    @State private var showPinConfirmation = false
+
+    // Rotate key confirmation
+    @State private var showRotateConfirmation = false
+    @State private var isRotatingKey = false
+
+    // Fork group
+    @State private var showForkSheet = false
+
     var body: some View {
         NavigationStack {
             List {
@@ -50,6 +70,66 @@ struct GroupInfoView: View {
                                     .foregroundStyle(.green)
                             }
                         }
+                    }
+                }
+
+                if appState.isMember(of: group) {
+                    // MARK: - Invite Member
+                    Section {
+                        TextField("X25519 public key (hex)", text: $recipientInboxKey)
+                            .font(.caption)
+                            .monospaced()
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+
+                        Button("Paste from Clipboard") {
+                            if let text = UIPasteboard.general.string {
+                                recipientInboxKey = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            }
+                        }
+
+                        Button {
+                            showScanner = true
+                        } label: {
+                            Label("Scan Inbox Key QR", systemImage: "qrcode.viewfinder")
+                        }
+
+                        Button {
+                            sendInvitation()
+                        } label: {
+                            HStack {
+                                Text("Send Invitation")
+                                if isSendingInvite {
+                                    Spacer()
+                                    ProgressView()
+                                }
+                            }
+                        }
+                        .disabled(recipientInboxKey.count != 64 || isSendingInvite)
+
+                        if let inviteStatus {
+                            Text(inviteStatus)
+                                .font(.caption)
+                                .foregroundStyle(inviteStatus.hasPrefix("Error") ? .red : .green)
+                        }
+                    } header: {
+                        Text("Invite Member")
+                    } footer: {
+                        Text("Enter the recipient's inbox key. They can find it in Settings → Advanced.")
+                    }
+
+                    // MARK: - Copy Invite Link
+                    Section {
+                        Button {
+                            copyInviteLink()
+                        } label: {
+                            Label(
+                                inviteLinkCopied ? "Link Copied!" : "Copy Invite Link",
+                                systemImage: inviteLinkCopied ? "checkmark" : "link"
+                            )
+                        }
+                    } footer: {
+                        Text("Copy a deep link that anyone can use to join this group.")
                     }
                 }
 
@@ -106,7 +186,8 @@ struct GroupInfoView: View {
                                 if pinnedEpoch == snapshot.epoch {
                                     appState.unpinEpoch(groupID: group.id)
                                 } else {
-                                    appState.pinEpoch(groupID: group.id, epoch: snapshot.epoch)
+                                    epochToPin = snapshot.epoch
+                                    showPinConfirmation = true
                                 }
                             } label: {
                                 HStack {
@@ -147,19 +228,39 @@ struct GroupInfoView: View {
                     }
                 }
 
-                Section {
-                    Button {
-                        Task {
-                            await appState.rotateGroupKey(groupID: group.id)
-                            removalStatus = "Key rotated to epoch \(appState.groups.first(where: { $0.id == group.id })?.epoch ?? 0)."
-                            removalStatusIsError = false
+                if appState.isMember(of: group) {
+                    Section {
+                        Button {
+                            showRotateConfirmation = true
+                        } label: {
+                            HStack {
+                                Text("Rotate Group Key")
+                                if isRotatingKey {
+                                    Spacer()
+                                    ProgressView()
+                                }
+                            }
                         }
-                    } label: {
-                        Text("Rotate Group Key")
+                        .disabled(isRotatingKey)
+                        Text("Generate a new encryption key without changing membership. Provides forward secrecy.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
-                    Text("Generate a new encryption key without changing membership. Provides forward secrecy.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                }
+
+                // MARK: - Fork Group (removed members only)
+                if !appState.isMember(of: group) && appState.canForkGroup(group) {
+                    Section {
+                        Button {
+                            showForkSheet = true
+                        } label: {
+                            Label("Fork This Group", systemImage: "arrow.triangle.branch")
+                        }
+                    } header: {
+                        Text("Fork")
+                    } footer: {
+                        Text("Create a new group from a past epoch, excluding members you choose. You will need to invite remaining members to join the fork.")
+                    }
                 }
 
                 if isRemovingMember {
@@ -201,6 +302,33 @@ struct GroupInfoView: View {
             } message: {
                 Text("The member will be removed and the group key will be rotated. They will not be able to decrypt future messages.")
             }
+            .confirmationDialog(
+                "Pin to Epoch \(epochToPin ?? 0)?",
+                isPresented: $showPinConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Pin Epoch") {
+                    if let epoch = epochToPin {
+                        appState.pinEpoch(groupID: group.id, epoch: epoch)
+                        dismiss()
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("You will switch to viewing and sending messages at this epoch. Other members at the current epoch won't see your messages here.")
+            }
+            .confirmationDialog(
+                "Rotate Group Key?",
+                isPresented: $showRotateConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Rotate Key") {
+                    rotateKey()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("A new encryption key will be generated for all members. Previous messages remain readable but future messages will use the new key.")
+            }
             .alert("Rename Group", isPresented: $showRenameAlert) {
                 TextField("Group name", text: $newGroupName)
                 Button("Rename") {
@@ -209,6 +337,18 @@ struct GroupInfoView: View {
                     removalStatusIsError = false
                 }
                 Button("Cancel", role: .cancel) {}
+            }
+            .sheet(isPresented: $showScanner) {
+                QRScannerView { scannedCode in
+                    let trimmed = scannedCode.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.count == 64, trimmed.allSatisfy({ $0.isHexDigit }) {
+                        recipientInboxKey = trimmed
+                    }
+                    showScanner = false
+                }
+            }
+            .sheet(isPresented: $showForkSheet) {
+                ForkGroupView(originalGroup: group)
             }
         }
     }
@@ -233,6 +373,75 @@ struct GroupInfoView: View {
             }
             isRemovingMember = false
         }
+    }
+
+    private func copyInviteLink() {
+        let code = InviteCode(
+            groupID: group.groupIDData,
+            groupSecret: group.groupSecret,
+            name: group.name,
+            relayHints: group.relayHints.map(\.absoluteString),
+            members: group.members,
+            epoch: group.epoch,
+            salt: group.salt,
+            commitment: group.commitment,
+            tierRawValue: group.tier.rawValue
+        )
+        UIPasteboard.general.string = "stellarchat://join?code=\(code.encode())"
+        inviteLinkCopied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { inviteLinkCopied = false }
+    }
+
+    private func sendInvitation() {
+        guard let recipientPubkeyData = hexToData(recipientInboxKey), recipientPubkeyData.count == 32 else {
+            inviteStatus = "Error: Invalid inbox key. Must be 64 hex characters (32 bytes)."
+            return
+        }
+
+        isSendingInvite = true
+        inviteStatus = nil
+
+        Task {
+            do {
+                let payload = BootstrapPayload.from(
+                    group: group,
+                    senderPubkey: appState.keyManager.publicKeyHex
+                )
+
+                await appState.invitationTransport.connect(to: appState.relayURLs)
+
+                try await appState.invitationTransport.sendInvitation(
+                    payload: payload,
+                    recipientKeyAgreementPubkey: recipientPubkeyData,
+                    keyManager: appState.keyManager
+                )
+
+                inviteStatus = "Sent! The recipient will see this in their pending invitations."
+            } catch {
+                inviteStatus = "Error: \(error.localizedDescription)"
+            }
+            isSendingInvite = false
+        }
+    }
+
+    private func rotateKey() {
+        isRotatingKey = true
+        Task {
+            await appState.rotateGroupKey(groupID: group.id)
+            isRotatingKey = false
+            dismiss()
+        }
+    }
+
+    private func hexToData(_ hex: String) -> Data? {
+        guard hex.count % 2 == 0 else { return nil }
+        let bytes = stride(from: 0, to: hex.count, by: 2).compactMap { i -> UInt8? in
+            let start = hex.index(hex.startIndex, offsetBy: i)
+            let end = hex.index(start, offsetBy: 2)
+            return UInt8(hex[start..<end], radix: 16)
+        }
+        guard bytes.count == hex.count / 2 else { return nil }
+        return Data(bytes)
     }
 }
 

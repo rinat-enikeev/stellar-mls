@@ -30,7 +30,13 @@ data class ChatGroup(
     /** Unix timestamp of the last received event, used for offline catch-up. */
     var lastEventTimestamp: Long = 0,
     /** When non-null, the user is pinned to this historical epoch for viewing/sending. */
-    var pinnedEpoch: Long? = null
+    var pinnedEpoch: Long? = null,
+    /** If this group was forked from another group, stores the original group's ID. */
+    var forkedFromGroupID: String? = null,
+    /** The epoch of the original group at which this fork was created. */
+    var forkedAtEpoch: Long? = null,
+    /** BLS pubkey hex of the member who removed us from this group (null if not removed). */
+    var removedByPubkeyHex: String? = null
 ) {
     /** Group ID as raw bytes (hex string → ByteArray). */
     val groupIDData: ByteArray get() = id.hexToBytes()

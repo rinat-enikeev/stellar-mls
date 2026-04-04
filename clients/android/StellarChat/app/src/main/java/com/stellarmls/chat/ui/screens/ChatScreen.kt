@@ -46,11 +46,9 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material3.Button
@@ -113,12 +111,12 @@ import java.util.concurrent.TimeUnit
 fun ChatScreen(
     viewModel: ChatViewModel,
     onBack: () -> Unit,
-    onInvite: () -> Unit,
     onGroupInfo: () -> Unit = {},
     onStartCall: (video: Boolean) -> Unit = {},
     contactAliasStore: com.stellarmls.chat.persistence.ContactAliasStore? = null,
     onUnpinEpoch: (() -> Unit)? = null,
-    groupListViewModel: com.stellarmls.chat.viewmodel.GroupListViewModel? = null
+    groupListViewModel: com.stellarmls.chat.viewmodel.GroupListViewModel? = null,
+    onForkGroup: (() -> Unit)? = null
 ) {
     val groupName = viewModel.groupName
     val listState = rememberLazyListState()
@@ -156,8 +154,6 @@ fun ChatScreen(
         }
     }
 
-    var inviteLinkCopied by remember { mutableStateOf(false) }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -176,26 +172,6 @@ fun ChatScreen(
                     }
                     IconButton(onClick = onGroupInfo) {
                         Icon(Icons.Filled.Group, contentDescription = "Group Info")
-                    }
-                    IconButton(onClick = onInvite) {
-                        Icon(Icons.Filled.PersonAdd, contentDescription = "Invite Member")
-                    }
-                    IconButton(onClick = {
-                        val link = viewModel.inviteLink
-                        if (link != null) {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Invite Link", link))
-                            inviteLinkCopied = true
-                            scope.launch {
-                                kotlinx.coroutines.delay(2000)
-                                inviteLinkCopied = false
-                            }
-                        }
-                    }) {
-                        Icon(
-                            if (inviteLinkCopied) Icons.Filled.Check else Icons.Filled.Share,
-                            contentDescription = "Copy Invite Link"
-                        )
                     }
                 }
             )
@@ -251,6 +227,39 @@ fun ChatScreen(
                         style = MaterialTheme.typography.labelSmall,
                         color = fgColor.copy(alpha = 0.7f)
                     )
+                }
+            }
+
+            // Fork banner
+            if (group?.forkedFromGroupID != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFFF3E5F5))
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "\u2442",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color(0xFF7B1FA2)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Forked group",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF7B1FA2)
+                        )
+                        group.forkedAtEpoch?.let { epoch ->
+                            Text(
+                                "Forked at epoch $epoch",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFF7B1FA2).copy(alpha = 0.7f)
+                            )
+                        }
+                    }
                 }
             }
 
@@ -465,17 +474,23 @@ fun ChatScreen(
             }
 
             if (!viewModel.isMember) {
-                Box(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
-                    contentAlignment = Alignment.Center
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
                         text = "You were removed from this group",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (onForkGroup != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(onClick = onForkGroup) {
+                            Text("Fork Group")
+                        }
+                    }
                 }
             } else {
                 Row(

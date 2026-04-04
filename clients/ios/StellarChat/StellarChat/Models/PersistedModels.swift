@@ -18,6 +18,9 @@ final class PersistedGroup {
     var tierRawValue: Int
     var isPublishedOnChain: Bool
     var pinnedEpoch: Int?
+    var forkedFromGroupID: String?
+    var forkedAtEpoch: Int?
+    var removedByPubkeyHex: String?
 
     init(
         id: String,
@@ -31,7 +34,10 @@ final class PersistedGroup {
         encryptedCommitment: Data?,
         tierRawValue: Int,
         isPublishedOnChain: Bool = false,
-        pinnedEpoch: Int? = nil
+        pinnedEpoch: Int? = nil,
+        forkedFromGroupID: String? = nil,
+        forkedAtEpoch: Int? = nil,
+        removedByPubkeyHex: String? = nil
     ) {
         self.id = id
         self.encryptedName = encryptedName
@@ -45,6 +51,9 @@ final class PersistedGroup {
         self.tierRawValue = tierRawValue
         self.isPublishedOnChain = isPublishedOnChain
         self.pinnedEpoch = pinnedEpoch
+        self.forkedFromGroupID = forkedFromGroupID
+        self.forkedAtEpoch = forkedAtEpoch
+        self.removedByPubkeyHex = removedByPubkeyHex
     }
 }
 

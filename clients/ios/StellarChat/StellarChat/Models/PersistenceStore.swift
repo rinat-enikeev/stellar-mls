@@ -435,7 +435,10 @@ final class PersistenceStore {
             encryptedCommitment: encCommitment,
             tierRawValue: group.tier.rawValue,
             isPublishedOnChain: group.isPublishedOnChain,
-            pinnedEpoch: group.pinnedEpoch.map { Int($0) }
+            pinnedEpoch: group.pinnedEpoch.map { Int($0) },
+            forkedFromGroupID: group.forkedFromGroupID,
+            forkedAtEpoch: group.forkedAtEpoch.map { Int($0) },
+            removedByPubkeyHex: group.removedByPubkeyHex
         )
     }
 
@@ -472,6 +475,9 @@ final class PersistenceStore {
         )
         group.isPublishedOnChain = persisted.isPublishedOnChain
         group.pinnedEpoch = persisted.pinnedEpoch.map { UInt64($0) }
+        group.forkedFromGroupID = persisted.forkedFromGroupID
+        group.forkedAtEpoch = persisted.forkedAtEpoch.map { UInt64($0) }
+        group.removedByPubkeyHex = persisted.removedByPubkeyHex
         return group
     }
 

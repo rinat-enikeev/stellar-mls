@@ -146,7 +146,10 @@ class PersistenceStore(context: Context) {
             encryptedCommitment = group.commitment?.let { StorageEncryption.encrypt(it) },
             tierRawValue = group.tier.id,
             isPublishedOnChain = group.isPublishedOnChain,
-            pinnedEpoch = group.pinnedEpoch?.toInt()
+            pinnedEpoch = group.pinnedEpoch?.toInt(),
+            forkedFromGroupID = group.forkedFromGroupID,
+            forkedAtEpoch = group.forkedAtEpoch?.toInt(),
+            removedByPubkeyHex = group.removedByPubkeyHex
         )
     }
 
@@ -174,7 +177,10 @@ class PersistenceStore(context: Context) {
             commitment = commitment,
             tier = tier,
             isPublishedOnChain = persisted.isPublishedOnChain,
-            pinnedEpoch = persisted.pinnedEpoch?.toLong()
+            pinnedEpoch = persisted.pinnedEpoch?.toLong(),
+            forkedFromGroupID = persisted.forkedFromGroupID,
+            forkedAtEpoch = persisted.forkedAtEpoch?.toLong(),
+            removedByPubkeyHex = persisted.removedByPubkeyHex
         )
     }
 

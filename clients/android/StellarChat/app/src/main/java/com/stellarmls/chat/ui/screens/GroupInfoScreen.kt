@@ -1,5 +1,7 @@
 package com.stellarmls.chat.ui.screens
 
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -31,6 +33,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,16 +43,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.stellarmls.chat.model.ChatGroup
 import com.stellarmls.chat.model.EpochSnapshot
 import com.stellarmls.chat.model.toHex
 import com.stellarmls.mls.SEPGroupMemberLeaf
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,14 +69,26 @@ fun GroupInfoScreen(
     epochSnapshots: Map<Long, EpochSnapshot> = emptyMap(),
     onPinEpoch: (Long) -> Unit = {},
     onUnpinEpoch: () -> Unit = {},
+    canForkGroup: Boolean = false,
+    onForkGroup: () -> Unit = {},
+    onSendInvitation: ((recipientKeyHex: String, onResult: (Result<Unit>) -> Unit) -> Unit)? = null,
+    inviteLink: String? = null,
     onBack: () -> Unit
 ) {
+    val isMember = group.members.any { it.publicKeyCompressed.contentEquals(myBlsPubkey) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var memberToRemove by remember { mutableStateOf<SEPGroupMemberLeaf?>(null) }
     var removalStatus by remember { mutableStateOf<String?>(null) }
     var removalStatusIsError by remember { mutableStateOf(false) }
     var isRemovingMember by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var newGroupName by remember { mutableStateOf(group.name) }
+    // Invite member state
+    var recipientKey by remember { mutableStateOf("") }
+    var inviteStatus by remember { mutableStateOf<String?>(null) }
+    var isSendingInvite by remember { mutableStateOf(false) }
+    var inviteLinkCopied by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -153,7 +173,7 @@ fun GroupInfoScreen(
                                     )
                                 }
                             }
-                            if (!isMe) {
+                            if (!isMe && isMember) {
                                 IconButton(
                                     onClick = { memberToRemove = member },
                                     enabled = !isRemovingMember
@@ -171,28 +191,147 @@ fun GroupInfoScreen(
                 }
             }
 
+            // Invite Member section
+            if (isMember && onSendInvitation != null) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Invite Member", style = MaterialTheme.typography.titleMedium)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = recipientKey,
+                            onValueChange = { recipientKey = it; inviteStatus = null },
+                            label = { Text("X25519 inbox key (64 hex chars)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                val clip = clipboard.primaryClip
+                                if (clip != null && clip.itemCount > 0) {
+                                    recipientKey = clip.getItemAt(0).text?.toString()?.trim() ?: ""
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Paste from Clipboard")
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = {
+                                isSendingInvite = true
+                                inviteStatus = null
+                                onSendInvitation(recipientKey.trim()) { result ->
+                                    isSendingInvite = false
+                                    result.onSuccess { inviteStatus = "Invitation sent!" }
+                                    result.onFailure { inviteStatus = "Error: ${it.message}" }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = recipientKey.trim().length == 64 && !isSendingInvite
+                        ) {
+                            Text(if (isSendingInvite) "Sending..." else "Send Invitation")
+                        }
+                        inviteStatus?.let { status ->
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                status,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (status.startsWith("Error")) MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Text(
+                            "Enter the recipient's inbox key. They can find it in Settings.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+            }
+
+            // Copy Invite Link section
+            if (isMember && inviteLink != null) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Invite Link", style = MaterialTheme.typography.titleMedium)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Invite Link", inviteLink))
+                                inviteLinkCopied = true
+                                scope.launch {
+                                    delay(2000)
+                                    inviteLinkCopied = false
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(if (inviteLinkCopied) "Link Copied!" else "Copy Invite Link")
+                        }
+                        Text(
+                            "Share this link with someone who has the app installed.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
 
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Key Rotation", style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    androidx.compose.material3.Button(
-                        onClick = {
-                            onRotateKey()
-                            removalStatus = "Key rotated."
-                            removalStatusIsError = false
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Rotate Group Key")
+            if (isMember) {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Key Rotation", style = MaterialTheme.typography.titleMedium)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        androidx.compose.material3.Button(
+                            onClick = {
+                                onRotateKey()
+                                removalStatus = "Key rotated."
+                                removalStatusIsError = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Rotate Group Key")
+                        }
+                        Text(
+                            "Generate a new encryption key without changing membership. Provides forward secrecy.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
                     }
-                    Text(
-                        "Generate a new encryption key without changing membership. Provides forward secrecy.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
+                }
+            }
+
+            // Fork section for removed members
+            if (!isMember && canForkGroup) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Fork", style = MaterialTheme.typography.titleMedium)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "Create a new group from a past epoch, excluding members you choose.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = onForkGroup,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Fork This Group")
+                        }
+                    }
                 }
             }
 

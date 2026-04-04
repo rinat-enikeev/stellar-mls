@@ -191,6 +191,11 @@ struct GroupRow: View {
                 }
             }
 
+            if group.forkedFromGroupID != nil {
+                Image(systemName: "arrow.triangle.branch")
+                    .foregroundStyle(.purple)
+                    .font(.caption)
+            }
             if group.isPublishedOnChain {
                 Image(systemName: "checkmark.seal.fill")
                     .foregroundStyle(.green)

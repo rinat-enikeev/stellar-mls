@@ -19,6 +19,7 @@ import com.stellarmls.chat.crypto.MediaCrypto
 import com.stellarmls.chat.crypto.NostrEvent
 import com.stellarmls.chat.crypto.NostrEventBuilder
 import com.stellarmls.chat.model.BootstrapPayload
+import com.stellarmls.chat.model.hexToBytes
 import com.stellarmls.chat.model.ChatError
 import com.stellarmls.chat.model.ChatGroup
 import com.stellarmls.chat.model.ChatMessage
@@ -54,6 +55,7 @@ import com.stellarmls.mls.SEPSaltResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.SecureRandom
@@ -1638,7 +1640,12 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
             if (selfRemoved) {
                 if (!BuildConfig.DEBUG) transport.unsubscribe(group.topicTag)
-                insertSystemMessage(groupID, "You were removed from this group", "self-removed", update.epoch)
+                val removerBlsHex = update.senderAttestation?.blsPubkey?.toHex()
+                val removerName = removerBlsHex?.let { memberDisplayName(update.senderAttestation!!.blsPubkey) } ?: "unknown"
+                group.removedByPubkeyHex = removerBlsHex
+                groups[index] = group
+                viewModelScope.launch { try { store.saveGroup(group) } catch (_: Exception) { } }
+                insertSystemMessage(groupID, "You were removed from this group by $removerName", "self-removed", update.epoch)
             } else {
                 syncTransportAndSubscribe(group)
                 viewModelScope.launch {
@@ -1709,6 +1716,162 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             group = group,
             keyResolver = { epoch -> epochKey(group.id, epoch) }
         )
+    }
+
+    // -- Fork Group --
+
+    /** Whether a removed member can fork this group (epoch snapshots exist where they were a member). */
+    fun canForkGroup(group: ChatGroup): Boolean {
+        if (isMember(group)) return false
+        val myLeaf = keyManager.memberLeaf()
+        val snapshots = epochSnapshots[group.id] ?: return false
+        return snapshots.values.any { snapshot ->
+            snapshot.members.any { it.publicKeyCompressed.contentEquals(myLeaf.publicKeyCompressed) }
+        }
+    }
+
+    /** Fork a group from the latest epoch where the current user was a member,
+     *  excluding specified members. Creates a new, cryptographically independent group. */
+    fun forkGroup(
+        originalGroupID: String,
+        excludingMembers: List<ByteArray>,
+        forkName: String? = null,
+        onProgress: (String) -> Unit = {},
+        onResult: (Result<ChatGroup>) -> Unit
+    ) {
+        viewModelScope.launch {
+            try {
+                onProgress("Creating group...")
+                val originalGroup = groups.find { it.id == originalGroupID }
+                    ?: throw ChatError.VerificationFailed("Group not found")
+                val myLeaf = keyManager.memberLeaf()
+                val snapshots = epochSnapshots[originalGroupID]
+                    ?: throw ChatError.VerificationFailed("No epoch snapshots available")
+
+                // Find the latest epoch where the user was a member
+                val myKey = myLeaf.publicKeyCompressed
+                val forkSnapshot = snapshots.values
+                    .filter { snapshot -> snapshot.members.any { it.publicKeyCompressed.contentEquals(myKey) } }
+                    .maxByOrNull { it.epoch }
+                    ?: throw ChatError.VerificationFailed("No epoch found where you were a member")
+
+                // Generate new group ID and secret
+                val random = java.security.SecureRandom()
+                val newGroupID = ByteArray(32).also { random.nextBytes(it) }
+                val newGroupSecret = ByteArray(32).also { random.nextBytes(it) }
+
+                // Build member list: snapshot members minus excluded, ensuring self is included
+                val forkMembers = forkSnapshot.members.filter { member ->
+                    excludingMembers.none { it.contentEquals(member.publicKeyCompressed) }
+                }.toMutableList()
+                if (forkMembers.none { it.publicKeyCompressed.contentEquals(myKey) }) {
+                    forkMembers.add(myLeaf)
+                }
+
+                val name = forkName?.takeIf { it.isNotBlank() } ?: "Fork of ${originalGroup.name}"
+                val forkedGroup = ChatGroup(
+                    id = newGroupID.toHex(),
+                    name = name,
+                    groupSecret = newGroupSecret,
+                    members = forkMembers,
+                    epoch = 0,
+                    salt = SEPCommitmentBuilder.generateSalt(),
+                    tier = originalGroup.tier,
+                    relayHints = originalGroup.relayHints,
+                    forkedFromGroupID = originalGroupID,
+                    forkedAtEpoch = forkSnapshot.epoch
+                )
+                sortMembers(forkedGroup)
+                forkedGroup.recomputeCommitment()
+
+                addGroup(forkedGroup)
+                captureEpochSnapshot(forkedGroup, "Forked from ${originalGroup.name} at epoch ${forkSnapshot.epoch}")
+                ensureOwnTransportBundle(forkedGroup.id)
+
+                // Copy messages from the original group up to the fork epoch
+                val originalMessages = chatMessages[originalGroupID] ?: emptyList()
+                val copiedMessages = originalMessages.mapNotNull { msg ->
+                    if (msg.epoch != null && msg.epoch > forkSnapshot.epoch) return@mapNotNull null
+                    msg.copy(
+                        id = "fork-${msg.id}",
+                        groupID = forkedGroup.id
+                    )
+                }
+                if (copiedMessages.isNotEmpty()) {
+                    onProgress("Copying ${copiedMessages.size} messages...")
+                }
+                chatMessages[forkedGroup.id] = copiedMessages.toMutableList()
+                withContext(Dispatchers.IO) {
+                    for (msg in copiedMessages) {
+                        try { store.saveMessage(msg) } catch (_: Exception) { }
+                    }
+                }
+
+                val excludedNames = excludingMembers.map { memberDisplayName(it) }.joinToString(", ")
+                val sysText = if (excludedNames.isEmpty())
+                    "Group forked from ${originalGroup.name}."
+                else
+                    "Group forked from ${originalGroup.name}. Excluded: $excludedNames."
+                insertSystemMessage(forkedGroup.id, sysText, "group-forked", 0)
+
+                // Send invitations to fork members using transport bundles from the original group
+                val otherMembers = forkMembers.filter { !it.publicKeyCompressed.contentEquals(myKey) }
+                val totalToInvite = otherMembers.size
+                if (totalToInvite > 0) {
+                    onProgress("Sending invitations (0/$totalToInvite)...")
+                }
+                val originalBundles = store.loadTransportBundles(originalGroupID)
+                val payload = com.stellarmls.chat.model.BootstrapPayload.from(
+                    forkedGroup, keyManager.publicKeyHex
+                )
+                var invitedCount = 0
+                var failedCount = 0
+                for (member in otherMembers) {
+                    val hex = member.publicKeyCompressed.toHex()
+                    val bundle = originalBundles[hex]
+                    if (bundle == null) {
+                        failedCount++
+                        continue
+                    }
+                    try {
+                        withTimeout(15_000) {
+                            withContext(Dispatchers.IO) {
+                                invitationTransport.sendInvitation(
+                                    payload, bundle.x25519InboxPubkey, keyManager
+                                )
+                            }
+                        }
+                        invitedCount++
+                    } catch (e: Exception) {
+                        failedCount++
+                        if (BuildConfig.DEBUG) Log.w("GroupListVM", "forkGroup: failed to invite $hex: ${e.message}")
+                    }
+                    onProgress("Sending invitations ($invitedCount/$totalToInvite)...")
+                }
+                val inviteMsg = when {
+                    invitedCount > 0 && failedCount > 0 ->
+                        "Sent $invitedCount invitation${if (invitedCount == 1) "" else "s"}, $failedCount failed."
+                    invitedCount > 0 ->
+                        "Sent invitations to $invitedCount member${if (invitedCount == 1) "" else "s"}."
+                    else -> null
+                }
+                if (inviteMsg != null) {
+                    insertSystemMessage(forkedGroup.id, inviteMsg, "fork-invitations-sent", 0)
+                }
+
+                // Publish on-chain if configured
+                if (isContractConfigured && onChainService != null) {
+                    onProgress("Publishing to blockchain...")
+                    publishGroupOnChain(forkedGroup) { /* best-effort */ }
+                }
+
+                if (BuildConfig.DEBUG) Log.d("GroupListVM", "forkGroup created=${forkedGroup.id.take(8)} from=${originalGroupID.take(8)} epoch=${forkSnapshot.epoch} members=${forkMembers.size} invited=$invitedCount failed=$failedCount")
+
+                onResult(Result.success(forkedGroup))
+            } catch (e: Exception) {
+                onResult(Result.failure(e))
+            }
+        }
     }
 
     /** Rotate the group key via chain-confirmed epoch transition. */
@@ -1903,6 +2066,27 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             put("name", trimmed)
         }
         transport.sendProtocolMessage(group, json.toString())
+    }
+
+    /** Send an invitation for a group to a recipient identified by their X25519 inbox key hex. */
+    fun sendInvitation(groupID: String, recipientKeyHex: String, onResult: (Result<Unit>) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val group = groups.find { it.id == groupID }
+                    ?: throw IllegalStateException("Group not found")
+                val pubkeyBytes = recipientKeyHex.hexToBytes()
+                require(pubkeyBytes.size == 32) { "Key must be 32 bytes (64 hex chars)" }
+                val payload = BootstrapPayload.from(group, keyManager.publicKeyHex)
+                withTimeout(15_000) {
+                    withContext(Dispatchers.IO) {
+                        invitationTransport.sendInvitation(payload, pubkeyBytes, keyManager)
+                    }
+                }
+                onResult(Result.success(Unit))
+            } catch (e: Exception) {
+                onResult(Result.failure(e))
+            }
+        }
     }
 
     /** Announce ourselves as a new member to the group over the Nostr transport. */
@@ -2524,11 +2708,18 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                             }
                             if (selfRemoved) {
                                 val noticeEpoch = obj.getLong("epoch")
+                                // Look up remover's BLS pubkey from transport bundles via Nostr Ed25519 key
+                                val removerBlsHex = transportBundles[groupID]?.entries?.firstOrNull { (_, bundle) ->
+                                    bundle.stellarEd25519Pubkey.toHex() == senderPubkey
+                                }?.key
                                 val idx = groups.indexOfFirst { it.id == groupID }
                                 if (idx >= 0) {
                                     var g = cloneGroup(groups[idx])
+                                    // Capture epoch snapshot BEFORE mutation so fork can find all members
+                                    captureEpochSnapshot(g, "Member removed (you)")
                                     // Update epoch and remove self from member list
                                     g = g.copy(epoch = noticeEpoch)
+                                    g.removedByPubkeyHex = removerBlsHex
                                     g.members.removeAll { it.publicKeyCompressed.contentEquals(myBls) }
                                     groups[idx] = g
                                     viewModelScope.launch { try { store.saveGroup(g) } catch (_: Exception) { } }
@@ -2536,7 +2727,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                                     // Rebuild currentMembers so BLS check rejects our own messages too
                                     updateCurrentMembers(groupID)
                                 }
-                                insertSystemMessage(groupID, "You were removed from this group", "self-removed", noticeEpoch)
+                                val removerName = contactAliasStore.displayName(senderPubkey) ?: (senderPubkey.take(8) + "...")
+                                insertSystemMessage(groupID, "You were removed from this group by $removerName", "self-removed", noticeEpoch)
                                 if (BuildConfig.DEBUG) Log.d("GroupListVM", "Self-removed from group=${groupID.take(8)} epoch=$noticeEpoch")
                             }
                         }

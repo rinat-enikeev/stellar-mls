@@ -11,7 +11,7 @@ services:
       - internal
 
   nostr-relay:
-    image: hoytech/strfry:latest
+    image: dockurr/strfry:latest
     volumes:
       - ./deploy/strfry/strfry.conf:/etc/strfry.conf:ro
       - strfry-data:/app/strfry-db
@@ -20,9 +20,10 @@ services:
       - internal
 
   blossom:
-    build:
-      context: ./deploy/blossom
-      dockerfile: Dockerfile
+    image: ghcr.io/hzrd149/blossom-server:latest
+    environment:
+      - DATA_DIR=/app/data
+      - PORT=3000
     volumes:
       - blossom-data:/app/data
     restart: unless-stopped

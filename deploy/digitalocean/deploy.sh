@@ -96,10 +96,11 @@ DO_REGION="${DO_REGION:-ams3}"
 DO_DROPLET_SIZE="${DO_DROPLET_SIZE:-s-2vcpu-4gb}"
 SSH_KEY_PATH="${SSH_KEY_PATH:-$HOME/.ssh/id_ed25519}"
 
-# Auto-detect git repo
+# Auto-detect git repo — always convert SSH to HTTPS so the droplet can clone without keys
 if [ -z "${GIT_REPO:-}" ]; then
     GIT_REPO=$(git remote get-url origin 2>/dev/null || echo "https://github.com/rinat-enikeev/stellar-mls.git")
 fi
+GIT_REPO=$(echo "$GIT_REPO" | sed -E 's|^git@github\.com:|https://github.com/|; s|\.git$||').git
 
 save_env
 ok "Configuration saved to .env"
@@ -278,12 +279,18 @@ cf_upsert_record "blossom" "$DROPLET_IP"
 info "Syncing repository on droplet..."
 $SSH_CMD "if [ -d /opt/onym-chat/.git ]; then cd /opt/onym-chat && git pull; else git clone $GIT_REPO /opt/onym-chat; fi"
 
+# Overlay local deploy/ and docker-compose.yml on top of the clone
+# so uncommitted/unpushed changes are always applied
+info "Uploading local config files..."
+$SCP_CMD -r "$REPO_ROOT/docker-compose.yml" "root@$DROPLET_IP:/opt/onym-chat/docker-compose.yml" 2>/dev/null
+$SCP_CMD -r "$REPO_ROOT/deploy/" "root@$DROPLET_IP:/opt/onym-chat/deploy/" 2>/dev/null
+
 info "Uploading relayer .env..."
 $SCP_CMD "$REPO_ROOT/relayer/.env" "root@$DROPLET_IP:/opt/onym-chat/relayer/.env" 2>/dev/null
 $SSH_CMD "sed -i 's/^RELAYER_BIND=.*/RELAYER_BIND=0.0.0.0:8080/' /opt/onym-chat/relayer/.env"
 
-info "Building containers (this may take a few minutes on first run)..."
-$SSH_CMD "cd /opt/onym-chat && docker compose build" 2>&1 | tail -5
+info "Pulling images and building containers (this may take a few minutes on first run)..."
+$SSH_CMD "cd /opt/onym-chat && docker compose pull --ignore-buildable && docker compose build --pull" 2>&1 | tail -5
 
 info "Starting nginx..."
 $SSH_CMD "cd /opt/onym-chat && docker compose up -d nginx" 2>&1 | tail -5

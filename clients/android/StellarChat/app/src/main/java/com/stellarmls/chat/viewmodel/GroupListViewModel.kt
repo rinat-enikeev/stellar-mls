@@ -212,10 +212,13 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         val savedTierId = contractPrefs.getInt("default_tier", SEPTier.LARGE.id)
         defaultGroupTier = SEPTier.entries.find { it.id == savedTierId } ?: SEPTier.LARGE
 
-        // Load contract + relayer config
-        contractEndpoint = contractPrefs.getString("endpoint", "") ?: ""
-        contractID = contractPrefs.getString("contract_id", "") ?: ""
-        relayerURL = contractPrefs.getString("relayer_url", "") ?: ""
+        // Load contract + relayer config (fall back to build-time defaults from relayer/.env)
+        contractEndpoint = contractPrefs.getString("endpoint", null)
+            ?: BuildConfig.DEFAULT_CONTRACT_ENDPOINT
+        contractID = contractPrefs.getString("contract_id", null)
+            ?: BuildConfig.DEFAULT_CONTRACT_ID
+        relayerURL = contractPrefs.getString("relayer_url", null)
+            ?: BuildConfig.DEFAULT_RELAYER_URL
         // N-5: Load auth token from encrypted prefs (migrate from plaintext if needed)
         val legacyToken = contractPrefs.getString("relayer_auth_token", null)
         if (legacyToken != null && legacyToken.isNotBlank()) {
@@ -223,6 +226,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             contractPrefs.edit().remove("relayer_auth_token").apply()
         }
         relayerAuthToken = keyManager.loadRelayerAuthToken()
+            .ifEmpty { BuildConfig.DEFAULT_RELAYER_AUTH_TOKEN }
 
         // Load TURN server config
         turnEnabled = turnPrefs.getBoolean("turn_enabled", false)

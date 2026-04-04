@@ -33,6 +33,37 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: ""
+    preBuildScripts:
+      - name: Generate Relayer Defaults
+        script: |
+          ENV_FILE="${SRCROOT}/../../../relayer/.env"
+          OUT="${SRCROOT}/StellarChat/RelayerDefaults.generated.swift"
+          EP=""; CID=""; BIND=""; AUTH=""
+          if [ -f "$ENV_FILE" ]; then
+            while IFS= read -r line || [ -n "$line" ]; do
+              case "$line" in \#*|"") continue ;; esac
+              key="${line%%=*}"; val="${line#*=}"
+              val="${val%\"}"; val="${val#\"}"
+              case "$key" in
+                RELAYER_RPC_URL) EP="$val" ;;
+                RELAYER_CONTRACT_ID) CID="$val" ;;
+                RELAYER_BIND) BIND="$val" ;;
+                RELAYER_AUTH_TOKENS) AUTH="${val%%,*}" ;;
+              esac
+            done < "$ENV_FILE"
+          fi
+          [ -n "$BIND" ] && BIND="http://$BIND"
+          cat > "$OUT" << SWIFT
+          // Auto-generated from relayer/.env — do not edit
+          enum RelayerDefaults {
+              static let contractEndpoint = "$EP"
+              static let contractID = "$CID"
+              static let relayerURL = "$BIND"
+              static let relayerAuthToken = "$AUTH"
+          }
+          SWIFT
+        outputFiles:
+          - $(SRCROOT)/StellarChat/RelayerDefaults.generated.swift
     dependencies:
       - package: SwiftMLS
       - package: WebRTC

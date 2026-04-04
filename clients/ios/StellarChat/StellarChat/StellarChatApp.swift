@@ -196,17 +196,21 @@ final class AppState {
         self.groups = store.loadGroups()
         self.relayURLs = Self.loadRelayURLs()
         self.blossomServerURLs = Self.loadBlossomServerURLs()
-        self.contractEndpoint = UserDefaults.standard.string(forKey: Self.contractEndpointKey) ?? ""
-        self.contractID = UserDefaults.standard.string(forKey: Self.contractIDKey) ?? ""
+        self.contractEndpoint = UserDefaults.standard.string(forKey: Self.contractEndpointKey)
+            ?? RelayerDefaults.contractEndpoint
+        self.contractID = UserDefaults.standard.string(forKey: Self.contractIDKey)
+            ?? RelayerDefaults.contractID
         self.defaultGroupTier = SEPTier(rawValue: UserDefaults.standard.integer(forKey: Self.defaultGroupTierKey)) ?? .large
-        self.relayerURL = UserDefaults.standard.string(forKey: Self.relayerURLKey) ?? ""
+        self.relayerURL = UserDefaults.standard.string(forKey: Self.relayerURLKey)
+            ?? RelayerDefaults.relayerURL
         // N-5: Load auth token from Keychain; migrate from UserDefaults if present
         if let legacyToken = UserDefaults.standard.string(forKey: Self.relayerAuthTokenKey), !legacyToken.isEmpty {
             Self.saveToKeychain(legacyToken, key: Self.relayerAuthTokenKey)
             UserDefaults.standard.removeObject(forKey: Self.relayerAuthTokenKey)
             self.relayerAuthToken = legacyToken
         } else {
-            self.relayerAuthToken = Self.loadFromKeychain(key: Self.relayerAuthTokenKey) ?? ""
+            self.relayerAuthToken = Self.loadFromKeychain(key: Self.relayerAuthTokenKey)
+                ?? RelayerDefaults.relayerAuthToken
         }
         // Load TURN server config
         self.turnEnabled = UserDefaults.standard.bool(forKey: Self.turnEnabledKey)

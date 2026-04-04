@@ -41,3 +41,6 @@ local.properties
 # Relayer secrets
 .env
 relayer/.env
+
+# Generated build-time defaults from relayer/.env
+clients/ios/StellarChat/StellarChat/RelayerDefaults.generated.swift

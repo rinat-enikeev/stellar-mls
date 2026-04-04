@@ -23,6 +23,7 @@
 		4CF5F8CBF1B249B01EC14D1C /* PersistenceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E25D14293AC1BC6E3FB1E28 /* PersistenceStore.swift */; };
 		4E0468C0A25E658173F4E628 /* ChatGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8FD22552EBCF23A89DB7700 /* ChatGroup.swift */; };
 		4FC9AB234CCA9BFAA0B112F1 /* StellarChatApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62FB83C87F9348F97EEDE0C8 /* StellarChatApp.swift */; };
+		538C339B8E0F50F72DCB8F72 /* RelayerDefaults.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CB66BD4710970306321664D /* RelayerDefaults.generated.swift */; };
 		661B24EC80C52FD32C0DB020 /* PersistedModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4705F8234AA6022CD782348E /* PersistedModels.swift */; };
 		69502F4BED8DAE5BB7CDC5A6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */; };
 		76E39A66EA185E3741BB902B /* Phase3Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30F3176E6A6E2A7C75F9CB47 /* Phase3Tests.swift */; };
@@ -73,6 +74,7 @@
 		1C987955167382BF0E0E251C /* SecurityLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityLog.swift; sourceTree = "<group>"; };
 		1E76AF13A26CCEC2E75C8310 /* VoiceRecordButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceRecordButton.swift; sourceTree = "<group>"; };
 		211AE30EB5115E4BB85D9084 /* swift-mls */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "swift-mls"; path = "../../../swift-mls"; sourceTree = SOURCE_ROOT; };
+		2CB66BD4710970306321664D /* RelayerDefaults.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayerDefaults.generated.swift; sourceTree = "<group>"; };
 		30F3176E6A6E2A7C75F9CB47 /* Phase3Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Phase3Tests.swift; sourceTree = "<group>"; };
 		37304476C52093C0D34ECB92 /* KeyAttestation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyAttestation.swift; sourceTree = "<group>"; };
 		3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StellarStrKey.swift; sourceTree = "<group>"; };
@@ -207,6 +209,7 @@
 			children = (
 				8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */,
 				F0F0E18BDAE3BFB365657BA8 /* Info.plist */,
+				2CB66BD4710970306321664D /* RelayerDefaults.generated.swift */,
 				62FB83C87F9348F97EEDE0C8 /* StellarChatApp.swift */,
 				4B01157F59B93E6CF03322E6 /* Call */,
 				23A47303C279700BCE7F944A /* Models */,
@@ -288,6 +291,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = AD86622DBF90D7F9FE95EC3B /* Build configuration list for PBXNativeTarget "StellarChat" */;
 			buildPhases = (
+				CE9CE4FC4CA0A94EAD3A494F /* Generate Relayer Defaults */,
 				A1F09619AC4E0C9E792E7EC6 /* Sources */,
 				19429B34CCDBB15661D0F552 /* Resources */,
 				C69419576D437082081E4D43 /* Frameworks */,
@@ -358,6 +362,28 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		CE9CE4FC4CA0A94EAD3A494F /* Generate Relayer Defaults */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Generate Relayer Defaults";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/StellarChat/RelayerDefaults.generated.swift",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "ENV_FILE=\"${SRCROOT}/../../../relayer/.env\"\nOUT=\"${SRCROOT}/StellarChat/RelayerDefaults.generated.swift\"\nEP=\"\"; CID=\"\"; BIND=\"\"; AUTH=\"\"\nif [ -f \"$ENV_FILE\" ]; then\n  while IFS= read -r line || [ -n \"$line\" ]; do\n    case \"$line\" in \\#*|\"\") continue ;; esac\n    key=\"${line%%=*}\"; val=\"${line#*=}\"\n    val=\"${val%\\\"}\"; val=\"${val#\\\"}\"\n    case \"$key\" in\n      RELAYER_RPC_URL) EP=\"$val\" ;;\n      RELAYER_CONTRACT_ID) CID=\"$val\" ;;\n      RELAYER_BIND) BIND=\"$val\" ;;\n      RELAYER_AUTH_TOKENS) AUTH=\"${val%%,*}\" ;;\n    esac\n  done < \"$ENV_FILE\"\nfi\n[ -n \"$BIND\" ] && BIND=\"http://$BIND\"\ncat > \"$OUT\" << SWIFT\n// Auto-generated from relayer/.env — do not edit\nenum RelayerDefaults {\n    static let contractEndpoint = \"$EP\"\n    static let contractID = \"$CID\"\n    static let relayerURL = \"$BIND\"\n    static let relayerAuthToken = \"$AUTH\"\n}\nSWIFT\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		4063E533998C2EEFCEEA7B71 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -403,6 +429,7 @@
 				4CF5F8CBF1B249B01EC14D1C /* PersistenceStore.swift in Sources */,
 				A49A5C6B2401EEB1847229DE /* QRCodeView.swift in Sources */,
 				3EC81E8DA76069452870626F /* QRScannerView.swift in Sources */,
+				538C339B8E0F50F72DCB8F72 /* RelayerDefaults.generated.swift in Sources */,
 				9EABBA75189DA35E0BA71054 /* SearchView.swift in Sources */,
 				1AA0059A3C3D6B195FB5615C /* SecurityLog.swift in Sources */,
 				69502F4BED8DAE5BB7CDC5A6 /* SettingsView.swift in Sources */,

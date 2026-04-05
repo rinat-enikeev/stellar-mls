@@ -1,0 +1,42 @@
+name: F-Droid Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build deterministic APK in Docker
+        run: |
+          chmod +x scripts/build-fdroid-release.sh
+          ./scripts/build-fdroid-release.sh
+
+      - name: Sign APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > /tmp/keystore.jks
+          APKSIGNER=$(find $ANDROID_HOME -name apksigner 2>/dev/null | sort -V | tail -1)
+          $APKSIGNER sign \
+            --ks /tmp/keystore.jks \
+            --ks-pass "pass:$KEYSTORE_PASSWORD" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --key-pass "pass:$KEY_PASSWORD" \
+            app-fdroid-release-*.apk
+          rm /tmp/keystore.jks
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app-fdroid-release-*.apk

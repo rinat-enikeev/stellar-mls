@@ -41,11 +41,12 @@ apt-get install -y rustup build-essential
 rustup default 1.94.1
 rustup target add aarch64-linux-android x86_64-linux-android
 
-# Copy source (read-only mount, need writable copy)
-rm -rf /home/vagrant/build
-mkdir -p /home/vagrant/build
-cp -a /src/. /home/vagrant/build
-cd /home/vagrant/build
+# Copy source to the SAME path F-Droid CI uses (critical for reproducible .so files)
+BUILD_DIR="/home/vagrant/build/chat.onym.android"
+rm -rf "$BUILD_DIR"
+mkdir -p "$BUILD_DIR"
+cp -a /src/. "$BUILD_DIR"
+cd "$BUILD_DIR"
 
 # Sanity check: verify repo root layout
 test -f scripts/build-android.sh
@@ -59,6 +60,8 @@ rm -rf clients/android/StellarChat/app/src/main/jniLibs/
 NDK_DIR="/opt/android-sdk/ndk/27.2.12479018"
 echo "==> Existing NDK versions:"
 ls /opt/android-sdk/ndk/ 2>/dev/null || echo "(none)"
+# Remove any other NDK versions to avoid AGP version disagreement
+find /opt/android-sdk/ndk/ -mindepth 1 -maxdepth 1 ! -name "27.2.12479018" -exec rm -rf {} + 2>/dev/null || true
 if [ ! -d "$NDK_DIR" ]; then
     echo "==> Downloading NDK r27c..."
     apt-get install -y -q unzip curl > /dev/null 2>&1 || true
@@ -79,7 +82,12 @@ rm -f clients/android/StellarChat/app/google-services.json
 # === gradle build ===
 cd clients/android/StellarChat
 echo "sdk.dir=/opt/android-sdk" > local.properties
-./gradlew assembleFdroidRelease
+# Use gradlew-fdroid if available (matches F-Droid CI), fall back to ./gradlew
+if command -v gradlew-fdroid >/dev/null 2>&1; then
+    gradlew-fdroid assembleFdroidRelease
+else
+    ./gradlew assembleFdroidRelease
+fi
 
 # Copy output
 cp app/build/outputs/apk/fdroid/release/app-fdroid-release-unsigned.apk /output/

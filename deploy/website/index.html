@@ -253,6 +253,33 @@
             font-size: 1.5rem;
         }
 
+        /* Ceremony */
+        .ceremony-callout {
+            padding: 40px;
+            border-radius: 20px;
+            border: 1px solid rgba(162, 155, 254, 0.28);
+            background:
+                radial-gradient(circle at top left, rgba(162, 155, 254, 0.16), transparent 42%),
+                linear-gradient(180deg, rgba(18, 18, 26, 0.98), rgba(12, 12, 18, 0.98));
+            box-shadow: 0 0 0 1px rgba(162, 155, 254, 0.05) inset;
+        }
+        .ceremony-callout h2 {
+            font-size: 1.8rem;
+            margin-bottom: 12px;
+        }
+        .ceremony-callout p {
+            color: var(--text-dim);
+            max-width: 720px;
+            margin-bottom: 24px;
+        }
+        .ceremony-note {
+            color: var(--accent-glow);
+            font-size: 0.85rem;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+            margin-bottom: 14px;
+        }
+
         /* Open Source */
         .oss {
             text-align: center;
@@ -430,6 +457,17 @@
             <div class="arch-box nostr">Nostr Relay<br><small style="font-weight:400;opacity:0.7">encrypted messages</small></div>
             <div class="arch-arrow">&rarr;</div>
             <div class="arch-box stellar">Stellar<br><small style="font-weight:400;opacity:0.7">ZK proof verification</small></div>
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="ceremony-callout">
+            <div class="ceremony-note">Trusted Setup Ceremony</div>
+            <h2>Help secure the production launch</h2>
+            <p>We are organizing a public Groth16 trusted setup ceremony for production. If you want to contribute randomness, verify the process, or participate in the setup as an independent contributor, join the ceremony thread on GitHub.</p>
+            <a href="https://github.com/rinat-enikeev/stellar-mls/issues/2" class="btn btn-primary">Join the Ceremony</a>
         </div>
     </div>
 </section>

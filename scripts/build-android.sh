@@ -59,8 +59,14 @@ X86_64_LINKER="$TOOLCHAIN/x86_64-linux-android${API_LEVEL}-clang"
 
 LIB_NAME="libsep_xxxx_circuits.so"
 
-# Reproducible build flags: disable build-id and standardize hash style
-export RUSTFLAGS="${RUSTFLAGS:-} -C codegen-units=1 -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--hash-style=gnu"
+# Reproducible build flags
+# - codegen-units=1: deterministic codegen regardless of CPU count
+# - build-id=none: no build-id in .so (differs across machines)
+# - hash-style=gnu: consistent hash style across platforms
+# - remap-path-prefix: strip build paths from binaries
+export RUSTFLAGS="${RUSTFLAGS:-} -C codegen-units=1 -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--hash-style=gnu --remap-path-prefix=$REPO_ROOT=/build --remap-path-prefix=$HOME/.cargo/registry=/cargo-registry --remap-path-prefix=$HOME/.rustup/toolchains=/rustup-toolchains"
+export SOURCE_DATE_EPOCH=0
+export CARGO_TARGET_DIR="$REPO_ROOT/target"
 
 build_target() {
     local target="$1"
@@ -88,6 +94,12 @@ build_target() {
     esac
     mkdir -p "$OUT_DIR/jniLibs/$abi"
     cp "$REPO_ROOT/target/$target/release/$LIB_NAME" "$OUT_DIR/jniLibs/$abi/$LIB_NAME"
+    # Remove .comment section (contains clang version string that differs between platforms)
+    # Use llvm-objcopy from NDK toolchain — handles cross-architecture binaries
+    NDK_OBJCOPY="$TOOLCHAIN/llvm-objcopy"
+    if [ -x "$NDK_OBJCOPY" ]; then
+        "$NDK_OBJCOPY" --remove-section .comment "$OUT_DIR/jniLibs/$abi/$LIB_NAME"
+    fi
 }
 
 build_target aarch64-linux-android arm64-v8a

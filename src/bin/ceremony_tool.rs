@@ -10,6 +10,7 @@ use rand::rngs::OsRng;
 use sep_xxxx_circuits::ceremony;
 use sep_xxxx_circuits::ceremony::phase2;
 use sep_xxxx_circuits::Tier;
+use sha2::{Digest, Sha256};
 
 const TOOL_VERSION: &str = "1";
 const STATE_META: &str = "state.txt";
@@ -57,6 +58,17 @@ fn run() -> Result<(), String> {
             let opts = parse_options(&rest)?;
             let state_dir = PathBuf::from(required_opt(&opts, "state-dir")?);
             show_receipt(&state_dir)
+        }
+        "verify-state" => {
+            let opts = parse_options(&rest)?;
+            let state_dir = PathBuf::from(required_opt(&opts, "state-dir")?);
+            verify_state(&state_dir)
+        }
+        "phase2-summary" => {
+            let opts = parse_options(&rest)?;
+            let state_dir = PathBuf::from(required_opt(&opts, "state-dir")?);
+            let out_file = opts.get("out-file").map(PathBuf::from);
+            phase2_summary(&state_dir, out_file)
         }
         "--help" | "-h" | "help" => {
             print_usage();
@@ -228,6 +240,95 @@ fn show_receipt(state_dir: &Path) -> Result<(), String> {
         state_value(&state, "contribution_id")?,
         receipt_value(&receipt, "participant")?,
     );
+    Ok(())
+}
+
+fn verify_state(state_dir: &Path) -> Result<(), String> {
+    let (state, srs, receipt) = load_state_dir(state_dir)?;
+    let round = parse_usize(state_value(&state, "round")?, "round")?;
+    let srs_hash = ceremony::hash_srs(&srs);
+    let expected_hash = state_value(&state, "srs_hash")?;
+    if hex_encode(&srs_hash) != expected_hash {
+        return Err("state.txt srs_hash does not match state.srs".to_string());
+    }
+    if !ceremony::verify_consistency(&srs) {
+        return Err("state.srs failed consistency verification".to_string());
+    }
+    if receipt_value(&receipt, "after_srs_hash")? != expected_hash {
+        return Err("receipt after_srs_hash does not match state.txt".to_string());
+    }
+
+    if round == 0 {
+        let proof = proof_from_lines(&receipt)?;
+        if !ceremony::verify_initial_contribution(&srs, &proof) {
+            return Err("initial contribution proof verification failed".to_string());
+        }
+        println!("verified state");
+        println!("kind: initial");
+    } else {
+        println!("verified state");
+        println!("kind: contributed-state");
+        println!("note: use verify-contribution with the previous round to verify the transition proof");
+    }
+    println!("tier: {}", state_value(&state, "tier")?);
+    println!("round: {round}");
+    println!("srs_hash: {expected_hash}");
+    println!("contribution_id: {}", state_value(&state, "contribution_id")?);
+    Ok(())
+}
+
+fn phase2_summary(state_dir: &Path, out_file: Option<PathBuf>) -> Result<(), String> {
+    let (state, srs, receipt) = load_state_dir(state_dir)?;
+    let round = parse_usize(state_value(&state, "round")?, "round")?;
+    let srs_hash = ceremony::hash_srs(&srs);
+    let expected_hash = state_value(&state, "srs_hash")?;
+    if hex_encode(&srs_hash) != expected_hash {
+        return Err("state.txt srs_hash does not match state.srs".to_string());
+    }
+    if !ceremony::verify_consistency(&srs) {
+        return Err("state.srs failed consistency verification".to_string());
+    }
+
+    let state_srs_bytes = fs::read(state_dir.join(STATE_SRS))
+        .map_err(|e| format!("failed to read {}: {e}", state_dir.join(STATE_SRS).display()))?;
+    let state_srs_archive_sha256 = sha256_hex(&state_srs_bytes);
+
+    let mut lines = vec![
+        "# Phase 2 transparency summary".to_string(),
+        format!("generated_at={}", unix_timestamp()),
+        format!("tool_version={TOOL_VERSION}"),
+        format!("trust_model_target=public-phase2-mpc"),
+        format!("tier={}", state_value(&state, "tier")?),
+        format!("round={round}"),
+        format!("participant_of_latest_round={}", receipt_value(&receipt, "participant")?),
+        format!("circuit_id={}", state_value(&state, "circuit_id")?),
+        format!("phase1_srs_hash={expected_hash}"),
+        format!("phase1_contribution_id={}", state_value(&state, "contribution_id")?),
+        format!("phase1_state_archive_sha256={state_srs_archive_sha256}"),
+        format!("phase1_state_archive_bytes={}", state_srs_bytes.len()),
+        format!("phase1_state_dir={}", state_dir.display()),
+        "recommended_publication=publish_this_summary_before_starting_public_phase2".to_string(),
+        "recommended_outputs=publish_phase2_round_hashes_beacon_final_pk_hash_final_vk_hash_and_verification_artifacts".to_string(),
+    ];
+    lines.push(String::new());
+    lines.push(String::from("Issue comment template:"));
+    lines.push(format!(
+        "We are freezing the final Phase 1 input for public Phase 2 MPC. tier={}, round={}, phase1_contribution_id={}, phase1_srs_hash={}, phase1_state_archive_sha256={}",
+        state_value(&state, "tier")?,
+        round,
+        state_value(&state, "contribution_id")?,
+        expected_hash,
+        state_srs_archive_sha256
+    ));
+    let rendered = lines.join("\n") + "\n";
+
+    if let Some(path) = out_file {
+        fs::write(&path, rendered.as_bytes())
+            .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+        println!("wrote {}", path.display());
+    } else {
+        print!("{rendered}");
+    }
     Ok(())
 }
 
@@ -478,6 +579,11 @@ fn unix_timestamp() -> String {
     }
 }
 
+fn sha256_hex(data: &[u8]) -> String {
+    let hash = Sha256::digest(data);
+    hex_encode(&hash)
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -526,4 +632,6 @@ fn print_usage() {
     eprintln!("  cargo run --bin ceremony_tool -- contribute --state-dir <dir> --out-dir <dir> --participant <name>");
     eprintln!("  cargo run --bin ceremony_tool -- verify-contribution --before-state-dir <dir> --after-state-dir <dir>");
     eprintln!("  cargo run --bin ceremony_tool -- show-receipt --state-dir <dir>");
+    eprintln!("  cargo run --bin ceremony_tool -- verify-state --state-dir <dir>");
+    eprintln!("  cargo run --bin ceremony_tool -- phase2-summary --state-dir <dir> [--out-file <path>]");
 }

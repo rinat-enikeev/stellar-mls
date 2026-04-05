@@ -10,6 +10,8 @@ This tool is meant for participants to:
 - initialize a new ceremony state
 - contribute randomness to the current state
 - verify a single contribution
+- verify a single state directory
+- freeze a final Phase 1 state into a Phase 2 handoff summary
 - print a short contribution id suitable for posting in a GitHub issue
 
 ## Run
@@ -71,6 +73,23 @@ bash tools/ceremony/run.sh \
   --state-dir /tmp/ceremony-round-001
 ```
 
+### 5. Verify a state directory
+
+```bash
+bash tools/ceremony/run.sh \
+  verify-state \
+  --state-dir /tmp/ceremony-round-001
+```
+
+### 6. Generate a Phase 2 handoff summary
+
+```bash
+bash tools/ceremony/run.sh \
+  phase2-summary \
+  --state-dir /tmp/ceremony-round-001 \
+  --out-file /tmp/phase2-summary.txt
+```
+
 ## Artifact model
 
 Each round is represented by a directory containing the full current SRS plus
@@ -83,8 +102,12 @@ the receipt for the contribution that produced it.
 Anyone can verify a participant's contribution using two adjacent round
 directories and the `verify-contribution` command.
 
+The final Phase 1 state can be frozen into a publication-ready Phase 2 handoff summary
+using `phase2-summary`.
+
 ## Notes
 
 - This tool uses `OsRng` for real randomness.
 - It is a practical local Phase 1 contribution tool, not a distributed coordinator.
 - The short `contribution_id` is intended for issue comments and public attestation.
+- See the playbooks in `docs/` for participant, coordinator, and public Phase 2 participation flows.

@@ -20,4 +20,11 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    packaging {
+        jniLibs {
+            // Rust .so files are already stripped; skip AGP stripping for reproducible builds
+            keepDebugSymbols += "**/libsep_xxxx_circuits.so"
+        }
+    }
 }

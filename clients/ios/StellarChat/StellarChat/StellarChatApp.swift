@@ -79,21 +79,13 @@ class StellarChatAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
         completionHandler()
     }
 
-    /// Show notifications even when the app is in the foreground (for other chats).
+    /// Suppress all notifications when the app is in the foreground.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        // Check if user is viewing this chat — suppress if so
-        let userInfo = notification.request.content.userInfo
-        if let groupID = userInfo["groupID"] as? String,
-           let appState = appState,
-           appState.activeGroupID == groupID {
-            completionHandler([])
-        } else {
-            completionHandler([.banner, .sound, .badge])
-        }
+        completionHandler([])
     }
 }
 
@@ -339,6 +331,11 @@ final class AppState {
             chatMessages[group.id] = msgs
             seenMessageIDs[group.id] = Set(msgs.map(\.id))
             transportBundles[group.id] = store.loadTransportBundles(groupID: group.id)
+        }
+
+        // Store local BLS pubkey for NSE self-message filtering (must happen before PNs arrive)
+        if let blsPub = try? keyManager.blsPublicKey {
+            pushManager.subscriptionStore.setLocalBlsPubkey(blsPub.base64EncodedString())
         }
 
         // Import messages received via push notifications while app was backgrounded

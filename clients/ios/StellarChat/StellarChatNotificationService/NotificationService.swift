@@ -94,6 +94,15 @@ class NotificationService: UNNotificationServiceExtension {
                 let senderPubkey = messageJSON["senderBlsPubkey"] as? String ?? ""
                 let type = messageJSON["type"] as? String ?? "chat"
 
+                // Skip messages sent by ourselves
+                if let myPubkey = store.localBlsPubkeyBase64(), senderPubkey == myPubkey {
+                    content.title = ""
+                    content.body = ""
+                    content.sound = nil
+                    contentHandler(content)
+                    return
+                }
+
                 // Resolve group name
                 let groupName = (try? StorageEncryption.decryptString(subscription.encryptedGroupName)) ?? "StellarChat"
 
@@ -111,13 +120,14 @@ class NotificationService: UNNotificationServiceExtension {
                     content.body = "\(senderAlias): \(text)"
 
                     // Persist to shared App Group so main app can import on launch
+                    let persistedEpoch = Int64(exactly: subscription.epoch) ?? Int64.max
                     Self.persistPendingMessage(
                         id: eventID,
                         groupID: subscription.groupID,
                         senderPubkey: senderPubkey,
                         text: text,
                         type: type,
-                        epoch: subscription.epoch,
+                        epoch: persistedEpoch,
                         mediaJSON: messageJSON["media"] as? [String: Any]
                     )
                 } else if type == "call" {

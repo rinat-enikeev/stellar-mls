@@ -4,6 +4,7 @@ import android.util.Base64
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import chat.onym.android.crypto.GroupCrypto
+import chat.onym.android.crypto.KeyManager
 import chat.onym.android.crypto.StorageEncryption
 import chat.onym.android.model.ChatMessage
 import chat.onym.android.model.MediaAttachment
@@ -83,6 +84,14 @@ class StellarChatMessagingService : FirebaseMessagingService() {
             val text = messageJSON.optString("text", "")
             val senderPubkey = messageJSON.optString("senderBlsPubkey", "")
             val type = messageJSON.optString("type", "chat")
+
+            // Skip messages sent by ourselves
+            try {
+                val myPubkey = Base64.encodeToString(
+                    KeyManager.create(applicationContext).blsPublicKey(), Base64.NO_WRAP
+                )
+                if (senderPubkey == myPubkey) return
+            } catch (_: Exception) { }
 
             // Resolve group name and sender alias
             val groupName = try {

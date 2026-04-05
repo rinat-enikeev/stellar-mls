@@ -86,6 +86,7 @@ fun GroupInfoScreen(
     var removalStatusIsError by remember { mutableStateOf(false) }
     var isRemovingMember by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
+    var showRotateKeyDialog by remember { mutableStateOf(false) }
     var newGroupName by remember { mutableStateOf(group.name) }
     // Invite member state
     var recipientKey by remember { mutableStateOf("") }
@@ -330,11 +331,7 @@ fun GroupInfoScreen(
                         Text("Key Rotation", style = MaterialTheme.typography.titleMedium)
                         Spacer(modifier = Modifier.height(8.dp))
                         androidx.compose.material3.Button(
-                            onClick = {
-                                onRotateKey()
-                                removalStatus = "Key rotated."
-                                removalStatusIsError = false
-                            },
+                            onClick = { showRotateKeyDialog = true },
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text("Rotate Group Key")
@@ -543,6 +540,29 @@ fun GroupInfoScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showRenameDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showRotateKeyDialog) {
+        AlertDialog(
+            onDismissRequest = { showRotateKeyDialog = false },
+            title = { Text("Rotate Group Key?") },
+            text = { Text("A new encryption key will be generated for all members. Previous messages remain readable but future messages will use the new key.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onRotateKey()
+                    removalStatus = "Key rotated."
+                    removalStatusIsError = false
+                    showRotateKeyDialog = false
+                }) {
+                    Text("Rotate Key")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRotateKeyDialog = false }) {
                     Text("Cancel")
                 }
             }

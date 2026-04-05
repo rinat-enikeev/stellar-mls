@@ -7,7 +7,7 @@ import UIKit
 @MainActor
 final class PushNotificationManager {
     private var pnRelayClient: PNRelayClient?
-    private let subscriptionStore = PushSubscriptionStore()
+    let subscriptionStore = PushSubscriptionStore()
     private(set) var apnsToken: String?
 
     /// The PN relay URL, read from RelayerDefaults or settings.

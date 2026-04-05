@@ -195,9 +195,12 @@ class NostrMessageTransport(
         val key = overrideKey ?: group.encryptionKey
         // Wrap with BLS auth like chat messages — receiver unwraps all messages uniformly
         val wrapper = JSONObject().apply {
+            put("v", 2)
+            put("type", "protocol")
             put("text", json)
             put("senderBlsPubkey", android.util.Base64.encodeToString(
                 keyManager.blsPublicKey(), android.util.Base64.NO_WRAP))
+            put("ts", System.currentTimeMillis() / 1000)
         }
         val envelopeJson = GroupCrypto.encrypt(wrapper.toString(), key)
         val content = android.util.Base64.encodeToString(

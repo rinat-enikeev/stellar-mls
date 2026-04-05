@@ -309,7 +309,7 @@ final class NostrMessageTransport {
     ) async throws {
         let json = try JSONEncoder().encode(message)
         let text = String(data: json, encoding: .utf8)!
-        try await sendRaw(text, topic: topic, key: key, keyManager: keyManager)
+        try await sendRaw(text, topic: topic, key: key, keyManager: keyManager, type: "protocol")
     }
 
     @discardableResult
@@ -317,14 +317,15 @@ final class NostrMessageTransport {
         _ text: String,
         topic: String,
         key: SymmetricKey,
-        keyManager: KeyManager
+        keyManager: KeyManager,
+        type: String = "chat"
     ) async throws -> NostrEvent {
         // v2 wrapper: includes version, type discriminator, message ID, and sender timestamp
         let blsPubkey = try keyManager.blsPublicKey
         let ts = Int64(Date().timeIntervalSince1970)
         let wrapper: [String: Any] = [
             "v": 2,
-            "type": "chat",
+            "type": type,
             "text": text,
             "senderBlsPubkey": blsPubkey.base64EncodedString(),
             "ts": ts

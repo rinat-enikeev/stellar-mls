@@ -355,7 +355,12 @@ final class PersistenceStore {
     }
 
     func saveEpochSnapshotAsync(_ snapshot: EpochSnapshot, groupID: String) {
-        Self.writeQueue.async { [self] in saveEpochSnapshot(snapshot, groupID: groupID) }
+        Self.writeQueue.async {
+            autoreleasepool {
+                guard let writer = try? PersistenceStore() else { return }
+                writer.saveEpochSnapshot(snapshot, groupID: groupID)
+            }
+        }
     }
 
     func loadEpochSnapshots(groupID: String) -> [UInt64: EpochSnapshot] {

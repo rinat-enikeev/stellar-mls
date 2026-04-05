@@ -22,6 +22,7 @@ final class PushSubscriptionStore {
     struct StoreData: Codable {
         var subscriptions: [String: SubscriptionInfo]  // keyed by subscription_id
         var contacts: [String: Data]  // bls_pubkey_base64 -> encrypted alias
+        var localBlsPubkeyBase64: String?
     }
 
     init() {
@@ -98,5 +99,15 @@ final class PushSubscriptionStore {
 
     func subscriptionForGroup(_ groupID: String) -> SubscriptionInfo? {
         load().subscriptions.values.first { $0.groupID == groupID }
+    }
+
+    func setLocalBlsPubkey(_ base64: String) {
+        var store = load()
+        store.localBlsPubkeyBase64 = base64
+        save(store)
+    }
+
+    func localBlsPubkeyBase64() -> String? {
+        load().localBlsPubkeyBase64
     }
 }

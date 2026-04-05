@@ -750,6 +750,11 @@ final class AppState {
                 isPublishedOnChain: candidate.isPublishedOnChain,
                 lastEventTimestamp: candidate.lastEventTimestamp
             )
+            rekeyCandidate.pinnedEpoch = candidate.pinnedEpoch
+            rekeyCandidate.forkedFromGroupID = candidate.forkedFromGroupID
+            rekeyCandidate.forkedAtEpoch = candidate.forkedAtEpoch
+            rekeyCandidate.removedByPubkeyHex = candidate.removedByPubkeyHex
+            rekeyCandidate.pushNotificationsEnabled = candidate.pushNotificationsEnabled
             try? rekeyCandidate.recomputeCommitment()
             candidate = rekeyCandidate
         }
@@ -1036,7 +1041,9 @@ final class AppState {
             isMine: false,
             isSystemMessage: true
         )
-        chatMessages[groupID, default: []].append(msg)
+        var messages = chatMessages[groupID, default: []]
+        messages.append(msg)
+        chatMessages[groupID] = messages
         store.saveMessageAsync(msg)
     }
 
@@ -1744,6 +1751,18 @@ final class AppState {
         store.saveGroup(group)
         storeSalt(groupID: groupID, epoch: rekey.epoch, salt: rekey.salt)
         subscribeGroup(group)
+        // Update push subscription with new topic tag and key material
+        if group.pushNotificationsEnabled {
+            Task {
+                await pushManager.updateGroupSubscription(
+                    groupID: groupID,
+                    newTopicTag: group.topicTag,
+                    epoch: UInt64(rekey.epoch),
+                    groupSecret: group.groupSecret,
+                    salt: rekey.salt
+                )
+            }
+        }
         #if DEBUG
         print("[AppState] Applied re-key for epoch=\(rekey.epoch) group=\(groupID.prefix(8))")
         #endif
@@ -1787,7 +1806,7 @@ final class AppState {
         updatedMembers.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
 
         // Install new secrets — ChatGroup.groupSecret is `let`, so create a new instance
-        let updatedGroup = ChatGroup(
+        var updatedGroup = ChatGroup(
             id: group.id,
             name: group.name,
             groupSecret: envelope.groupSecret,
@@ -1801,6 +1820,12 @@ final class AppState {
             isPublishedOnChain: group.isPublishedOnChain,
             lastEventTimestamp: group.lastEventTimestamp
         )
+        // Carry over mutable state that isn't part of the rekey
+        updatedGroup.pinnedEpoch = group.pinnedEpoch
+        updatedGroup.forkedFromGroupID = group.forkedFromGroupID
+        updatedGroup.forkedAtEpoch = group.forkedAtEpoch
+        updatedGroup.removedByPubkeyHex = group.removedByPubkeyHex
+        updatedGroup.pushNotificationsEnabled = group.pushNotificationsEnabled
         group = updatedGroup
 
         // Update transport bundles from envelope
@@ -1819,6 +1844,19 @@ final class AppState {
         #endif
         subscribeGroup(group)
         chatTransport.currentMembers = groups.flatMap(\.members)
+
+        // Update push subscription with new key material
+        if group.pushNotificationsEnabled {
+            Task {
+                await pushManager.updateGroupSubscription(
+                    groupID: groupIDHex,
+                    newTopicTag: group.topicTag,
+                    epoch: UInt64(envelope.epoch),
+                    groupSecret: envelope.groupSecret,
+                    salt: envelope.salt
+                )
+            }
+        }
 
         // System messages for removed members
         for removed in envelope.removedMemberKeys {
@@ -1949,7 +1987,7 @@ final class AppState {
         guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
         // ChatGroup.name is let — we need to create a new instance
         let old = groups[index]
-        let updated = ChatGroup(
+        var updated = ChatGroup(
             id: old.id,
             name: renamed.name,
             groupSecret: old.groupSecret,
@@ -1963,6 +2001,11 @@ final class AppState {
             isPublishedOnChain: old.isPublishedOnChain,
             lastEventTimestamp: old.lastEventTimestamp
         )
+        updated.pinnedEpoch = old.pinnedEpoch
+        updated.forkedFromGroupID = old.forkedFromGroupID
+        updated.forkedAtEpoch = old.forkedAtEpoch
+        updated.removedByPubkeyHex = old.removedByPubkeyHex
+        updated.pushNotificationsEnabled = old.pushNotificationsEnabled
         groups[index] = updated
         store.saveGroup(updated)
         insertSystemMessage(groupID: groupID, text: "Group renamed to \"\(renamed.name)\"", event: "renamed", epoch: updated.epoch)
@@ -2938,7 +2981,9 @@ final class AppState {
             )
 
             // Add to in-memory state
-            chatMessages[groupID, default: []].append(msg)
+            var msgs = chatMessages[groupID, default: []]
+            msgs.append(msg)
+            chatMessages[groupID] = msgs
             seenMessageIDs[groupID, default: []].insert(id)
 
             // Persist
@@ -2962,6 +3007,10 @@ final class AppState {
            let host = nostrRelay.host {
             let domain = host.replacingOccurrences(of: "nostr.", with: "")
             pushManager.relayURL = URL(string: "https://push.\(domain)")
+        }
+        // Store local BLS pubkey in shared App Group so NSE can filter own messages
+        if let blsPub = try? keyManager.blsPublicKey {
+            pushManager.subscriptionStore.setLocalBlsPubkey(blsPub.base64EncodedString())
         }
     }
 

@@ -386,7 +386,7 @@ struct GroupInfoView: View {
             commitment: group.commitment,
             tierRawValue: group.tier.rawValue
         )
-        UIPasteboard.general.string = "stellarchat://join?code=\(code.encode())"
+        UIPasteboard.general.string = "onym://join?code=\(code.encode())"
         inviteLinkCopied = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { inviteLinkCopied = false }
     }

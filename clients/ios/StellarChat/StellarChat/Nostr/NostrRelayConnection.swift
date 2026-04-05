@@ -240,7 +240,7 @@ actor NostrRelayConnection {
 
     /// N-18: Maximum incoming WebSocket message size (1 MB).
     private static let maxMessageSize = 1_048_576
-    private static let securityLogger = Logger(subsystem: "com.stellarmls.chat", category: "Security")
+    private static let securityLogger = Logger(subsystem: "chat.onym.ios", category: "Security")
 
     private func handleMessage(_ text: String) {
         // N-18: Reject oversized messages to prevent memory exhaustion from malicious relays

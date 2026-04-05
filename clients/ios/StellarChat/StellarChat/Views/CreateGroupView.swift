@@ -257,7 +257,7 @@ struct CreateGroupView: View {
             }
 
             Section {
-                let deepLink = "stellarchat://join?code=\(inviteCode)"
+                let deepLink = "onym://join?code=\(inviteCode)"
                 ShareLink(item: deepLink) {
                     Label("Share Invite Link", systemImage: "square.and.arrow.up")
                 }

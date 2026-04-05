@@ -7,14 +7,14 @@
 		<dict>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>stellarchat</string>
+				<string>onym</string>
 			</array>
 			<key>CFBundleURLName</key>
-			<string>com.stellarmls.chat</string>
+			<string>chat.onym.ios</string>
 		</dict>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>StellarChat needs camera access to scan QR codes for joining groups.</string>
+	<string>Onym needs camera access to scan QR codes for joining groups.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
@@ -34,9 +34,9 @@
 		</dict>
 	</dict>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>StellarChat needs photo library access to share encrypted images in group chats.</string>
+	<string>Onym needs photo library access to share encrypted images in group chats.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>StellarChat needs microphone access to record voice messages.</string>
+	<string>Onym needs microphone access to record voice messages.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>voip</string>

@@ -22,14 +22,7 @@ read_env_value() {
   if [ ! -f "$file" ]; then
     return 0
   fi
-  awk -F '=' -v key="$key" '
-    $1 == key {
-      $1=""
-      sub(/^=/, "", $0)
-      print $0
-      exit
-    }
-  ' "$file"
+  sed -n "s/^${key}=//p" "$file" | head -1
 }
 
 write_api_key_json() {
@@ -69,6 +62,15 @@ require_cmd ruby
 require_cmd bundle
 require_cmd python3
 
+# Ensure SSH agent is running and has a key loaded (needed for git clone inside fastlane)
+if [ -z "${SSH_AUTH_SOCK:-}" ]; then
+  eval "$(ssh-agent -s)" >/dev/null
+fi
+if ! ssh-add -l &>/dev/null; then
+  SSH_KEY="${SSH_KEY_PATH:-$HOME/.ssh/id_ed25519}"
+  [ -f "$SSH_KEY" ] && ssh-add "$SSH_KEY" 2>/dev/null
+fi
+
 [ -f "$ENV_FILE" ] || fail "missing $ENV_FILE"
 
 MATCH_GIT_URL="$(read_env_value "MATCH_GIT_URL" "$ENV_FILE" || true)"
@@ -104,6 +106,11 @@ export MATCH_TEAM_ID
 export MATCH_PASSWORD
 export APP_STORE_CONNECT_API_KEY_PATH="$API_KEY_JSON_PATH"
 export SPACESHIP_CONNECT_API_IN_HOUSE="$ASC_IN_HOUSE"
+
+# Ensure SSH_AUTH_SOCK is available to child processes (fastlane git clone)
+if [ -n "${SSH_AUTH_SOCK:-}" ]; then
+  export SSH_AUTH_SOCK
+fi
 
 run_match development
 run_match adhoc

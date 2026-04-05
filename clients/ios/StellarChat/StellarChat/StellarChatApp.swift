@@ -73,7 +73,7 @@ struct StellarChatApp: App {
                     await appState.registerForPushNotifications()
                 }
                 .onOpenURL { url in
-                    // Handle stellarchat://join?code=<base64>
+                    // Handle onym://join?code=<base64>
                     if url.scheme == "stellarchat", url.host == "join",
                        let code = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                         .queryItems?.first(where: { $0.name == "code" })?.value {
@@ -173,7 +173,7 @@ final class AppState {
     var defaultGroupTier: SEPTier {
         didSet { UserDefaults.standard.set(defaultGroupTier.rawValue, forKey: Self.defaultGroupTierKey) }
     }
-    private static let defaultGroupTierKey = "com.stellarmls.chat.defaultGroupTier"
+    private static let defaultGroupTierKey = "chat.onym.ios.defaultGroupTier"
 
     // MARK: - TURN Server Configuration
 
@@ -189,10 +189,10 @@ final class AppState {
     var turnPassword: String {
         didSet { Self.saveToKeychain(turnPassword, key: Self.turnPasswordKey) }
     }
-    private static let turnEnabledKey = "com.stellarmls.chat.turnEnabled"
-    private static let turnURLsKey = "com.stellarmls.chat.turnURLs"
-    private static let turnUsernameKey = "com.stellarmls.chat.turnUsername"
-    private static let turnPasswordKey = "com.stellarmls.chat.turnPassword"
+    private static let turnEnabledKey = "chat.onym.ios.turnEnabled"
+    private static let turnURLsKey = "chat.onym.ios.turnURLs"
+    private static let turnUsernameKey = "chat.onym.ios.turnUsername"
+    private static let turnPasswordKey = "chat.onym.ios.turnPassword"
 
     // MARK: - Salt History (for offline recovery)
 
@@ -209,7 +209,7 @@ final class AppState {
     /// Used for secure per-member inbox rekey during removals.
     private var transportBundles: [String: [String: SEPMemberTransportBundle]] = [:]
 
-    private static let saltHistoryKey = "com.stellarmls.chat.saltHistory"
+    private static let saltHistoryKey = "chat.onym.ios.saltHistory"
 
     private static let defaultRelays: [URL] = {
         var relays: [URL] = []
@@ -2789,10 +2789,10 @@ final class AppState {
 
     // MARK: - Contract Configuration
 
-    private static let contractEndpointKey = "com.stellarmls.chat.contractEndpoint"
-    private static let contractIDKey = "com.stellarmls.chat.contractID"
-    private static let relayerURLKey = "com.stellarmls.chat.relayerURL"
-    private static let relayerAuthTokenKey = "com.stellarmls.chat.relayerAuthToken"
+    private static let contractEndpointKey = "chat.onym.ios.contractEndpoint"
+    private static let contractIDKey = "chat.onym.ios.contractID"
+    private static let relayerURLKey = "chat.onym.ios.relayerURL"
+    private static let relayerAuthTokenKey = "chat.onym.ios.relayerAuthToken"
 
     func configureContract() {
         configureContractIfReady()
@@ -2952,7 +2952,7 @@ final class AppState {
 
     // MARK: - Relay Persistence
 
-    private static let relayURLsKey = "com.stellarmls.chat.relayURLs"
+    private static let relayURLsKey = "chat.onym.ios.relayURLs"
 
     private static func loadRelayURLs() -> [URL] {
         guard let strings = UserDefaults.standard.stringArray(forKey: relayURLsKey),
@@ -2967,7 +2967,7 @@ final class AppState {
 
     // MARK: - Blossom Server Persistence
 
-    private static let blossomServerURLsKey = "com.stellarmls.chat.blossomServerURLs"
+    private static let blossomServerURLsKey = "chat.onym.ios.blossomServerURLs"
     private static let defaultBlossomServers: [URL] = {
         var servers: [URL] = []
         if let url = URL(string: RelayerDefaults.defaultBlossomServer), !RelayerDefaults.defaultBlossomServer.isEmpty {

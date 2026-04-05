@@ -7,7 +7,7 @@ import Foundation
 /// ensuring that even with physical disk access, persisted fields are unreadable
 /// without Keychain access (which requires device unlock + biometrics/passcode).
 enum StorageEncryption {
-    private static let keychainKey = "com.stellarmls.chat.storageRootKey"
+    private static let keychainKey = "chat.onym.ios.storageRootKey"
 
     /// AES-256-GCM key derived from a Keychain-stored root secret.
     /// The root secret is generated once and stored in the Keychain with
@@ -16,7 +16,7 @@ enum StorageEncryption {
         let rootSecret = loadOrCreateRootSecret()
         return HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: rootSecret),
-            salt: Data("com.stellarmls.chat.storage".utf8),
+            salt: Data("chat.onym.ios.storage".utf8),
             info: Data("local-storage-v1".utf8),
             outputByteCount: 32
         )

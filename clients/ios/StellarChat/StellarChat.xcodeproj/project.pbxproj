@@ -14,6 +14,7 @@
 		16ADABAE1C78B394179DD74B /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76C1E6E24CEC0349F3C9A60A /* ChatViewModel.swift */; };
 		1AA0059A3C3D6B195FB5615C /* SecurityLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C987955167382BF0E0E251C /* SecurityLog.swift */; };
 		1F2DC6C7FF3C465CBD31ABA9 /* PendingInvitationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6867C765FBB9480D9E0D9FC /* PendingInvitationsView.swift */; };
+		2567EA1F6AD89933D7A3FEBC /* PushNotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 768AD875E03E5137536C5563 /* PushNotificationManager.swift */; };
 		276E482D1A8B67CFB9B7ADF1 /* InvitationTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C958564E515954D41E226897 /* InvitationTransport.swift */; };
 		2DAB2E5F09CA9490F5C7CDF8 /* CallManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 485C53049C1128D91F1CA2DB /* CallManager.swift */; };
 		33D3690E63750E20852336EE /* AudioCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57DB304E93E815412ABA6010 /* AudioCache.swift */; };
@@ -34,13 +35,16 @@
 		833FF1A77449454BF4ADC801 /* GroupInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7446E889E7A95E042201A70D /* GroupInfoView.swift */; };
 		8403CC60E770407C27CF89ED /* SwiftMLS in Frameworks */ = {isa = PBXBuildFile; productRef = 93FDE6A85EACB5AD144480F3 /* SwiftMLS */; };
 		865234AA099329B7E4D41789 /* JoinGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 005C04E920D6B0FC3423EE24 /* JoinGroupView.swift */; };
+		8682AD241895109FD0E1BC81 /* StellarChatNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D93193C84699A94AF7090C64 /* StellarChatNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		90B7D2930C07431EB75DBFB3 /* VoiceRecordButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E76AF13A26CCEC2E75C8310 /* VoiceRecordButton.swift */; };
 		95489626E5CAD02D3CDB0207 /* StellarStrKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */; };
+		9A2E9C3E41BAD4719895F302 /* PNRelayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA247CDB4DE5023BE0A6BF52 /* PNRelayClient.swift */; };
 		9EABBA75189DA35E0BA71054 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD4DD514A884BAD2FC5B2D73 /* SearchView.swift */; };
 		A49A5C6B2401EEB1847229DE /* QRCodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C2E0A174CC0B050D6BADB3 /* QRCodeView.swift */; };
 		A59B1DBBCD75C4882A4A7EF6 /* CallKitProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4A3E005A9C5AF2DE5743188 /* CallKitProvider.swift */; };
 		AE25761903B1EA84D9AFADD2 /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8ACE473C3096412015326C52 /* ImageCache.swift */; };
 		B5836D3E7760359CFB8C42AC /* GroupCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8210CED65D67082D16673F07 /* GroupCrypto.swift */; };
+		C551E3710EC9BA8ACFC5A9C0 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0734DFA865A663F2138CD236 /* NotificationService.swift */; };
 		C78434B5880A2483C3DAF9E9 /* CallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E005C90D6C91D9810C11364 /* CallView.swift */; };
 		CF17A18CDF1209DC9F6CA369 /* OnChainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06014BB7573399F26644F9F6 /* OnChainService.swift */; };
 		CFC4BB79BE2BD8A37F35D9D2 /* VerificationBadgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1F7647C522D0F7D1F86CE17 /* VerificationBadgeView.swift */; };
@@ -48,6 +52,7 @@
 		D6847B5213B8820FA30819D7 /* StorageEncryption.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD61B2440CA5ED81C983DA87 /* StorageEncryption.swift */; };
 		D6C3C9E90F39CCA80D2DD029 /* GroupListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C2B0F0A2A137DC1BE419CC3 /* GroupListView.swift */; };
 		D80AA787557EC39AC88FF3F3 /* KeyAttestation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37304476C52093C0D34ECB92 /* KeyAttestation.swift */; };
+		D8CE0C737C0C3FE425C2F8B4 /* PushSubscriptionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9C563AA269E4B62C095C93E /* PushSubscriptionStore.swift */; };
 		E10FD8A2E1B0D8169A2BEB15 /* BlossomClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FCDBA22391412C6D05BB99E /* BlossomClient.swift */; };
 		E54951E56532C7FBD90317DE /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70C111DF10AF94B4F95C4742 /* ChatView.swift */; };
 		EDF053D5AE1660633B823B48 /* NostrEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 703A9C8CDE76DF5C28608301 /* NostrEvent.swift */; };
@@ -65,12 +70,34 @@
 			remoteGlobalIDString = 7E1AB0C084DAFEAB2A75FC86;
 			remoteInfo = StellarChat;
 		};
+		C8A2140724DE77C010BA3A11 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 251E05B18A6ED69B293D52CC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D5EEC8F76D9E6B84F05DF01D;
+			remoteInfo = StellarChatNotificationService;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		F64F836F8758F5AE952C1137 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				8682AD241895109FD0E1BC81 /* StellarChatNotificationService.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		005C04E920D6B0FC3423EE24 /* JoinGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinGroupView.swift; sourceTree = "<group>"; };
 		03DDE39E8A2DC3CBF08D400C /* StellarChatTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = StellarChatTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		06014BB7573399F26644F9F6 /* OnChainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnChainService.swift; sourceTree = "<group>"; };
+		0734DFA865A663F2138CD236 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		0E25D14293AC1BC6E3FB1E28 /* PersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStore.swift; sourceTree = "<group>"; };
 		1C987955167382BF0E0E251C /* SecurityLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityLog.swift; sourceTree = "<group>"; };
 		1E76AF13A26CCEC2E75C8310 /* VoiceRecordButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceRecordButton.swift; sourceTree = "<group>"; };
@@ -89,6 +116,8 @@
 		703A9C8CDE76DF5C28608301 /* NostrEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrEvent.swift; sourceTree = "<group>"; };
 		70C111DF10AF94B4F95C4742 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		7446E889E7A95E042201A70D /* GroupInfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupInfoView.swift; sourceTree = "<group>"; };
+		7485EE02F3B736EE786818FB /* StellarChatNotificationService.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StellarChatNotificationService.entitlements; sourceTree = "<group>"; };
+		768AD875E03E5137536C5563 /* PushNotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushNotificationManager.swift; sourceTree = "<group>"; };
 		76C1E6E24CEC0349F3C9A60A /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
 		7A14AE9A1C9F0583137C7797 /* ContactsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactsView.swift; sourceTree = "<group>"; };
 		7C2B0F0A2A137DC1BE419CC3 /* GroupListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupListView.swift; sourceTree = "<group>"; };
@@ -99,17 +128,22 @@
 		A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A4A3E005A9C5AF2DE5743188 /* CallKitProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallKitProvider.swift; sourceTree = "<group>"; };
 		B0884F32E9A807B2566DD234 /* NostrRelayConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrRelayConnection.swift; sourceTree = "<group>"; };
+		BA643A0E8E9EAA763609E1EA /* StellarChat.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StellarChat.entitlements; sourceTree = "<group>"; };
 		BF781055530F3AF0953DE842 /* CreateGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateGroupView.swift; sourceTree = "<group>"; };
 		C1FB5F184FBA9633C01BDFBC /* VideoCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCache.swift; sourceTree = "<group>"; };
 		C6867C765FBB9480D9E0D9FC /* PendingInvitationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingInvitationsView.swift; sourceTree = "<group>"; };
 		C958564E515954D41E226897 /* InvitationTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InvitationTransport.swift; sourceTree = "<group>"; };
+		C9C563AA269E4B62C095C93E /* PushSubscriptionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushSubscriptionStore.swift; sourceTree = "<group>"; };
+		CA247CDB4DE5023BE0A6BF52 /* PNRelayClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PNRelayClient.swift; sourceTree = "<group>"; };
 		CEE93134C2D32A03E89226B8 /* NostrMessageTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrMessageTransport.swift; sourceTree = "<group>"; };
+		D8C92D1E1F59A902BCED5859 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		D93193C84699A94AF7090C64 /* StellarChatNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = StellarChatNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		E8D38B6A8AA5A166074EA951 /* InviteMemberView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InviteMemberView.swift; sourceTree = "<group>"; };
 		EC5B1B630CCFBA76B3C56C87 /* ForkGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForkGroupView.swift; sourceTree = "<group>"; };
 		F0C2E0A174CC0B050D6BADB3 /* QRCodeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeView.swift; sourceTree = "<group>"; };
 		F0F0E18BDAE3BFB365657BA8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		F1F7647C522D0F7D1F86CE17 /* VerificationBadgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerificationBadgeView.swift; sourceTree = "<group>"; };
-		F406EABD519847834878AA47 /* StellarChat.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = StellarChat.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F406EABD519847834878AA47 /* StellarChat.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = StellarChat.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F5EB556EBD80A9DC1A99F1F4 /* KeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyManager.swift; sourceTree = "<group>"; };
 		F67E0578F1C0DC64C2004D62 /* ContactAliasStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactAliasStore.swift; sourceTree = "<group>"; };
 		F8FD22552EBCF23A89DB7700 /* ChatGroup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGroup.swift; sourceTree = "<group>"; };
@@ -168,6 +202,7 @@
 			children = (
 				ABDD2AD803B8C85F0ACC3714 /* Packages */,
 				80602CB4E8F63DBA92D87C56 /* StellarChat */,
+				49940AF5B123283EAE1AACDB /* StellarChatNotificationService */,
 				C1AFFA22C05C5C880CC15516 /* StellarChatTests */,
 				E290D72BA448D601D86C5E67 /* Products */,
 			);
@@ -189,12 +224,25 @@
 				06014BB7573399F26644F9F6 /* OnChainService.swift */,
 				4705F8234AA6022CD782348E /* PersistedModels.swift */,
 				0E25D14293AC1BC6E3FB1E28 /* PersistenceStore.swift */,
+				CA247CDB4DE5023BE0A6BF52 /* PNRelayClient.swift */,
+				768AD875E03E5137536C5563 /* PushNotificationManager.swift */,
+				C9C563AA269E4B62C095C93E /* PushSubscriptionStore.swift */,
 				1C987955167382BF0E0E251C /* SecurityLog.swift */,
 				3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */,
 				FD61B2440CA5ED81C983DA87 /* StorageEncryption.swift */,
 				C1FB5F184FBA9633C01BDFBC /* VideoCache.swift */,
 			);
 			path = Models;
+			sourceTree = "<group>";
+		};
+		49940AF5B123283EAE1AACDB /* StellarChatNotificationService */ = {
+			isa = PBXGroup;
+			children = (
+				D8C92D1E1F59A902BCED5859 /* Info.plist */,
+				0734DFA865A663F2138CD236 /* NotificationService.swift */,
+				7485EE02F3B736EE786818FB /* StellarChatNotificationService.entitlements */,
+			);
+			path = StellarChatNotificationService;
 			sourceTree = "<group>";
 		};
 		4B01157F59B93E6CF03322E6 /* Call */ = {
@@ -213,6 +261,7 @@
 				8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */,
 				F0F0E18BDAE3BFB365657BA8 /* Info.plist */,
 				2CB66BD4710970306321664D /* RelayerDefaults.generated.swift */,
+				BA643A0E8E9EAA763609E1EA /* StellarChat.entitlements */,
 				62FB83C87F9348F97EEDE0C8 /* StellarChatApp.swift */,
 				4B01157F59B93E6CF03322E6 /* Call */,
 				23A47303C279700BCE7F944A /* Models */,
@@ -251,6 +300,7 @@
 			isa = PBXGroup;
 			children = (
 				F406EABD519847834878AA47 /* StellarChat.app */,
+				D93193C84699A94AF7090C64 /* StellarChatNotificationService.appex */,
 				03DDE39E8A2DC3CBF08D400C /* StellarChatTests.xctest */,
 			);
 			name = Products;
@@ -298,10 +348,12 @@
 				A1F09619AC4E0C9E792E7EC6 /* Sources */,
 				19429B34CCDBB15661D0F552 /* Resources */,
 				C69419576D437082081E4D43 /* Frameworks */,
+				F64F836F8758F5AE952C1137 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				560A760B848BE8B9EA2E2E30 /* PBXTargetDependency */,
 			);
 			name = StellarChat;
 			packageProductDependencies = (
@@ -311,6 +363,23 @@
 			productName = StellarChat;
 			productReference = F406EABD519847834878AA47 /* StellarChat.app */;
 			productType = "com.apple.product-type.application";
+		};
+		D5EEC8F76D9E6B84F05DF01D /* StellarChatNotificationService */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 86E336E023D3811FEE336BC8 /* Build configuration list for PBXNativeTarget "StellarChatNotificationService" */;
+			buildPhases = (
+				B0569B031B709CEE33D0C93F /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = StellarChatNotificationService;
+			packageProductDependencies = (
+			);
+			productName = StellarChatNotificationService;
+			productReference = D93193C84699A94AF7090C64 /* StellarChatNotificationService.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -326,6 +395,11 @@
 						ProvisioningStyle = Automatic;
 					};
 					7E1AB0C084DAFEAB2A75FC86 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+					D5EEC8F76D9E6B84F05DF01D = {
+						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -349,6 +423,7 @@
 			projectRoot = "";
 			targets = (
 				7E1AB0C084DAFEAB2A75FC86 /* StellarChat */,
+				D5EEC8F76D9E6B84F05DF01D /* StellarChatNotificationService */,
 				79B5A663264579340235CB0C /* StellarChatTests */,
 			);
 		};
@@ -428,9 +503,12 @@
 				EFB9DF389A99555142550086 /* NostrMessageTransport.swift in Sources */,
 				F5E26B4C634D5DFCC4ECBD28 /* NostrRelayConnection.swift in Sources */,
 				CF17A18CDF1209DC9F6CA369 /* OnChainService.swift in Sources */,
+				9A2E9C3E41BAD4719895F302 /* PNRelayClient.swift in Sources */,
 				1F2DC6C7FF3C465CBD31ABA9 /* PendingInvitationsView.swift in Sources */,
 				661B24EC80C52FD32C0DB020 /* PersistedModels.swift in Sources */,
 				4CF5F8CBF1B249B01EC14D1C /* PersistenceStore.swift in Sources */,
+				2567EA1F6AD89933D7A3FEBC /* PushNotificationManager.swift in Sources */,
+				D8CE0C737C0C3FE425C2F8B4 /* PushSubscriptionStore.swift in Sources */,
 				A49A5C6B2401EEB1847229DE /* QRCodeView.swift in Sources */,
 				3EC81E8DA76069452870626F /* QRScannerView.swift in Sources */,
 				538C339B8E0F50F72DCB8F72 /* RelayerDefaults.generated.swift in Sources */,
@@ -446,6 +524,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B0569B031B709CEE33D0C93F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C551E3710EC9BA8ACFC5A9C0 /* NotificationService.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -454,6 +540,11 @@
 			target = 7E1AB0C084DAFEAB2A75FC86 /* StellarChat */;
 			targetProxy = 1EFF7167A75DE1FC7EB88FF9 /* PBXContainerItemProxy */;
 		};
+		560A760B848BE8B9EA2E2E30 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D5EEC8F76D9E6B84F05DF01D /* StellarChatNotificationService */;
+			targetProxy = C8A2140724DE77C010BA3A11 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -461,14 +552,16 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = StellarChat/StellarChat.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
+				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = StellarChat/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIBackgroundModes = "remote-notification voip";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -477,7 +570,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.stellarmls.chat;
+				PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -559,7 +652,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.stellarmls.chat.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios.tests;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -571,14 +664,16 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = StellarChat/StellarChat.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
+				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = StellarChat/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIBackgroundModes = "remote-notification voip";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -587,7 +682,29 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.stellarmls.chat;
+				PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		623118812632D7D206B7274B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = StellarChatNotificationService/StellarChatNotificationService.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = StellarChatNotificationService/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios.NotificationService;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -606,13 +723,35 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.stellarmls.chat.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios.tests;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/StellarChat.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/StellarChat";
 			};
 			name = Debug;
+		};
+		F480291B54675D23A3B15383 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = StellarChatNotificationService/StellarChatNotificationService.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = StellarChatNotificationService/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios.NotificationService;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
 		};
 		F56A291E6EDB312323FF4609 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -678,6 +817,15 @@
 			buildConfigurations = (
 				0CEC59D4F75C554B514CD84D /* Debug */,
 				F56A291E6EDB312323FF4609 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		86E336E023D3811FEE336BC8 /* Build configuration list for PBXNativeTarget "StellarChatNotificationService" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				623118812632D7D206B7274B /* Debug */,
+				F480291B54675D23A3B15383 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

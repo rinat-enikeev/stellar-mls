@@ -4,7 +4,7 @@ import Foundation
 /// Persists push subscription state in the shared App Group container.
 /// Both the main app and the Notification Service Extension read this store.
 final class PushSubscriptionStore {
-    static let appGroupID = "group.com.stellarmls.chat"
+    static let appGroupID = "group.chat.onym.ios"
 
     private let fileURL: URL
 

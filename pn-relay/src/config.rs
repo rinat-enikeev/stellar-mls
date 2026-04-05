@@ -43,7 +43,7 @@ impl Config {
         let apns_key_id = env::var("APNS_KEY_ID").ok().filter(|s| !s.is_empty());
         let apns_team_id = env::var("APNS_TEAM_ID").ok().filter(|s| !s.is_empty());
         let apns_bundle_id =
-            env::var("APNS_BUNDLE_ID").unwrap_or_else(|_| "com.stellarmls.chat".to_string());
+            env::var("APNS_BUNDLE_ID").unwrap_or_else(|_| "chat.onym.ios".to_string());
         let apns_environment =
             env::var("APNS_ENVIRONMENT").unwrap_or_else(|_| "production".to_string());
 

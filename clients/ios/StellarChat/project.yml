@@ -1,6 +1,6 @@
 name: StellarChat
 options:
-  bundleIdPrefix: com.stellarmls
+  bundleIdPrefix: chat.onym
   deploymentTarget:
     iOS: "18.0"
   xcodeVersion: "15.4"
@@ -21,7 +21,7 @@ targets:
       - StellarChat
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.stellarmls.chat
+        PRODUCT_BUNDLE_IDENTIFIER: chat.onym.ios
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: 1
         SWIFT_VERSION: "5.0"
@@ -99,7 +99,7 @@ targets:
       - StellarChatTests
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.stellarmls.chat.tests
+        PRODUCT_BUNDLE_IDENTIFIER: chat.onym.ios.tests
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGN_STYLE: Automatic
@@ -117,7 +117,7 @@ targets:
       - StellarChatNotificationService
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.stellarmls.chat.NotificationService
+        PRODUCT_BUNDLE_IDENTIFIER: chat.onym.ios.NotificationService
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: 1
         SWIFT_VERSION: "5.0"
@@ -129,7 +129,7 @@ targets:
       path: StellarChatNotificationService/StellarChatNotificationService.entitlements
       properties:
         com.apple.security.application-groups:
-          - group.com.stellarmls.chat
+          - group.chat.onym.ios
     dependencies: []
 
 schemes:

@@ -5,7 +5,7 @@ import os.log
 /// Logs to the unified OS log system under the "Security" category.
 /// Never logs sensitive data (keys, plaintexts, proofs).
 enum SecurityLog {
-    private static let logger = Logger(subsystem: "com.stellarmls.chat", category: "Security")
+    private static let logger = Logger(subsystem: "chat.onym.ios", category: "Security")
 
     /// A decryption attempt failed (wrong key, corrupted data, etc.).
     static func decryptionFailed(context: String) {

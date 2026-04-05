@@ -102,7 +102,7 @@ final class KeyManager: Codable {
     private static func deriveStellarKey(from nostrSecret: Data) -> Curve25519.Signing.PrivateKey {
         let derived = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: nostrSecret),
-            salt: Data("com.stellarmls.chat".utf8),
+            salt: Data("chat.onym.ios".utf8),
             info: Data("stellar-ed25519-v1".utf8),
             outputByteCount: 32
         )
@@ -141,7 +141,7 @@ final class KeyManager: Codable {
     private static func deriveKeyAgreementKey(from nostrSecret: Data) -> Curve25519.KeyAgreement.PrivateKey {
         let derived = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: nostrSecret),
-            salt: Data("com.stellarmls.chat".utf8),
+            salt: Data("chat.onym.ios".utf8),
             info: Data("x25519-key-agreement-v1".utf8),
             outputByteCount: 32
         )
@@ -273,9 +273,9 @@ final class KeyManager: Codable {
 
     // MARK: - Keychain
 
-    private static let keychainService = "com.stellarmls.chat.keys"
-    private static let nostrKeychainKey = "com.stellarmls.chat.nostrSecretKey"
-    private static let blsKeychainKey = "com.stellarmls.chat.blsSecretKey"
+    private static let keychainService = "chat.onym.ios.keys"
+    private static let nostrKeychainKey = "chat.onym.ios.nostrSecretKey"
+    private static let blsKeychainKey = "chat.onym.ios.blsSecretKey"
 
     private static func generateRandom(count: Int) -> Data {
         var bytes = [UInt8](repeating: 0, count: count)

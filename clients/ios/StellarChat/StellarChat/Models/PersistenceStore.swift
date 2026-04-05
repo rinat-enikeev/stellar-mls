@@ -6,7 +6,7 @@ import SwiftMLS
 /// and FileProtectionType.complete on the store directory.
 final class PersistenceStore {
     private static let writeQueue = DispatchQueue(
-        label: "com.stellarmls.chat.persistence.write",
+        label: "chat.onym.ios.persistence.write",
         qos: .utility
     )
 

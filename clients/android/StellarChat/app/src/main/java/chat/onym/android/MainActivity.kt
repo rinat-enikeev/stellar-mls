@@ -63,12 +63,25 @@ class MainActivity : ComponentActivity() {
 
         // Handle deep link: stellarchat://join?code=<base64>
         val deepLinkCode = intent?.data?.getQueryParameter("code")
+        // Handle notification tap: navigate to specific chat
+        val notificationGroupId = intent?.getStringExtra("navigate_group_id")
 
         setContent {
             StellarChatTheme {
-                StellarChatNavHost(groupListViewModel, deepLinkInviteCode = deepLinkCode)
+                StellarChatNavHost(
+                    groupListViewModel,
+                    deepLinkInviteCode = deepLinkCode,
+                    notificationGroupId = notificationGroupId
+                )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // Handle notification tap when activity is already running
+        val groupId = intent.getStringExtra("navigate_group_id") ?: return
+        groupListViewModel.pendingNavigationGroupId = groupId
     }
 }
 
@@ -84,13 +97,35 @@ private val tabs = listOf(Tab.Contacts, Tab.Chats, Tab.Search, Tab.Settings)
 private val tabRoutes = tabs.map { it.route }.toSet()
 
 @Composable
-fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCode: String? = null) {
+fun StellarChatNavHost(
+    groupListViewModel: GroupListViewModel,
+    deepLinkInviteCode: String? = null,
+    notificationGroupId: String? = null
+) {
     val navController = rememberNavController()
 
     // Navigate to join screen if deep link contains invite code
     androidx.compose.runtime.LaunchedEffect(deepLinkInviteCode) {
         if (deepLinkInviteCode != null) {
             navController.navigate("join")
+        }
+    }
+
+    // Navigate to chat from notification tap (cold start — wait for groups to load)
+    androidx.compose.runtime.LaunchedEffect(notificationGroupId, groupListViewModel.groups.size) {
+        if (notificationGroupId != null && groupListViewModel.groups.any { it.id == notificationGroupId }) {
+            navController.navigate("chat/$notificationGroupId")
+        }
+    }
+
+    // Navigate to chat from notification tap (warm start — activity already running)
+    val pendingGroupId = groupListViewModel.pendingNavigationGroupId
+    androidx.compose.runtime.LaunchedEffect(pendingGroupId) {
+        if (pendingGroupId != null) {
+            if (groupListViewModel.groups.any { it.id == pendingGroupId }) {
+                navController.navigate("chat/$pendingGroupId")
+            }
+            groupListViewModel.pendingNavigationGroupId = null
         }
     }
 

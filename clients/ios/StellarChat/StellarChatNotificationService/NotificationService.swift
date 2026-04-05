@@ -119,6 +119,8 @@ class NotificationService: UNNotificationServiceExtension {
                     content.title = groupName
                     content.body = "\(senderAlias): \(text)"
                     content.badge = Self.incrementBadgeCount() as NSNumber
+                    // Store groupID for navigation on tap
+                    content.userInfo["groupID"] = subscription.groupID
 
                     // Persist to shared App Group so main app can import on launch
                     let persistedEpoch = Int64(exactly: subscription.epoch) ?? Int64.max

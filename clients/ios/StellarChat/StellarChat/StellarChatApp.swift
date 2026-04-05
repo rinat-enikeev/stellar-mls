@@ -29,9 +29,18 @@ enum PendingTransitionState: Equatable {
     case awaitingChainConfirmation(targetEpoch: UInt64)
 }
 
-/// AppDelegate handles APNs registration callbacks.
-class StellarChatAppDelegate: NSObject, UIApplicationDelegate {
+/// AppDelegate handles APNs registration callbacks and notification tap handling.
+class StellarChatAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     weak var pushManager: PushNotificationManager?
+    weak var appState: AppState?
+
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        UNUserNotificationCenter.current().delegate = self
+        return true
+    }
 
     func application(
         _ application: UIApplication,
@@ -52,6 +61,40 @@ class StellarChatAppDelegate: NSObject, UIApplicationDelegate {
         print("[Push] Failed to register for remote notifications: \(error)")
         #endif
     }
+
+    // MARK: - UNUserNotificationCenterDelegate
+
+    /// Handle notification tap — navigate to the specific chat.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let userInfo = response.notification.request.content.userInfo
+        if let groupID = userInfo["groupID"] as? String {
+            Task { @MainActor in
+                appState?.navigateToGroupID = groupID
+            }
+        }
+        completionHandler()
+    }
+
+    /// Show notifications even when the app is in the foreground (for other chats).
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        // Check if user is viewing this chat — suppress if so
+        let userInfo = notification.request.content.userInfo
+        if let groupID = userInfo["groupID"] as? String,
+           let appState = appState,
+           appState.activeGroupID == groupID {
+            completionHandler([])
+        } else {
+            completionHandler([.banner, .sound, .badge])
+        }
+    }
 }
 
 extension Notification.Name {
@@ -71,6 +114,7 @@ struct StellarChatApp: App {
                 .task {
                     await appState.startInboxListener()
                     appDelegate.pushManager = appState.pushManager
+                    appDelegate.appState = appState
                     appState.configurePushRelay()
                 }
                 .onOpenURL { url in

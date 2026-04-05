@@ -185,6 +185,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     private val pushPrefs = application.getSharedPreferences("stellar_push_config", Context.MODE_PRIVATE)
     /** Observable push-enabled state per group — separate from groups list for reliable Compose recomposition. */
     val pushEnabledStates = androidx.compose.runtime.mutableStateMapOf<String, Boolean>()
+    /** Set by MainActivity.onNewIntent to navigate to a chat from a notification tap. */
+    var pendingNavigationGroupId by androidx.compose.runtime.mutableStateOf<String?>(null)
 
     // Transports
     lateinit var transport: NostrMessageTransport

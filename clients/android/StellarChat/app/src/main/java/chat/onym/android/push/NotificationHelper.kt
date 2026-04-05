@@ -57,9 +57,11 @@ object NotificationHelper {
     ) {
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            if (groupID != null) putExtra("navigate_group_id", groupID)
         }
+        val requestCode = groupID?.hashCode() ?: 0
         val pendingIntent = PendingIntent.getActivity(
-            context, 0, intent,
+            context, requestCode, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 

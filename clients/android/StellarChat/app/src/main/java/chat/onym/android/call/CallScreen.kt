@@ -14,9 +14,14 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,6 +43,19 @@ fun CallScreen(
     if (callManager.state == CallState.IDLE) {
         onDismiss()
         return
+    }
+
+    val context = LocalContext.current
+
+    // Permission launcher for accepting incoming calls
+    val acceptPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        val audioGranted = grants[Manifest.permission.RECORD_AUDIO] == true
+        val cameraGranted = !callManager.isVideoCall || grants[Manifest.permission.CAMERA] == true
+        if (audioGranted && cameraGranted) {
+            callManager.acceptCall()
+        }
     }
 
     Box(
@@ -130,7 +148,21 @@ fun CallScreen(
                             Icon(Icons.Default.CallEnd, contentDescription = "Decline", tint = Color.White)
                         }
                         IconButton(
-                            onClick = { callManager.acceptCall() },
+                            onClick = {
+                                val permissions = if (callManager.isVideoCall) {
+                                    arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+                                } else {
+                                    arrayOf(Manifest.permission.RECORD_AUDIO)
+                                }
+                                val allGranted = permissions.all {
+                                    ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+                                }
+                                if (allGranted) {
+                                    callManager.acceptCall()
+                                } else {
+                                    acceptPermissionLauncher.launch(permissions)
+                                }
+                            },
                             modifier = Modifier
                                 .size(64.dp)
                                 .background(Color(0xFF4CAF50), CircleShape)

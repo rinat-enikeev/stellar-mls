@@ -289,6 +289,9 @@ final class AppState {
             transportBundles[group.id] = store.loadTransportBundles(groupID: group.id)
         }
 
+        // Import messages received via push notifications while app was backgrounded
+        importPendingPushMessages()
+
         // Clean up expired pending rekeys (>24h) on startup
         let allPending = store.loadAllPendingRekeys()
         let expiryInterval: TimeInterval = 24 * 60 * 60
@@ -2898,6 +2901,60 @@ final class AppState {
     }
 
     // MARK: - Push Notifications
+
+    /// Import messages that were decrypted by the Notification Service Extension
+    /// while the app was backgrounded. Reads from the shared App Group JSONL file.
+    func importPendingPushMessages() {
+        let appGroupID = "group.chat.onym.ios"
+        guard let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: appGroupID
+        ) else { return }
+
+        let fileURL = container.appendingPathComponent("pending_pn_messages.jsonl")
+        guard let data = try? String(contentsOf: fileURL, encoding: .utf8) else { return }
+
+        var imported = 0
+        for line in data.components(separatedBy: "\n") where !line.isEmpty {
+            guard let jsonData = line.data(using: .utf8),
+                  let entry = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                  let id = entry["id"] as? String,
+                  let groupID = entry["groupID"] as? String,
+                  let senderPubkey = entry["senderPubkey"] as? String,
+                  let text = entry["text"] as? String,
+                  let ts = entry["timestamp"] as? TimeInterval else { continue }
+
+            // Skip if already in memory (dedup)
+            if seenMessageIDs[groupID]?.contains(id) == true { continue }
+
+            let epoch = entry["epoch"] as? UInt64
+            let msg = ChatMessage(
+                id: id,
+                groupID: groupID,
+                senderPubkey: senderPubkey,
+                text: text,
+                timestamp: Date(timeIntervalSince1970: ts),
+                isMine: false,
+                epoch: epoch
+            )
+
+            // Add to in-memory state
+            chatMessages[groupID, default: []].append(msg)
+            seenMessageIDs[groupID, default: []].insert(id)
+
+            // Persist
+            store.saveMessageAsync(msg)
+            imported += 1
+        }
+
+        // Clear the file after import
+        try? FileManager.default.removeItem(at: fileURL)
+
+        #if DEBUG
+        if imported > 0 {
+            print("[Push] Imported \(imported) pending PN messages")
+        }
+        #endif
+    }
 
     /// Lightweight setup — just configures the relay URL, no permission prompt.
     func configurePushRelay() {

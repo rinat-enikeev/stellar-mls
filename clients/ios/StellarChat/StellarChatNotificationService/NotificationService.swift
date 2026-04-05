@@ -109,6 +109,17 @@ class NotificationService: UNNotificationServiceExtension {
                 if type == "chat" || type == "image" {
                     content.title = groupName
                     content.body = "\(senderAlias): \(text)"
+
+                    // Persist to shared App Group so main app can import on launch
+                    Self.persistPendingMessage(
+                        id: eventID,
+                        groupID: subscription.groupID,
+                        senderPubkey: senderPubkey,
+                        text: text,
+                        type: type,
+                        epoch: subscription.epoch,
+                        mediaJSON: messageJSON["media"] as? [String: Any]
+                    )
                 } else if type == "call" {
                     content.title = groupName
                     content.body = "\(senderAlias) is calling..."
@@ -129,6 +140,55 @@ class NotificationService: UNNotificationServiceExtension {
     override func serviceExtensionTimeWillExpire() {
         if let handler = contentHandler, let content = bestAttemptContent {
             handler(content)
+        }
+    }
+
+    // MARK: - Persist pending messages for main app import
+
+    private static let appGroupID = "group.chat.onym.ios"
+    private static let pendingFileName = "pending_pn_messages.jsonl"
+
+    /// Write a decrypted message to the shared App Group container as a JSON line.
+    /// The main app reads and imports these on launch, then clears the file.
+    static func persistPendingMessage(
+        id: String,
+        groupID: String,
+        senderPubkey: String,
+        text: String,
+        type: String,
+        epoch: Int64,
+        mediaJSON: [String: Any]?
+    ) {
+        guard let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: appGroupID
+        ) else { return }
+
+        let fileURL = container.appendingPathComponent(pendingFileName)
+        var entry: [String: Any] = [
+            "id": id,
+            "groupID": groupID,
+            "senderPubkey": senderPubkey,
+            "text": text,
+            "type": type,
+            "epoch": epoch,
+            "timestamp": Date().timeIntervalSince1970
+        ]
+        if let media = mediaJSON {
+            entry["media"] = media
+        }
+
+        guard let data = try? JSONSerialization.data(withJSONObject: entry),
+              var line = String(data: data, encoding: .utf8) else { return }
+        line += "\n"
+
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            if let handle = try? FileHandle(forWritingTo: fileURL) {
+                handle.seekToEndOfFile()
+                handle.write(Data(line.utf8))
+                handle.closeFile()
+            }
+        } else {
+            try? Data(line.utf8).write(to: fileURL, options: .atomic)
         }
     }
 }

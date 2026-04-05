@@ -5,7 +5,15 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import chat.onym.android.crypto.GroupCrypto
 import chat.onym.android.crypto.StorageEncryption
+import chat.onym.android.model.ChatMessage
+import chat.onym.android.model.MediaAttachment
+import chat.onym.android.model.MessageStatus
+import chat.onym.android.persistence.PersistenceStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.util.Date
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -94,9 +102,49 @@ class StellarChatMessagingService : FirebaseMessagingService() {
             }
 
             when (type) {
-                "chat", "image" -> NotificationHelper.showMessageNotification(
-                    applicationContext, groupName, senderAlias, text, subscription.groupID
-                )
+                "chat", "image" -> {
+                    NotificationHelper.showMessageNotification(
+                        applicationContext, groupName, senderAlias, text, subscription.groupID
+                    )
+                    // Persist message so it appears in chat history when the user opens the app
+                    val mediaAttachment = if (type == "image") {
+                        try {
+                            val mediaJSON = messageJSON.optJSONObject("media")
+                            if (mediaJSON != null) MediaAttachment(
+                                blobHash = mediaJSON.optString("blobHash", ""),
+                                fileKey = Base64.decode(mediaJSON.optString("fileKey", ""), Base64.DEFAULT),
+                                mimeType = mediaJSON.optString("mimeType", "image/jpeg"),
+                                width = mediaJSON.optInt("width", 0),
+                                height = mediaJSON.optInt("height", 0),
+                                size = mediaJSON.optInt("size", 0),
+                                blossomServers = mutableListOf<String>().apply {
+                                    val arr = mediaJSON.optJSONArray("blossomServers")
+                                    if (arr != null) for (i in 0 until arr.length()) add(arr.getString(i))
+                                },
+                                encryptedThumbnail = mediaJSON.optString("encryptedThumbnail", "").let {
+                                    if (it.isNotEmpty()) Base64.decode(it, Base64.DEFAULT) else null
+                                }
+                            ) else null
+                        } catch (_: Exception) { null }
+                    } else null
+
+                    val msg = ChatMessage(
+                        id = eventID ?: java.util.UUID.randomUUID().toString(),
+                        groupID = subscription.groupID,
+                        senderPubkey = senderPubkey,
+                        text = text,
+                        timestamp = Date(),
+                        isMine = false,
+                        status = MessageStatus.SENT,
+                        mediaAttachment = mediaAttachment,
+                        epoch = subscription.epoch
+                    )
+                    CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            PersistenceStore(applicationContext).saveMessage(msg)
+                        } catch (_: Exception) { }
+                    }
+                }
                 "call" -> NotificationHelper.showCallNotification(
                     applicationContext, groupName, senderAlias
                 )

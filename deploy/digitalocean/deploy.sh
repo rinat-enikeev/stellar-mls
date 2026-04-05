@@ -238,7 +238,7 @@ if [ -z "$CF_ZONE_ID" ]; then
 fi
 ok "Cloudflare zone ID: $CF_ZONE_ID"
 
-cf_upsert_record() {
+cf_ensure_record() {
     local name="$1"
     local ip="$2"
     local full_name
@@ -248,14 +248,20 @@ cf_upsert_record() {
         full_name="${name}.${DOMAIN}"
     fi
 
-    local existing
-    existing=$(curl -s -X GET "$CF_API/zones/$CF_ZONE_ID/dns_records?type=A&name=$full_name" \
+    # Check if record already points to the right IP
+    local result
+    result=$(curl -s -X GET "$CF_API/zones/$CF_ZONE_ID/dns_records?type=A&name=$full_name" \
         -H "Authorization: Bearer $CF_API_TOKEN" \
-        -H "Content-Type: application/json" | \
-        python3 -c "import sys,json; r=json.load(sys.stdin)['result']; print(r[0]['id'] if r else '')")
+        -H "Content-Type: application/json")
 
-    if [ -n "$existing" ]; then
-        curl -s -X PUT "$CF_API/zones/$CF_ZONE_ID/dns_records/$existing" \
+    local existing_id existing_ip
+    existing_id=$(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin)['result']; print(r[0]['id'] if r else '')" 2>/dev/null)
+    existing_ip=$(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin)['result']; print(r[0]['content'] if r else '')" 2>/dev/null)
+
+    if [ -n "$existing_id" ] && [ "$existing_ip" = "$ip" ]; then
+        ok "  $full_name -> $ip (already set)"
+    elif [ -n "$existing_id" ]; then
+        curl -s -X PUT "$CF_API/zones/$CF_ZONE_ID/dns_records/$existing_id" \
             -H "Authorization: Bearer $CF_API_TOKEN" \
             -H "Content-Type: application/json" \
             --data "{\"type\":\"A\",\"name\":\"$full_name\",\"content\":\"$ip\",\"ttl\":300,\"proxied\":false}" >/dev/null
@@ -269,16 +275,16 @@ cf_upsert_record() {
     fi
 }
 
-cf_upsert_record "@" "$DROPLET_IP"
-cf_upsert_record "relay" "$DROPLET_IP"
-cf_upsert_record "nostr" "$DROPLET_IP"
-cf_upsert_record "blossom" "$DROPLET_IP"
-cf_upsert_record "push" "$DROPLET_IP"
+cf_ensure_record "@" "$DROPLET_IP"
+cf_ensure_record "relay" "$DROPLET_IP"
+cf_ensure_record "nostr" "$DROPLET_IP"
+cf_ensure_record "blossom" "$DROPLET_IP"
+cf_ensure_record "push" "$DROPLET_IP"
 
 # ─── Deploy Application ───────────────────────────────────────────────
 
 info "Syncing repository on droplet..."
-$SSH_CMD "if [ -d /opt/onym-chat/.git ]; then cd /opt/onym-chat && git pull; else git clone $GIT_REPO /opt/onym-chat; fi"
+$SSH_CMD "if [ -d /opt/onym-chat/.git ]; then cd /opt/onym-chat && git fetch origin && git reset --hard origin/main; else git clone $GIT_REPO /opt/onym-chat; fi"
 
 # Overlay local deploy/ and docker-compose.yml on top of the clone
 # so uncommitted/unpushed changes are always applied

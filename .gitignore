@@ -68,6 +68,9 @@ deploy/certbot/webroot/
 /clients/fastlane/metadata/review_information/phone_number.txt
 /clients/fastlane/metadata/review_information/email_address.txt
 
+# BIS encryption filing (personal data)
+/clients/ios/onym-encryption.csv
+
 # Google Play release automation
 /clients/google.env
 /clients/fastlane/.google_play_service_account.json

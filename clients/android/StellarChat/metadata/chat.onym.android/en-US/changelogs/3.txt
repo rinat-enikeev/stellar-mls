@@ -1,0 +1,1 @@
+Production trusted setup: proving keys loaded from bundled keyset instead of deterministic seed.

@@ -2,6 +2,9 @@
 
 Standalone CLI wrapper for local SEP-XXXX Phase 1 ceremony contributions.
 
+The wrapper runs the binary in `--release` mode because contribution verification
+does a large number of pairing checks and is noticeably slower in debug builds.
+
 This tool is meant for participants to:
 
 - initialize a new ceremony state

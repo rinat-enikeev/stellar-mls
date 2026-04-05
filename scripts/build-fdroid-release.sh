@@ -42,17 +42,35 @@ rustup default 1.94.1
 rustup target add aarch64-linux-android x86_64-linux-android
 
 # Copy source (read-only mount, need writable copy)
-cp -a /src /home/vagrant/build
+rm -rf /home/vagrant/build
+mkdir -p /home/vagrant/build
+cp -a /src/. /home/vagrant/build
 cd /home/vagrant/build
+
+# Sanity check: verify repo root layout
+test -f scripts/build-android.sh
+test -f clients/android/StellarChat/gradlew
 
 # === scandelete step ===
 rm -rf kotlin-mls/src/main/jniLibs/
 rm -rf clients/android/StellarChat/app/src/main/jniLibs/
 
+# === Install NDK r27c (matches ndk: r27c in fdroid metadata) ===
+NDK_DIR="/opt/android-sdk/ndk/27.2.12479018"
+echo "==> Existing NDK versions:"
+ls /opt/android-sdk/ndk/ 2>/dev/null || echo "(none)"
+if [ ! -d "$NDK_DIR" ]; then
+    echo "==> Downloading NDK r27c..."
+    apt-get install -y -q unzip curl > /dev/null 2>&1 || true
+    curl -sLO "https://dl.google.com/android/repository/android-ndk-r27c-linux.zip"
+    unzip -q android-ndk-r27c-linux.zip -d /opt/android-sdk/ndk-tmp
+    mv /opt/android-sdk/ndk-tmp/android-ndk-r27c "$NDK_DIR"
+    rm -rf /opt/android-sdk/ndk-tmp android-ndk-r27c-linux.zip
+fi
+echo "==> NDK at $NDK_DIR"
+
 # === build step (from fdroiddata metadata) ===
 export PATH="$HOME/.cargo/bin:$PATH"
-# Find the installed NDK (matches $$NDK$$ in fdroid metadata)
-NDK_DIR=$(ls -d /opt/android-sdk/ndk/* 2>/dev/null | sort -V | tail -1)
 ANDROID_NDK_HOME="$NDK_DIR" bash scripts/build-android.sh --out-dir kotlin-mls/src/main
 
 # === prebuild step ===

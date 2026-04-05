@@ -1,2 +1,2 @@
-app_identifier(ENV['MATCH_APP_IDENTIFIER'] || ENV['APP_IDENTIFIER'])
+app_identifier(ENV['APP_IDENTIFIER'])
 team_id(ENV['MATCH_TEAM_ID'])

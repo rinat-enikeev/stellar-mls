@@ -24,6 +24,12 @@ trim() {
   printf '%s' "$value"
 }
 
+csv_first_value() {
+  local value="$1"
+  value="${value%%,*}"
+  trim "$value"
+}
+
 read_env_value() {
   local key="$1"
   local file="$2"
@@ -187,6 +193,48 @@ extract_default_bundle_id() {
   ' "$PBXPROJ_FILE"
 }
 
+extract_default_match_app_identifiers() {
+  if [ -f "$PROJECT_YML_FILE" ]; then
+    awk '
+      /PRODUCT_BUNDLE_IDENTIFIER:/ {
+        value = $2
+        gsub(/"/, "", value)
+        gsub(/[[:space:]]/, "", value)
+        if (value == "" || value ~ /\.tests$/ || seen[value]++) next
+        values[++count] = value
+      }
+      END {
+        for (i = 1; i <= count; i++) {
+          if (i > 1) {
+            printf ","
+          }
+          printf "%s", values[i]
+        }
+      }
+    ' "$PROJECT_YML_FILE"
+    return 0
+  fi
+  [ -f "$PBXPROJ_FILE" ] || return 0
+  awk '
+    /PRODUCT_BUNDLE_IDENTIFIER = / {
+      line = $0
+      sub(/^.*PRODUCT_BUNDLE_IDENTIFIER = /, "", line)
+      sub(/;.*/, "", line)
+      gsub(/[[:space:]]/, "", line)
+      if (line == "" || line ~ /\.tests$/ || seen[line]++) next
+      values[++count] = line
+    }
+    END {
+      for (i = 1; i <= count; i++) {
+        if (i > 1) {
+          printf ","
+        }
+        printf "%s", values[i]
+      }
+    }
+  ' "$PBXPROJ_FILE"
+}
+
 extract_default_team_id() {
   if [ -f "$PROJECT_YML_FILE" ]; then
     awk '
@@ -310,7 +358,11 @@ require_cmd python3
 cd "$ROOT_DIR"
 
 existing_repo="$(read_env_value "MATCH_GIT_URL" "$ENV_FILE" || true)"
-existing_bundle_id="$(read_env_value "MATCH_APP_IDENTIFIER" "$ENV_FILE" || true)"
+existing_match_app_identifier="$(read_env_value "MATCH_APP_IDENTIFIER" "$ENV_FILE" || true)"
+existing_bundle_id="$(read_env_value "APP_IDENTIFIER" "$ENV_FILE" || true)"
+if [ -z "$existing_bundle_id" ]; then
+  existing_bundle_id="$(csv_first_value "$existing_match_app_identifier")"
+fi
 existing_team_id="$(read_env_value "MATCH_TEAM_ID" "$ENV_FILE" || true)"
 existing_match_password="$(read_env_value "MATCH_PASSWORD" "$ENV_FILE" || true)"
 existing_key_id="$(read_env_value "ASC_KEY_ID" "$ENV_FILE" || true)"
@@ -319,11 +371,15 @@ existing_key_escaped="$(read_env_value "ASC_PRIVATE_KEY_P8" "$ENV_FILE" || true)
 existing_in_house="$(read_env_value "ASC_IN_HOUSE" "$ENV_FILE" || true)"
 
 default_bundle_id="$(extract_default_bundle_id)"
+default_match_app_identifier="$(extract_default_match_app_identifiers)"
 default_team_id="$(extract_default_team_id)"
 default_match_repo="$(default_match_git_url)"
 
 if [ -z "$existing_bundle_id" ] && [ -n "$default_bundle_id" ]; then
   existing_bundle_id="$default_bundle_id"
+fi
+if [ -z "$existing_match_app_identifier" ] && [ -n "$default_match_app_identifier" ]; then
+  existing_match_app_identifier="$default_match_app_identifier"
 fi
 if [ -z "$existing_team_id" ] && [ -n "$default_team_id" ]; then
   existing_team_id="$default_team_id"
@@ -335,7 +391,8 @@ fi
 echo "Fastlane Match setup (files live at repo root)"
 
 match_git_url="$(prompt_required "GitHub SSH repo URL for match storage" "$existing_repo")"
-match_app_identifier="$(prompt_required "App identifier (bundle id)" "$existing_bundle_id")"
+app_identifier="$(prompt_required "Main app identifier (bundle id)" "$existing_bundle_id")"
+match_app_identifier="$(prompt_required "Match app identifiers (comma-separated bundle ids)" "${existing_match_app_identifier:-$app_identifier}")"
 match_team_id="$(prompt_required "Apple Team ID" "$existing_team_id")"
 
 if [ -n "$existing_match_password" ]; then
@@ -368,7 +425,7 @@ create_github_repo_if_needed "$match_git_url"
 
 upsert_env "MATCH_GIT_URL" "$match_git_url" "$ENV_FILE"
 upsert_env "MATCH_APP_IDENTIFIER" "$match_app_identifier" "$ENV_FILE"
-upsert_env "APP_IDENTIFIER" "$match_app_identifier" "$ENV_FILE"
+upsert_env "APP_IDENTIFIER" "$app_identifier" "$ENV_FILE"
 upsert_env "MATCH_TEAM_ID" "$match_team_id" "$ENV_FILE"
 upsert_env "MATCH_PASSWORD" "$match_password" "$ENV_FILE"
 upsert_env "ASC_KEY_ID" "$asc_key_id" "$ENV_FILE"
@@ -380,6 +437,7 @@ write_api_key_json "$asc_key_id" "$asc_issuer_id" "$asc_private_key_escaped" "$a
 
 export MATCH_GIT_URL="$match_git_url"
 export MATCH_APP_IDENTIFIER="$match_app_identifier"
+export APP_IDENTIFIER="$app_identifier"
 export MATCH_TEAM_ID="$match_team_id"
 export MATCH_PASSWORD="$match_password"
 export APP_STORE_CONNECT_API_KEY_PATH="$API_KEY_JSON_PATH"

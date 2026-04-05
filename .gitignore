@@ -40,6 +40,7 @@ local.properties
 /.cargo/config.toml
 **/google-services.json
 **/fcm-service-account.json
+**/google-play-secret.json
 
 # Relayer secrets
 .env
@@ -60,3 +61,13 @@ deploy/certbot/webroot/
 /clients/fastlane/.appstoreconnect_api_key.json
 /clients/fastlane/.export_options.plist
 /clients/vendor/
+
+# App Store review personal info
+/clients/fastlane/metadata/review_information/first_name.txt
+/clients/fastlane/metadata/review_information/last_name.txt
+/clients/fastlane/metadata/review_information/phone_number.txt
+/clients/fastlane/metadata/review_information/email_address.txt
+
+# Google Play release automation
+/clients/google.env
+/clients/fastlane/.google_play_service_account.json

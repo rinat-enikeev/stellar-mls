@@ -18,5 +18,12 @@ captures/
 .externalNativeBuild/
 .cxx/
 
+# Keystores
+*.jks
+*.keystore
+
+# Google Play service account
+google-play-secret.json
+
 # macOS
 .DS_Store

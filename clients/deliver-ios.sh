@@ -68,6 +68,19 @@ fail() {
   exit 1
 }
 
+trim() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+csv_first_value() {
+  local value="$1"
+  value="${value%%,*}"
+  trim "$value"
+}
+
 require_cmd() {
   local cmd="$1"
   command -v "$cmd" >/dev/null 2>&1 || fail "required command not found: $cmd"
@@ -164,7 +177,7 @@ fi
 
 APP_IDENTIFIER="$(read_env_value "APP_IDENTIFIER" "$ENV_FILE" || true)"
 if [ -z "$APP_IDENTIFIER" ]; then
-  APP_IDENTIFIER="$(read_env_value "MATCH_APP_IDENTIFIER" "$ENV_FILE" || true)"
+  APP_IDENTIFIER="$(csv_first_value "$(read_env_value "MATCH_APP_IDENTIFIER" "$ENV_FILE" || true)")"
 fi
 [ -n "$APP_IDENTIFIER" ] || fail "APP_IDENTIFIER (or MATCH_APP_IDENTIFIER) is missing in $ENV_FILE"
 

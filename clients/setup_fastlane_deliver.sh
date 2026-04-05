@@ -24,6 +24,12 @@ trim() {
   printf '%s' "$value"
 }
 
+csv_first_value() {
+  local value="$1"
+  value="${value%%,*}"
+  trim "$value"
+}
+
 read_env_value() {
   local key="$1"
   local file="$2"
@@ -221,7 +227,7 @@ cd "$ROOT_DIR"
 
 existing_app_identifier="$(read_env_value "APP_IDENTIFIER" "$ENV_FILE" || true)"
 if [ -z "$existing_app_identifier" ]; then
-  existing_app_identifier="$(read_env_value "MATCH_APP_IDENTIFIER" "$ENV_FILE" || true)"
+  existing_app_identifier="$(csv_first_value "$(read_env_value "MATCH_APP_IDENTIFIER" "$ENV_FILE" || true)")"
 fi
 if [ -z "$existing_app_identifier" ]; then
   existing_app_identifier="$(extract_default_bundle_id)"
@@ -260,7 +266,6 @@ if prompt_yes_no "Upload binary (ipa) too?" false; then
 fi
 
 upsert_env "APP_IDENTIFIER" "$app_identifier" "$ENV_FILE"
-upsert_env "MATCH_APP_IDENTIFIER" "$app_identifier" "$ENV_FILE"
 upsert_env "ASC_KEY_ID" "$asc_key_id" "$ENV_FILE"
 upsert_env "ASC_ISSUER_ID" "$asc_issuer_id" "$ENV_FILE"
 upsert_env "ASC_PRIVATE_KEY_P8" "$asc_private_key_escaped" "$ENV_FILE"

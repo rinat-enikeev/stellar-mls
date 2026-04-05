@@ -1,0 +1,34 @@
+Onym is a private group chat app where every message is end-to-end encrypted before it leaves your device. Built on open protocols, Onym gives you verifiable privacy without trusting a central server.
+
+<b>End-to-End Encryption</b>
+Every message is encrypted with AES-256-GCM on your device. Only group members can read messages. Not even relay operators can see your conversations.
+
+<b>Cryptographic Group Membership</b>
+Group membership is verified using zero-knowledge proofs anchored on the Stellar blockchain. You can prove you belong to a group without revealing who else is in it.
+
+<b>Decentralized Communication</b>
+Messages travel through Nostr relays, an open protocol with no single point of failure. Your conversations are not locked into any company's servers.
+
+<b>Push Notifications</b>
+Never miss a message. Notifications are end-to-end encrypted with per-subscription keys and decrypted on-device. The push relay uses ephemeral X25519 keys and never learns your identity.
+
+<b>Private Invitations</b>
+Invite members via QR codes or invite links. Invitations are encrypted end-to-end so only the intended recipient can join.
+
+<b>Voice Messages</b>
+Record and send encrypted voice messages directly in your chats.
+
+<b>Media Sharing</b>
+Share photos and images with the same end-to-end encryption applied to all media.
+
+<b>Voice and Video Calls</b>
+Make encrypted voice and video calls to your group members via WebRTC.
+
+<b>Cross-Platform</b>
+Onym works across iOS and Android. Both platforms use identical encryption and wire formats, so you can chat with anyone regardless of their device.
+
+<b>No Phone Number Required</b>
+Your identity is a cryptographic key pair generated on your device. No phone number, no email, no personal information needed to start chatting.
+
+<b>Open Source</b>
+Onym is built on open standards: Nostr for messaging, Stellar for on-chain membership verification, and standard cryptographic primitives you can audit.

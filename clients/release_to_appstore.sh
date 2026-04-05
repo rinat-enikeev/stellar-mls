@@ -64,6 +64,12 @@ trim() {
   printf '%s' "$value"
 }
 
+csv_first_value() {
+  local value="$1"
+  value="${value%%,*}"
+  trim "$value"
+}
+
 print_cmd() {
   local out=""
   local part
@@ -385,6 +391,48 @@ extract_default_bundle_id() {
   ' "$PBXPROJ_FILE"
 }
 
+extract_default_match_app_identifiers() {
+  if [ -f "$PROJECT_YML_FILE" ]; then
+    awk '
+      /PRODUCT_BUNDLE_IDENTIFIER:/ {
+        value = $2
+        gsub(/"/, "", value)
+        gsub(/[[:space:]]/, "", value)
+        if (value == "" || value ~ /\.tests$/ || seen[value]++) next
+        values[++count] = value
+      }
+      END {
+        for (i = 1; i <= count; i++) {
+          if (i > 1) {
+            printf ","
+          }
+          printf "%s", values[i]
+        }
+      }
+    ' "$PROJECT_YML_FILE"
+    return 0
+  fi
+  [ -f "$PBXPROJ_FILE" ] || return 0
+  awk '
+    /PRODUCT_BUNDLE_IDENTIFIER = / {
+      line = $0
+      sub(/^.*PRODUCT_BUNDLE_IDENTIFIER = /, "", line)
+      sub(/;.*/, "", line)
+      gsub(/[[:space:]]/, "", line)
+      if (line == "" || line ~ /\.tests$/ || seen[line]++) next
+      values[++count] = line
+    }
+    END {
+      for (i = 1; i <= count; i++) {
+        if (i > 1) {
+          printf ","
+        }
+        printf "%s", values[i]
+      }
+    }
+  ' "$PBXPROJ_FILE"
+}
+
 extract_default_team_id() {
   if [ -f "$PROJECT_YML_FILE" ]; then
     awk '
@@ -634,8 +682,9 @@ require_cmd xcodebuild
 [ -d "$IOS_DIR" ] || fail "iOS directory not found: $IOS_DIR"
 
 existing_app_identifier="$(read_env_value "APP_IDENTIFIER" "$ENV_FILE" || true)"
+existing_match_app_identifier="$(read_env_value "MATCH_APP_IDENTIFIER" "$ENV_FILE" || true)"
 if [ -z "$existing_app_identifier" ]; then
-  existing_app_identifier="$(read_env_value "MATCH_APP_IDENTIFIER" "$ENV_FILE" || true)"
+  existing_app_identifier="$(csv_first_value "$existing_match_app_identifier")"
 fi
 existing_match_git_url="$(read_env_value "MATCH_GIT_URL" "$ENV_FILE" || true)"
 existing_match_team_id="$(read_env_value "MATCH_TEAM_ID" "$ENV_FILE" || true)"
@@ -656,6 +705,7 @@ if [ -z "$existing_private_key" ]; then
 fi
 
 default_bundle_id="$(extract_default_bundle_id)"
+default_match_app_identifier="$(extract_default_match_app_identifiers)"
 default_team_id="$(extract_default_team_id)"
 default_build_number="$(extract_current_build_number)"
 default_build_number="$(increment_number "$default_build_number")"
@@ -663,6 +713,9 @@ default_match_repo="$(default_match_git_url)"
 
 if [ -z "$existing_app_identifier" ] && [ -n "$default_bundle_id" ]; then
   existing_app_identifier="$default_bundle_id"
+fi
+if [ -z "$existing_match_app_identifier" ] && [ -n "$default_match_app_identifier" ]; then
+  existing_match_app_identifier="$default_match_app_identifier"
 fi
 if [ -z "$existing_match_team_id" ] && [ -n "$default_team_id" ]; then
   existing_match_team_id="$default_team_id"
@@ -676,6 +729,7 @@ fi
 
 step "Collect release inputs"
 APP_IDENTIFIER="$(prompt_required "App identifier (bundle id)" "$existing_app_identifier")"
+MATCH_APP_IDENTIFIER="${existing_match_app_identifier:-$APP_IDENTIFIER}"
 MATCH_GIT_URL="$(prompt_required "Match GitHub SSH repo URL" "$existing_match_git_url")"
 MATCH_TEAM_ID="$(prompt_required "Apple Team ID" "$existing_match_team_id")"
 BUILD_NUMBER="$(prompt_required "Build number" "$default_build_number")"
@@ -706,7 +760,7 @@ SCREENSHOTS_PATH="$(prompt_required "Screenshots path" "$ROOT_DIR/fastlane/scree
 step "Persist local config"
 if ! $DRY_RUN; then
   upsert_env "APP_IDENTIFIER" "$APP_IDENTIFIER" "$ENV_FILE"
-  upsert_env "MATCH_APP_IDENTIFIER" "$APP_IDENTIFIER" "$ENV_FILE"
+  upsert_env "MATCH_APP_IDENTIFIER" "$MATCH_APP_IDENTIFIER" "$ENV_FILE"
   upsert_env "MATCH_GIT_URL" "$MATCH_GIT_URL" "$ENV_FILE"
   upsert_env "MATCH_TEAM_ID" "$MATCH_TEAM_ID" "$ENV_FILE"
   upsert_env "MATCH_PASSWORD" "$MATCH_PASSWORD" "$ENV_FILE"
@@ -727,7 +781,7 @@ run_in_dir "$ROOT_DIR" bundle config set --local path 'vendor/bundle'
 run_in_dir "$ROOT_DIR" bundle install
 
 export MATCH_GIT_URL
-export MATCH_APP_IDENTIFIER="$APP_IDENTIFIER"
+export MATCH_APP_IDENTIFIER
 export MATCH_TEAM_ID
 export MATCH_PASSWORD
 export APP_STORE_CONNECT_API_KEY_PATH="$API_KEY_JSON_PATH"

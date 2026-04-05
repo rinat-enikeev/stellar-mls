@@ -153,6 +153,18 @@ async fn handle_subscribe(state: &Arc<AppState>, decrypted: &Value) -> Response 
         }
     };
 
+    // SECURITY: For UnifiedPush subscriptions, validate the endpoint URL at registration
+    // time to prevent SSRF. The URL is also validated at dispatch time as defense-in-depth.
+    if platform == "android-up" {
+        if let Err(e) = crate::unified_push::validate_endpoint_url(&token) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"status": "error", "message": format!("invalid UnifiedPush endpoint: {e}")})),
+            )
+                .into_response();
+        }
+    }
+
     let notification_key_b64 = match decrypted.get("notification_key").and_then(|v| v.as_str()) {
         Some(k) => k,
         None => {
@@ -248,10 +260,14 @@ async fn handle_subscribe(state: &Arc<AppState>, decrypted: &Value) -> Response 
     // Signal the watcher to refresh
     let _ = state.watcher_tx.send(());
 
-    eprintln!(
-        "New subscription: id={}, platform={}",
-        sub.subscription_id, sub.platform
-    );
+    // SECURITY: Do not log full subscription_id — it is a bearer token.
+    // Log only a truncated hint for debugging.
+    let id_hint = if sub.subscription_id.len() >= 8 {
+        &sub.subscription_id[..8]
+    } else {
+        &sub.subscription_id
+    };
+    eprintln!("New subscription: id_hint={id_hint}..., platform={}", sub.platform);
     (StatusCode::OK, Json(json!({"status": "ok"}))).into_response()
 }
 
@@ -295,7 +311,12 @@ async fn handle_update(state: &Arc<AppState>, decrypted: &Value) -> Response {
     // Signal the watcher to refresh
     let _ = state.watcher_tx.send(());
 
-    eprintln!("Updated subscription: id={subscription_id}");
+    let id_hint = if subscription_id.len() >= 8 {
+        &subscription_id[..8]
+    } else {
+        subscription_id
+    };
+    eprintln!("Updated subscription: id_hint={id_hint}...");
     (StatusCode::OK, Json(json!({"status": "ok"}))).into_response()
 }
 
@@ -323,7 +344,12 @@ async fn handle_unsubscribe(state: &Arc<AppState>, decrypted: &Value) -> Respons
     // Signal the watcher to refresh
     let _ = state.watcher_tx.send(());
 
-    eprintln!("Deleted subscription: id={subscription_id}");
+    let id_hint = if subscription_id.len() >= 8 {
+        &subscription_id[..8]
+    } else {
+        subscription_id
+    };
+    eprintln!("Deleted subscription: id_hint={id_hint}...");
     (StatusCode::OK, Json(json!({"status": "ok"}))).into_response()
 }
 

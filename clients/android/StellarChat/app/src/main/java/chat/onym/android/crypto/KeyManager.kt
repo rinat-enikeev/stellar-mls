@@ -136,9 +136,12 @@ class KeyManager private constructor(private val prefs: android.content.SharedPr
         }
 
         // Ed25519 Stellar key (HKDF-derived from Nostr secret)
+        // SECURITY: Salt must match iOS ("chat.onym.ios") for cross-platform key derivation
+        // parity. Both platforms must derive identical Stellar Ed25519 and X25519 keys from
+        // the same Nostr secret to enable cross-platform key attestation and invitation delivery.
         val stellarSeed = GroupCrypto.hkdf(
             ikm = secretKey,
-            salt = "com.stellarmls.chat".toByteArray(),
+            salt = "chat.onym.ios".toByteArray(),
             info = "stellar-ed25519-v1".toByteArray(),
             length = 32
         )
@@ -148,7 +151,7 @@ class KeyManager private constructor(private val prefs: android.content.SharedPr
         // X25519 key agreement key (HKDF-derived from Nostr secret)
         val x25519Seed = GroupCrypto.hkdf(
             ikm = secretKey,
-            salt = "com.stellarmls.chat".toByteArray(),
+            salt = "chat.onym.ios".toByteArray(),
             info = "x25519-key-agreement-v1".toByteArray(),
             length = 32
         )

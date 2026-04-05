@@ -112,13 +112,22 @@ impl Database {
         // We search for the tag value appearing anywhere in filter_json.
         // Since filters store tags as JSON arrays like "#t":["abc123"], we search
         // for the tag value as a JSON string within the filter.
-        let pattern = format!("%\"{}\"%", tag_value.replace('"', ""));
+        //
+        // SECURITY: Escape SQL LIKE wildcards (% and _) in the tag value to prevent
+        // attacker-controlled Nostr event tags from matching unintended subscriptions.
+        // Without escaping, a tag value of "%" would match ALL subscriptions.
+        let escaped = tag_value
+            .replace('\\', "\\\\")  // Escape backslash first
+            .replace('%', "\\%")    // Escape % wildcard
+            .replace('_', "\\_")    // Escape _ wildcard
+            .replace('"', "");      // Strip quotes (for JSON string matching)
+        let pattern = format!("%\"{}\"%", escaped);
 
         let mut stmt = conn
             .prepare(
                 "SELECT subscription_id, filter_json, encrypted_token, encrypted_notif_key,
                         platform, created_at, last_pushed_at
-                 FROM subscriptions WHERE filter_json LIKE ?1",
+                 FROM subscriptions WHERE filter_json LIKE ?1 ESCAPE '\\'",
             )
             .map_err(|e| format!("failed to prepare query: {e}"))?;
 

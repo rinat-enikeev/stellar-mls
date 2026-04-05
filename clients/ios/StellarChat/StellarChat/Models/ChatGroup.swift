@@ -27,6 +27,8 @@ struct ChatGroup: Identifiable, Codable {
     var forkedAtEpoch: UInt64?
     /// BLS pubkey hex of the member who removed us from this group (nil if not removed).
     var removedByPubkeyHex: String?
+    /// Whether push notifications are enabled for this group (opt-in, defaults to off).
+    var pushNotificationsEnabled: Bool = false
 
     /// Nostr subscription topic tag for this group.
     /// Derivation (SEP-XXXX §3.1): `topicTag = hex(SHA-256("sep-topic-v1" || groupSecret)[0..8])`

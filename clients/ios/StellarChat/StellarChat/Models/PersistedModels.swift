@@ -21,6 +21,7 @@ final class PersistedGroup {
     var forkedFromGroupID: String?
     var forkedAtEpoch: Int?
     var removedByPubkeyHex: String?
+    var pushNotificationsEnabled: Bool
 
     init(
         id: String,
@@ -37,7 +38,8 @@ final class PersistedGroup {
         pinnedEpoch: Int? = nil,
         forkedFromGroupID: String? = nil,
         forkedAtEpoch: Int? = nil,
-        removedByPubkeyHex: String? = nil
+        removedByPubkeyHex: String? = nil,
+        pushNotificationsEnabled: Bool = false
     ) {
         self.id = id
         self.encryptedName = encryptedName
@@ -54,6 +56,7 @@ final class PersistedGroup {
         self.forkedFromGroupID = forkedFromGroupID
         self.forkedAtEpoch = forkedAtEpoch
         self.removedByPubkeyHex = removedByPubkeyHex
+        self.pushNotificationsEnabled = pushNotificationsEnabled
     }
 }
 

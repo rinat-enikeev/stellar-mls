@@ -438,7 +438,8 @@ final class PersistenceStore {
             pinnedEpoch: group.pinnedEpoch.map { Int($0) },
             forkedFromGroupID: group.forkedFromGroupID,
             forkedAtEpoch: group.forkedAtEpoch.map { Int($0) },
-            removedByPubkeyHex: group.removedByPubkeyHex
+            removedByPubkeyHex: group.removedByPubkeyHex,
+            pushNotificationsEnabled: group.pushNotificationsEnabled
         )
     }
 
@@ -478,6 +479,7 @@ final class PersistenceStore {
         group.forkedFromGroupID = persisted.forkedFromGroupID
         group.forkedAtEpoch = persisted.forkedAtEpoch.map { UInt64($0) }
         group.removedByPubkeyHex = persisted.removedByPubkeyHex
+        group.pushNotificationsEnabled = persisted.pushNotificationsEnabled
         return group
     }
 

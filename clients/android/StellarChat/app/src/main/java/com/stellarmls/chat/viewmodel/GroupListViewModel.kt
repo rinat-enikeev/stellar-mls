@@ -2048,6 +2048,18 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         insertSystemMessage(groupID, "Group renamed to \"$newName\"", "renamed", updated.epoch)
     }
 
+    /** Toggle push notifications for a group and persist the change. */
+    fun setPushNotifications(enabled: Boolean, groupID: String) {
+        val index = groups.indexOfFirst { it.id == groupID }
+        if (index < 0) return
+        groups[index] = groups[index].copy(pushNotificationsEnabled = enabled)
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                store.saveGroup(groups[index])
+            }
+        }
+    }
+
     /** Rename a group and broadcast the change to all members. */
     fun renameGroup(groupID: String, newName: String) {
         val trimmed = newName.trim()

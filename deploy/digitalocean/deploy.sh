@@ -273,6 +273,7 @@ cf_upsert_record "@" "$DROPLET_IP"
 cf_upsert_record "relay" "$DROPLET_IP"
 cf_upsert_record "nostr" "$DROPLET_IP"
 cf_upsert_record "blossom" "$DROPLET_IP"
+cf_upsert_record "push" "$DROPLET_IP"
 
 # ─── Deploy Application ───────────────────────────────────────────────
 
@@ -291,13 +292,25 @@ info "Uploading relayer .env..."
 $SCP_CMD "$REPO_ROOT/relayer/.env" "root@$DROPLET_IP:/opt/onym-chat/relayer/.env" 2>/dev/null
 $SSH_CMD "sed -i 's/^RELAYER_BIND=.*/RELAYER_BIND=0.0.0.0:8080/' /opt/onym-chat/relayer/.env"
 
+info "Uploading PN relay config..."
+$SSH_CMD "mkdir -p /opt/onym-chat/pn-relay"
+if [ -f "$REPO_ROOT/pn-relay/.env" ]; then
+    $SCP_CMD "$REPO_ROOT/pn-relay/.env" "root@$DROPLET_IP:/opt/onym-chat/pn-relay/.env" 2>/dev/null
+else
+    # Create a minimal .env if none exists
+    $SSH_CMD "touch /opt/onym-chat/pn-relay/.env"
+fi
+$SCP_CMD "$REPO_ROOT/pn-relay/Cargo.toml" "root@$DROPLET_IP:/opt/onym-chat/pn-relay/Cargo.toml" 2>/dev/null
+$SCP_CMD "$REPO_ROOT/pn-relay/Dockerfile" "root@$DROPLET_IP:/opt/onym-chat/pn-relay/Dockerfile" 2>/dev/null
+$SCP_CMD -r "$REPO_ROOT/pn-relay/src" "root@$DROPLET_IP:/opt/onym-chat/pn-relay/src" 2>/dev/null
+
 info "Pulling images and building containers (this may take a few minutes on first run)..."
 $SSH_CMD "cd /opt/onym-chat && docker compose pull --ignore-buildable && docker compose build --pull" 2>&1 | tail -5
 
 # ─── Wait for DNS Propagation ─────────────────────────────────────────
 
 info "Waiting for DNS propagation (all 4 subdomains)..."
-ALL_DOMAINS=("$DOMAIN" "relay.$DOMAIN" "nostr.$DOMAIN" "blossom.$DOMAIN")
+ALL_DOMAINS=("$DOMAIN" "relay.$DOMAIN" "nostr.$DOMAIN" "blossom.$DOMAIN" "push.$DOMAIN")
 MAX_WAIT=60  # 60 x 10s = 10 minutes
 
 for d in "${ALL_DOMAINS[@]}"; do
@@ -345,6 +358,7 @@ check_endpoint() {
 check_endpoint "https://$DOMAIN" "Website"
 check_endpoint "https://relay.$DOMAIN" "Stellar Relayer"
 check_endpoint "https://blossom.$DOMAIN" "Blossom Server"
+check_endpoint "https://push.$DOMAIN/v1/health" "Push Relay"
 
 echo ""
 echo "════════════════════════════════════════════════════════════"
@@ -355,6 +369,7 @@ echo "  Website:         https://$DOMAIN"
 echo "  Stellar Relayer: https://relay.$DOMAIN"
 echo "  Nostr Relay:     wss://nostr.$DOMAIN"
 echo "  Blossom Server:  https://blossom.$DOMAIN"
+echo "  Push Relay:      https://push.$DOMAIN"
 echo ""
 echo "  Droplet IP:      $DROPLET_IP"
 echo "  SSH:             ssh -i $SSH_KEY_PATH root@$DROPLET_IP"

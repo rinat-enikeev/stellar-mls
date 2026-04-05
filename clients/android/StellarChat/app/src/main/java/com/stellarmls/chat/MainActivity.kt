@@ -320,6 +320,9 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                         groupListViewModel.sendInvitation(groupId, recipientKeyHex, onResult)
                     },
                     inviteLink = "stellarchat://join?code=${inviteCode.encode()}",
+                    onTogglePushNotifications = { enabled ->
+                        groupListViewModel.setPushNotifications(enabled, groupId)
+                    },
                     onBack = { navController.popBackStack() }
                 )
             }

@@ -135,6 +135,11 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.4.1")
     implementation("androidx.camera:camera-view:1.4.1")
 
+    // Push notifications
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-messaging")
+    implementation("org.unifiedpush.android:connector:2.4.0")
+
     // Core
     implementation("androidx.core:core-ktx:1.15.0")
 
@@ -143,3 +148,5 @@ dependencies {
     androidTestImplementation("androidx.test:rules:1.6.1")
     androidTestImplementation("androidx.test.ext:junit-ktx:1.2.1")
 }
+
+apply(plugin = "com.google.gms.google-services")

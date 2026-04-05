@@ -1,6 +1,7 @@
 import CryptoKit
 import SwiftUI
 import SwiftMLS
+import UserNotifications
 
 // MARK: - Blockchain-First Epoch Authority Types
 
@@ -28,8 +29,38 @@ enum PendingTransitionState: Equatable {
     case awaitingChainConfirmation(targetEpoch: UInt64)
 }
 
+/// AppDelegate handles APNs registration callbacks.
+class StellarChatAppDelegate: NSObject, UIApplicationDelegate {
+    weak var pushManager: PushNotificationManager?
+
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        pushManager?.setAPNsToken(deviceToken)
+        Task { @MainActor in
+            // Trigger registration after receiving token
+            NotificationCenter.default.post(name: .apnsTokenReceived, object: nil)
+        }
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        #if DEBUG
+        print("[Push] Failed to register for remote notifications: \(error)")
+        #endif
+    }
+}
+
+extension Notification.Name {
+    static let apnsTokenReceived = Notification.Name("apnsTokenReceived")
+}
+
 @main
 struct StellarChatApp: App {
+    @UIApplicationDelegateAdaptor(StellarChatAppDelegate.self) var appDelegate
     @State private var appState = AppState()
 
     var body: some Scene {
@@ -38,6 +69,8 @@ struct StellarChatApp: App {
                 .environment(appState)
                 .task {
                     await appState.startInboxListener()
+                    appDelegate.pushManager = appState.pushManager
+                    await appState.registerForPushNotifications()
                 }
                 .onOpenURL { url in
                     // Handle stellarchat://join?code=<base64>
@@ -66,6 +99,7 @@ final class AppState {
     var navigateToGroupID: String?
     let invitationTransport = InvitationTransport()
     var pendingInvitations: [PendingInvitation] = []
+    let pushManager = PushNotificationManager()
 
     // MARK: - Calls
 
@@ -1950,6 +1984,20 @@ final class AppState {
         }
     }
 
+    func setPushNotifications(enabled: Bool, forGroup groupID: String) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        groups[index].pushNotificationsEnabled = enabled
+        persistenceStore.saveGroupAsync(groups[index])
+
+        Task {
+            if enabled {
+                await pushManager.registerGroup(groups[index])
+            } else {
+                await pushManager.unregisterGroup(groupID)
+            }
+        }
+    }
+
     // MARK: - Rekey Health & Diagnostics
 
     /// Phase 6.2: Check for groups with stale rekey state. Called on app foreground.
@@ -2846,6 +2894,59 @@ final class AppState {
                     isRelayConnected = connected
                 }
             }
+        }
+    }
+
+    // MARK: - Push Notifications
+
+    func registerForPushNotifications() async {
+        // Determine PN relay URL from settings or defaults
+        // Use the same domain pattern as the Nostr relay
+        if let nostrRelay = relayURLs.first,
+           let host = nostrRelay.host {
+            let domain = host.replacingOccurrences(of: "nostr.", with: "")
+            let pushURL = URL(string: "https://push.\(domain)")
+            pushManager.relayURL = pushURL
+        }
+
+        // Request notification permission
+        do {
+            let center = UNUserNotificationCenter.current()
+            let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+            if granted {
+                UIApplication.shared.registerForRemoteNotifications()
+                // Wait for token to arrive
+                await withCheckedContinuation { continuation in
+                    var observer: NSObjectProtocol?
+                    observer = NotificationCenter.default.addObserver(
+                        forName: .apnsTokenReceived,
+                        object: nil,
+                        queue: .main
+                    ) { _ in
+                        if let observer { NotificationCenter.default.removeObserver(observer) }
+                        continuation.resume()
+                    }
+                    // Timeout after 10 seconds
+                    Task {
+                        try? await Task.sleep(for: .seconds(10))
+                        if let observer {
+                            NotificationCenter.default.removeObserver(observer)
+                        }
+                        continuation.resume()
+                    }
+                }
+                // Register all groups
+                await pushManager.registerAll(groups: groups)
+                // Register inbox
+                await pushManager.registerInbox(inboxTag: keyManager.inboxTag)
+                // Sync contacts
+                let aliases = contactAliasStore.aliases
+                pushManager.syncContacts(aliases)
+            }
+        } catch {
+            #if DEBUG
+            print("[Push] Authorization error: \(error)")
+            #endif
         }
     }
 

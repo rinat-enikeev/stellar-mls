@@ -149,7 +149,8 @@ class PersistenceStore(context: Context) {
             pinnedEpoch = group.pinnedEpoch?.toInt(),
             forkedFromGroupID = group.forkedFromGroupID,
             forkedAtEpoch = group.forkedAtEpoch?.toInt(),
-            removedByPubkeyHex = group.removedByPubkeyHex
+            removedByPubkeyHex = group.removedByPubkeyHex,
+            pushNotificationsEnabled = group.pushNotificationsEnabled
         )
     }
 
@@ -180,7 +181,8 @@ class PersistenceStore(context: Context) {
             pinnedEpoch = persisted.pinnedEpoch?.toLong(),
             forkedFromGroupID = persisted.forkedFromGroupID,
             forkedAtEpoch = persisted.forkedAtEpoch?.toLong(),
-            removedByPubkeyHex = persisted.removedByPubkeyHex
+            removedByPubkeyHex = persisted.removedByPubkeyHex,
+            pushNotificationsEnabled = persisted.pushNotificationsEnabled
         )
     }
 

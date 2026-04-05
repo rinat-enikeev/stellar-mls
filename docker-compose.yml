@@ -21,6 +21,23 @@ services:
     networks:
       - internal
 
+  pn-relay:
+    build:
+      context: ./pn-relay
+      dockerfile: Dockerfile
+    environment:
+      - PN_BIND=0.0.0.0:8090
+      - PN_NOSTR_RELAY=ws://nostr-relay:7777
+      - PN_DATA_DIR=/app/data
+    env_file: ./pn-relay/.env
+    volumes:
+      - pn-relay-data:/app/data
+    restart: unless-stopped
+    networks:
+      - internal
+    depends_on:
+      - nostr-relay
+
   blossom:
     image: ghcr.io/hzrd149/blossom-server:latest
     environment:
@@ -59,6 +76,7 @@ services:
 
 volumes:
   strfry-data:
+  pn-relay-data:
   blossom-data:
   certbot-webroot:
   certbot-certs:

@@ -37,6 +37,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -74,6 +75,7 @@ fun GroupInfoScreen(
     onForkGroup: () -> Unit = {},
     onSendInvitation: ((recipientKeyHex: String, onResult: (Result<Unit>) -> Unit) -> Unit)? = null,
     inviteLink: String? = null,
+    onTogglePushNotifications: ((Boolean) -> Unit)? = null,
     onBack: () -> Unit
 ) {
     val isMember = group.members.any { it.publicKeyCompressed.contentEquals(myBlsPubkey) }
@@ -154,6 +156,21 @@ fun GroupInfoScreen(
                             InfoRow("On-Chain", "Diverged \u26A0\uFE0F")
                         } else {
                             InfoRow("On-Chain", "Verified")
+                        }
+                    }
+                    if (onTogglePushNotifications != null) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Push Notifications", style = MaterialTheme.typography.labelMedium)
+                            Switch(
+                                checked = group.pushNotificationsEnabled,
+                                onCheckedChange = { onTogglePushNotifications(it) }
+                            )
                         }
                     }
                 }

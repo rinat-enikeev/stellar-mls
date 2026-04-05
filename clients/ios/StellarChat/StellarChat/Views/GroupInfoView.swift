@@ -70,6 +70,12 @@ struct GroupInfoView: View {
                             }
                         }
                     }
+                    Toggle("Push Notifications", isOn: Binding(
+                        get: { group.pushNotificationsEnabled },
+                        set: { enabled in
+                            appState.setPushNotifications(enabled: enabled, forGroup: group.id)
+                        }
+                    ))
                 }
 
                 if appState.isMember(of: group) {

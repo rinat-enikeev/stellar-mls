@@ -20,7 +20,9 @@ data class PersistedGroup(
     val pinnedEpoch: Int? = null,
     val forkedFromGroupID: String? = null,
     val forkedAtEpoch: Int? = null,
-    val removedByPubkeyHex: String? = null
+    val removedByPubkeyHex: String? = null,
+    @ColumnInfo(defaultValue = "0")
+    val pushNotificationsEnabled: Boolean = false
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

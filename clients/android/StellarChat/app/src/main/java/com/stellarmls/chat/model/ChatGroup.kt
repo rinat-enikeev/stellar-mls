@@ -40,7 +40,9 @@ data class ChatGroup(
     /** The epoch of the original group at which this fork was created. */
     var forkedAtEpoch: Long? = null,
     /** BLS pubkey hex of the member who removed us from this group (null if not removed). */
-    var removedByPubkeyHex: String? = null
+    var removedByPubkeyHex: String? = null,
+    /** Whether push notifications are enabled for this group (opt-in, defaults to off). */
+    var pushNotificationsEnabled: Boolean = false
 ) {
     /** Group ID as raw bytes (hex string → ByteArray). */
     val groupIDData: ByteArray get() = id.hexToBytes()

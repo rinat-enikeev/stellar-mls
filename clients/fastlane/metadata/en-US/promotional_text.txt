@@ -1,0 +1,1 @@
+Private group chat with end-to-end encryption, zero-knowledge membership proofs, and no phone number required. Your messages, your keys, your privacy.

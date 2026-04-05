@@ -1,0 +1,1 @@
+Onym is a decentralized group chat app. To test, create a group and send messages. No account registration is required — the app generates a cryptographic identity on first launch.

@@ -75,6 +75,12 @@ android {
         }
     }
 
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("play") { dimension = "distribution" }
+        create("fdroid") { dimension = "distribution" }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -126,8 +132,8 @@ dependencies {
     // QR code generation
     implementation("com.google.zxing:core:3.5.3")
 
-    // ML Kit barcode scanning (bundled model — no Play Services dependency)
-    implementation("com.google.mlkit:barcode-scanning:17.3.0")
+    // ML Kit barcode scanning (play flavor only — proprietary)
+    "playImplementation"("com.google.mlkit:barcode-scanning:17.3.0")
 
     // CameraX for QR scanner
     implementation("androidx.camera:camera-core:1.4.1")
@@ -135,10 +141,13 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.4.1")
     implementation("androidx.camera:camera-view:1.4.1")
 
-    // Push notifications
-    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
-    implementation("com.google.firebase:firebase-messaging")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
+    // Push notifications (play flavor — proprietary FCM)
+    "playImplementation"(platform("com.google.firebase:firebase-bom:33.7.0"))
+    "playImplementation"("com.google.firebase:firebase-messaging")
+    "playImplementation"("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
+
+    // Push notifications (fdroid flavor — FOSS UnifiedPush)
+    "fdroidImplementation"("org.unifiedpush.android:connector:2.5.0")
     // Core
     implementation("androidx.core:core-ktx:1.15.0")
 
@@ -148,4 +157,6 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit-ktx:1.2.1")
 }
 
-apply(plugin = "com.google.gms.google-services")
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}

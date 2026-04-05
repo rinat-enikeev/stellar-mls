@@ -39,10 +39,13 @@ fi
 
 echo "Using NDK: $ANDROID_NDK_HOME"
 
-# NDK toolchain bin directory
-TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/bin"
+# NDK toolchain bin directory (works on macOS and Linux)
+HOST_OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+HOST_ARCH=$(uname -m)
+TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/${HOST_OS}-${HOST_ARCH}/bin"
 if [ ! -d "$TOOLCHAIN" ]; then
-    TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-arm64/bin"
+    # Fallback: try darwin-x86_64 for older NDK on macOS
+    TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/bin"
 fi
 if [ ! -d "$TOOLCHAIN" ]; then
     echo "ERROR: Cannot find NDK toolchain in $ANDROID_NDK_HOME" >&2

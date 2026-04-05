@@ -207,7 +207,16 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                     groupListViewModel = groupListViewModel,
                     onForkGroup = if (groupListViewModel.canForkGroup(
                         groupListViewModel.groups.find { it.id == groupId } ?: return@composable
-                    )) {{ navController.navigate("fork/$groupId") }} else null
+                    )) {{ navController.navigate("fork/$groupId") }} else null,
+                    pushNotificationsEnabled = groupListViewModel.pushEnabledStates[groupId] ?: false,
+                    onEnablePushNotifications = {
+                        groupListViewModel.setPushNotifications(true, groupId)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                    }
                 )
 
                 // Show call screen overlay when a call is active

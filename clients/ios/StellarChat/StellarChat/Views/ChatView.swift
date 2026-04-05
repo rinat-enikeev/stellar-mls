@@ -19,9 +19,39 @@ struct ChatView: View {
     @State private var videoDuration: Int?
     @State private var showCallScreen = false
     @State private var showForkSheet = false
+    @State private var pushBannerDismissed = false
 
     var body: some View {
         VStack(spacing: 0) {
+            // Push notification banner
+            if let group = viewModel.group,
+               !group.pushNotificationsEnabled,
+               !pushBannerDismissed {
+                HStack(spacing: 8) {
+                    Image(systemName: "bell.badge")
+                        .foregroundStyle(.primary)
+                    Text("Enable push notifications for this chat?")
+                        .font(.caption)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button("Enable") {
+                        appState.setPushNotifications(enabled: true, forGroup: group.id)
+                        pushBannerDismissed = true
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    Button {
+                        pushBannerDismissed = true
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(Color.accentColor.opacity(0.1))
+            }
+
             // Epoch pinning banner
             if let group = viewModel.group, let pinned = group.pinnedEpoch,
                let snapshot = appState.epochSnapshots[group.id]?[pinned] {

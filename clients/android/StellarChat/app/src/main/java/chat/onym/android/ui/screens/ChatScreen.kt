@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -116,7 +117,9 @@ fun ChatScreen(
     contactAliasStore: chat.onym.android.persistence.ContactAliasStore? = null,
     onUnpinEpoch: (() -> Unit)? = null,
     groupListViewModel: chat.onym.android.viewmodel.GroupListViewModel? = null,
-    onForkGroup: (() -> Unit)? = null
+    onForkGroup: (() -> Unit)? = null,
+    pushNotificationsEnabled: Boolean = false,
+    onEnablePushNotifications: (() -> Unit)? = null
 ) {
     val groupName = viewModel.groupName
     val listState = rememberLazyListState()
@@ -257,6 +260,48 @@ fun ChatScreen(
                                 color = Color(0xFF7B1FA2).copy(alpha = 0.7f)
                             )
                         }
+                    }
+                }
+            }
+
+            // Push notification banner — show once per session if not enabled
+            var pushBannerDismissed by remember { mutableStateOf(false) }
+            if (!pushNotificationsEnabled && !pushBannerDismissed && onEnablePushNotifications != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.primaryContainer)
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Filled.Notifications,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Enable push notifications for this chat?",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = {
+                        onEnablePushNotifications()
+                        pushBannerDismissed = true
+                    }) {
+                        Text("Enable")
+                    }
+                    IconButton(
+                        onClick = { pushBannerDismissed = true },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Dismiss",
+                            modifier = Modifier.size(16.dp)
+                        )
                     }
                 }
             }

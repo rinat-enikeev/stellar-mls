@@ -66,6 +66,12 @@ class MainActivity : ComponentActivity() {
         // Handle notification tap: navigate to specific chat
         val notificationGroupId = intent?.getStringExtra("navigate_group_id")
 
+        // Handle notification tap when activity is already running
+        addOnNewIntentListener { newIntent ->
+            val groupId = newIntent.getStringExtra("navigate_group_id") ?: return@addOnNewIntentListener
+            groupListViewModel.pendingNavigationGroupId = groupId
+        }
+
         setContent {
             StellarChatTheme {
                 StellarChatNavHost(
@@ -75,13 +81,6 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        // Handle notification tap when activity is already running
-        val groupId = intent.getStringExtra("navigate_group_id") ?: return
-        groupListViewModel.pendingNavigationGroupId = groupId
     }
 }
 

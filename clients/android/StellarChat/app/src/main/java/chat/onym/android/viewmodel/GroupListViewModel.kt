@@ -36,6 +36,8 @@ import chat.onym.android.onchain.OnChainVerificationResult
 import chat.onym.android.persistence.ContactAliasStore
 import chat.onym.android.persistence.PersistenceStore
 import chat.onym.android.crypto.StorageEncryption
+import chat.onym.android.push.PushNotificationManager
+import com.google.firebase.messaging.FirebaseMessaging
 import com.stellarmls.mls.SEPCommitmentBuilder
 import com.stellarmls.mls.SEPGroupMemberLeaf
 import com.stellarmls.mls.SEPGroupRenamed
@@ -55,6 +57,7 @@ import com.stellarmls.mls.SEPSaltResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -177,6 +180,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     lateinit var callManager: chat.onym.android.call.CallManager
         private set
 
+    // Push notifications
+    private var pushManager: PushNotificationManager? = null
+    private val pushPrefs = application.getSharedPreferences("stellar_push_config", Context.MODE_PRIVATE)
+
     // Transports
     lateinit var transport: NostrMessageTransport
         private set
@@ -266,6 +273,11 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
         // Initialize on-chain service if configured
         configureContract()
+
+        // Wire FCM token refresh callback
+        chat.onym.android.push.StellarChatMessagingService.onTokenRefresh = { token ->
+            onNewFcmToken(token)
+        }
 
         // Load contact aliases
         viewModelScope.launch {
@@ -2032,6 +2044,16 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         syncTransportAndSubscribe(group)
         viewModelScope.launch {
             try { store.saveGroup(group) } catch (_: Exception) { }
+            // Update push subscription with new topic tag
+            if (group.pushNotificationsEnabled) {
+                pushManager?.updateGroupSubscription(
+                    groupID = groupID,
+                    newTopicTag = group.topicTag,
+                    epoch = epoch,
+                    groupSecret = group.groupSecret,
+                    salt = salt
+                )
+            }
         }
         if (BuildConfig.DEBUG) Log.d("GroupListVM", "Applied re-key for epoch=$epoch group=${groupID.take(8)}")
     }
@@ -2048,14 +2070,82 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         insertSystemMessage(groupID, "Group renamed to \"$newName\"", "renamed", updated.epoch)
     }
 
+    /** Derive push relay URL from the first Nostr relay.
+     *  e.g. wss://nostr.onym.chat → https://push.onym.chat */
+    private fun derivePushRelayURL(): String? {
+        val nostrRelay = relayURLs.firstOrNull() ?: return null
+        val host = try { java.net.URI(nostrRelay).host } catch (_: Exception) { return null }
+            ?: return null
+        val domain = host.removePrefix("nostr.")
+        return "https://push.$domain"
+    }
+
+    /** Get or create PushNotificationManager. */
+    private fun getOrCreatePushManager(): PushNotificationManager? {
+        pushManager?.let { return it }
+        val url = derivePushRelayURL() ?: return null
+        val mgr = PushNotificationManager(getApplication(), url)
+        pushManager = mgr
+        return mgr
+    }
+
+    /** Get FCM token, using cached value or fetching from Firebase. */
+    private suspend fun getFcmToken(): String? {
+        // Check cached token first
+        val cached = pushPrefs.getString("fcm_token", null)
+        if (!cached.isNullOrBlank() && !pushPrefs.getBoolean("token_needs_refresh", false)) {
+            return cached
+        }
+        // Fetch from Firebase
+        return withContext(Dispatchers.IO) {
+            try {
+                FirebaseMessaging.getInstance().token.await()
+            } catch (e: Exception) {
+                Log.e("GroupListVM", "Failed to get FCM token: ${e.message}")
+                null
+            }
+        }
+    }
+
     /** Toggle push notifications for a group and persist the change. */
     fun setPushNotifications(enabled: Boolean, groupID: String) {
         val index = groups.indexOfFirst { it.id == groupID }
         if (index < 0) return
         groups[index] = groups[index].copy(pushNotificationsEnabled = enabled)
+        val group = groups[index]
         viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                store.saveGroup(groups[index])
+            withContext(Dispatchers.IO) { store.saveGroup(group) }
+            if (enabled) {
+                val mgr = getOrCreatePushManager()
+                if (mgr == null) {
+                    Log.w("GroupListVM", "Cannot register push: no relay URL")
+                    return@launch
+                }
+                val token = getFcmToken()
+                if (token == null) {
+                    Log.w("GroupListVM", "Cannot register push: no FCM token")
+                    return@launch
+                }
+                // Cache the token
+                pushPrefs.edit().putString("fcm_token", token).putBoolean("token_needs_refresh", false).apply()
+                mgr.registerGroup(group, token, "android-fcm")
+                if (BuildConfig.DEBUG) Log.d("GroupListVM", "Push registered for group ${groupID.take(8)}")
+            } else {
+                pushManager?.unregisterGroup(groupID)
+                if (BuildConfig.DEBUG) Log.d("GroupListVM", "Push unregistered for group ${groupID.take(8)}")
+            }
+        }
+    }
+
+    /** Called when FCM token is refreshed — re-register all push-enabled groups. */
+    fun onNewFcmToken(token: String) {
+        pushPrefs.edit().putString("fcm_token", token).putBoolean("token_needs_refresh", false).apply()
+        viewModelScope.launch {
+            val mgr = getOrCreatePushManager() ?: return@launch
+            val pushGroups = groups.filter { it.pushNotificationsEnabled }
+            if (pushGroups.isNotEmpty()) {
+                mgr.reregisterAll(pushGroups, token, "android-fcm")
+                if (BuildConfig.DEBUG) Log.d("GroupListVM", "Re-registered ${pushGroups.size} groups with new FCM token")
             }
         }
     }

@@ -12,6 +12,11 @@ import javax.crypto.spec.SecretKeySpec
 
 class StellarChatMessagingService : FirebaseMessagingService() {
 
+    companion object {
+        /** Callback set by GroupListViewModel to handle token refreshes while app is alive. */
+        var onTokenRefresh: ((String) -> Unit)? = null
+    }
+
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
         val subIDHint = data["sub_id"] ?: return
@@ -76,7 +81,17 @@ class StellarChatMessagingService : FirebaseMessagingService() {
                 StorageEncryption.decryptString(subscription.encryptedGroupName)
             } catch (_: Exception) { "StellarChat" }
 
-            val senderAlias = store.resolveAlias(senderPubkey) ?: "Unknown"
+            val senderAlias = store.resolveAlias(senderPubkey) ?: run {
+                // Show truncated pubkey instead of "Unknown"
+                val decoded = try { Base64.decode(senderPubkey, Base64.DEFAULT) } catch (_: Exception) { null }
+                if (decoded != null && decoded.size >= 4) {
+                    decoded.take(4).joinToString("") { "%02x".format(it) } + "..."
+                } else if (senderPubkey.length >= 8) {
+                    senderPubkey.take(8) + "..."
+                } else {
+                    "Unknown"
+                }
+            }
 
             when (type) {
                 "chat", "image" -> NotificationHelper.showMessageNotification(
@@ -97,8 +112,10 @@ class StellarChatMessagingService : FirebaseMessagingService() {
     }
 
     override fun onNewToken(token: String) {
-        // Store the new token — GroupListViewModel will re-register on next launch
+        // Store the new token
         val prefs = applicationContext.getSharedPreferences("stellar_push_config", MODE_PRIVATE)
-        prefs.edit().putString("fcm_token", token).putBoolean("token_needs_refresh", true).apply()
+        prefs.edit().putString("fcm_token", token).putBoolean("token_needs_refresh", false).apply()
+        // Notify ViewModel to re-register if app is alive
+        onTokenRefresh?.invoke(token)
     }
 }

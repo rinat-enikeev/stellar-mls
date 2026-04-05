@@ -310,8 +310,29 @@ $SCP_CMD "$REPO_ROOT/pn-relay/Cargo.toml" "root@$DROPLET_IP:/opt/onym-chat/pn-re
 $SCP_CMD "$REPO_ROOT/pn-relay/Dockerfile" "root@$DROPLET_IP:/opt/onym-chat/pn-relay/Dockerfile" 2>/dev/null
 $SCP_CMD -r "$REPO_ROOT/pn-relay/src" "root@$DROPLET_IP:/opt/onym-chat/pn-relay/src" 2>/dev/null
 
+# Upload FCM service account JSON if present (for Android push notifications)
+FCM_SA_FILE="$REPO_ROOT/clients/android/StellarChat/fcm-service-account.json"
+if [ -f "$FCM_SA_FILE" ]; then
+    info "Uploading FCM service account..."
+    # Ensure the pn-relay data directory exists on the host (mapped to /app/data in container)
+    $SSH_CMD "docker volume inspect onym_pn-relay-data >/dev/null 2>&1 || docker volume create onym_pn-relay-data"
+    PN_DATA_PATH=$($SSH_CMD "docker volume inspect onym_pn-relay-data --format '{{.Mountpoint}}'")
+    $SCP_CMD "$FCM_SA_FILE" "root@$DROPLET_IP:$PN_DATA_PATH/fcm-service-account.json" 2>/dev/null
+    ok "FCM service account uploaded to pn-relay data volume"
+else
+    warn "FCM service account not found at $FCM_SA_FILE — Android push notifications will not work"
+fi
+
 info "Pulling images and building containers (this may take a few minutes on first run)..."
 $SSH_CMD "cd /opt/onym-chat && docker compose pull --ignore-buildable && docker compose build --pull" 2>&1 | tail -5
+
+# Check if SSL certs already exist — if so, skip cert bootstrap and just restart
+CERTS_EXIST=$($SSH_CMD "docker run --rm -v onym_certbot-certs:/certs alpine test -f /certs/live/$DOMAIN/fullchain.pem && echo yes || echo no" 2>/dev/null)
+if [ "$CERTS_EXIST" = "yes" ]; then
+    info "SSL certificates already exist, restarting services..."
+    $SSH_CMD "cd /opt/onym-chat && docker compose up -d" 2>&1 | tail -5
+    ok "Services restarted"
+else
 
 # ─── Wait for DNS Propagation ─────────────────────────────────────────
 
@@ -343,6 +364,8 @@ echo ""
 
 info "Bootstrapping SSL certificates..."
 $SSH_CMD "cd /opt/onym-chat && bash deploy/certbot/init-certs.sh '$CERTBOT_EMAIL' '$DOMAIN'" 2>&1
+
+fi  # end if certs don't exist
 
 # ─── Verify ────────────────────────────────────────────────────────────
 

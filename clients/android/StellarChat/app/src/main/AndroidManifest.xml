@@ -46,19 +46,6 @@
             </intent-filter>
         </service>
 
-        <!-- UnifiedPush receiver disabled until dependency is added
-        <receiver
-            android:name=".push.StellarChatUnifiedPushReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="org.unifiedpush.android.connector.MESSAGE" />
-                <action android:name="org.unifiedpush.android.connector.NEW_ENDPOINT" />
-                <action android:name="org.unifiedpush.android.connector.UNREGISTERED" />
-                <action android:name="org.unifiedpush.android.connector.REGISTRATION_FAILED" />
-            </intent-filter>
-        </receiver>
-        -->
-
         <meta-data
             android:name="firebase_messaging_auto_init_enabled"
             android:value="false" />

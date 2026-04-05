@@ -138,8 +138,7 @@ dependencies {
     // Push notifications
     implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
     implementation("com.google.firebase:firebase-messaging")
-    // implementation("org.unifiedpush.android:connector:2.4.0") // TODO: add UnifiedPush maven repo when needed
-
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
     // Core
     implementation("androidx.core:core-ktx:1.15.0")
 
@@ -149,4 +148,4 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit-ktx:1.2.1")
 }
 
-// apply(plugin = "com.google.gms.google-services") // TODO: enable when google-services.json is added
+apply(plugin = "com.google.gms.google-services")

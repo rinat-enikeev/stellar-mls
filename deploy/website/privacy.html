@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy — Onym</title>
+    <meta name="description" content="Onym privacy policy. How we handle your data — or rather, how we don't.">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --surface: #12121a;
+            --border: #1e1e2e;
+            --text: #e4e4ef;
+            --text-dim: #8888a0;
+            --accent: #6c5ce7;
+            --accent-glow: #a29bfe;
+            --green: #00b894;
+            --blue: #0984e3;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Navigation */
+        nav {
+            padding: 20px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        nav .container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text);
+            text-decoration: none;
+            letter-spacing: -0.5px;
+        }
+        .logo span { color: var(--accent-glow); }
+        nav a.gh-link {
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+        nav a.gh-link:hover { color: var(--text); }
+
+        /* Content */
+        .content {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 80px 24px;
+        }
+        .content h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            letter-spacing: -1px;
+            margin-bottom: 12px;
+        }
+        .content .updated {
+            color: var(--text-dim);
+            font-size: 0.9rem;
+            margin-bottom: 48px;
+        }
+        .content h2 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            margin-top: 40px;
+            margin-bottom: 12px;
+            letter-spacing: -0.3px;
+        }
+        .content p {
+            color: var(--text-dim);
+            margin-bottom: 16px;
+            font-size: 1rem;
+        }
+        .content ul {
+            color: var(--text-dim);
+            margin-bottom: 16px;
+            padding-left: 24px;
+        }
+        .content li {
+            margin-bottom: 8px;
+            font-size: 1rem;
+        }
+        .content strong {
+            color: var(--text);
+        }
+        .content a {
+            color: var(--accent-glow);
+            text-decoration: none;
+        }
+        .content a:hover {
+            text-decoration: underline;
+        }
+        .highlight-box {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            margin: 24px 0;
+        }
+        .highlight-box p {
+            margin-bottom: 0;
+            color: var(--text);
+        }
+
+        /* Footer */
+        footer {
+            padding: 32px 0;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+        }
+        footer a {
+            color: var(--text-dim);
+            text-decoration: none;
+        }
+        footer a:hover { color: var(--text); }
+        .footer-links {
+            display: flex;
+            gap: 24px;
+            justify-content: center;
+            margin-bottom: 12px;
+        }
+
+        @media (max-width: 640px) {
+            .content { padding: 50px 24px; }
+            .content h1 { font-size: 2rem; }
+        }
+    </style>
+</head>
+<body>
+
+<nav>
+    <div class="container">
+        <a href="/" class="logo">onym<span>.</span>chat</a>
+        <a href="https://github.com/rinat-enikeev/stellar-mls" class="gh-link">GitHub</a>
+    </div>
+</nav>
+
+<div class="content">
+    <h1>Privacy Policy</h1>
+    <p class="updated">Last updated: April 5, 2026</p>
+
+    <div class="highlight-box">
+        <p>Onym is designed so that we cannot access your messages, group memberships, or identity. This is not a policy choice — it is enforced by cryptography.</p>
+    </div>
+
+    <h2>What Onym does not collect</h2>
+    <p>Onym does not collect, store, or have access to:</p>
+    <ul>
+        <li><strong>Message content.</strong> All messages are end-to-end encrypted with AES-256-GCM on your device before transmission. Relay servers only see ciphertext.</li>
+        <li><strong>Your identity.</strong> No phone number, email address, or personal information is required. Your identity is a cryptographic key pair generated locally on your device.</li>
+        <li><strong>Group member lists.</strong> Group membership is represented on-chain as opaque Poseidon hash commitments. The blockchain stores cryptographic commitments — never names, keys, or member lists.</li>
+        <li><strong>Contacts or address book.</strong> Onym never accesses your phone contacts.</li>
+    </ul>
+
+    <h2>Data stored on your device</h2>
+    <p>Onym stores the following data locally on your device, protected by iOS file protection (<code>FileProtectionType.complete</code>) and field-level AES-256-GCM encryption:</p>
+    <ul>
+        <li><strong>Cryptographic keys</strong> — your secp256k1 (Nostr), BLS12-381 (membership), Ed25519 (Stellar), and X25519 (key agreement) key pairs, stored in the iOS Keychain.</li>
+        <li><strong>Group state</strong> — group IDs, shared secrets, epoch numbers, member lists, and commitment data.</li>
+        <li><strong>Message history</strong> — decrypted messages stored locally via SwiftData with per-field encryption.</li>
+        <li><strong>Settings</strong> — relay URLs, display preferences, and contact aliases.</li>
+    </ul>
+    <p>All persisted data is encrypted at rest. If you delete the app, all local data is permanently erased.</p>
+
+    <h2>Nostr relays</h2>
+    <p>Messages are transmitted through Nostr relays using the NIP protocol. Relays can observe:</p>
+    <ul>
+        <li><strong>Encrypted event payloads</strong> — ciphertext that relays cannot decrypt.</li>
+        <li><strong>Topic tags</strong> — derived as <code>SHA256("sep-topic-v1" || groupSecret)</code>, which reveals that events belong to the same group but not the group's identity or members.</li>
+        <li><strong>Nostr public keys</strong> — your secp256k1 public key is visible to relays. This key is not linked to any real-world identity.</li>
+        <li><strong>IP addresses</strong> — your IP address is visible to the relay server you connect to.</li>
+    </ul>
+    <p>You can self-host your own Nostr relay to eliminate third-party relay exposure entirely.</p>
+
+    <h2>Push notifications</h2>
+    <p>Onym supports push notifications with a privacy-preserving architecture:</p>
+    <ul>
+        <li><strong>Ephemeral registration.</strong> Subscriptions to the push notification relay use ephemeral X25519 key pairs. The relay never learns your Nostr identity or links subscriptions to your account.</li>
+        <li><strong>Encrypted payloads.</strong> Notification content is encrypted with a per-subscription notification key using AES-256-GCM. The push relay and Apple (APNs) cannot read notification content.</li>
+        <li><strong>On-device decryption.</strong> The iOS Notification Service Extension decrypts notification payloads on your device before display. The decrypted message never leaves your device.</li>
+        <li><strong>Event ID binding.</strong> Each notification is cryptographically bound to its Nostr event ID as additional authenticated data, preventing tampering or replay.</li>
+    </ul>
+    <p>Apple receives your device push token and encrypted notification payloads, but cannot decrypt them. You can disable push notifications per group in settings.</p>
+
+    <h2>Stellar blockchain</h2>
+    <p>Group membership state is anchored on the Stellar blockchain via a Soroban smart contract. The following is stored on-chain:</p>
+    <ul>
+        <li><strong>Group commitments</strong> — a SHA256 hash of the Poseidon Merkle root, epoch, and salt. This commitment reveals nothing about group members.</li>
+        <li><strong>Zero-knowledge proofs</strong> — Groth16 proofs that verify membership without revealing the member's identity.</li>
+    </ul>
+    <p>A fee-paying relayer submits transactions on your behalf so you never need a funded Stellar account. The relayer sees the commitment and proof data but cannot determine group membership from it.</p>
+
+    <h2>Media and files</h2>
+    <p>Images, videos, and voice messages are encrypted with AES-256-GCM before upload to a Blossom content-addressed storage server. The storage server receives only ciphertext and a content hash — it cannot decrypt or view your media. You can self-host Blossom storage.</p>
+
+    <h2>Voice and video calls</h2>
+    <p>Calls use WebRTC for peer-to-peer encrypted communication. Call signaling goes through Nostr relays as encrypted events. Once a call is established, audio and video data flows directly between devices using SRTP encryption — relay servers are not involved in the media stream.</p>
+
+    <h2>Analytics and tracking</h2>
+    <p>Onym does not include any analytics SDKs, tracking pixels, crash reporters, or telemetry. No usage data is collected or transmitted.</p>
+
+    <h2>Third-party services</h2>
+    <ul>
+        <li><strong>Apple Push Notification service (APNs)</strong> — used to deliver encrypted push notifications to iOS devices. Apple receives your device token and encrypted payloads.</li>
+        <li><strong>Stellar network</strong> — used for on-chain group state verification. Only opaque cryptographic commitments are published.</li>
+    </ul>
+
+    <h2>Data retention</h2>
+    <p>We do not retain any user data because we do not collect any. Nostr relays may retain encrypted events according to their own policies — but these events are ciphertext that cannot be decrypted without the group secret. Deleting the Onym app permanently erases all local keys and data.</p>
+
+    <h2>Children's privacy</h2>
+    <p>Onym does not knowingly collect any personal information from anyone, including children under 13. Since Onym does not require registration or collect personal data, there is no mechanism for age-based data collection.</p>
+
+    <h2>Changes to this policy</h2>
+    <p>If this policy is updated, the changes will be posted on this page with an updated date. Because Onym's privacy properties are enforced by its cryptographic design rather than policy promises, material changes would require changes to the open-source code — which anyone can audit.</p>
+
+    <h2>Contact</h2>
+    <p>For questions about this privacy policy, open an issue on <a href="https://github.com/rinat-enikeev/stellar-mls">GitHub</a>.</p>
+</div>
+
+<footer>
+    <div class="container">
+        <div class="footer-links">
+            <a href="https://github.com/rinat-enikeev/stellar-mls">GitHub</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls/tree/main/docs">Docs</a>
+            <a href="/privacy">Privacy</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls/blob/main/LICENSE">MIT License</a>
+        </div>
+        <p>onym.chat</p>
+    </div>
+</footer>
+
+</body>
+</html>

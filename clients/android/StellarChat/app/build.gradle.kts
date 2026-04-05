@@ -94,6 +94,18 @@ android {
         compose = true
         buildConfig = true
     }
+
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+
+    packaging {
+        resources.excludes += "META-INF/*.version"
+        // Exclude baseline profile for reproducible builds
+        resources.excludes += "assets/dexopt/baseline.prof"
+        resources.excludes += "assets/dexopt/baseline.profm"
+    }
 }
 
 dependencies {

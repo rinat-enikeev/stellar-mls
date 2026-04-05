@@ -59,6 +59,9 @@ X86_64_LINKER="$TOOLCHAIN/x86_64-linux-android${API_LEVEL}-clang"
 
 LIB_NAME="libsep_xxxx_circuits.so"
 
+# Reproducible build flags: disable build-id and standardize hash style
+export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--hash-style=gnu"
+
 build_target() {
     local target="$1"
     local abi="$2"

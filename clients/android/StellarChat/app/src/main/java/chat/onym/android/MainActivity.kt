@@ -306,8 +306,10 @@ fun StellarChatNavHost(groupListViewModel: GroupListViewModel, deepLinkInviteCod
                     )
                 }
 
+                val pushEnabled = groupListViewModel.pushEnabledStates[groupId] ?: group.pushNotificationsEnabled
+
                 GroupInfoScreen(
-                    group = group,
+                    group = group.copy(pushNotificationsEnabled = pushEnabled),
                     myBlsPubkey = groupListViewModel.keyManager.blsPublicKey(),
                     onRemoveMember = { blsPubkey, onResult ->
                         groupListViewModel.removeMember(blsPubkey, groupId, onResult)

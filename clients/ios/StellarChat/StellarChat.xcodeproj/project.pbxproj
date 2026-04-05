@@ -394,15 +394,15 @@
 				LastUpgradeCheck = 1540;
 				TargetAttributes = {
 					79B5A663264579340235CB0C = {
-						DevelopmentTeam = "${DEVELOPMENT_TEAM}";
+						DevelopmentTeam = 5V5EUT3ZXJ;
 						ProvisioningStyle = Automatic;
 					};
 					7E1AB0C084DAFEAB2A75FC86 = {
-						DevelopmentTeam = "${DEVELOPMENT_TEAM}";
+						DevelopmentTeam = 5V5EUT3ZXJ;
 						ProvisioningStyle = Automatic;
 					};
 					D5EEC8F76D9E6B84F05DF01D = {
-						DevelopmentTeam = "${DEVELOPMENT_TEAM}";
+						DevelopmentTeam = 5V5EUT3ZXJ;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -562,7 +562,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "${DEVELOPMENT_TEAM}";
+				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = StellarChat/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Onym;
@@ -652,7 +652,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "${DEVELOPMENT_TEAM}";
+				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -675,7 +675,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "${DEVELOPMENT_TEAM}";
+				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = StellarChat/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Onym;
@@ -703,7 +703,7 @@
 				CODE_SIGN_ENTITLEMENTS = StellarChatNotificationService/StellarChatNotificationService.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "${DEVELOPMENT_TEAM}";
+				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = StellarChatNotificationService/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -725,7 +725,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "${DEVELOPMENT_TEAM}";
+				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -746,7 +746,7 @@
 				CODE_SIGN_ENTITLEMENTS = StellarChatNotificationService/StellarChatNotificationService.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "${DEVELOPMENT_TEAM}";
+				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = StellarChatNotificationService/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

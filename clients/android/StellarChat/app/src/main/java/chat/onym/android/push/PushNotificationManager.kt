@@ -30,9 +30,14 @@ class PushNotificationManager(
         }
     }
 
-    /// Register push for a single group. Skips if already registered.
+    /// Register push for a single group. Cleans up any existing subscriptions first.
     suspend fun registerGroup(group: ChatGroup, pushToken: String, platform: String) {
-        if (store.findByGroupID(group.id) != null) return
+        // Remove any existing subscriptions for this group (prevents duplicates)
+        val existing = store.all().filter { it.groupID == group.id }
+        for (sub in existing) {
+            try { client.unsubscribe(sub.subscriptionID) } catch (_: Exception) { }
+            store.delete(sub.subscriptionID)
+        }
         val subscriptionID = PushSubscriptionStore.generateSubscriptionID()
         val notificationKey = PushSubscriptionStore.generateNotificationKey()
 

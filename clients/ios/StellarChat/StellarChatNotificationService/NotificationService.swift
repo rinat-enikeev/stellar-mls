@@ -112,6 +112,11 @@ class NotificationService: UNNotificationServiceExtension {
                 } else if type == "call" {
                     content.title = groupName
                     content.body = "\(senderAlias) is calling..."
+                } else {
+                    // Protocol message (sep_message_ack, sep_rekey, etc.) — suppress notification
+                    content.title = ""
+                    content.body = ""
+                    content.sound = nil
                 }
             }
         } catch {

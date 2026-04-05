@@ -183,6 +183,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     // Push notifications
     private var pushManager: PushNotificationManager? = null
     private val pushPrefs = application.getSharedPreferences("stellar_push_config", Context.MODE_PRIVATE)
+    /** Observable push-enabled state per group — separate from groups list for reliable Compose recomposition. */
+    val pushEnabledStates = androidx.compose.runtime.mutableStateMapOf<String, Boolean>()
 
     // Transports
     lateinit var transport: NostrMessageTransport
@@ -294,6 +296,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 val loaded = store.loadGroups()
                 Log.d("GroupListVM", "Loaded ${loaded.size} groups from store")
                 groups.addAll(loaded)
+                // Populate push states from persisted groups
+                for (g in loaded) { pushEnabledStates[g.id] = g.pushNotificationsEnabled }
                 // Populate currentMembers from all persisted groups
                 transport.currentMembers.addAll(loaded.flatMap { it.members })
                 for (group in loaded) {
@@ -2112,6 +2116,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         val index = groups.indexOfFirst { it.id == groupID }
         if (index < 0) return
         groups[index] = groups[index].copy(pushNotificationsEnabled = enabled)
+        pushEnabledStates[groupID] = enabled
         val group = groups[index]
         viewModelScope.launch {
             withContext(Dispatchers.IO) { store.saveGroup(group) }

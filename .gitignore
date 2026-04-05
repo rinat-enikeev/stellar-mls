@@ -39,6 +39,7 @@ local.properties
 .gradle/
 /.cargo/config.toml
 **/google-services.json
+**/fcm-service-account.json
 
 # Relayer secrets
 .env

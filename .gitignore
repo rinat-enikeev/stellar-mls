@@ -38,6 +38,7 @@ local.properties
 .kotlin/
 .gradle/
 /.cargo/config.toml
+**/google-services.json
 
 # Relayer secrets
 .env

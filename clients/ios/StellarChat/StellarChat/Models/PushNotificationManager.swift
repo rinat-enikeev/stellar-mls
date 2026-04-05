@@ -169,11 +169,6 @@ final class PushNotificationManager {
         }
     }
 
-    /// Update contacts in the shared store for NSE sender resolution.
-    func syncContacts(_ contacts: [String: String]) {
-        subscriptionStore.updateContacts(contacts)
-    }
-
     // MARK: - Private
 
     private func generateSubscriptionID() -> String {

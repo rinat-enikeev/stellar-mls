@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "com.stellarmls.chat"
+    namespace = "chat.onym.android"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.stellarmls.chat"
+        applicationId = "chat.onym.android"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

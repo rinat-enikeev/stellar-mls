@@ -729,7 +729,6 @@ final class AppState {
         // If secure rekey, apply fresh groupSecret + salt now so the chain publish
         // uses the final commitment (one publish instead of two).
         // Save pre-rekey candidate for broadcasting on the old channel later.
-        let preRekeyCandidate = candidate
         if useSecureRekey {
             var freshSecret = [UInt8](repeating: 0, count: 32)
             _ = SecRandomCopyBytes(kSecRandomDefault, 32, &freshSecret)
@@ -2943,8 +2942,6 @@ final class AppState {
             }
 
             await pushManager.registerGroup(group)
-            // Sync contacts for sender name resolution in NSE
-            pushManager.syncContacts(contactAliasStore.aliases)
         } catch {
             #if DEBUG
             print("[Push] Authorization error: \(error)")

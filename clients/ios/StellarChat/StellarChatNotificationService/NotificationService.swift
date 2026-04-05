@@ -97,12 +97,13 @@ class NotificationService: UNNotificationServiceExtension {
                 // Resolve group name
                 let groupName = (try? StorageEncryption.decryptString(subscription.encryptedGroupName)) ?? "StellarChat"
 
-                // Resolve sender alias
-                let storeData = store.load()
-                var senderAlias = "Unknown"
-                if let encAlias = storeData.contacts[senderPubkey],
-                   let alias = try? StorageEncryption.decryptString(encAlias) {
-                    senderAlias = alias
+                // Show truncated pubkey as sender identifier
+                let senderAlias: String
+                if let pubkeyData = Data(base64Encoded: senderPubkey) {
+                    let hex = pubkeyData.prefix(4).map { String(format: "%02x", $0) }.joined()
+                    senderAlias = hex + "..."
+                } else {
+                    senderAlias = String(senderPubkey.prefix(8)) + "..."
                 }
 
                 if type == "chat" || type == "image" {

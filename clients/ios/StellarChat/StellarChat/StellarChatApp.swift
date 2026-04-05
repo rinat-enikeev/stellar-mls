@@ -1987,7 +1987,7 @@ final class AppState {
     func setPushNotifications(enabled: Bool, forGroup groupID: String) {
         guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
         groups[index].pushNotificationsEnabled = enabled
-        persistenceStore.saveGroupAsync(groups[index])
+        store.saveGroupAsync(groups[index])
 
         Task {
             if enabled {
@@ -2916,22 +2916,23 @@ final class AppState {
             if granted {
                 UIApplication.shared.registerForRemoteNotifications()
                 // Wait for token to arrive
-                await withCheckedContinuation { continuation in
-                    var observer: NSObjectProtocol?
-                    observer = NotificationCenter.default.addObserver(
+                // Wait for APNs token (or timeout after 10s)
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    nonisolated(unsafe) var didResume = false
+                    let observer = NotificationCenter.default.addObserver(
                         forName: .apnsTokenReceived,
                         object: nil,
                         queue: .main
                     ) { _ in
-                        if let observer { NotificationCenter.default.removeObserver(observer) }
+                        guard !didResume else { return }
+                        didResume = true
                         continuation.resume()
                     }
-                    // Timeout after 10 seconds
-                    Task {
+                    Task { @MainActor in
                         try? await Task.sleep(for: .seconds(10))
-                        if let observer {
-                            NotificationCenter.default.removeObserver(observer)
-                        }
+                        NotificationCenter.default.removeObserver(observer)
+                        guard !didResume else { return }
+                        didResume = true
                         continuation.resume()
                     }
                 }

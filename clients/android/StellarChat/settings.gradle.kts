@@ -11,7 +11,7 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-    }
+}
 }
 
 rootProject.name = "StellarChat"

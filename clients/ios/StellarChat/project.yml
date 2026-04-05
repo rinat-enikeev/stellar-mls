@@ -32,7 +32,7 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: ""
+        DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
         CODE_SIGN_ENTITLEMENTS: StellarChat/StellarChat.entitlements
         INFOPLIST_KEY_UIBackgroundModes: "remote-notification voip"
     preBuildScripts:
@@ -103,7 +103,7 @@ targets:
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: ""
+        DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/StellarChat.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/StellarChat"
         BUNDLE_LOADER: "$(TEST_HOST)"
     dependencies:
@@ -115,6 +115,9 @@ targets:
     platform: iOS
     sources:
       - StellarChatNotificationService
+      - path: StellarChat/Models/PushSubscriptionStore.swift
+      - path: StellarChat/Models/StorageEncryption.swift
+      - path: StellarChat/Models/GroupCrypto.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.onym.ios.NotificationService
@@ -124,7 +127,8 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: StellarChatNotificationService/Info.plist
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: ""
+        DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: NOTIFICATION_SERVICE_EXTENSION
     entitlements:
       path: StellarChatNotificationService/StellarChatNotificationService.entitlements
       properties:

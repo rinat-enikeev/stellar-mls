@@ -70,6 +70,7 @@ enum GroupCrypto {
         )
     }
 
+    #if !NOTIFICATION_SERVICE_EXTENSION
     // MARK: - Invitation Encryption (X25519 ECDH + AES-256-GCM)
 
     /// Encrypt a bootstrap payload to a specific recipient using ephemeral X25519 ECDH.
@@ -167,15 +168,19 @@ enum GroupCrypto {
         return try AES.GCM.open(box, using: key)
     }
 
+    #endif
+
     // MARK: - Group Message Encryption
+
+    enum DecryptError: Error { case failed }
 
     /// Decrypt a sealed envelope using the group key.
     static func decrypt(_ envelope: SealedEnvelope, key: SymmetricKey) throws -> String {
         guard envelope.scheme == "aes-256-gcm-v1" else {
-            throw ChatError.decryptionFailed
+            throw DecryptError.failed
         }
         guard let nonceData = envelope.nonce, let tag = envelope.authenticationTag else {
-            throw ChatError.decryptionFailed
+            throw DecryptError.failed
         }
         let nonce = try AES.GCM.Nonce(data: nonceData)
         let sealedBox = try AES.GCM.SealedBox(
@@ -185,7 +190,7 @@ enum GroupCrypto {
         )
         let decrypted = try AES.GCM.open(sealedBox, using: key)
         guard let text = String(data: decrypted, encoding: .utf8) else {
-            throw ChatError.decryptionFailed
+            throw DecryptError.failed
         }
         return text
     }

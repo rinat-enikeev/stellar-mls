@@ -29,6 +29,7 @@
 		661B24EC80C52FD32C0DB020 /* PersistedModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4705F8234AA6022CD782348E /* PersistedModels.swift */; };
 		69502F4BED8DAE5BB7CDC5A6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */; };
 		76E39A66EA185E3741BB902B /* Phase3Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30F3176E6A6E2A7C75F9CB47 /* Phase3Tests.swift */; };
+		78062C236F67BC5FADD88916 /* StorageEncryption.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD61B2440CA5ED81C983DA87 /* StorageEncryption.swift */; };
 		7C027F9FEC64BC2471784A58 /* InviteMemberView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8D38B6A8AA5A166074EA951 /* InviteMemberView.swift */; };
 		7E322A06E7A5D688E206F2F3 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 3316A7A4CF4C52BEBFF32B30 /* WebRTC */; };
 		816EB9A5EB988647F86E220B /* ContactAliasStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F67E0578F1C0DC64C2004D62 /* ContactAliasStore.swift */; };
@@ -55,11 +56,13 @@
 		D8CE0C737C0C3FE425C2F8B4 /* PushSubscriptionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9C563AA269E4B62C095C93E /* PushSubscriptionStore.swift */; };
 		E10FD8A2E1B0D8169A2BEB15 /* BlossomClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FCDBA22391412C6D05BB99E /* BlossomClient.swift */; };
 		E54951E56532C7FBD90317DE /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70C111DF10AF94B4F95C4742 /* ChatView.swift */; };
+		EBC0BEE01D60D74615750B15 /* PushSubscriptionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9C563AA269E4B62C095C93E /* PushSubscriptionStore.swift */; };
 		EDF053D5AE1660633B823B48 /* NostrEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 703A9C8CDE76DF5C28608301 /* NostrEvent.swift */; };
 		EFB9DF389A99555142550086 /* NostrMessageTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEE93134C2D32A03E89226B8 /* NostrMessageTransport.swift */; };
 		F5E26B4C634D5DFCC4ECBD28 /* NostrRelayConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0884F32E9A807B2566DD234 /* NostrRelayConnection.swift */; };
 		F7159773858364D2C8D16FE1 /* KeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5EB556EBD80A9DC1A99F1F4 /* KeyManager.swift */; };
 		FE754451C690FD52A395B8B2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */; };
+		FF4A530CF3321A480E61DE6B /* GroupCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8210CED65D67082D16673F07 /* GroupCrypto.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -391,15 +394,15 @@
 				LastUpgradeCheck = 1540;
 				TargetAttributes = {
 					79B5A663264579340235CB0C = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = 5V5EUT3ZXJ;
 						ProvisioningStyle = Automatic;
 					};
 					7E1AB0C084DAFEAB2A75FC86 = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = 5V5EUT3ZXJ;
 						ProvisioningStyle = Automatic;
 					};
 					D5EEC8F76D9E6B84F05DF01D = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = 5V5EUT3ZXJ;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -528,7 +531,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FF4A530CF3321A480E61DE6B /* GroupCrypto.swift in Sources */,
 				C551E3710EC9BA8ACFC5A9C0 /* NotificationService.swift in Sources */,
+				EBC0BEE01D60D74615750B15 /* PushSubscriptionStore.swift in Sources */,
+				78062C236F67BC5FADD88916 /* StorageEncryption.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -556,7 +562,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = StellarChat/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -645,7 +651,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -668,7 +674,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = StellarChat/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -695,7 +701,7 @@
 				CODE_SIGN_ENTITLEMENTS = StellarChatNotificationService/StellarChatNotificationService.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = StellarChatNotificationService/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -706,6 +712,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios.NotificationService;
 				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = NOTIFICATION_SERVICE_EXTENSION;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -716,7 +723,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -737,7 +744,7 @@
 				CODE_SIGN_ENTITLEMENTS = StellarChatNotificationService/StellarChatNotificationService.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = StellarChatNotificationService/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -748,6 +755,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios.NotificationService;
 				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = NOTIFICATION_SERVICE_EXTENSION;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};

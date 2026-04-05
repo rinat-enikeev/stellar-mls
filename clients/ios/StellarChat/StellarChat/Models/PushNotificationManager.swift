@@ -8,7 +8,7 @@ import UIKit
 final class PushNotificationManager {
     private var pnRelayClient: PNRelayClient?
     private let subscriptionStore = PushSubscriptionStore()
-    private var apnsToken: String?
+    private(set) var apnsToken: String?
 
     /// The PN relay URL, read from RelayerDefaults or settings.
     var relayURL: URL? {

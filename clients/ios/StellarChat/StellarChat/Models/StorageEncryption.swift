@@ -8,6 +8,8 @@ import Foundation
 /// without Keychain access (which requires device unlock + biometrics/passcode).
 enum StorageEncryption {
     private static let keychainKey = "chat.onym.ios.storageRootKey"
+    /// Shared Keychain access group so the NSE can read the same root key.
+    private static let accessGroup = "group.chat.onym.ios"
 
     /// AES-256-GCM key derived from a Keychain-stored root secret.
     /// The root secret is generated once and stored in the Keychain with
@@ -57,8 +59,20 @@ enum StorageEncryption {
     // MARK: - Keychain
 
     private static func loadOrCreateRootSecret() -> Data {
-        if let existing = loadFromKeychain() {
+        // Try shared access group first (main app + NSE)
+        if let existing = loadFromKeychain(accessGroup: accessGroup) {
             return existing
+        }
+        // Migrate from old non-shared Keychain item
+        if let legacy = loadFromKeychain(accessGroup: nil) {
+            saveToKeychain(legacy)
+            // Delete old item so we don't have duplicates
+            let deleteQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrAccount as String: keychainKey,
+            ]
+            SecItemDelete(deleteQuery as CFDictionary)
+            return legacy
         }
         var bytes = [UInt8](repeating: 0, count: 32)
         _ = SecRandomCopyBytes(kSecRandomDefault, 32, &bytes)
@@ -67,12 +81,15 @@ enum StorageEncryption {
         return secret
     }
 
-    private static func loadFromKeychain() -> Data? {
-        let query: [String: Any] = [
+    private static func loadFromKeychain(accessGroup: String?) -> Data? {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: keychainKey,
             kSecReturnData as String: true,
         ]
+        if let group = accessGroup {
+            query[kSecAttrAccessGroup as String] = group
+        }
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecSuccess, let data = result as? Data {
@@ -82,13 +99,21 @@ enum StorageEncryption {
     }
 
     private static func saveToKeychain(_ data: Data) {
+        // Delete any existing item (from any access group) first
+        let deleteQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: keychainKey,
+            kSecAttrAccessGroup as String: accessGroup,
+        ]
+        SecItemDelete(deleteQuery as CFDictionary)
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: keychainKey,
+            kSecAttrAccessGroup as String: accessGroup,
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
-        SecItemDelete(query as CFDictionary)
         SecItemAdd(query as CFDictionary, nil)
     }
 }

@@ -25,10 +25,14 @@ final class PushSubscriptionStore {
     }
 
     init() {
-        let container = FileManager.default.containerURL(
+        if let container = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: Self.appGroupID
-        )!
-        fileURL = container.appendingPathComponent("push_subscriptions.json")
+        ) {
+            fileURL = container.appendingPathComponent("push_subscriptions.json")
+        } else {
+            // Fallback to temp directory if App Group is unavailable
+            fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("push_subscriptions.json")
+        }
     }
 
     func load() -> StoreData {

@@ -62,6 +62,7 @@ extension Notification.Name {
 struct StellarChatApp: App {
     @UIApplicationDelegateAdaptor(StellarChatAppDelegate.self) var appDelegate
     @State private var appState = AppState()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -78,6 +79,13 @@ struct StellarChatApp: App {
                        let code = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                         .queryItems?.first(where: { $0.name == "code" })?.value {
                         appState.deepLinkInviteCode = code
+                    }
+                }
+                .onChange(of: scenePhase) { _, newPhase in
+                    if newPhase == .active {
+                        // Clear badge when app comes to foreground
+                        UNUserNotificationCenter.current().setBadgeCount(0)
+                        UserDefaults(suiteName: "group.chat.onym.ios")?.set(0, forKey: "pn_badge_count")
                     }
                 }
         }

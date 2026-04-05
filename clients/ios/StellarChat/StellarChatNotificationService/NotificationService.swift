@@ -118,6 +118,7 @@ class NotificationService: UNNotificationServiceExtension {
                 if type == "chat" || type == "image" {
                     content.title = groupName
                     content.body = "\(senderAlias): \(text)"
+                    content.badge = Self.incrementBadgeCount() as NSNumber
 
                     // Persist to shared App Group so main app can import on launch
                     let persistedEpoch = Int64(exactly: subscription.epoch) ?? Int64.max
@@ -200,5 +201,24 @@ class NotificationService: UNNotificationServiceExtension {
         } else {
             try? Data(line.utf8).write(to: fileURL, options: .atomic)
         }
+    }
+
+    // MARK: - Badge count
+
+    private static let badgeCountKey = "pn_badge_count"
+
+    /// Atomically increment the badge count stored in the shared App Group and return the new value.
+    static func incrementBadgeCount() -> Int {
+        let defaults = UserDefaults(suiteName: appGroupID) ?? .standard
+        let current = defaults.integer(forKey: badgeCountKey)
+        let next = current + 1
+        defaults.set(next, forKey: badgeCountKey)
+        return next
+    }
+
+    /// Reset the badge count (called by the main app when it becomes active).
+    static func resetBadgeCount() {
+        let defaults = UserDefaults(suiteName: appGroupID) ?? .standard
+        defaults.set(0, forKey: badgeCountKey)
     }
 }

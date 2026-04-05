@@ -63,6 +63,7 @@
 		F7159773858364D2C8D16FE1 /* KeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5EB556EBD80A9DC1A99F1F4 /* KeyManager.swift */; };
 		FE754451C690FD52A395B8B2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */; };
 		FF4A530CF3321A480E61DE6B /* GroupCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8210CED65D67082D16673F07 /* GroupCrypto.swift */; };
+		A1B2C3D4E5F60001KEYSET01 /* keyset-v1 in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60002KEYSET01 /* keyset-v1 */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -128,6 +129,7 @@
 		8210CED65D67082D16673F07 /* GroupCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupCrypto.swift; sourceTree = "<group>"; };
 		8ACE473C3096412015326C52 /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCache.swift; sourceTree = "<group>"; };
 		8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A1B2C3D4E5F60002KEYSET01 /* keyset-v1 */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "keyset-v1"; sourceTree = "<group>"; };
 		A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A4A3E005A9C5AF2DE5743188 /* CallKitProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallKitProvider.swift; sourceTree = "<group>"; };
 		B0884F32E9A807B2566DD234 /* NostrRelayConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrRelayConnection.swift; sourceTree = "<group>"; };
@@ -262,6 +264,7 @@
 			isa = PBXGroup;
 			children = (
 				8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */,
+				A1B2C3D4E5F60002KEYSET01 /* keyset-v1 */,
 				F0F0E18BDAE3BFB365657BA8 /* Info.plist */,
 				2CB66BD4710970306321664D /* RelayerDefaults.generated.swift */,
 				BA643A0E8E9EAA763609E1EA /* StellarChat.entitlements */,
@@ -438,6 +441,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				FE754451C690FD52A395B8B2 /* Assets.xcassets in Resources */,
+				A1B2C3D4E5F60001KEYSET01 /* keyset-v1 in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

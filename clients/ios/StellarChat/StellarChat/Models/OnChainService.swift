@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import SwiftMLS
 
 /// Result of verifying local group state against on-chain commitment.
@@ -28,6 +29,20 @@ enum OnChainVerificationResult: Equatable {
     }
 }
 
+enum OnChainError: LocalizedError {
+    case provingKeyNotFound(tier: SEPTier, keyset: Int)
+    case provingKeyHashMismatch(tier: SEPTier, expected: String, actual: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .provingKeyNotFound(let tier, let keyset):
+            return "Proving key not found for tier \(tier.rawValue) in keyset-v\(keyset)"
+        case .provingKeyHashMismatch(let tier, let expected, let actual):
+            return "Proving key hash mismatch for tier \(tier.rawValue): expected \(expected), got \(actual)"
+        }
+    }
+}
+
 /// Orchestrates ZK proof generation and Soroban contract interaction.
 ///
 /// Uses the existing `SEPContractClient` from SwiftMLS for HTTP-based
@@ -38,11 +53,22 @@ enum OnChainVerificationResult: Equatable {
 actor OnChainService {
     let contractClient: SEPContractClient
 
-    /// Cached proving keys per tier (generated on first use).
+    /// Cached proving keys per tier (loaded from bundle on first use).
     private var provingKeys: [SEPTier: Data] = [:]
 
     private static let maxRetries = 3
     private static let baseRetryDelay: TimeInterval = 1.0
+
+    /// Current keyset version. Must match the resources in keyset-vN/.
+    static let keysetVersion = 1
+
+    /// Expected SHA-256 hashes of proving keys per tier.
+    /// Update these after running scripts/generate-keyset.sh.
+    private static let provingKeyHashes: [SEPTier: String] = [
+        .small: "adca1962089d3f6bd89135f2cb1c20f44f7b5be3f83b279b8a8517ad5233f2d1",
+        .medium: "630fbf2ad238f6153a143cf625c176b625870fd57535426133ed90e9fe03f215",
+        .large: "f1e577cc9dde0cfa6cac569c66726199478a76c87b6c07067b3859783a4e355f",
+    ]
 
     /// Execute an async block with exponential backoff retry on URLError.
     private func withRetry<T>(_ block: () async throws -> T) async throws -> T {
@@ -74,24 +100,47 @@ actor OnChainService {
 
     // MARK: - Proving Key Management
 
-    /// Generate or return a cached proving key for the given tier.
-    /// Proving key generation is expensive; results are cached in memory.
+    /// Load or return a cached proving key for the given tier.
+    /// Proving keys are loaded from the app bundle's keyset resources.
     func ensureProvingKey(tier: SEPTier) throws -> Data {
         if let cached = provingKeys[tier] {
-            #if DEBUG
-            print("[OnChainService] using cached proving key tier=\(tier.rawValue)")
-            #endif
             return cached
         }
-        #if DEBUG
-        print("[OnChainService] generating proving key tier=\(tier.rawValue)")
-        #endif
-        let pk = try SEPProofGenerator.generateTestingProvingKey(tier: tier)
+        let pk = try Self.loadProvingKeyFromBundle(tier: tier)
         provingKeys[tier] = pk
-        #if DEBUG
-        print("[OnChainService] generated proving key bytes=\(pk.count)")
-        #endif
         return pk
+    }
+
+    private static func tierResourceName(tier: SEPTier) -> String {
+        switch tier {
+        case .small: return "small"
+        case .medium: return "medium"
+        case .large: return "large"
+        }
+    }
+
+    private static func loadProvingKeyFromBundle(tier: SEPTier) throws -> Data {
+        let name = tierResourceName(tier: tier)
+        let subdirectory = "keyset-v\(keysetVersion)"
+
+        guard let url = Bundle.main.url(forResource: name, withExtension: "bin", subdirectory: subdirectory) else {
+            throw OnChainError.provingKeyNotFound(tier: tier, keyset: keysetVersion)
+        }
+
+        let data = try Data(contentsOf: url)
+
+        // Verify hash if configured
+        if let expectedHash = provingKeyHashes[tier] {
+            let actualHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            guard actualHash == expectedHash else {
+                throw OnChainError.provingKeyHashMismatch(tier: tier, expected: expectedHash, actual: actualHash)
+            }
+        }
+
+        #if DEBUG
+        print("[OnChainService] loaded proving key from bundle: \(subdirectory)/\(name).bin (\(data.count) bytes)")
+        #endif
+        return data
     }
 
     // MARK: - Proof Generation

@@ -1,0 +1,34 @@
+{
+  "version": "1",
+  "generated": "unix:1775417838",
+  "rng": "OsRng",
+  "tiers": [
+    {
+      "tier": "small",
+      "depth": 5,
+      "max_members": 32,
+      "proving_key_sha256": "adca1962089d3f6bd89135f2cb1c20f44f7b5be3f83b279b8a8517ad5233f2d1",
+      "proving_key_bytes": 559296,
+      "verifying_key_sha256": "a3b82cfcddb25d3d0c2049b877d35ad69610b7f8ab4e29b85fc261ede54d9f9c",
+      "verifying_key_bytes": 488
+    },
+    {
+      "tier": "medium",
+      "depth": 8,
+      "max_members": 256,
+      "proving_key_sha256": "630fbf2ad238f6153a143cf625c176b625870fd57535426133ed90e9fe03f215",
+      "proving_key_bytes": 831120,
+      "verifying_key_sha256": "38f36c2311af1130aaaefda000ff54401aad818162733275a61cf64763db4017",
+      "verifying_key_bytes": 488
+    },
+    {
+      "tier": "large",
+      "depth": 11,
+      "max_members": 2048,
+      "proving_key_sha256": "f1e577cc9dde0cfa6cac569c66726199478a76c87b6c07067b3859783a4e355f",
+      "proving_key_bytes": 1004640,
+      "verifying_key_sha256": "7facab9fbdf5a4153b48942a632356c7ca6c6dd9f229dc58593755382238be00",
+      "verifying_key_bytes": 488
+    }
+  ]
+}

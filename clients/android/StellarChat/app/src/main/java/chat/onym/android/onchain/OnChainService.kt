@@ -1,5 +1,6 @@
 package chat.onym.android.onchain
 
+import android.content.Context
 import android.util.Log
 import chat.onym.android.BuildConfig
 import com.stellarmls.mls.SEPCommitmentBuilder
@@ -7,6 +8,7 @@ import com.stellarmls.mls.SEPGroupMemberLeaf
 import com.stellarmls.mls.SEPMembershipProofBundle
 import com.stellarmls.mls.SEPProofGenerator
 import com.stellarmls.mls.SEPTier
+import java.security.MessageDigest
 
 /**
  * Orchestrates ZK proof generation and Soroban contract interaction.
@@ -18,7 +20,7 @@ import com.stellarmls.mls.SEPTier
  * backoff (up to 3 attempts). Groups continue to function in "unverified" mode
  * when the contract endpoint is unreachable.
  */
-class OnChainService(contractID: String, transport: SEPContractTransport) {
+class OnChainService(private val context: Context, contractID: String, transport: SEPContractTransport) {
 
     val contractClient = SEPContractClient(
         contractID = contractID,
@@ -26,23 +28,17 @@ class OnChainService(contractID: String, transport: SEPContractTransport) {
     )
 
     /** Direct endpoint constructor. */
-    constructor(contractID: String, endpoint: String) : this(
-        contractID, OkHttpSEPContractTransport(endpoint)
+    constructor(context: Context, contractID: String, endpoint: String) : this(
+        context, contractID, OkHttpSEPContractTransport(endpoint)
     )
 
     /** Relayer transport constructor for fee-decoupled submission. */
-    constructor(contractID: String, relayerURL: String, authToken: String?) : this(
-        contractID, OkHttpRelayerTransport(relayerURL, authToken)
+    constructor(context: Context, contractID: String, relayerURL: String, authToken: String?) : this(
+        context, contractID, OkHttpRelayerTransport(relayerURL, authToken)
     )
 
-    /** Cached proving keys per tier (generated on first use). */
+    /** Cached proving keys per tier (loaded from assets on first use). */
     private val provingKeys = mutableMapOf<SEPTier, ByteArray>()
-
-    companion object {
-        private const val TAG = "OnChainService"
-        private const val MAX_RETRIES = 3
-        private const val BASE_RETRY_DELAY_MS = 1000L
-    }
 
     /** Execute a block with exponential backoff retry on IOException. */
     private fun <T> withRetry(block: () -> T): T {
@@ -62,10 +58,56 @@ class OnChainService(contractID: String, transport: SEPContractTransport) {
 
     // -- Proving Key Management --
 
+    companion object {
+        private const val TAG = "OnChainService"
+        private const val MAX_RETRIES = 3
+        private const val BASE_RETRY_DELAY_MS = 1000L
+
+        /** Current keyset version. Must match the assets in keyset-vN/. */
+        const val KEYSET_VERSION = 1
+
+        /** Expected SHA-256 hashes of proving keys per tier.
+         *  Update these after running scripts/generate-keyset.sh. */
+        val PROVING_KEY_HASHES = mapOf(
+            SEPTier.SMALL to "adca1962089d3f6bd89135f2cb1c20f44f7b5be3f83b279b8a8517ad5233f2d1",
+            SEPTier.MEDIUM to "630fbf2ad238f6153a143cf625c176b625870fd57535426133ed90e9fe03f215",
+            SEPTier.LARGE to "f1e577cc9dde0cfa6cac569c66726199478a76c87b6c07067b3859783a4e355f",
+        )
+
+        private fun tierAssetName(tier: SEPTier): String {
+            val name = when (tier) {
+                SEPTier.SMALL -> "small"
+                SEPTier.MEDIUM -> "medium"
+                SEPTier.LARGE -> "large"
+            }
+            return "keyset-v$KEYSET_VERSION/$name.bin"
+        }
+    }
+
+    /** Load a proving key from bundled assets, verifying its hash. */
     fun ensureProvingKey(tier: SEPTier): ByteArray {
         return provingKeys.getOrPut(tier) {
-            SEPProofGenerator.generateTestingProvingKey(tier)
+            loadProvingKeyFromAssets(tier)
         }
+    }
+
+    private fun loadProvingKeyFromAssets(tier: SEPTier): ByteArray {
+        val assetPath = tierAssetName(tier)
+        val bytes = context.assets.open(assetPath).use { it.readBytes() }
+
+        // Verify hash if configured
+        val expectedHash = PROVING_KEY_HASHES[tier]
+        if (expectedHash != null) {
+            val actualHash = MessageDigest.getInstance("SHA-256")
+                .digest(bytes)
+                .joinToString("") { "%02x".format(it) }
+            require(actualHash == expectedHash) {
+                "Proving key hash mismatch for $tier: expected $expectedHash, got $actualHash"
+            }
+        }
+
+        Log.d(TAG, "Loaded proving key from assets: $assetPath (${bytes.size} bytes)")
+        return bytes
     }
 
     // -- Proof Generation --

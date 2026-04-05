@@ -902,12 +902,13 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         if (isContractConfigured && isValidRPCEndpoint(contractEndpoint)) {
             onChainService = if (isRelayerConfigured) {
                 OnChainService(
+                    getApplication(),
                     contractID,
                     relayerURL,
                     relayerAuthToken.ifBlank { null }
                 )
             } else {
-                OnChainService(contractID, contractEndpoint)
+                OnChainService(getApplication(), contractID, contractEndpoint)
             }
         } else {
             onChainService = null

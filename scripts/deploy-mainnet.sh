@@ -97,15 +97,37 @@ if [ ! -f "$WASM_PATH" ]; then
 fi
 echo "    WASM built: $(wc -c < "$WASM_PATH" | tr -d ' ') bytes"
 
-# ── Step 3: Generate verification keys (seed 42) ──────────────────
+# ── Step 3: Generate verification keys ────────────────────────────
 echo ""
-echo "==> Generating verification keys (seed 42, matching mobile apps)"
-cargo run --quiet \
-    --release \
-    --manifest-path "$REPO_ROOT/Cargo.toml" \
-    --bin generate_mainnet_vks \
-    -- \
-    --out-dir "$VK_DIR"
+if [ -n "${KEYSET_DIR:-}" ]; then
+    echo "==> Generating verification keys from keyset: $KEYSET_DIR"
+    cargo run --quiet \
+        --release \
+        --manifest-path "$REPO_ROOT/Cargo.toml" \
+        --bin generate_mainnet_vks \
+        -- \
+        --keyset-dir "$KEYSET_DIR" \
+        --out-dir "$VK_DIR"
+else
+    echo "ERROR: KEYSET_DIR is required for production deployment." >&2
+    echo "  Generate a keyset first: ./scripts/generate-keyset.sh" >&2
+    echo "  Then: KEYSET_DIR=keyset-v1 IDENTITY=... ./scripts/deploy-mainnet.sh" >&2
+    echo "" >&2
+    echo "  For testing only: KEYSET_DIR=test VK_SEED=42 ..." >&2
+    if [ -n "${VK_SEED:-}" ]; then
+        echo "" >&2
+        echo "  VK_SEED=$VK_SEED detected — proceeding with seed-based generation (testing only)."
+        cargo run --quiet \
+            --release \
+            --manifest-path "$REPO_ROOT/Cargo.toml" \
+            --bin generate_mainnet_vks \
+            -- \
+            --seed "$VK_SEED" \
+            --out-dir "$VK_DIR"
+    else
+        exit 1
+    fi
+fi
 
 for f in vk-small.json vk-medium.json vk-large.json; do
     if [ ! -f "$VK_DIR/$f" ]; then

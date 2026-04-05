@@ -54,11 +54,37 @@ IDENTITY=my-deployer ./scripts/deploy-mainnet.sh --network testnet
 
 The script will:
 1. Build the Soroban contract WASM
-2. Generate verification keys (deterministic seed 42, matching mobile app defaults)
+2. Read verification keys from the keyset directory (see "Generate a keyset" below)
 3. Deploy the contract
 4. Initialize with verification keys for all three tiers (small/medium/large)
 5. Verify the contract is live
 6. Print the contract ID and configuration instructions
+
+### 1.2a Generate a keyset (one-time, before first deployment)
+
+```bash
+# Generate production proving keys + verification keys with real randomness
+./scripts/generate-keyset.sh --version 1
+
+# Copy proving keys into mobile app assets
+for tier in small medium large; do
+  mkdir -p clients/android/StellarChat/app/src/main/assets/keyset-v1
+  cp keyset-v1/$tier/proving_key.bin clients/android/StellarChat/app/src/main/assets/keyset-v1/$tier.bin
+
+  mkdir -p clients/ios/StellarChat/StellarChat/Resources/keyset-v1
+  cp keyset-v1/$tier/proving_key.bin clients/ios/StellarChat/StellarChat/Resources/keyset-v1/$tier.bin
+done
+```
+
+Then deploy with:
+```bash
+KEYSET_DIR=keyset-v1 IDENTITY=my-deployer ./scripts/deploy-mainnet.sh
+```
+
+For **testnet** testing only (uses deterministic seed — NOT for production):
+```bash
+VK_SEED=42 KEYSET_DIR=test IDENTITY=my-deployer ./scripts/deploy-mainnet.sh --network testnet
+```
 
 ### 1.3 Save the contract ID
 
@@ -309,13 +335,17 @@ stellar contract invoke \
 - **Deployer account** — becomes the contract admin. Store its secret key securely offline after deployment. Only needed for contract upgrades or enabling restricted mode.
 - **Relayer account** — used for ongoing operations. Keep it funded. If compromised, an attacker can only create/modify groups (requires valid ZK proofs) and spend the relayer's XLM.
 
-### Testing vs production VKs
+### Proving key lifecycle
 
-This deployment uses **testing verification keys** (deterministic seed 42). This means:
-- Proofs are cryptographically valid and the system works correctly
-- The trusted setup was performed by a single machine (not an MPC ceremony)
-- Acceptable for personal use, demos, and development
-- For production with adversarial threat models, run a multi-party ceremony (see `docs/phase-2.md`)
+Production deployments use **real randomness** via `scripts/generate-keyset.sh` (OsRng). This is a single-party trusted setup — acceptable for closed beta.
+
+For public launch, upgrade to an MPC ceremony:
+1. Run multi-party ceremony to produce new `keyset-v2/`
+2. Ship new proving keys in mobile app assets
+3. Rotate VKs on-chain tier-by-tier via `update_vk`
+4. Bump `KEYSET_VERSION` in mobile code
+
+**Testing only**: `VK_SEED=42` flag enables deterministic seed for dev/testnet. This must NEVER be used for production.
 
 ### Privacy model
 

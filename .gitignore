@@ -74,3 +74,6 @@ deploy/certbot/webroot/
 # Google Play release automation
 /clients/google.env
 /clients/fastlane/.google_play_service_account.json
+
+# Keyset proving keys (large binaries, already copied to app assets)
+keyset-v*/*/proving_key.bin

@@ -5,6 +5,10 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+val isFdroidReleaseBuild = gradle.startParameter.taskNames.any { task ->
+    task.contains("fdroid", ignoreCase = true) && task.contains("release", ignoreCase = true)
+}
+
 android {
     namespace = "chat.onym.android"
     compileSdk = 35
@@ -79,6 +83,17 @@ android {
     productFlavors {
         create("play") { dimension = "distribution" }
         create("fdroid") { dimension = "distribution" }
+    }
+
+    if (isFdroidReleaseBuild) {
+        splits {
+            abi {
+                isEnable = true
+                reset()
+                include("arm64-v8a")
+                isUniversalApk = false
+            }
+        }
     }
 
     compileOptions {

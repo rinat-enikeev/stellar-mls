@@ -11,7 +11,7 @@ Kotlin SDK for Android — JNI bridge to the Rust ZK core, providing:
 
 ## Build
 
-The module depends on pre-built native `.so` libraries in `src/main/jniLibs/` (arm64-v8a and x86_64).
+The module depends on pre-built native `.so` libraries in `src/main/jniLibs/` (by default `arm64-v8a` and `x86_64`).
 
 To rebuild from Rust source:
 
@@ -19,6 +19,9 @@ To rebuild from Rust source:
 # From repo root — requires Android NDK 27+ and Rust targets
 rustup target add aarch64-linux-android x86_64-linux-android
 ./scripts/build-android.sh
+
+# For the F-Droid release path (ARM64 only)
+./scripts/build-android.sh --abis arm64-v8a
 
 # Copy into this module
 cp -r build/android/jniLibs/ kotlin-mls/src/main/jniLibs/

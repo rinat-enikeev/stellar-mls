@@ -1,8 +1,8 @@
-#!/bin/sh
+#!/bin/bash
 # Build the Rust shared library for Android targets.
 #
 # Usage:
-#   ./scripts/build-android.sh [--out-dir DIR]
+#   ./scripts/build-android.sh [--out-dir DIR] [--abis ABI[,ABI...]]
 #
 # Prerequisites:
 #   rustup target add aarch64-linux-android x86_64-linux-android
@@ -18,9 +18,11 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 
 OUT_DIR="${REPO_ROOT}/build/android"
+ABI_LIST="arm64-v8a,x86_64"
 while [ $# -gt 0 ]; do
     case "$1" in
         --out-dir) OUT_DIR="$2"; shift 2 ;;
+        --abis) ABI_LIST="$2"; shift 2 ;;
         *) echo "unknown arg: $1" >&2; exit 1 ;;
     esac
 done
@@ -102,8 +104,26 @@ build_target() {
     fi
 }
 
-build_target aarch64-linux-android arm64-v8a
-build_target x86_64-linux-android x86_64
+IFS=',' read -r -a REQUESTED_ABIS <<EOF
+$ABI_LIST
+EOF
+
+for abi in "${REQUESTED_ABIS[@]}"; do
+    case "$abi" in
+        arm64-v8a)
+            build_target aarch64-linux-android arm64-v8a
+            ;;
+        x86_64)
+            build_target x86_64-linux-android x86_64
+            ;;
+        "")
+            ;;
+        *)
+            echo "ERROR: Unsupported ABI $abi" >&2
+            exit 1
+            ;;
+    esac
+done
 
 echo
 echo "Android native libraries built:"

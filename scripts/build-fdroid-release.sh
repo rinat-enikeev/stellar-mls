@@ -6,7 +6,7 @@
 #   ./scripts/build-fdroid-release.sh [--sign /path/to/keystore.jks]
 #
 # Output:
-#   app-fdroid-release-<version>.apk in the repo root
+#   app-fdroid-arm64-v8a-release-<version>.apk in the repo root
 #
 set -euo pipefail
 
@@ -39,7 +39,7 @@ apt-get install -y rustup build-essential
 
 # === init step (from fdroiddata metadata) ===
 rustup default 1.94.1
-rustup target add aarch64-linux-android x86_64-linux-android
+rustup target add aarch64-linux-android
 
 # Copy source to the SAME path F-Droid CI uses (critical for reproducible .so files)
 BUILD_DIR="/home/vagrant/build/chat.onym.android"
@@ -74,7 +74,7 @@ echo "==> NDK at $NDK_DIR"
 
 # === build step (from fdroiddata metadata) ===
 export PATH="$HOME/.cargo/bin:$PATH"
-ANDROID_NDK_HOME="$NDK_DIR" bash scripts/build-android.sh --out-dir kotlin-mls/src/main
+ANDROID_NDK_HOME="$NDK_DIR" bash scripts/build-android.sh --out-dir kotlin-mls/src/main --abis arm64-v8a
 
 # === prebuild step ===
 rm -f clients/android/StellarChat/app/google-services.json
@@ -90,17 +90,17 @@ else
 fi
 
 # Copy output
-cp app/build/outputs/apk/fdroid/release/app-fdroid-release-unsigned.apk /output/
+cp app/build/outputs/apk/fdroid/release/*arm64-v8a*unsigned.apk /output/
 '
 
-OUTPUT_APK="$REPO_ROOT/build/fdroid-output/app-fdroid-release-unsigned.apk"
+OUTPUT_APK="$(find "$REPO_ROOT/build/fdroid-output" -maxdepth 1 -name '*arm64-v8a*unsigned.apk' | head -1)"
 
-if [ ! -f "$OUTPUT_APK" ]; then
+if [ -z "$OUTPUT_APK" ] || [ ! -f "$OUTPUT_APK" ]; then
     echo "ERROR: Build failed — no APK produced" >&2
     exit 1
 fi
 
-FINAL_APK="$REPO_ROOT/app-fdroid-release-${VERSION_NAME}.apk"
+FINAL_APK="$REPO_ROOT/app-fdroid-arm64-v8a-release-${VERSION_NAME}.apk"
 cp "$OUTPUT_APK" "$FINAL_APK"
 
 # Sign if keystore provided

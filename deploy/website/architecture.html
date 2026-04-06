@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Architecture — Onym</title>
+    <meta name="description" content="How Onym works: zero-knowledge proofs, Merkle trees, and end-to-end encryption — explained for humans.">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --surface: #12121a;
+            --border: #1e1e2e;
+            --text: #e4e4ef;
+            --text-dim: #8888a0;
+            --accent: #6c5ce7;
+            --accent-glow: #a29bfe;
+            --green: #00b894;
+            --blue: #0984e3;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Navigation */
+        nav {
+            padding: 20px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        nav .container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text);
+            text-decoration: none;
+            letter-spacing: -0.5px;
+        }
+        .logo span { color: var(--accent-glow); }
+        .nav-links {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+        .nav-links a {
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+        .nav-links a:hover { color: var(--text); }
+        .nav-links a.active { color: var(--accent-glow); }
+
+        /* Content */
+        .content {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 80px 24px;
+        }
+        .content h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            letter-spacing: -1px;
+            margin-bottom: 12px;
+        }
+        .content .subtitle {
+            color: var(--text-dim);
+            font-size: 1.15rem;
+            margin-bottom: 48px;
+            line-height: 1.5;
+        }
+        .content h2 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            margin-top: 48px;
+            margin-bottom: 12px;
+            letter-spacing: -0.3px;
+        }
+        .content h3 {
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin-top: 24px;
+            margin-bottom: 8px;
+            color: var(--text);
+        }
+        .content p {
+            color: var(--text-dim);
+            margin-bottom: 16px;
+            font-size: 1rem;
+        }
+        .content ul, .content ol {
+            color: var(--text-dim);
+            margin-bottom: 16px;
+            padding-left: 24px;
+        }
+        .content li {
+            margin-bottom: 8px;
+            font-size: 1rem;
+        }
+        .content strong {
+            color: var(--text);
+        }
+        .content a {
+            color: var(--accent-glow);
+            text-decoration: none;
+        }
+        .content a:hover {
+            text-decoration: underline;
+        }
+        .content code {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 0.9em;
+            font-family: 'SF Mono', Menlo, Monaco, monospace;
+        }
+        .content pre {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin: 16px 0;
+            overflow-x: auto;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            font-family: 'SF Mono', Menlo, Monaco, monospace;
+            color: var(--text-dim);
+        }
+        .highlight-box {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            margin: 24px 0;
+        }
+        .highlight-box p {
+            margin-bottom: 0;
+            color: var(--text);
+        }
+        .analogy {
+            border-left: 3px solid var(--accent);
+            background: rgba(108, 92, 231, 0.06);
+            border-radius: 0 8px 8px 0;
+            padding: 16px 20px;
+            margin: 20px 0;
+        }
+        .analogy p {
+            color: var(--text);
+            margin-bottom: 0;
+            font-size: 0.95rem;
+        }
+        .analogy .label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--accent-glow);
+            margin-bottom: 6px;
+        }
+
+        /* Architecture Diagram */
+        .arch-diagram {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            flex-wrap: wrap;
+            margin: 32px 0;
+        }
+        .arch-box {
+            padding: 14px 22px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            font-weight: 600;
+            font-size: 0.9rem;
+            text-align: center;
+        }
+        .arch-box.app { border-color: var(--green); color: var(--green); }
+        .arch-box.nostr { border-color: var(--accent-glow); color: var(--accent-glow); }
+        .arch-box.stellar { border-color: var(--blue); color: var(--blue); }
+        .arch-box.blossom { border-color: #e17055; color: #e17055; }
+        .arch-arrow {
+            color: var(--text-dim);
+            font-size: 1.3rem;
+        }
+
+        /* Privacy Table */
+        .privacy-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 24px 0;
+            font-size: 0.85rem;
+        }
+        .privacy-table th {
+            text-align: left;
+            padding: 10px 12px;
+            border-bottom: 2px solid var(--border);
+            color: var(--text);
+            font-weight: 600;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .privacy-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-dim);
+        }
+        .privacy-table tr:last-child td { border-bottom: none; }
+        .cell-never { color: var(--green); }
+        .cell-opaque { color: var(--accent-glow); }
+        .cell-visible { color: #e17055; }
+
+        /* Section Divider */
+        .section-divider {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 48px 0;
+        }
+
+        /* Footer */
+        footer {
+            padding: 32px 0;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+        }
+        footer a {
+            color: var(--text-dim);
+            text-decoration: none;
+        }
+        footer a:hover { color: var(--text); }
+        .footer-links {
+            display: flex;
+            gap: 24px;
+            justify-content: center;
+            margin-bottom: 12px;
+        }
+
+        @media (max-width: 640px) {
+            .content { padding: 50px 24px; }
+            .content h1 { font-size: 2rem; }
+            .arch-diagram { flex-direction: column; }
+            .arch-arrow { transform: rotate(90deg); }
+            .privacy-table { font-size: 0.75rem; }
+            .privacy-table th, .privacy-table td { padding: 8px 6px; }
+        }
+    </style>
+</head>
+<body>
+
+<nav>
+    <div class="container">
+        <a href="/" class="logo">onym<span>.</span>chat</a>
+        <div class="nav-links">
+            <a href="/architecture" class="active">Architecture</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls">GitHub</a>
+        </div>
+    </div>
+</nav>
+
+<div class="content">
+    <h1>How Onym Works</h1>
+    <p class="subtitle">A technical walkthrough of zero-knowledge group membership, Merkle trees, and end-to-end encryption &mdash; explained for humans.</p>
+
+    <div class="highlight-box">
+        <p>Onym lets you prove you belong to a group without revealing who you are. The server that verifies your membership never learns your identity, the member list, or even how many people are in the group. This page explains how.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <h2>The Problem</h2>
+
+    <p>In every group chat app today &mdash; Signal, WhatsApp, Telegram &mdash; the server knows exactly who is in every group. It has to, because it uses the member list to route messages. Even with end-to-end encryption, the server sees the roster: who joined, who left, who was removed.</p>
+
+    <p>This metadata is powerful. A court order, a hack, or a rogue employee can expose not just what you said, but who you associate with. In many contexts, the member list <em>is</em> the sensitive information.</p>
+
+    <p><strong>What if the server could verify you belong to a group &mdash; without knowing who you are or who else is in it?</strong></p>
+
+    <div class="analogy">
+        <div class="label">The analogy</div>
+        <p>Imagine a private club where the bouncer can verify your membership card is real &mdash; but the card has no name, no photo, and the club has no member list on file. The bouncer checks a mathematical proof on the card and lets you in. That's what Onym does.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2>1. Zero-Knowledge Proofs</h2>
+
+    <p>A zero-knowledge proof lets you prove a statement is true without revealing <em>why</em> it's true. In Onym, the statement is:</p>
+
+    <div class="highlight-box">
+        <p>"I am a member of this group, at this version, and I can prove it &mdash; without telling you which member I am."</p>
+    </div>
+
+    <p>The proof convinces the blockchain that the statement is correct. The blockchain learns nothing else: not your key, not your position in the member list, not even how many members exist. The proof is <strong>192 bytes</strong> &mdash; the same size whether the group has 2 people or 2,048.</p>
+
+    <div class="analogy">
+        <div class="label">For kids</div>
+        <p>You colored a picture perfectly, following all the rules. You want to prove you did it right &mdash; but without showing anyone your coloring. A zero-knowledge proof is like a magic frosted window: the teacher looks through it and sees "yes, the coloring is correct" but can't see the actual colors you used.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2>2. The Merkle Tree: A Fingerprint of the Group</h2>
+
+    <p>Every group member has a <strong>secret key</strong> &mdash; a big random number known only to them. To build a compact representation of the entire group, we:</p>
+
+    <ol>
+        <li><strong>Fingerprint each secret.</strong> Each member's secret key is hashed using <a href="https://eprint.iacr.org/2019/458">Poseidon</a>, a hash function designed specifically for zero-knowledge circuits. The result is a unique "fingerprint" &mdash; you can't reverse it to get the secret back.</li>
+        <li><strong>Sort the fingerprints.</strong> All member fingerprints are placed in a fixed order (sorted by their public key bytes) so every member builds the same tree.</li>
+        <li><strong>Build a binary tree.</strong> Pair up fingerprints and hash each pair together. Then pair <em>those</em> results and hash again. Keep going until you reach a single value at the top: the <strong>Merkle root</strong>.</li>
+    </ol>
+
+    <p>The root is a single 32-byte number that uniquely represents the entire membership. Change one member anywhere and the root changes completely.</p>
+
+    <div class="analogy">
+        <div class="label">The analogy</div>
+        <p>Think of a tournament bracket. Each match produces a winner (a hash). The final champion (the root) represents the entire tournament. Swap one player in the first round and the final champion changes. The root is a tamper-proof summary of the whole group.</p>
+    </div>
+
+    <h3>Why Poseidon?</h3>
+    <p>SHA-256 &mdash; the standard hash function &mdash; costs about 25,000 constraints to evaluate inside a ZK circuit. Poseidon costs about 300. That's an 80x reduction, which makes proof generation fast enough to run on a phone. Poseidon achieves this by operating natively over the BLS12-381 scalar field, the same field used by the proof system.</p>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2>3. The Commitment: Sealing the Snapshot</h2>
+
+    <p>The Merkle root alone isn't enough &mdash; we also need to bind it to a specific version of the group and prevent outsiders from guessing the member list. The <strong>commitment</strong> does this:</p>
+
+    <pre>commitment = Poseidon(Poseidon(root, epoch), salt)</pre>
+
+    <ul>
+        <li><strong>root</strong> &mdash; the Merkle root representing the current member set</li>
+        <li><strong>epoch</strong> &mdash; a version counter that increments on every membership change (0, 1, 2, ...)</li>
+        <li><strong>salt</strong> &mdash; 32 random bytes, shared only among group members</li>
+    </ul>
+
+    <p><strong>Only the commitment goes on-chain.</strong> The member list, the tree, the salt &mdash; all stay off-chain, known only to group members.</p>
+
+    <div class="analogy">
+        <div class="label">The analogy</div>
+        <p>Seal the tournament bracket in an envelope, stamp it with a version number and a secret code. Mail the envelope to a public notary. Anyone can see the envelope exists &mdash; but you can't peek inside without the secret code. The notary (blockchain) never opens the envelope.</p>
+    </div>
+
+    <h3>Why salt?</h3>
+    <p>Without the salt, an attacker who guesses the member set could compute the root locally, hash it with the public epoch, and check if it matches the on-chain commitment. Salt adds 256 bits of randomness, making this brute-force attack infeasible.</p>
+
+    <h3>What the blockchain stores</h3>
+    <p>For each group, the Stellar smart contract stores exactly three things:</p>
+    <ul>
+        <li><strong>commitment</strong> &mdash; 32 opaque bytes</li>
+        <li><strong>epoch</strong> &mdash; a version number</li>
+        <li><strong>tier</strong> &mdash; the group size category (small: up to 32, medium: up to 256, large: up to 2,048)</li>
+    </ul>
+    <p>That's it. No names, no keys, no roster.</p>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2>4. Proving Membership: The Groth16 Circuit</h2>
+
+    <p>When a member needs to prove they belong to the group (for example, to update the on-chain commitment after adding someone), they generate a <a href="https://eprint.iacr.org/2016/260">Groth16</a> zero-knowledge proof. The proof demonstrates three things simultaneously:</p>
+
+    <ol>
+        <li><strong>Key ownership.</strong> "I know a secret key whose Poseidon hash equals one of the leaves in the tree." This proves you hold a valid membership key.</li>
+        <li><strong>Merkle membership.</strong> "That leaf exists in the committed Merkle tree." This proves your key is part of the current group roster.</li>
+        <li><strong>Commitment binding.</strong> "The tree root, epoch, and salt produce exactly the commitment stored on-chain." This ties the proof to the current group state.</li>
+    </ol>
+
+    <p>The proof is generated entirely on your device. The blockchain verifier performs 3 elliptic curve pairings on BLS12-381 &mdash; constant time, constant cost, regardless of group size.</p>
+
+    <div class="analogy">
+        <div class="label">The analogy</div>
+        <p>It's a notarized letter that says "the bearer is a member of Group X at version 7" &mdash; but the letter has no name, no photo, and no way to trace it back to any specific person. The notary can verify it's authentic but learns nothing about the bearer.</p>
+    </div>
+
+    <h3>Circuit complexity</h3>
+    <table class="privacy-table">
+        <tr>
+            <th>Tier</th>
+            <th>Max Members</th>
+            <th>Tree Depth</th>
+            <th>Constraints</th>
+            <th>Proof Size</th>
+        </tr>
+        <tr>
+            <td>Small</td>
+            <td>32</td>
+            <td>5</td>
+            <td>~1,910</td>
+            <td>192 bytes</td>
+        </tr>
+        <tr>
+            <td>Medium</td>
+            <td>256</td>
+            <td>8</td>
+            <td>~2,630</td>
+            <td>192 bytes</td>
+        </tr>
+        <tr>
+            <td>Large</td>
+            <td>2,048</td>
+            <td>11</td>
+            <td>~3,350</td>
+            <td>192 bytes</td>
+        </tr>
+    </table>
+    <p>The proof size is constant: 192 bytes compressed, regardless of group size. A 2,048-member group costs the same to verify as a 2-member group.</p>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2>5. The Trusted Setup Ceremony</h2>
+
+    <p>Groth16 is a <em>preprocessing</em> proof system: it requires a one-time setup phase that generates the proving key (used by members) and verification key (stored on the contract). This setup produces secret values called "toxic waste" that must be destroyed. If anyone kept them, they could forge proofs.</p>
+
+    <p>The solution is a <strong>Multi-Party Computation (MPC)</strong> ceremony. Many independent participants each contribute randomness in sequence. The security guarantee: as long as <strong>at least one</strong> participant honestly destroys their contribution, the system is sound.</p>
+
+    <div class="analogy">
+        <div class="label">The analogy</div>
+        <p>Twenty people each add a secret ingredient to a soup, then burn their recipe. Even if 19 of them are malicious and kept their recipes, the one honest cook's secret ingredient makes it impossible to reconstruct the full recipe. You only need one honest cook.</p>
+    </div>
+
+    <p>Onym runs a separate ceremony for each of the three tiers (Small, Medium, Large). The ceremony follows the <a href="https://eprint.iacr.org/2017/1050">Powers of Tau</a> protocol, compatible with standard tooling (arkworks, snarkjs, bellman). The full ceremony process, participant playbooks, and verification procedures are <a href="https://github.com/rinat-enikeev/stellar-mls/tree/main/docs">published on GitHub</a>.</p>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2>6. Message Encryption</h2>
+
+    <p>Messages are encrypted end-to-end with <strong>AES-256-GCM</strong> &mdash; the same cipher used by banks, governments, and every major messaging app. The encryption key is derived from the group state:</p>
+
+    <pre>key = HKDF-SHA256(groupSecret || epoch || salt, "sep-msg-key-v1", "traffic")</pre>
+
+    <p>Messages are transported over <strong>Nostr</strong>, a decentralized relay network. Each group's messages are tagged with a <em>hidden topic</em> &mdash; a hash of the group secret &mdash; so relays can route messages without knowing what group they belong to.</p>
+
+    <h3>What the relay sees</h3>
+    <ul>
+        <li>Encrypted blobs tagged with a random-looking topic</li>
+        <li>Event timing and approximate size</li>
+        <li>Your Nostr public key (not linked to any real-world identity)</li>
+    </ul>
+
+    <h3>What the relay never sees</h3>
+    <ul>
+        <li>Group ID, group name, or member list</li>
+        <li>Message content (AES-256-GCM encrypted)</li>
+        <li>Who is in which group</li>
+        <li>Membership changes</li>
+    </ul>
+
+    <div class="analogy">
+        <div class="label">The analogy</div>
+        <p>The relay is a post office that delivers sealed envelopes. Each envelope has a code number instead of an address. The post office delivers mail to anyone subscribed to that code &mdash; but it can't open the envelope or know what's inside.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2>7. Key Hierarchy</h2>
+
+    <p>Each user's identity starts from a single random seed. Four independent key types serve different purposes:</p>
+
+    <table class="privacy-table">
+        <tr>
+            <th>Key</th>
+            <th>Curve</th>
+            <th>Purpose</th>
+        </tr>
+        <tr>
+            <td><strong>Nostr</strong></td>
+            <td>secp256k1</td>
+            <td>Sign relay events (transport identity)</td>
+        </tr>
+        <tr>
+            <td><strong>Stellar</strong></td>
+            <td>Ed25519</td>
+            <td>On-chain account (derived via HKDF)</td>
+        </tr>
+        <tr>
+            <td><strong>Inbox</strong></td>
+            <td>X25519</td>
+            <td>Invitation encryption (derived via HKDF)</td>
+        </tr>
+        <tr>
+            <td><strong>Membership</strong></td>
+            <td>BLS12-381</td>
+            <td>ZK proofs, group membership (independent)</td>
+        </tr>
+    </table>
+
+    <p>The BLS12-381 key is generated independently &mdash; not derived from the Nostr seed &mdash; so compromising one key hierarchy doesn't compromise group membership. A <strong>key attestation</strong> (an Ed25519 signature over the BLS public key) cryptographically binds the two identities together when needed.</p>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2>8. Invitations: Sealed Envelopes</h2>
+
+    <p>To invite someone, the sender creates a sealed envelope containing the full group state (member list, epoch, salt, group secret). The envelope is encrypted using X25519 ECDH key agreement:</p>
+
+    <ol>
+        <li>Sender generates an <strong>ephemeral</strong> X25519 keypair (used once, then discarded)</li>
+        <li>Computes a shared secret via Diffie-Hellman with the recipient's public X25519 key</li>
+        <li>Derives an AES-256-GCM key from the shared secret via HKDF-SHA256</li>
+        <li>Encrypts the group state and sends it via Nostr to the recipient's hidden inbox tag</li>
+    </ol>
+
+    <p>The relay sees an encrypted blob addressed to a random-looking tag. It doesn't know who the recipient is, what group they're being invited to, or what the invitation contains.</p>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2>9. Fee Decoupling</h2>
+
+    <p>If group members submitted Stellar transactions directly, their account addresses would be permanently linked to the group on-chain. Onym solves this with a <strong>relayer</strong>:</p>
+
+    <ol>
+        <li>Your app builds the contract payload (commitment, proof, public inputs)</li>
+        <li>Sends it to the relayer over HTTPS</li>
+        <li>The relayer wraps it in a Stellar transaction, signs with its own key, and submits</li>
+        <li>The smart contract doesn't care who pays the fee &mdash; it only checks the ZK proof</li>
+    </ol>
+
+    <p>On-chain, the transaction shows the relayer's account &mdash; not yours. The relayer sees the opaque proof but cannot determine group membership from it.</p>
+
+    <div class="analogy">
+        <div class="label">The analogy</div>
+        <p>Like paying a courier to mail your sealed envelope. The postmark shows the courier's return address, not yours.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2>10. Media Storage</h2>
+
+    <p>Images, videos, and voice messages are encrypted with a <strong>random per-file AES-256-GCM key</strong> before upload to a <a href="https://github.com/hzrd149/blossom">Blossom</a> content-addressed storage server. The file key is shared inside the encrypted group message, so only group members can decrypt the media.</p>
+
+    <p>The storage server holds only ciphertext. It cannot determine which user uploaded the file, which group it belongs to, or what it contains.</p>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2>11. Push Notifications</h2>
+
+    <p>Onym's push notification architecture preserves privacy through layered encryption:</p>
+
+    <ul>
+        <li><strong>Registration</strong> uses ephemeral X25519 keys &mdash; the push relay cannot link subscriptions to your Nostr identity</li>
+        <li><strong>Payloads</strong> are encrypted with a per-subscription notification key (AES-256-GCM) &mdash; the push relay and Apple/Google cannot read notification content</li>
+        <li><strong>Decryption</strong> happens on-device in the Notification Service Extension &mdash; plaintext never leaves your phone</li>
+    </ul>
+
+    <p>Each group subscription is cryptographically independent: different ephemeral key, different subscription ID, different notification key. The push relay cannot correlate which subscriptions belong to the same device.</p>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2>System Diagram</h2>
+
+    <div class="arch-diagram">
+        <div class="arch-box app">Mobile App<br><small style="font-weight:400;opacity:0.7">encryption + proofs</small></div>
+        <div class="arch-arrow">&rarr;</div>
+        <div class="arch-box nostr">Nostr Relay<br><small style="font-weight:400;opacity:0.7">encrypted messages</small></div>
+        <div class="arch-arrow">&rarr;</div>
+        <div class="arch-box app">Recipients<br><small style="font-weight:400;opacity:0.7">decrypt locally</small></div>
+    </div>
+
+    <div class="arch-diagram">
+        <div class="arch-box app">Mobile App<br><small style="font-weight:400;opacity:0.7">ZK proof</small></div>
+        <div class="arch-arrow">&rarr;</div>
+        <div class="arch-box nostr">Relayer<br><small style="font-weight:400;opacity:0.7">fee decoupling</small></div>
+        <div class="arch-arrow">&rarr;</div>
+        <div class="arch-box stellar">Stellar<br><small style="font-weight:400;opacity:0.7">commitment storage</small></div>
+    </div>
+
+    <div class="arch-diagram">
+        <div class="arch-box app">Mobile App<br><small style="font-weight:400;opacity:0.7">encrypt media</small></div>
+        <div class="arch-arrow">&rarr;</div>
+        <div class="arch-box blossom">Blossom<br><small style="font-weight:400;opacity:0.7">ciphertext storage</small></div>
+    </div>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2>What Each Party Sees</h2>
+
+    <table class="privacy-table">
+        <tr>
+            <th></th>
+            <th>Nostr Relay</th>
+            <th>Blockchain</th>
+            <th>Blossom</th>
+            <th>Relayer</th>
+        </tr>
+        <tr>
+            <td><strong>Group ID</strong></td>
+            <td class="cell-never">never</td>
+            <td class="cell-opaque">opaque hash</td>
+            <td class="cell-never">never</td>
+            <td class="cell-opaque">opaque hash</td>
+        </tr>
+        <tr>
+            <td><strong>Members</strong></td>
+            <td class="cell-never">never</td>
+            <td class="cell-never">never</td>
+            <td class="cell-never">never</td>
+            <td class="cell-never">never</td>
+        </tr>
+        <tr>
+            <td><strong>Messages</strong></td>
+            <td class="cell-opaque">encrypted</td>
+            <td class="cell-never">never</td>
+            <td class="cell-never">never</td>
+            <td class="cell-never">never</td>
+        </tr>
+        <tr>
+            <td><strong>Media</strong></td>
+            <td class="cell-never">never</td>
+            <td class="cell-never">never</td>
+            <td class="cell-opaque">encrypted</td>
+            <td class="cell-never">never</td>
+        </tr>
+        <tr>
+            <td><strong>Proofs</strong></td>
+            <td class="cell-never">never</td>
+            <td class="cell-opaque">opaque</td>
+            <td class="cell-never">never</td>
+            <td class="cell-opaque">opaque</td>
+        </tr>
+        <tr>
+            <td><strong>User identity</strong></td>
+            <td class="cell-visible">Nostr pubkey</td>
+            <td class="cell-never">never</td>
+            <td class="cell-never">never</td>
+            <td class="cell-never">never</td>
+        </tr>
+    </table>
+
+    <p><span class="cell-never">never</span> = data never touches this system. <span class="cell-opaque">opaque/encrypted</span> = system handles the data but cannot read it. <span class="cell-visible">visible</span> = system can observe this data.</p>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+
+    <div class="highlight-box">
+        <p>Onym is fully open source under the MIT license. The complete specification, smart contract source, circuit code, and client applications are available for audit on <a href="https://github.com/rinat-enikeev/stellar-mls">GitHub</a>. The formal protocol specification is in <a href="https://github.com/rinat-enikeev/stellar-mls/tree/main/docs">docs/sep.md</a>.</p>
+    </div>
+</div>
+
+<footer>
+    <div class="container">
+        <div class="footer-links">
+            <a href="/">Home</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls">GitHub</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls/tree/main/docs">Docs</a>
+            <a href="/privacy">Privacy</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls/blob/main/LICENSE">MIT License</a>
+        </div>
+        <p>onym.chat</p>
+    </div>
+</footer>
+
+</body>
+</html>

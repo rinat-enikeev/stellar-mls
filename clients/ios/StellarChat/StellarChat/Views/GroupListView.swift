@@ -138,6 +138,9 @@ struct GroupListView: View {
         Task {
             let result = await appState.verifyGroupOnChain(group)
             verificationResult = result
+            if result == .verified {
+                appState.markGroupPublished(groupID: group.id)
+            }
             verifyingGroupID = nil
             showVerificationAlert = true
         }

@@ -411,6 +411,13 @@ final class AppState {
         }
     }
 
+    func markGroupPublished(groupID: String) {
+        if let index = groups.firstIndex(where: { $0.id == groupID }) {
+            groups[index].isPublishedOnChain = true
+            store.saveGroup(groups[index])
+        }
+    }
+
     func updateGroup(_ group: ChatGroup) {
         if let index = groups.firstIndex(where: { $0.id == group.id }) {
             groups[index] = group

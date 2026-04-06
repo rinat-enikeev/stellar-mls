@@ -207,6 +207,29 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     private var connected = false
 
+    private fun pushEnabledPrefKey(groupID: String) = "push_enabled_$groupID"
+
+    private fun resolvedPushEnabled(groupID: String, fallback: Boolean): Boolean {
+        return if (pushPrefs.contains(pushEnabledPrefKey(groupID))) {
+            pushPrefs.getBoolean(pushEnabledPrefKey(groupID), fallback)
+        } else {
+            fallback
+        }
+    }
+
+    private fun persistPushEnabled(groupID: String, enabled: Boolean) {
+        pushPrefs.edit().putBoolean(pushEnabledPrefKey(groupID), enabled).apply()
+    }
+
+    private fun applyLocalPushState(group: ChatGroup): ChatGroup {
+        val enabled = resolvedPushEnabled(group.id, group.pushNotificationsEnabled)
+        return if (group.pushNotificationsEnabled == enabled) {
+            group
+        } else {
+            group.copy(pushNotificationsEnabled = enabled)
+        }
+    }
+
     init {
         // Load relay URLs
         val savedRelays = relayPrefs.getString("relay_urls", null)
@@ -295,10 +318,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         // Load persisted groups, messages, and initialize salt history
         viewModelScope.launch {
             try {
-                val loaded = store.loadGroups()
+                val loaded = store.loadGroups().map { applyLocalPushState(it) }
                 Log.d("GroupListVM", "Loaded ${loaded.size} groups from store")
                 groups.addAll(loaded)
-                // Populate push states from persisted groups
+                // Populate push states from local preferences
                 for (g in loaded) { pushEnabledStates[g.id] = g.pushNotificationsEnabled }
                 // Populate currentMembers from all persisted groups
                 transport.currentMembers.addAll(loaded.flatMap { it.members })
@@ -382,30 +405,34 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     // -- Group lifecycle --
 
     fun addGroup(group: ChatGroup) {
-        if (groups.none { it.id == group.id }) {
-            groups.add(group)
-            chatMessages[group.id] = emptyList()
-            seenMessageIDs[group.id] = java.util.Collections.synchronizedSet(mutableSetOf())
+        val resolvedGroup = applyLocalPushState(group)
+        if (groups.none { it.id == resolvedGroup.id }) {
+            groups.add(resolvedGroup)
+            pushEnabledStates[resolvedGroup.id] = resolvedGroup.pushNotificationsEnabled
+            chatMessages[resolvedGroup.id] = emptyList()
+            seenMessageIDs[resolvedGroup.id] = java.util.Collections.synchronizedSet(mutableSetOf())
             // Update transport members
-            updateCurrentMembers(group.id)
+            updateCurrentMembers(resolvedGroup.id)
             connectIfNeeded()
             transport.subscribe(
-                group = group,
-                keyResolver = { epoch -> epochKey(group.id, epoch) }
+                group = resolvedGroup,
+                keyResolver = { epoch -> epochKey(resolvedGroup.id, epoch) }
             )
             viewModelScope.launch {
-                try { store.saveGroup(group) } catch (_: Exception) { }
+                try { store.saveGroup(resolvedGroup) } catch (_: Exception) { }
             }
         }
     }
 
     fun updateGroup(group: ChatGroup) {
+        val resolvedGroup = applyLocalPushState(group)
         val index = groups.indexOfFirst { it.id == group.id }
         if (index >= 0) {
-            groups[index] = group
+            groups[index] = resolvedGroup
         }
+        pushEnabledStates[resolvedGroup.id] = resolvedGroup.pushNotificationsEnabled
         viewModelScope.launch {
-            try { store.saveGroup(group) } catch (_: Exception) { }
+            try { store.saveGroup(resolvedGroup) } catch (_: Exception) { }
         }
     }
 
@@ -414,8 +441,12 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         chatMessages.remove(id)
         seenMessageIDs.remove(id)
         epochSnapshots.remove(id)
+        pushEnabledStates.remove(id)
         viewModelScope.launch {
-            try { store.deleteGroup(id) } catch (_: Exception) { }
+            try {
+                pushPrefs.edit().remove(pushEnabledPrefKey(id)).apply()
+                store.deleteGroup(id)
+            } catch (_: Exception) { }
         }
     }
 
@@ -2110,6 +2141,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     fun setPushNotifications(enabled: Boolean, groupID: String) {
         val index = groups.indexOfFirst { it.id == groupID }
         if (index < 0) return
+        persistPushEnabled(groupID, enabled)
         groups[index] = groups[index].copy(pushNotificationsEnabled = enabled)
         pushEnabledStates[groupID] = enabled
         val group = groups[index]

@@ -34,10 +34,10 @@ jobs:
             --ks-pass "pass:$KEYSTORE_PASSWORD" \
             --ks-key-alias "$KEY_ALIAS" \
             --key-pass "pass:$KEY_PASSWORD" \
-            app-fdroid-release-*.apk
+            app-fdroid-arm64-v8a-release-*.apk
           rm /tmp/keystore.jks
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: app-fdroid-release-*.apk
+          files: app-fdroid-arm64-v8a-release-*.apk

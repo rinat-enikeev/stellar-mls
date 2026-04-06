@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Proof of Soundness — Onym</title>
+    <meta name="description" content="Formal mathematical proofs of soundness for the Onym zero-knowledge group membership protocol.">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --surface: #12121a;
+            --border: #1e1e2e;
+            --text: #e4e4ef;
+            --text-dim: #8888a0;
+            --accent: #6c5ce7;
+            --accent-glow: #a29bfe;
+            --green: #00b894;
+            --blue: #0984e3;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Navigation */
+        nav {
+            padding: 20px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        nav .container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text);
+            text-decoration: none;
+            letter-spacing: -0.5px;
+        }
+        .logo span { color: var(--accent-glow); }
+        .nav-links {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+        .nav-links a {
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+        .nav-links a:hover { color: var(--text); }
+        .nav-links a.active { color: var(--accent-glow); }
+
+        /* Content */
+        .content {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 80px 24px;
+        }
+        .content h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            letter-spacing: -1px;
+            margin-bottom: 12px;
+        }
+        .content .subtitle {
+            color: var(--text-dim);
+            font-size: 1.15rem;
+            margin-bottom: 48px;
+            line-height: 1.5;
+        }
+        .content h2 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            margin-top: 48px;
+            margin-bottom: 12px;
+            letter-spacing: -0.3px;
+        }
+        .content h3 {
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin-top: 24px;
+            margin-bottom: 8px;
+            color: var(--text);
+        }
+        .content p {
+            color: var(--text-dim);
+            margin-bottom: 16px;
+            font-size: 1rem;
+        }
+        .content ul, .content ol {
+            color: var(--text-dim);
+            margin-bottom: 16px;
+            padding-left: 24px;
+        }
+        .content li {
+            margin-bottom: 8px;
+            font-size: 1rem;
+        }
+        .content strong {
+            color: var(--text);
+        }
+        .content em {
+            color: var(--text);
+            font-style: italic;
+        }
+        .content a {
+            color: var(--accent-glow);
+            text-decoration: none;
+        }
+        .content a:hover {
+            text-decoration: underline;
+        }
+        .content code {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 0.9em;
+            font-family: 'SF Mono', Menlo, Monaco, monospace;
+        }
+        .content pre {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin: 16px 0;
+            overflow-x: auto;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            font-family: 'SF Mono', Menlo, Monaco, monospace;
+            color: var(--text-dim);
+        }
+        .highlight-box {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            margin: 24px 0;
+        }
+        .highlight-box p {
+            margin-bottom: 0;
+            color: var(--text);
+        }
+
+        /* Theorem boxes */
+        .theorem {
+            border-left: 3px solid var(--accent);
+            background: rgba(108, 92, 231, 0.06);
+            border-radius: 0 8px 8px 0;
+            padding: 16px 20px;
+            margin: 20px 0;
+        }
+        .theorem p {
+            color: var(--text);
+            margin-bottom: 8px;
+            font-size: 0.95rem;
+        }
+        .theorem p:last-child { margin-bottom: 0; }
+        .theorem .label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--accent-glow);
+            margin-bottom: 6px;
+            font-weight: 700;
+        }
+
+        /* Definition boxes */
+        .definition {
+            border-left: 3px solid var(--blue);
+            background: rgba(9, 132, 227, 0.06);
+            border-radius: 0 8px 8px 0;
+            padding: 16px 20px;
+            margin: 20px 0;
+        }
+        .definition p {
+            color: var(--text);
+            margin-bottom: 8px;
+            font-size: 0.95rem;
+        }
+        .definition p:last-child { margin-bottom: 0; }
+        .definition .label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--blue);
+            margin-bottom: 6px;
+            font-weight: 700;
+        }
+
+        /* Assumption boxes */
+        .assumption {
+            border-left: 3px solid var(--green);
+            background: rgba(0, 184, 148, 0.06);
+            border-radius: 0 8px 8px 0;
+            padding: 16px 20px;
+            margin: 20px 0;
+        }
+        .assumption p {
+            color: var(--text);
+            margin-bottom: 8px;
+            font-size: 0.95rem;
+        }
+        .assumption p:last-child { margin-bottom: 0; }
+        .assumption .label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--green);
+            margin-bottom: 6px;
+            font-weight: 700;
+        }
+
+        /* Proof blocks */
+        .proof {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            margin: 16px 0;
+        }
+        .proof p {
+            color: var(--text-dim);
+            margin-bottom: 10px;
+            font-size: 0.95rem;
+        }
+        .proof p:last-child { margin-bottom: 0; }
+        .proof .proof-label {
+            font-size: 0.8rem;
+            font-weight: 700;
+            color: var(--text);
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .proof .qed {
+            text-align: right;
+            color: var(--accent-glow);
+            font-size: 0.85rem;
+        }
+
+        /* Math notation */
+        .math {
+            font-family: 'SF Mono', Menlo, Monaco, monospace;
+            font-size: 0.9em;
+            color: var(--accent-glow);
+        }
+
+        /* Notation table */
+        .notation-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 24px 0;
+            font-size: 0.85rem;
+        }
+        .notation-table th {
+            text-align: left;
+            padding: 10px 12px;
+            border-bottom: 2px solid var(--border);
+            color: var(--text);
+            font-weight: 600;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .notation-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-dim);
+        }
+        .notation-table td:first-child {
+            font-family: 'SF Mono', Menlo, Monaco, monospace;
+            color: var(--accent-glow);
+            white-space: nowrap;
+        }
+        .notation-table tr:last-child td { border-bottom: none; }
+
+        /* Section Divider */
+        .section-divider {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 48px 0;
+        }
+
+        /* TOC */
+        .toc {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            margin: 24px 0;
+        }
+        .toc p {
+            color: var(--text);
+            font-weight: 700;
+            font-size: 0.9rem;
+            margin-bottom: 12px;
+        }
+        .toc ol {
+            color: var(--text-dim);
+            padding-left: 20px;
+            margin-bottom: 0;
+        }
+        .toc li {
+            margin-bottom: 4px;
+            font-size: 0.9rem;
+        }
+        .toc a {
+            color: var(--accent-glow);
+            text-decoration: none;
+        }
+        .toc a:hover { text-decoration: underline; }
+
+        /* Footer */
+        footer {
+            padding: 32px 0;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+        }
+        footer a {
+            color: var(--text-dim);
+            text-decoration: none;
+        }
+        footer a:hover { color: var(--text); }
+        .footer-links {
+            display: flex;
+            gap: 24px;
+            justify-content: center;
+            margin-bottom: 12px;
+        }
+
+        @media (max-width: 640px) {
+            .content { padding: 50px 24px; }
+            .content h1 { font-size: 2rem; }
+            .notation-table { font-size: 0.75rem; }
+            .notation-table th, .notation-table td { padding: 8px 6px; }
+        }
+    </style>
+</head>
+<body>
+
+<nav>
+    <div class="container">
+        <a href="/" class="logo">onym<span>.</span>chat</a>
+        <div class="nav-links">
+            <a href="/architecture">Architecture</a>
+            <a href="/math" class="active">Math</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls">GitHub</a>
+        </div>
+    </div>
+</nav>
+
+<div class="content">
+    <h1>Proof of Soundness</h1>
+    <p class="subtitle">Formal mathematical proofs for the SEP-XXXX zero-knowledge group membership protocol. Version 1.0 &mdash; April 6, 2026.</p>
+
+    <div class="highlight-box">
+        <p>This document proves that Onym's cryptographic protocol is sound: only real members can prove membership, proofs reveal nothing about the prover, and on-chain state cannot be forked or replayed. Eight theorems compose into a complete security argument.</p>
+    </div>
+
+    <div class="toc">
+        <p>Contents</p>
+        <ol>
+            <li><a href="#preamble">Preamble</a></li>
+            <li><a href="#model">System Model</a></li>
+            <li><a href="#assumptions">Cryptographic Assumptions</a></li>
+            <li><a href="#thm1">Theorem 1: Merkle Tree Collision Resistance</a></li>
+            <li><a href="#thm2">Theorem 2: Commitment Hiding</a></li>
+            <li><a href="#thm3">Theorem 3: ZK Membership Soundness</a></li>
+            <li><a href="#thm4">Theorem 4: Zero-Knowledge Property</a></li>
+            <li><a href="#thm5">Theorem 5: Epoch Monotonicity</a></li>
+            <li><a href="#thm6">Theorem 6: Proof Non-Replayability</a></li>
+            <li><a href="#thm7">Theorem 7: Fee-Payer Privacy</a></li>
+            <li><a href="#thm8">Theorem 8: Symmetric Removal Impossibility</a></li>
+            <li><a href="#corollary">Overall System Soundness</a></li>
+            <li><a href="#appendix-a">Appendix A: Poseidon Parameters</a></li>
+            <li><a href="#appendix-b">Appendix B: Groth16 Verification Equation</a></li>
+            <li><a href="#appendix-c">Appendix C: Contract Pseudocode</a></li>
+            <li><a href="#references">References</a></li>
+        </ol>
+    </div>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="preamble">1. Preamble</h2>
+
+    <h3>Scope</h3>
+    <p>This document provides formal security proofs for the SEP-XXXX zero-knowledge group membership protocol as implemented in the Onym system. We prove eight theorems establishing:</p>
+    <ol>
+        <li><strong>Membership soundness</strong> &mdash; only holders of a secret key in the committed member set can produce an accepting proof.</li>
+        <li><strong>Membership privacy</strong> &mdash; the proof reveals nothing about the prover's identity or position.</li>
+        <li><strong>Commitment confidentiality</strong> &mdash; on-chain commitments reveal no membership information.</li>
+        <li><strong>State integrity</strong> &mdash; group state advances monotonically and cannot be forked.</li>
+        <li><strong>Proof non-replayability</strong> &mdash; an accepted proof cannot be replayed.</li>
+        <li><strong>Fee-payer unlinkability</strong> &mdash; the relayer pattern decouples submitter from prover.</li>
+    </ol>
+    <p>We also reproduce the impossibility proof for symmetric member removal from the fourth security audit.</p>
+    <p><strong>Out of scope.</strong> Network-layer traffic analysis, side-channel attacks on client implementations, and denial-of-service attacks.</p>
+
+    <h3>Protocol Version</h3>
+    <p>This analysis covers <strong>Variant B (Poseidon-only commitment)</strong> of SEP-XXXX:</p>
+    <pre>commitment = H_P(H_P(root, epoch), salt)</pre>
+
+    <h3>Notation</h3>
+    <table class="notation-table">
+        <tr><th>Symbol</th><th>Meaning</th></tr>
+        <tr><td>F_r</td><td>BLS12-381 scalar field, r &asymp; 2<sup>255</sup></td></tr>
+        <tr><td>G_1, G_2</td><td>BLS12-381 source groups</td></tr>
+        <tr><td>G_T</td><td>Target group of the pairing e : G_1 &times; G_2 &rarr; G_T</td></tr>
+        <tr><td>H_P</td><td>Poseidon hash function over F_r (parameters in Appendix A)</td></tr>
+        <tr><td>H_S</td><td>SHA-256 hash function</td></tr>
+        <tr><td>||</td><td>Byte concatenation</td></tr>
+        <tr><td>&lambda;</td><td>Security parameter (&lambda; = 128 for BLS12-381)</td></tr>
+        <tr><td>negl(&lambda;)</td><td>A function negligible in &lambda;</td></tr>
+        <tr><td>PPT</td><td>Probabilistic polynomial-time</td></tr>
+        <tr><td>Adv<sup>X</sup><sub>Y</sub>(A)</td><td>Advantage of adversary A in game X against scheme Y</td></tr>
+    </table>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="model">2. System Model</h2>
+
+    <div class="definition">
+        <div class="label">Definition 2.1 &mdash; Group State</div>
+        <p>A group state is a tuple <span class="math">(G, C, e, t)</span> where <span class="math">G = {sk_1, &hellip;, sk_n} &sub; F_r</span> is the member set, <span class="math">C &isin; F_r</span> is the on-chain commitment, <span class="math">e &isin; N</span> is the epoch (starting at 0), and <span class="math">t &isin; {0, 1, 2}</span> is the tier determining tree depth <span class="math">d &isin; {5, 8, 11}</span>.</p>
+    </div>
+
+    <div class="definition">
+        <div class="label">Definition 2.2 &mdash; Membership Predicate</div>
+        <p><span class="math">M(sk, G, C, e) = 1</span> iff: (1) <span class="math">sk &isin; G</span>, (2) <span class="math">root</span> is the Poseidon Merkle root of <span class="math">G</span> under canonical ordering, and (3) there exists salt <span class="math">s &isin; F_r</span> such that <span class="math">C = H_P(H_P(root, e), s)</span>.</p>
+    </div>
+
+    <div class="definition">
+        <div class="label">Definition 2.3 &mdash; Adversary Model</div>
+        <p>PPT adversary <span class="math">A</span> with oracle access to: <strong>CreateGroup</strong>, <strong>UpdateCommitment</strong>, <strong>VerifyMembership</strong> (public contract calls), <strong>Corrupt(i)</strong> &rarr; reveals <span class="math">sk_i</span> (adaptive corruption), and <strong>Observe(relay)</strong> &rarr; sees encrypted events, timing, topic tags.</p>
+    </div>
+
+    <div class="definition">
+        <div class="label">Definition 2.4 &mdash; Security Goals</div>
+        <p>Five security games: <strong>SND</strong> (soundness &mdash; forge a proof without knowing any <span class="math">sk &isin; G</span>), <strong>ZK</strong> (zero-knowledge &mdash; distinguish real from simulated proofs), <strong>HIDE</strong> (commitment hiding &mdash; recover root from commitment), <strong>EPOCH</strong> (epoch integrity &mdash; revert, skip, or fork epochs), <strong>PRIV</strong> (prover privacy &mdash; identify which member produced a proof).</p>
+    </div>
+
+    <div class="definition">
+        <div class="label">Definition 2.5 &mdash; Canonical Member Ordering</div>
+        <p>For each <span class="math">sk_i</span>, compute compressed BLS12-381 G1 public key <span class="math">pk_i = [sk_i] &middot; G_1</span> (48 bytes). Sort by lexicographic big-endian order. Reject duplicates. This ensures any permutation of the same set produces the same Merkle tree.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="assumptions">3. Cryptographic Assumptions</h2>
+
+    <div class="assumption">
+        <div class="label">Assumption 3.1 &mdash; Poseidon Preimage Resistance</div>
+        <p>For <span class="math">H_P</span> with width 3, 8 full rounds, 56 partial rounds, <span class="math">&alpha; = 5</span> over BLS12-381 <span class="math">F_r</span>: <span class="math">Adv<sup>Pre</sup><sub>H_P</sub>(A) &le; negl(&lambda;)</span>. Justified by Grassi et al. (USENIX Security 2021) with &ge;2x safety margin over minimum rounds.</p>
+    </div>
+
+    <div class="assumption">
+        <div class="label">Assumption 3.2 &mdash; Poseidon Collision Resistance</div>
+        <p><span class="math">Adv<sup>CR</sup><sub>H_P</sub>(A) = Pr[(x, x') &larr; A : x &ne; x' &and; H_P(x) = H_P(x')] &le; negl(&lambda;)</span>. The parameters provide &ge;128-bit security against all known collision-finding attacks.</p>
+    </div>
+
+    <div class="assumption">
+        <div class="label">Assumption 3.3 &mdash; Groth16 Knowledge Soundness</div>
+        <p>Under the q-SDH and Knowledge of Exponent assumptions over BLS12-381: for any PPT prover producing an accepting proof, there exists an extractor that outputs a valid witness with overwhelming probability (Groth, EUROCRYPT 2016).</p>
+    </div>
+
+    <div class="assumption">
+        <div class="label">Assumption 3.4 &mdash; Groth16 Zero-Knowledge</div>
+        <p>Groth16 provides <em>perfect</em> zero-knowledge: there exists a simulator <span class="math">S</span> producing proofs identically distributed to honest proofs given only public inputs and the simulation trapdoor.</p>
+    </div>
+
+    <div class="assumption">
+        <div class="label">Assumption 3.5 &mdash; BLS12-381 Pairing Security</div>
+        <p>The co-CDH and q-SDH assumptions hold. Embedding degree 12 provides &ge;128-bit discrete logarithm security in <span class="math">G_T</span>.</p>
+    </div>
+
+    <div class="assumption">
+        <div class="label">Assumption 3.6 &mdash; HKDF-SHA256 PRF Security</div>
+        <p>HKDF-SHA256 (RFC 5869) is a secure PRF family: <span class="math">Adv<sup>PRF</sup><sub>HKDF</sub>(D) &le; negl(&lambda;)</span>.</p>
+    </div>
+
+    <div class="assumption">
+        <div class="label">Assumption 3.7 &mdash; AES-256-GCM Security</div>
+        <p>AES-256-GCM provides IND-CPA and INT-CTXT security under unique nonces.</p>
+    </div>
+
+    <div class="assumption">
+        <div class="label">Assumption 3.8 &mdash; Trusted Setup Integrity</div>
+        <p>At least 1-of-N participants in the MPC ceremony is honest. Under this assumption, the simulation trapdoor is unknown and the CRS is indistinguishable from one generated by a trusted dealer.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="thm1">4. Theorem 1: Merkle Tree Collision Resistance</h2>
+
+    <div class="theorem">
+        <div class="label">Theorem 1</div>
+        <p>For any PPT adversary <span class="math">A</span>, the probability of finding two distinct canonically-ordered member sets <span class="math">S_1 &ne; S_2</span> such that <span class="math">MerkleRoot(S_1) = MerkleRoot(S_2)</span> is negligible in <span class="math">&lambda;</span>, assuming Poseidon collision resistance (Assumption 3.2).</p>
+    </div>
+
+    <div class="proof">
+        <div class="proof-label">Proof</div>
+        <p><strong>Construction.</strong> Given canonically-ordered member set <span class="math">S = {sk_1, &hellip;, sk_n}</span> with <span class="math">n &le; 2<sup>d</sup></span>, the Merkle tree <span class="math">T</span> of depth <span class="math">d</span> is:</p>
+        <ol>
+            <li>Compute leaf hashes: <span class="math">l_i = H_P(sk_i)</span> for <span class="math">i = 1, &hellip;, n</span>.</li>
+            <li>Pad with zeros: <span class="math">l_i = 0</span> for <span class="math">i = n+1, &hellip;, 2<sup>d</sup></span>.</li>
+            <li>For each internal node (bottom-up): <span class="math">T[j] = H_P(T[2j], T[2j+1])</span>.</li>
+            <li>Root is <span class="math">T[1]</span>.</li>
+        </ol>
+        <p><strong>Reduction.</strong> Suppose <span class="math">A</span> outputs <span class="math">(S_1, S_2)</span> with <span class="math">S_1 &ne; S_2</span> and equal roots. We build adversary <span class="math">B</span> that breaks Poseidon CR:</p>
+        <p><span class="math">B</span> builds both trees. Since <span class="math">S_1 &ne; S_2</span>, the leaf layers differ. Walking from the root (where <span class="math">T_1[1] = T_2[1]</span>) downward, there must exist a node <span class="math">j*</span> where <span class="math">T_1[j*] = T_2[j*]</span> but its children differ: <span class="math">(T_1[2j*], T_1[2j*+1]) &ne; (T_2[2j*], T_2[2j*+1])</span>. This yields a Poseidon collision.</p>
+        <p><strong>Bound.</strong> The tree has at most <span class="math">2<sup>d+1</sup> - 1</span> internal nodes:</p>
+        <pre>Adv^TreeCR(A) &le; (2^(d+1) - 1) &middot; Adv^CR_H_P(B)</pre>
+        <p>For <span class="math">d = 11</span>: <span class="math">&le; 4095 &middot; Adv<sup>CR</sup><sub>H_P</sub>(B)</span>, which remains negligible.</p>
+        <p class="qed">&#9632;</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Corollary 4.1 &mdash; Canonical Injectivity</div>
+        <p>Distinct canonically-ordered member sets produce distinct Merkle roots with overwhelming probability.</p>
+    </div>
+
+    <p><strong>Remark 4.2 (Zero-Padding Security).</strong> Empty leaf slots use <span class="math">l = 0 &isin; F_r</span>. Forging membership at an empty slot requires finding <span class="math">sk*</span> such that <span class="math">H_P(sk*) = 0</span>, which contradicts Assumption 3.1. The implementation verifies <span class="math">H_P(0) &ne; 0</span>.</p>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="thm2">5. Theorem 2: Commitment Hiding</h2>
+
+    <div class="theorem">
+        <div class="label">Theorem 2</div>
+        <p>Given commitment <span class="math">C = H_P(H_P(root, e), s)</span> where <span class="math">s</span> is uniform random over <span class="math">{0,1}<sup>256</sup></span> reduced mod <span class="math">r</span>, no PPT adversary observing <span class="math">(C, e)</span> can recover <span class="math">root</span> with probability better than <span class="math">Adv<sup>Pre</sup><sub>H_P</sub>(A) + 1/|F_r|</span>.</p>
+    </div>
+
+    <div class="proof">
+        <div class="proof-label">Proof</div>
+        <p><strong>Salt entropy.</strong> Since <span class="math">r &lt; 2<sup>256</sup></span>, reduction mod <span class="math">r</span> maps at most 2 preimages per output, giving min-entropy <span class="math">H_&infin;(s) &ge; 254</span> bits &mdash; well above the 128-bit security level.</p>
+        <p><strong>Game 1.</strong> The commitment <span class="math">C = H_P(h, s)</span> where <span class="math">h = H_P(root, e)</span>. Since salt <span class="math">s</span> is unknown with 254 bits of min-entropy, recovering <span class="math">h</span> requires either guessing <span class="math">s</span> (probability <span class="math">&le; 1/|F_r| &asymp; 2<sup>-255</sup></span>) or inverting <span class="math">H_P</span> (contradicting Assumption 3.1).</p>
+        <p><strong>Game 2.</strong> Even if <span class="math">h</span> is recovered, extracting <span class="math">root</span> from <span class="math">h = H_P(root, e)</span> requires a second preimage inversion.</p>
+        <p><strong>Union bound:</strong></p>
+        <pre>Pr[A recovers root] &le; Adv^Pre_H_P(A) + 1/|F_r|</pre>
+        <p>Both terms are negligible.</p>
+        <p class="qed">&#9632;</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Corollary 5.1 &mdash; Commitment Unlinkability</div>
+        <p>Two commitments with independently sampled salts are computationally indistinguishable even for the same member set at different epochs.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="thm3">6. Theorem 3: ZK Membership Soundness</h2>
+
+    <div class="theorem">
+        <div class="label">Theorem 3</div>
+        <p>If the Groth16 verification equation accepts proof <span class="math">&pi;</span> for public inputs <span class="math">(C, e)</span>, then the prover knows a witness <span class="math">(sk, root, s, path, idx)</span> satisfying all three circuit constraints, except with probability negligible in <span class="math">&lambda;</span>.</p>
+    </div>
+
+    <div class="proof">
+        <div class="proof-label">Proof</div>
+        <p><strong>Step 1: Knowledge extraction.</strong> By Groth16 knowledge soundness (Assumption 3.3), there exists an extractor <span class="math">E</span> that outputs a valid witness with overwhelming probability.</p>
+        <p><strong>Step 2: Witness validity.</strong> The extracted witness satisfies three constraints simultaneously:</p>
+        <p><strong>Constraint 1 &mdash; Key Ownership:</strong> <span class="math">l = H_P(sk)</span>. The prover knows <span class="math">sk</span> whose hash equals leaf <span class="math">l</span>.</p>
+        <p><strong>Constraint 2 &mdash; Merkle Membership:</strong> Starting from <span class="math">l</span> at index <span class="math">idx</span>, the path of sibling hashes leads to <span class="math">root</span>:</p>
+        <pre>current_0 = l
+current_{i+1} = H_P(current_i, path[i])   if idx[i] = 0
+              = H_P(path[i], current_i)    if idx[i] = 1
+current_d = root</pre>
+        <p><strong>Constraint 3 &mdash; Commitment Binding:</strong> <span class="math">H_P(H_P(root, e), s) = C</span>.</p>
+        <p><strong>Step 3: Composition.</strong> By Theorem 1, the root uniquely determines the member set. By Constraint 1, <span class="math">sk</span> belongs to that set. By Constraint 3, this is the set committed on-chain at epoch <span class="math">e</span>. Therefore, the prover is a member of the committed group.</p>
+        <p class="qed">&#9632;</p>
+    </div>
+
+    <p><strong>Remark 6.1.</strong> Groth16 provides <em>knowledge soundness</em> (argument of knowledge), which is stronger than plain soundness. A valid proof guarantees the prover <em>knows</em> a secret key &mdash; not merely that one exists.</p>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="thm4">7. Theorem 4: Zero-Knowledge Property</h2>
+
+    <div class="theorem">
+        <div class="label">Theorem 4</div>
+        <p>The proof <span class="math">&pi;</span> reveals no information about the witness <span class="math">(sk, root, s, path, idx)</span> beyond the public inputs <span class="math">(C, e)</span>.</p>
+    </div>
+
+    <div class="proof">
+        <div class="proof-label">Proof</div>
+        <p>By Groth16 perfect zero-knowledge (Assumption 3.4), there exists a simulator <span class="math">S</span> producing proofs <em>identically distributed</em> to honest proofs given only public inputs and the simulation trapdoor. This is information-theoretic, not merely computational.</p>
+        <p><strong>Hidden:</strong> <span class="math">sk</span> (which member), <span class="math">idx</span> (position in tree), <span class="math">path</span> (tree structure), <span class="math">s</span> (salt), <span class="math">root</span> (Merkle root).</p>
+        <p><strong>Observable:</strong> <span class="math">C</span> (opaque commitment, hidden by Theorem 2) and <span class="math">e</span> (epoch number).</p>
+        <p class="qed">&#9632;</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Corollary 7.1 &mdash; Constant-Size Proofs</div>
+        <p>A Groth16 proof consists of <span class="math">&pi; = (&pi;_A &isin; G_1, &pi;_B &isin; G_2, &pi;_C &isin; G_1)</span>. Compressed: 48 + 96 + 48 = <strong>192 bytes</strong>, regardless of group size. No side-channel on <span class="math">|G|</span>.</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Corollary 7.2 &mdash; Multi-Proof Unlinkability</div>
+        <p>Given two proofs for the same commitment <span class="math">C</span>, a verifier cannot determine whether they were produced by the same or different members. Both are simulatable without any witness.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="thm5">8. Theorem 5: Epoch Monotonicity and State Integrity</h2>
+
+    <div class="theorem">
+        <div class="label">Theorem 5</div>
+        <p>Under the contract's epoch enforcement (<code>new_epoch == stored_epoch + 1</code>), no adversary can: (a) revert to a previous epoch, (b) skip an epoch, or (c) fork the group state.</p>
+    </div>
+
+    <div class="proof">
+        <div class="proof-label">Proof</div>
+        <p><strong>(a) No reversion.</strong> The contract enforces strict equality: <code>new_epoch == current.epoch + 1</code>. Any <span class="math">new_epoch &le; current.epoch</span> is rejected. Overflow is prevented by <code>checked_add</code>.</p>
+        <p><strong>(b) No skipping.</strong> The same strict equality prevents any value other than <span class="math">current.epoch + 1</span>.</p>
+        <p><strong>(c) No forking.</strong> The contract stores exactly one <span class="math">CommitmentEntry</span> per <span class="math">group_id</span>. Two competing updates at epoch <span class="math">e</span> both require proofs against <span class="math">(C_e, e)</span>. Stellar's deterministic transaction ordering ensures exactly one executes first, advancing to <span class="math">e+1</span>. The second fails because <span class="math">current.epoch</span> is now <span class="math">e+1</span>, not <span class="math">e</span>.</p>
+        <p><strong>Inductive argument.</strong> Base case: group creation requires <span class="math">epoch = 0</span> and a valid membership proof. Inductive step: <code>update_commitment</code> verifies a proof against the <em>current</em> commitment &mdash; the updater must be a current member &mdash; before storing the new state.</p>
+        <p class="qed">&#9632;</p>
+    </div>
+
+    <p><strong>Remark 8.1 (Deactivation).</strong> <code>deactivate_group</code> sets <span class="math">active = false</span> irreversibly. Subsequent updates are rejected. <code>verify_membership</code> remains available for historical queries.</p>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="thm6">9. Theorem 6: Proof Non-Replayability</h2>
+
+    <div class="theorem">
+        <div class="label">Theorem 6</div>
+        <p>A proof <span class="math">&pi;</span> accepted for one state-changing contract call cannot be replayed to any other state-changing call.</p>
+    </div>
+
+    <div class="proof">
+        <div class="proof-label">Proof</div>
+        <p><strong>Proof hash.</strong> For each proof <span class="math">&pi; = (&pi;_A, &pi;_B, &pi;_C)</span>, the contract computes:</p>
+        <pre>h_&pi; = SHA-256(&pi;_A || &pi;_B || &pi;_C)    // 96 + 192 + 96 = 384 bytes</pre>
+        <p><strong>Recording.</strong> After successful verification in any state-changing function, <span class="math">h_&pi;</span> is stored persistently.</p>
+        <p><strong>Checking.</strong> Before verification, every state-changing function rejects if <span class="math">h_&pi;</span> already exists.</p>
+        <p><strong>Cross-function:</strong> The hash is function-independent &mdash; a proof accepted by <code>create_group</code> cannot be resubmitted to <code>update_commitment</code>.</p>
+        <p><strong>Cross-group:</strong> The proof is bound to specific public inputs <span class="math">(C, e)</span>. A different group with <span class="math">C' &ne; C</span> would fail Groth16 verification. The hash check provides a second defense layer.</p>
+        <p><strong>Collision resistance:</strong> Distinct proofs <span class="math">&pi; &ne; &pi;'</span> with <span class="math">h_&pi; = h_&pi;'</span> would constitute a SHA-256 collision.</p>
+        <p><strong>Read-only exception:</strong> <code>verify_membership</code> does not record the hash, allowing reuse for read-only queries.</p>
+        <p class="qed">&#9632;</p>
+    </div>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="thm7">10. Theorem 7: Fee-Payer Privacy</h2>
+
+    <div class="theorem">
+        <div class="label">Theorem 7</div>
+        <p>If a relayer submits transactions on behalf of group members, the on-chain record reveals only the relayer's Stellar account &mdash; not the prover's identity.</p>
+    </div>
+
+    <div class="proof">
+        <div class="proof-label">Proof</div>
+        <p><strong>Transaction structure.</strong> A Stellar transaction contains <span class="math">source_account</span> (the relayer), operations, fee, and signature. None contain the prover's identity.</p>
+        <p><strong>Contract authorization.</strong> <code>update_commitment</code> accepts <span class="math">(group_id, new_commitment, new_epoch, proof, public_inputs)</span> &mdash; no caller address parameter. Authorization is proof-only.</p>
+        <p><strong>Proof zero-knowledge.</strong> By Theorem 4, the proof reveals nothing about the prover.</p>
+        <p><strong>Formal bound:</strong></p>
+        <pre>Adv^Identify(A) = Adv^ZK(A) + Adv^Network(A)</pre>
+        <p>where <span class="math">Adv<sup>ZK</sup>(A) &le; negl(&lambda;)</span> and <span class="math">Adv<sup>Network</sup>(A)</span> captures IP-based deanonymization (out of scope).</p>
+        <p><strong>Residual leakage:</strong> Timing correlation at the relayer's HTTPS endpoint is a network-layer concern, mitigated by Tor, VPN, or batching.</p>
+        <p class="qed">&#9632;</p>
+    </div>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="thm8">11. Theorem 8: Symmetric Member Removal Impossibility</h2>
+
+    <div class="theorem">
+        <div class="label">Theorem 8 (from Security Audit v4)</div>
+        <p>No modification to the symmetric-key-only key derivation protocol can provide cryptographic eviction of a removed member who retains the group secret. For any KDF computing <span class="math">K_{e+1} = KDF(groupSecret, e+1, s_{e+1}, aux)</span> where <span class="math">aux</span> is derivable from shared state, a removed member <span class="math">M_r</span> who knows <span class="math">(groupSecret, K_e)</span> can compute <span class="math">K_{e+1}</span>.</p>
+    </div>
+
+    <div class="proof">
+        <div class="proof-label">Proof</div>
+        <p><strong>Setup.</strong> Group with members <span class="math">{M_1, &hellip;, M_n}</span> sharing: <span class="math">groupSecret</span>, traffic key <span class="math">K_e = HKDF(groupSecret || e || s_e)</span>, epoch <span class="math">e</span>, salt <span class="math">s_e</span>. Member <span class="math">M_r</span> is removed at epoch <span class="math">e</span>.</p>
+        <p><strong>Observation 1.</strong> The removal message must be encrypted under <span class="math">K_e</span> (the current key). It contains <span class="math">e+1</span> and <span class="math">s_{e+1}</span> so remaining members can derive <span class="math">K_{e+1}</span>.</p>
+        <p><strong>Observation 2.</strong> At removal, <span class="math">M_r</span> possesses: (1) <span class="math">groupSecret</span>, (2) <span class="math">K_e</span>, (3) the removal message (decryptable with <span class="math">K_e</span>, yielding <span class="math">e+1</span> and <span class="math">s_{e+1}</span>), and (4) the member roster.</p>
+        <p><strong>Observation 3.</strong> <span class="math">K_{e+1} = HKDF(groupSecret || (e+1) || s_{e+1})</span> &mdash; all inputs are known to <span class="math">M_r</span>.</p>
+        <p><strong>Generalization by exhaustion.</strong> Six natural "fixes" all fail:</p>
+        <ol>
+            <li>Omitting salt &mdash; remaining members can't derive the key either.</li>
+            <li>Deterministic salt from groupSecret &mdash; <span class="math">M_r</span> computes it too.</li>
+            <li>Transition key from <span class="math">K_e</span> &mdash; <span class="math">M_r</span> knows <span class="math">K_e</span>.</li>
+            <li>Salt as function of member set &mdash; member set is public after removal.</li>
+            <li>Chained KDF rounds &mdash; all intermediates computable from same inputs.</li>
+            <li>Epoch-dependent KDF with removal flag &mdash; flag is observable.</li>
+        </ol>
+        <p><strong>Principle:</strong> Any deterministic function of values all known to <span class="math">M_r</span> is computable by <span class="math">M_r</span>.</p>
+        <p class="qed">&#9632;</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Corollary 11.1 &mdash; Necessity of Asymmetric Rekey</div>
+        <p>Secure removal requires delivering a secret <em>only</em> to remaining members via per-recipient X25519 inbox encryption. This transforms the protocol into a hybrid symmetric-asymmetric system where the asymmetric component provides key separation.</p>
+    </div>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="corollary">12. Overall System Soundness</h2>
+
+    <div class="highlight-box">
+        <p>Composing Theorems 1&ndash;8, the SEP-XXXX protocol provides: <strong>membership soundness</strong> (Thm 3 + 1), <strong>membership privacy</strong> (Thm 4), <strong>state integrity</strong> (Thm 5 + 6), <strong>commitment confidentiality</strong> (Thm 2), and <strong>fee-payer unlinkability</strong> (Thm 7).</p>
+    </div>
+
+    <h3>12.1 Membership Soundness</h3>
+    <p><em>Only holders of a secret key in the committed set can produce an accepting proof.</em> By Theorem 3, an accepting proof implies knowledge of a valid witness. By Theorem 1, the root uniquely determines the member set.</p>
+
+    <h3>12.2 Membership Privacy</h3>
+    <p><em>A verifier learns nothing about the prover's identity.</em> By Theorem 4 (perfect ZK), Corollary 7.1 (constant proof size), and Corollary 7.2 (multi-proof unlinkability).</p>
+
+    <h3>12.3 State Integrity</h3>
+    <p><em>Group state advances correctly and cannot be forked or reverted.</em> By Theorem 5 (epoch monotonicity) and Theorem 6 (proof non-replayability).</p>
+
+    <h3>12.4 Commitment Confidentiality</h3>
+    <p><em>On-chain commitments reveal no membership information.</em> By Theorem 2 (commitment hiding) and Corollary 5.1 (unlinkability across epochs).</p>
+
+    <h3>12.5 Fee-Payer Unlinkability</h3>
+    <p><em>Transaction submitter is decoupled from prover.</em> By Theorem 7 and Theorem 4.</p>
+
+    <h3>Acknowledged Limitations</h3>
+    <ol>
+        <li><strong>Post-compromise forward secrecy</strong> &mdash; Theorem 8 shows the symmetric protocol cannot evict removed members. Requires asymmetric rekey (Corollary 11.1).</li>
+        <li><strong>Group size upper bound</strong> &mdash; Tier <span class="math">t &isin; {0, 1, 2}</span> is on-chain, leaking an upper bound (32, 256, or 2,048). Information-theoretic; cannot be eliminated without a universal circuit.</li>
+        <li><strong>Network-layer privacy</strong> &mdash; Nostr relay traffic analysis is out of scope for the cryptographic protocol.</li>
+        <li><strong>Trusted setup</strong> &mdash; If all N ceremony participants are dishonest, soundness is lost (Assumption 3.8).</li>
+    </ol>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="appendix-a">Appendix A: Poseidon Parameters</h2>
+
+    <table class="notation-table">
+        <tr><th>Parameter</th><th>Value</th></tr>
+        <tr><td>Field</td><td>BLS12-381 F_r, r &asymp; 2<sup>255</sup></td></tr>
+        <tr><td>Width (w)</td><td>3</td></tr>
+        <tr><td>Rate</td><td>2</td></tr>
+        <tr><td>Capacity</td><td>1</td></tr>
+        <tr><td>Full rounds (R_f)</td><td>8</td></tr>
+        <tr><td>Partial rounds (R_p)</td><td>56</td></tr>
+        <tr><td>Total rounds</td><td>64</td></tr>
+        <tr><td>S-box (&alpha;)</td><td>x<sup>5</sup></td></tr>
+    </table>
+
+    <h3>Round Constant Derivation</h3>
+    <p>192 constants derived deterministically via iterated SHA-256:</p>
+    <pre>seed_0 = SHA-256("SEP-XXXX-Poseidon-BLS12-381-w3-f8-p56-a5-round-constants")
+
+For i = 0, 1, ..., 191:
+    extended[0..32]  = seed
+    seed = SHA-256(seed)
+    extended[32..64] = seed
+    seed = SHA-256(seed)
+    constant_i = Fr::from_le_bytes_mod_order(extended[0..64])</pre>
+    <p>The 192 constants are arranged as 64 rounds of 3 constants each.</p>
+
+    <h3>MDS Matrix (Cauchy)</h3>
+    <p>The 3&times;3 MDS matrix <span class="math">M</span> is:</p>
+    <pre>M[i][j] = 1 / (x_i + y_j)
+
+where x_i = i + 1, y_j = w + j + 1  for i, j &isin; {0, 1, 2}
+
+M = | 5^-1  6^-1  7^-1 |
+    | 6^-1  7^-1  8^-1 |
+    | 7^-1  8^-1  9^-1 |</pre>
+    <p>All inverses in <span class="math">F_r</span>. The Cauchy construction guarantees every square submatrix is invertible (MDS property).</p>
+
+    <h3>Security Margins</h3>
+    <p>Minimum rounds for known attacks: ~6 (algebraic), ~4 (interpolation), ~6 (differential/linear). With 8 full + 56 partial rounds, the design provides approximately 2x safety margin.</p>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="appendix-b">Appendix B: Groth16 Verification Equation</h2>
+
+    <h3>Pairing Equation</h3>
+    <pre>e(-&pi;_A, &pi;_B) &middot; e(&alpha;, &beta;) &middot; e(vk_x, &gamma;) &middot; e(&pi;_C, &delta;) = 1_G_T
+
+where vk_x = IC[0] + C &middot; IC[1] + e &middot; IC[2]</pre>
+    <p>with <span class="math">C &isin; F_r</span> (commitment, public input 1), <span class="math">e &isin; F_r</span> (epoch, public input 2), and <span class="math">IC[0..2] &isin; G_1</span> (verification key input commitment points).</p>
+
+    <h3>Verification Key Structure</h3>
+    <table class="notation-table">
+        <tr><th>Component</th><th>Group</th><th>Size (uncompressed)</th></tr>
+        <tr><td>&alpha;</td><td>G_1</td><td>96 bytes</td></tr>
+        <tr><td>&beta;</td><td>G_2</td><td>192 bytes</td></tr>
+        <tr><td>&gamma;</td><td>G_2</td><td>192 bytes</td></tr>
+        <tr><td>&delta;</td><td>G_2</td><td>192 bytes</td></tr>
+        <tr><td>IC[0..2]</td><td>G_1<sup>3</sup></td><td>3 &times; 96 bytes</td></tr>
+    </table>
+
+    <h3>Canonical Input Validation</h3>
+    <p>The contract validates that commitment bytes represent a canonical field element (integer value &lt; <span class="math">r</span>), preventing malleability from non-canonical encodings. Epoch (u64) is padded to 256-bit big-endian, which is always canonical since all u64 values are &lt; <span class="math">r</span>.</p>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="appendix-c">Appendix C: Contract Pseudocode</h2>
+
+    <h3>create_group</h3>
+    <pre>function create_group(group_id, commitment, tier, proof, public_inputs):
+    require(tier &le; 2)
+    require(!storage.has(Group(group_id)))
+    require(public_inputs.commitment == commitment)
+    require(public_inputs.epoch == 0)
+
+    check_proof_replay(proof)
+    vk = load_vk(tier)
+    require(verify_groth16_proof(vk, proof, commitment, 0))
+    record_proof(proof)
+
+    store CommitmentEntry { commitment, epoch: 0, active: true }
+    require(tier_count &lt; 10,000)</pre>
+
+    <h3>update_commitment</h3>
+    <pre>function update_commitment(group_id, new_commitment, new_epoch, proof, public_inputs):
+    current = storage.get(Group(group_id))
+    require(current.active)
+    require(new_epoch == current.epoch + 1)            // strict monotonicity
+    require(public_inputs.commitment == current.commitment)  // bind to CURRENT state
+    require(public_inputs.epoch == current.epoch)
+
+    check_proof_replay(proof)
+    vk = load_vk(tier)
+    require(verify_groth16_proof(vk, proof, current.commitment, current.epoch))
+    record_proof(proof)
+
+    current.commitment = new_commitment
+    current.epoch = new_epoch</pre>
+
+    <h3>deactivate_group</h3>
+    <pre>function deactivate_group(group_id, proof, public_inputs):
+    current = storage.get(Group(group_id))
+    require(current.active)
+    require(public_inputs matches current state)
+
+    check_proof_replay(proof)
+    verify proof against current state
+    record_proof(proof)
+
+    current.active = false    // irreversible</pre>
+
+    <h3>Proof Replay Prevention</h3>
+    <pre>function proof_hash(proof):
+    return SHA-256(&pi;_A || &pi;_B || &pi;_C)    // 384 bytes uncompressed
+
+function check_proof_replay(proof):
+    h = proof_hash(proof)
+    require(!storage.has(UsedProof(h)))
+
+function record_proof(proof):
+    h = proof_hash(proof)
+    storage.set(UsedProof(h), true)</pre>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="references">References</h2>
+
+    <ol>
+        <li>Groth, J. "On the Size of Pairing-Based Non-interactive Arguments." <em>EUROCRYPT 2016</em>.</li>
+        <li>Grassi, L. et al. "Poseidon: A New Hash Function for Zero-Knowledge Proof Systems." <em>USENIX Security 2021</em>.</li>
+        <li>Bowe, S. et al. "Halo: Recursive Proof Composition without a Trusted Setup." <em>ePrint 2019/1021</em>.</li>
+        <li>RFC 5869: HMAC-based Extract-and-Expand Key Derivation Function (HKDF).</li>
+        <li>NIST SP 800-38D: Galois/Counter Mode (GCM) and GMAC.</li>
+        <li>arkworks contributors. "arkworks: An Ecosystem for zkSNARKs." <a href="https://arkworks.rs">arkworks.rs</a></li>
+        <li>Stellar Development Foundation. "Soroban Smart Contracts." <a href="https://soroban.stellar.org">soroban.stellar.org</a></li>
+    </ol>
+
+    <hr class="section-divider">
+    <div class="highlight-box">
+        <p>This document is part of the <a href="https://github.com/rinat-enikeev/stellar-mls">Onym open-source project</a>. The full source code for the circuit, contract, and client implementations is available for audit. See also the <a href="/architecture">Architecture</a> page for a less formal overview.</p>
+    </div>
+</div>
+
+<footer>
+    <div class="container">
+        <div class="footer-links">
+            <a href="/">Home</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls">GitHub</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls/tree/main/docs">Docs</a>
+            <a href="/privacy">Privacy</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls/blob/main/LICENSE">MIT License</a>
+        </div>
+        <p>onym.chat</p>
+    </div>
+</footer>
+
+</body>
+</html>

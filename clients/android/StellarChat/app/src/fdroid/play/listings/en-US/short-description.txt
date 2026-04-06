@@ -1,0 +1,1 @@
+Private group messaging with zero-knowledge proofs and end-to-end encryption

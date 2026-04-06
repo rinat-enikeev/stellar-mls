@@ -342,6 +342,7 @@ struct GroupInfoView: View {
                     let trimmed = scannedCode.trimmingCharacters(in: .whitespacesAndNewlines)
                     if trimmed.count == 64, trimmed.allSatisfy({ $0.isHexDigit }) {
                         recipientInboxKey = trimmed
+                        sendInvitation()
                     }
                     showScanner = false
                 }

@@ -143,6 +143,11 @@ final class AppState {
     var navigateToGroupID: String?
     let invitationTransport = InvitationTransport()
     var pendingInvitations: [PendingInvitation] = []
+    /// Group IDs that the user has declined — persisted so duplicates are suppressed across restarts.
+    private var declinedGroupIDs: Set<String> {
+        didSet { UserDefaults.standard.set(Array(declinedGroupIDs), forKey: Self.declinedGroupIDsKey) }
+    }
+    private static let declinedGroupIDsKey = "chat.onym.ios.declinedGroupIDs"
     let pushManager = PushNotificationManager()
 
     // MARK: - Calls
@@ -307,6 +312,8 @@ final class AppState {
             self.relayerAuthToken = Self.loadFromKeychain(key: Self.relayerAuthTokenKey)
                 ?? RelayerDefaults.relayerAuthToken
         }
+        // Load declined invitation group IDs
+        self.declinedGroupIDs = Set(UserDefaults.standard.stringArray(forKey: Self.declinedGroupIDsKey) ?? [])
         // Load TURN server config
         self.turnEnabled = UserDefaults.standard.bool(forKey: Self.turnEnabledKey)
         self.turnURLs = UserDefaults.standard.stringArray(forKey: Self.turnURLsKey) ?? []
@@ -513,6 +520,15 @@ final class AppState {
     }
 
     func removePendingInvitation(id: String) {
+        pendingInvitations.removeAll { $0.id == id }
+    }
+
+    func declinePendingInvitation(id: String) {
+        if let invitation = pendingInvitations.first(where: { $0.id == id }) {
+            let groupIDHex = invitation.payload.groupID
+                .map { String(format: "%02x", $0) }.joined()
+            declinedGroupIDs.insert(groupIDHex)
+        }
         pendingInvitations.removeAll { $0.id == id }
     }
 
@@ -2955,10 +2971,11 @@ final class AppState {
                 guard let self else { return }
                 // Dedup by event ID
                 if !self.pendingInvitations.contains(where: { $0.id == invitation.id }) {
-                    // Skip if already in this group
+                    // Skip if already in this group or previously declined
                     let groupIDHex = invitation.payload.groupID
                         .map { String(format: "%02x", $0) }.joined()
-                    if !self.groups.contains(where: { $0.id == groupIDHex }) {
+                    if !self.groups.contains(where: { $0.id == groupIDHex }),
+                       !self.declinedGroupIDs.contains(groupIDHex) {
                         self.pendingInvitations.append(invitation)
                     }
                 }

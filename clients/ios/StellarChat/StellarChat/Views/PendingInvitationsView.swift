@@ -166,7 +166,7 @@ struct PendingInvitationsView: View {
     }
 
     private func declineInvitation(_ invitation: PendingInvitation) {
-        appState.removePendingInvitation(id: invitation.id)
+        appState.declinePendingInvitation(id: invitation.id)
     }
 }
 

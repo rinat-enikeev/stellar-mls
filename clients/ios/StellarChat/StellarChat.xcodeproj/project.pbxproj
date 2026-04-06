@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0029F253BA68E6B4CA11E864 /* BootstrapPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA96977038D2F9F4EC31EF3D /* BootstrapPayload.swift */; };
 		01083F180D3E8311A7E002C6 /* CreateGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF781055530F3AF0953DE842 /* CreateGroupView.swift */; };
+		093FB54E41C5835F525E8494 /* vk-medium.json in Resources */ = {isa = PBXBuildFile; fileRef = 1492BFF03652C63278A1559B /* vk-medium.json */; };
 		09EC25786F839A9A840E509A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E292A37C859D6BE12BE2376 /* ContentView.swift */; };
 		1567BD34990CE37FB89521DF /* VideoCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1FB5F184FBA9633C01BDFBC /* VideoCache.swift */; };
 		16ADABAE1C78B394179DD74B /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76C1E6E24CEC0349F3C9A60A /* ChatViewModel.swift */; };
@@ -20,12 +21,15 @@
 		33D3690E63750E20852336EE /* AudioCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57DB304E93E815412ABA6010 /* AudioCache.swift */; };
 		3B5518BB5C6DB07F6628E7BD /* ForkGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC5B1B630CCFBA76B3C56C87 /* ForkGroupView.swift */; };
 		3EC81E8DA76069452870626F /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68F22F3B02C2C003269BA135 /* QRScannerView.swift */; };
+		3EE35BCE5D589F7930DBE7CD /* vk-small.json in Resources */ = {isa = PBXBuildFile; fileRef = DB6F458946661A40FAC38DD2 /* vk-small.json */; };
+		4517DD86FF56160F98C99FB8 /* medium.bin in Resources */ = {isa = PBXBuildFile; fileRef = 4A4B6451B3583EB5078ECE1F /* medium.bin */; };
 		459BB52914DCD2B789CA689C /* MediaCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBAE6FF501ED7880C298C7FC /* MediaCrypto.swift */; };
 		4B45989EA613CA80A4D8FFCB /* ContactsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A14AE9A1C9F0583137C7797 /* ContactsView.swift */; };
 		4CF5F8CBF1B249B01EC14D1C /* PersistenceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E25D14293AC1BC6E3FB1E28 /* PersistenceStore.swift */; };
 		4E0468C0A25E658173F4E628 /* ChatGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8FD22552EBCF23A89DB7700 /* ChatGroup.swift */; };
 		4FC9AB234CCA9BFAA0B112F1 /* StellarChatApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62FB83C87F9348F97EEDE0C8 /* StellarChatApp.swift */; };
 		538C339B8E0F50F72DCB8F72 /* RelayerDefaults.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CB66BD4710970306321664D /* RelayerDefaults.generated.swift */; };
+		64EEB4AECF4F978F545823B0 /* large.bin in Resources */ = {isa = PBXBuildFile; fileRef = D24B0BEDBA88DF1ED4D09AF8 /* large.bin */; };
 		661B24EC80C52FD32C0DB020 /* PersistedModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4705F8234AA6022CD782348E /* PersistedModels.swift */; };
 		69502F4BED8DAE5BB7CDC5A6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */; };
 		76E39A66EA185E3741BB902B /* Phase3Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30F3176E6A6E2A7C75F9CB47 /* Phase3Tests.swift */; };
@@ -45,6 +49,7 @@
 		A59B1DBBCD75C4882A4A7EF6 /* CallKitProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4A3E005A9C5AF2DE5743188 /* CallKitProvider.swift */; };
 		AE25761903B1EA84D9AFADD2 /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8ACE473C3096412015326C52 /* ImageCache.swift */; };
 		B5836D3E7760359CFB8C42AC /* GroupCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8210CED65D67082D16673F07 /* GroupCrypto.swift */; };
+		C550DD6040190C3D04ACE570 /* vk-large.json in Resources */ = {isa = PBXBuildFile; fileRef = 5266CA213C59AAFE1667321F /* vk-large.json */; };
 		C551E3710EC9BA8ACFC5A9C0 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0734DFA865A663F2138CD236 /* NotificationService.swift */; };
 		C78434B5880A2483C3DAF9E9 /* CallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E005C90D6C91D9810C11364 /* CallView.swift */; };
 		CF17A18CDF1209DC9F6CA369 /* OnChainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06014BB7573399F26644F9F6 /* OnChainService.swift */; };
@@ -61,9 +66,9 @@
 		EFB9DF389A99555142550086 /* NostrMessageTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEE93134C2D32A03E89226B8 /* NostrMessageTransport.swift */; };
 		F5E26B4C634D5DFCC4ECBD28 /* NostrRelayConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0884F32E9A807B2566DD234 /* NostrRelayConnection.swift */; };
 		F7159773858364D2C8D16FE1 /* KeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5EB556EBD80A9DC1A99F1F4 /* KeyManager.swift */; };
+		FD4A35DD21888E8B52788996 /* small.bin in Resources */ = {isa = PBXBuildFile; fileRef = BD9FA6FCA3EF79096682957B /* small.bin */; };
 		FE754451C690FD52A395B8B2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */; };
 		FF4A530CF3321A480E61DE6B /* GroupCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8210CED65D67082D16673F07 /* GroupCrypto.swift */; };
-		A1B2C3D4E5F60001KEYSET01 /* keyset-v1 in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60002KEYSET01 /* keyset-v1 */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -103,6 +108,7 @@
 		06014BB7573399F26644F9F6 /* OnChainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnChainService.swift; sourceTree = "<group>"; };
 		0734DFA865A663F2138CD236 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		0E25D14293AC1BC6E3FB1E28 /* PersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStore.swift; sourceTree = "<group>"; };
+		1492BFF03652C63278A1559B /* vk-medium.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "vk-medium.json"; sourceTree = "<group>"; };
 		1C987955167382BF0E0E251C /* SecurityLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityLog.swift; sourceTree = "<group>"; };
 		1E76AF13A26CCEC2E75C8310 /* VoiceRecordButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceRecordButton.swift; sourceTree = "<group>"; };
 		211AE30EB5115E4BB85D9084 /* swift-mls */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "swift-mls"; path = "../../../swift-mls"; sourceTree = SOURCE_ROOT; };
@@ -112,7 +118,9 @@
 		3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StellarStrKey.swift; sourceTree = "<group>"; };
 		4705F8234AA6022CD782348E /* PersistedModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistedModels.swift; sourceTree = "<group>"; };
 		485C53049C1128D91F1CA2DB /* CallManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallManager.swift; sourceTree = "<group>"; };
+		4A4B6451B3583EB5078ECE1F /* medium.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = medium.bin; sourceTree = "<group>"; };
 		4FCDBA22391412C6D05BB99E /* BlossomClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlossomClient.swift; sourceTree = "<group>"; };
+		5266CA213C59AAFE1667321F /* vk-large.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "vk-large.json"; sourceTree = "<group>"; };
 		57DB304E93E815412ABA6010 /* AudioCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioCache.swift; sourceTree = "<group>"; };
 		62FB83C87F9348F97EEDE0C8 /* StellarChatApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StellarChatApp.swift; sourceTree = "<group>"; };
 		68F22F3B02C2C003269BA135 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
@@ -129,11 +137,11 @@
 		8210CED65D67082D16673F07 /* GroupCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupCrypto.swift; sourceTree = "<group>"; };
 		8ACE473C3096412015326C52 /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCache.swift; sourceTree = "<group>"; };
 		8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		A1B2C3D4E5F60002KEYSET01 /* keyset-v1 */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "keyset-v1"; sourceTree = "<group>"; };
 		A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A4A3E005A9C5AF2DE5743188 /* CallKitProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallKitProvider.swift; sourceTree = "<group>"; };
 		B0884F32E9A807B2566DD234 /* NostrRelayConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrRelayConnection.swift; sourceTree = "<group>"; };
 		BA643A0E8E9EAA763609E1EA /* StellarChat.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StellarChat.entitlements; sourceTree = "<group>"; };
+		BD9FA6FCA3EF79096682957B /* small.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = small.bin; sourceTree = "<group>"; };
 		BF781055530F3AF0953DE842 /* CreateGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateGroupView.swift; sourceTree = "<group>"; };
 		C1FB5F184FBA9633C01BDFBC /* VideoCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCache.swift; sourceTree = "<group>"; };
 		C6867C765FBB9480D9E0D9FC /* PendingInvitationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingInvitationsView.swift; sourceTree = "<group>"; };
@@ -141,8 +149,10 @@
 		C9C563AA269E4B62C095C93E /* PushSubscriptionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushSubscriptionStore.swift; sourceTree = "<group>"; };
 		CA247CDB4DE5023BE0A6BF52 /* PNRelayClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PNRelayClient.swift; sourceTree = "<group>"; };
 		CEE93134C2D32A03E89226B8 /* NostrMessageTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrMessageTransport.swift; sourceTree = "<group>"; };
+		D24B0BEDBA88DF1ED4D09AF8 /* large.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = large.bin; sourceTree = "<group>"; };
 		D8C92D1E1F59A902BCED5859 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		D93193C84699A94AF7090C64 /* StellarChatNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = StellarChatNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		DB6F458946661A40FAC38DD2 /* vk-small.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "vk-small.json"; sourceTree = "<group>"; };
 		E8D38B6A8AA5A166074EA951 /* InviteMemberView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InviteMemberView.swift; sourceTree = "<group>"; };
 		EC5B1B630CCFBA76B3C56C87 /* ForkGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForkGroupView.swift; sourceTree = "<group>"; };
 		F0C2E0A174CC0B050D6BADB3 /* QRCodeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeView.swift; sourceTree = "<group>"; };
@@ -179,6 +189,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		056862ECA5D7EE101A9A0D11 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				A4F0BC9F48FD82738A8AD252 /* keyset-v1 */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
 		156F9CE2E835AC03BD150D68 /* Views */ = {
 			isa = PBXGroup;
 			children = (
@@ -264,7 +282,6 @@
 			isa = PBXGroup;
 			children = (
 				8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */,
-				A1B2C3D4E5F60002KEYSET01 /* keyset-v1 */,
 				F0F0E18BDAE3BFB365657BA8 /* Info.plist */,
 				2CB66BD4710970306321664D /* RelayerDefaults.generated.swift */,
 				BA643A0E8E9EAA763609E1EA /* StellarChat.entitlements */,
@@ -272,6 +289,7 @@
 				4B01157F59B93E6CF03322E6 /* Call */,
 				23A47303C279700BCE7F944A /* Models */,
 				F04F98010B05CF98606768DC /* Nostr */,
+				056862ECA5D7EE101A9A0D11 /* Resources */,
 				93C6D05F9E220C987CC0880A /* ViewModels */,
 				156F9CE2E835AC03BD150D68 /* Views */,
 			);
@@ -284,6 +302,19 @@
 				76C1E6E24CEC0349F3C9A60A /* ChatViewModel.swift */,
 			);
 			path = ViewModels;
+			sourceTree = "<group>";
+		};
+		A4F0BC9F48FD82738A8AD252 /* keyset-v1 */ = {
+			isa = PBXGroup;
+			children = (
+				D24B0BEDBA88DF1ED4D09AF8 /* large.bin */,
+				4A4B6451B3583EB5078ECE1F /* medium.bin */,
+				BD9FA6FCA3EF79096682957B /* small.bin */,
+				5266CA213C59AAFE1667321F /* vk-large.json */,
+				1492BFF03652C63278A1559B /* vk-medium.json */,
+				DB6F458946661A40FAC38DD2 /* vk-small.json */,
+			);
+			path = "keyset-v1";
 			sourceTree = "<group>";
 		};
 		ABDD2AD803B8C85F0ACC3714 /* Packages */ = {
@@ -397,15 +428,15 @@
 				LastUpgradeCheck = 1540;
 				TargetAttributes = {
 					79B5A663264579340235CB0C = {
-						DevelopmentTeam = 5V5EUT3ZXJ;
+						DevelopmentTeam = "${DEVELOPMENT_TEAM}";
 						ProvisioningStyle = Automatic;
 					};
 					7E1AB0C084DAFEAB2A75FC86 = {
-						DevelopmentTeam = 5V5EUT3ZXJ;
+						DevelopmentTeam = "${DEVELOPMENT_TEAM}";
 						ProvisioningStyle = Automatic;
 					};
 					D5EEC8F76D9E6B84F05DF01D = {
-						DevelopmentTeam = 5V5EUT3ZXJ;
+						DevelopmentTeam = "${DEVELOPMENT_TEAM}";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -441,7 +472,12 @@
 			buildActionMask = 2147483647;
 			files = (
 				FE754451C690FD52A395B8B2 /* Assets.xcassets in Resources */,
-				A1B2C3D4E5F60001KEYSET01 /* keyset-v1 in Resources */,
+				64EEB4AECF4F978F545823B0 /* large.bin in Resources */,
+				4517DD86FF56160F98C99FB8 /* medium.bin in Resources */,
+				FD4A35DD21888E8B52788996 /* small.bin in Resources */,
+				C550DD6040190C3D04ACE570 /* vk-large.json in Resources */,
+				093FB54E41C5835F525E8494 /* vk-medium.json in Resources */,
+				3EE35BCE5D589F7930DBE7CD /* vk-small.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -566,7 +602,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
+				DEVELOPMENT_TEAM = "${DEVELOPMENT_TEAM}";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = StellarChat/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Onym;
@@ -580,7 +616,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
@@ -656,7 +692,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
+				DEVELOPMENT_TEAM = "${DEVELOPMENT_TEAM}";
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -679,7 +715,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
+				DEVELOPMENT_TEAM = "${DEVELOPMENT_TEAM}";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = StellarChat/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Onym;
@@ -693,7 +729,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
@@ -707,7 +743,7 @@
 				CODE_SIGN_ENTITLEMENTS = StellarChatNotificationService/StellarChatNotificationService.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
+				DEVELOPMENT_TEAM = "${DEVELOPMENT_TEAM}";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = StellarChatNotificationService/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -715,7 +751,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios.NotificationService;
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = NOTIFICATION_SERVICE_EXTENSION;
@@ -729,7 +765,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
+				DEVELOPMENT_TEAM = "${DEVELOPMENT_TEAM}";
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -750,7 +786,7 @@
 				CODE_SIGN_ENTITLEMENTS = StellarChatNotificationService/StellarChatNotificationService.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 5V5EUT3ZXJ;
+				DEVELOPMENT_TEAM = "${DEVELOPMENT_TEAM}";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = StellarChatNotificationService/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -758,7 +794,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.0.3;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios.NotificationService;
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = NOTIFICATION_SERVICE_EXTENSION;

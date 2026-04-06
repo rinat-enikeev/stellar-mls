@@ -68,22 +68,18 @@ struct SettingsView: View {
 
             Section {
                 DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
-                    // Inbox Key
-                    LabeledContent("Inbox Key (X25519)") {
-                        Text(appState.keyManager.keyAgreementPublicKeyHex.prefix(16) + "...")
+                    // Nostr Identity
+                    LabeledContent("Nostr Public Key (secp256k1)") {
+                        Text(appState.keyManager.publicKeyHex.prefix(16) + "...")
                             .font(.caption)
                             .monospaced()
                     }
 
-                    Button("Copy Inbox Key") {
-                        UIPasteboard.general.string = appState.keyManager.keyAgreementPublicKeyHex
+                    Button("Copy Nostr Public Key") {
+                        UIPasteboard.general.string = appState.keyManager.publicKeyHex
                     }
 
-                    QRCodeView(appState.keyManager.keyAgreementPublicKeyHex, size: 160)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.vertical, 4)
-
-                    Text("Share this QR code so others can scan it to send you group invitations.")
+                    Text("Your Nostr identity key used to sign events on relays.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
 
@@ -148,7 +144,7 @@ struct SettingsView: View {
             }
 
             Section("About") {
-                LabeledContent("Version") { Text("1.0.0") }
+                LabeledContent("Version") { Text("1.0.3") }
                 Text("Messages are encrypted end-to-end. Relays see only opaque ciphertext and hidden topic tags. Group IDs never appear in cleartext on the wire.")
                     .font(.caption)
                     .foregroundStyle(.secondary)

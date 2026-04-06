@@ -18,6 +18,7 @@ class StellarChatUnifiedPushReceiver : MessagingReceiver() {
             .putString("up_endpoint", endpoint)
             .putBoolean("endpoint_needs_refresh", true)
             .apply()
+        UnifiedPushTokenProvider.notifyNewEndpoint(context, endpoint)
     }
 
     override fun onMessage(context: Context, message: ByteArray, instance: String) {

@@ -10,4 +10,6 @@ Features:
 - Encrypted media sharing via Blossom servers
 - No phone number or email required
 
+Push notifications on the F-Droid build require a UnifiedPush distributor. Install ntfy (or another UnifiedPush-compatible distributor) from F-Droid, open it once, then enable push notifications in Onym.
+
 Trusted Setup Ceremony: We are preparing a multi-party Groth16 trusted setup ceremony for the production launch. Help secure the protocol by contributing randomness. Register at https://github.com/rinat-enikeev/stellar-mls/issues/2

@@ -1,6 +1,7 @@
 package chat.onym.android.push
 
 import android.content.Context
+import android.util.Log
 import chat.onym.android.crypto.StorageEncryption
 import chat.onym.android.model.ChatGroup
 import kotlinx.coroutines.Dispatchers
@@ -12,6 +13,7 @@ class PushNotificationManager(
     private val context: Context,
     relayURL: String
 ) {
+    private val relayURL = relayURL
     private val client = PNRelayClient(relayURL)
     private val store = PushSubscriptionStore.getInstance(context)
 
@@ -31,7 +33,7 @@ class PushNotificationManager(
     }
 
     /// Register push for a single group. Cleans up any existing subscriptions first.
-    suspend fun registerGroup(group: ChatGroup, pushToken: String, platform: String) {
+    suspend fun registerGroup(group: ChatGroup, pushToken: String, platform: String): Boolean {
         // Remove any existing subscriptions for this group (prevents duplicates)
         val existing = store.all().filter { it.groupID == group.id }
         for (sub in existing) {
@@ -66,8 +68,14 @@ class PushNotificationManager(
                 groupID = group.id
             )
             store.save(info)
+            return true
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(
+                "PushManager",
+                "Failed to register push for group ${group.id.take(8)} via $platform at $relayURL",
+                e
+            )
+            return false
         }
     }
 

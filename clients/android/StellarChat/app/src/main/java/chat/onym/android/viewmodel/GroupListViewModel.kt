@@ -2126,8 +2126,12 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     Log.w("GroupListVM", "Cannot register push: no push token")
                     return@launch
                 }
-                mgr.registerGroup(group, token, pushTokenProvider.getPlatformName())
-                if (BuildConfig.DEBUG) Log.d("GroupListVM", "Push registered for group ${groupID.take(8)}")
+                val registered = mgr.registerGroup(group, token, pushTokenProvider.getPlatformName())
+                if (registered) {
+                    if (BuildConfig.DEBUG) Log.d("GroupListVM", "Push registered for group ${groupID.take(8)}")
+                } else {
+                    Log.w("GroupListVM", "Push registration failed for group ${groupID.take(8)}")
+                }
             } else {
                 pushManager?.unregisterGroup(groupID)
                 if (BuildConfig.DEBUG) Log.d("GroupListVM", "Push unregistered for group ${groupID.take(8)}")

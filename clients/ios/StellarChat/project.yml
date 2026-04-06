@@ -19,6 +19,9 @@ targets:
     platform: iOS
     sources:
       - StellarChat
+      - path: StellarChat/Resources/keyset-v1
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.onym.ios

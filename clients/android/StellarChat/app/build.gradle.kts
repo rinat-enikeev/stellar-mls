@@ -81,10 +81,6 @@ android {
         }
     }
 
-    aaptOptions {
-        cruncherEnabled = false
-    }
-
     flavorDimensions += "distribution"
     productFlavors {
         create("play") { dimension = "distribution" }

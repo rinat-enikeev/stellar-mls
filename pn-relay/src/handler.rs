@@ -357,3 +357,204 @@ async fn handle_unsubscribe(state: &Arc<AppState>, decrypted: &Value) -> Respons
 pub async fn handle_health() -> Json<Value> {
     Json(json!({"status": "ok"}))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aes_gcm::aead::Aead;
+    use rand::RngCore;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = PathBuf::from(format!(
+            "/tmp/pn_relay_handler_test_{}_{}_{id}",
+            std::process::id(),
+            prefix
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn make_test_state(dir: &std::path::Path) -> Arc<AppState> {
+        let (x25519_private, x25519_public) = crypto::load_or_create_keypair(dir).unwrap();
+        let storage_key = crypto::load_or_create_storage_key(dir).unwrap();
+        let db = crate::db::Database::new(dir).unwrap();
+        let (watcher_tx, _rx) = tokio::sync::watch::channel(());
+
+        Arc::new(AppState {
+            config: Config {
+                bind_address: "127.0.0.1:0".to_string(),
+                nostr_relay_url: "ws://localhost:7777".to_string(),
+                data_dir: dir.to_string_lossy().to_string(),
+                apns_key_path: None,
+                apns_key_pem: None,
+                apns_key_id: None,
+                apns_team_id: None,
+                apns_bundle_id: "test.bundle".to_string(),
+                apns_environment: "development".to_string(),
+                fcm_service_account_path: None,
+                fcm_project_id: None,
+                rate_limit_seconds: 5,
+            },
+            db,
+            x25519_private,
+            x25519_public,
+            storage_key,
+            watcher_tx,
+        })
+    }
+
+    #[tokio::test]
+    async fn test_info_endpoint_structure() {
+        let dir = unique_temp_dir("info");
+        let state = make_test_state(&dir);
+
+        let Json(response) = handle_info(State(state.clone())).await;
+
+        // Check required fields exist
+        assert_eq!(response["version"], 1);
+        assert!(response["x25519_public_key"].is_string());
+        assert!(response["supported_platforms"].is_array());
+        assert_eq!(response["max_filters_per_subscription"], 10);
+        assert_eq!(response["max_subscriptions"], 1000);
+
+        // UnifiedPush should always be in supported_platforms
+        let platforms = response["supported_platforms"].as_array().unwrap();
+        let platform_strs: Vec<&str> = platforms.iter().filter_map(|v| v.as_str()).collect();
+        assert!(platform_strs.contains(&"android-up"));
+
+        // APNs and FCM should NOT be listed since they are not configured
+        assert!(!platform_strs.contains(&"ios"));
+        assert!(!platform_strs.contains(&"android-fcm"));
+
+        // x25519_public_key should be valid base64 and decode to 32 bytes
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let key_bytes = b64
+            .decode(response["x25519_public_key"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(key_bytes.len(), 32);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_health_endpoint() {
+        let Json(response) = handle_health().await;
+        assert_eq!(response["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_subscription_rejects_wrong_version() {
+        let dir = unique_temp_dir("wrong_version");
+        let state = make_test_state(&dir);
+
+        let envelope = serde_json::json!({
+            "version": 99,
+            "scheme": "x25519-aes-256-gcm-v1",
+        });
+
+        let response = handle_subscription(State(state), Json(envelope)).await;
+        let (parts, body) = response.into_parts();
+        assert_eq!(parts.status, StatusCode::BAD_REQUEST);
+
+        let body_bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+        let body_json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(body_json["message"].as_str().unwrap().contains("version"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_subscription_rejects_wrong_scheme() {
+        let dir = unique_temp_dir("wrong_scheme");
+        let state = make_test_state(&dir);
+
+        let envelope = serde_json::json!({
+            "version": 1,
+            "scheme": "rsa-2048",
+        });
+
+        let response = handle_subscription(State(state), Json(envelope)).await;
+        let (parts, body) = response.into_parts();
+        assert_eq!(parts.status, StatusCode::BAD_REQUEST);
+
+        let body_bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+        let body_json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(body_json["message"].as_str().unwrap().contains("scheme"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_subscription_full_roundtrip() {
+        let dir = unique_temp_dir("full_roundtrip");
+        let state = make_test_state(&dir);
+        let b64 = base64::engine::general_purpose::STANDARD;
+
+        // Build a valid encrypted envelope with a subscribe action
+        let notification_key = [42u8; 32];
+        let inner_payload = serde_json::json!({
+            "action": "subscribe",
+            "subscription_id": "roundtrip-sub-001",
+            "platform": "ios",
+            "token": "apns-device-token",
+            "notification_key": b64.encode(notification_key),
+            "filter": {"#t": ["tag_value_1"]},
+        });
+
+        // Construct the encrypted envelope (same logic as crypto test helper)
+        let mut rng = rand::thread_rng();
+        let mut eph_bytes = [0u8; 32];
+        rng.fill_bytes(&mut eph_bytes);
+        let ephemeral_secret = x25519_dalek::StaticSecret::from(eph_bytes);
+        let ephemeral_public = x25519_dalek::PublicKey::from(&ephemeral_secret);
+
+        let shared_secret = ephemeral_secret.diffie_hellman(&state.x25519_public);
+        let hkdf = hkdf::Hkdf::<sha2::Sha256>::new(
+            Some(b"sep-invitation-v1"),
+            shared_secret.as_bytes(),
+        );
+        let mut aes_key = [0u8; 32];
+        hkdf.expand(b"aes-256-gcm", &mut aes_key).unwrap();
+
+        use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+        let cipher = Aes256Gcm::new_from_slice(&aes_key).unwrap();
+        let mut nonce_bytes = [0u8; 12];
+        rng.fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let plaintext = serde_json::to_vec(&inner_payload).unwrap();
+        let encrypted = cipher
+            .encrypt(nonce, plaintext.as_ref())
+            .unwrap();
+        let tag_start = encrypted.len() - 16;
+
+        let envelope = serde_json::json!({
+            "version": 1,
+            "scheme": "x25519-aes-256-gcm-v1",
+            "ephemeral_public_key": b64.encode(ephemeral_public.as_bytes()),
+            "nonce": b64.encode(&nonce_bytes),
+            "ciphertext": b64.encode(&encrypted[..tag_start]),
+            "authentication_tag": b64.encode(&encrypted[tag_start..]),
+        });
+
+        let response = handle_subscription(State(state.clone()), Json(envelope)).await;
+        let (parts, body) = response.into_parts();
+        assert_eq!(parts.status, StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+        let body_json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body_json["status"], "ok");
+
+        // Verify the subscription was stored in the database
+        let subs = state.db.get_subscriptions_for_tag("tag_value_1").unwrap();
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].subscription_id, "roundtrip-sub-001");
+        assert_eq!(subs[0].platform, "ios");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

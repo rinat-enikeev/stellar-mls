@@ -82,3 +82,38 @@ impl Config {
 fn require_env(key: &str) -> Result<String, String> {
     env::var(key).map_err(|_| format!("{key} environment variable is required"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_config(auth_tokens: HashSet<String>) -> Config {
+        Config {
+            secret_key: String::new(),
+            public_address: String::new(),
+            contract_id: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM".to_string(),
+            rpc_url: "https://soroban.stellar.org".to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            network: "testnet".to_string(),
+            bind_address: "0.0.0.0:8080".to_string(),
+            auth_tokens,
+            rate_limit_per_minute: 30,
+            max_payload_size: 8192,
+            identity_name: "sep-relayer".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_auth_required_with_tokens() {
+        let mut tokens = HashSet::new();
+        tokens.insert("mytoken".to_string());
+        let config = make_config(tokens);
+        assert!(config.auth_required());
+    }
+
+    #[test]
+    fn test_auth_not_required_without_tokens() {
+        let config = make_config(HashSet::new());
+        assert!(!config.auth_required());
+    }
+}

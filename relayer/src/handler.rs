@@ -390,3 +390,119 @@ fn nibble_to_hex(nibble: u8) -> char {
         _ => unreachable!(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- hex_encode tests ----
+
+    #[test]
+    fn test_hex_encode_empty() {
+        assert_eq!(hex_encode(&[]), "");
+    }
+
+    #[test]
+    fn test_hex_encode_bytes() {
+        assert_eq!(hex_encode(&[0x01, 0x23, 0xab, 0xcd]), "0123abcd");
+    }
+
+    #[test]
+    fn test_hex_encode_all_ff() {
+        assert_eq!(hex_encode(&[0xff, 0xff, 0xff]), "ffffff");
+    }
+
+    // ---- parse_bool_output tests ----
+
+    #[test]
+    fn test_parse_bool_output_true() {
+        assert_eq!(parse_bool_output("true").unwrap(), true);
+    }
+
+    #[test]
+    fn test_parse_bool_output_false() {
+        assert_eq!(parse_bool_output("false").unwrap(), false);
+    }
+
+    #[test]
+    fn test_parse_bool_output_case_insensitive() {
+        assert_eq!(parse_bool_output("TRUE").unwrap(), true);
+        assert_eq!(parse_bool_output("False").unwrap(), false);
+        assert_eq!(parse_bool_output("TrUe").unwrap(), true);
+    }
+
+    #[test]
+    fn test_parse_bool_output_with_whitespace() {
+        assert_eq!(parse_bool_output("  true  \n").unwrap(), true);
+        assert_eq!(parse_bool_output("\tfalse\t").unwrap(), false);
+    }
+
+    #[test]
+    fn test_parse_bool_output_invalid() {
+        assert!(parse_bool_output("yes").is_err());
+        assert!(parse_bool_output("1").is_err());
+        assert!(parse_bool_output("").is_err());
+    }
+
+    // ---- hex_to_base64_if_needed tests ----
+
+    #[test]
+    fn test_hex_to_base64_valid() {
+        // 0xdeadbeef -> 3q2+7w==
+        let result = hex_to_base64_if_needed("deadbeef").unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&result)
+            .unwrap();
+        assert_eq!(decoded, vec![0xde, 0xad, 0xbe, 0xef]);
+    }
+
+    #[test]
+    fn test_hex_to_base64_odd_length_rejected() {
+        // Odd-length strings are not valid hex, so the function returns the input unchanged
+        let result = hex_to_base64_if_needed("abc").unwrap();
+        assert_eq!(result, "abc");
+    }
+
+    // ---- normalize_commitment_fields tests ----
+
+    #[test]
+    fn test_normalize_commitment_flat_object() {
+        let mut value = serde_json::json!({
+            "commitment": "deadbeef",
+            "epoch": 1
+        });
+        normalize_commitment_fields(&mut value).unwrap();
+
+        // commitment should be base64 now
+        let commitment = value["commitment"].as_str().unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(commitment)
+            .unwrap();
+        assert_eq!(decoded, vec![0xde, 0xad, 0xbe, 0xef]);
+
+        // epoch should be unchanged
+        assert_eq!(value["epoch"], 1);
+    }
+
+    #[test]
+    fn test_normalize_commitment_nested_array() {
+        let mut value = serde_json::json!([
+            { "commitment": "0011ff", "name": "group1" },
+            { "commitment": "aabb", "name": "group2" }
+        ]);
+        normalize_commitment_fields(&mut value).unwrap();
+
+        // Both commitments should be converted
+        let c0 = value[0]["commitment"].as_str().unwrap();
+        let d0 = base64::engine::general_purpose::STANDARD.decode(c0).unwrap();
+        assert_eq!(d0, vec![0x00, 0x11, 0xff]);
+
+        let c1 = value[1]["commitment"].as_str().unwrap();
+        let d1 = base64::engine::general_purpose::STANDARD.decode(c1).unwrap();
+        assert_eq!(d1, vec![0xaa, 0xbb]);
+
+        // Other fields should be untouched
+        assert_eq!(value[0]["name"], "group1");
+        assert_eq!(value[1]["name"], "group2");
+    }
+}

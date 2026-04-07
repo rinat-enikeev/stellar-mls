@@ -139,3 +139,101 @@ pub fn build_up_payload(encrypted: &[u8], nonce: &[u8], tag: &[u8]) -> Vec<u8> {
     payload.extend_from_slice(tag);
     payload
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_endpoint_url_https_accepted() {
+        assert!(validate_endpoint_url("https://push.example.com/up/abc123").is_ok());
+    }
+
+    #[test]
+    fn test_validate_endpoint_url_http_accepted() {
+        assert!(validate_endpoint_url("http://push.example.com/up/abc123").is_ok());
+    }
+
+    #[test]
+    fn test_validate_endpoint_url_ftp_rejected() {
+        let result = validate_endpoint_url("ftp://push.example.com/file");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("http"));
+    }
+
+    #[test]
+    fn test_validate_endpoint_url_localhost_rejected() {
+        let result = validate_endpoint_url("https://localhost/up");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("localhost"));
+    }
+
+    #[test]
+    fn test_validate_endpoint_url_127_0_0_1_rejected() {
+        let result = validate_endpoint_url("https://127.0.0.1/up");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("localhost"));
+    }
+
+    #[test]
+    fn test_validate_endpoint_url_ipv6_loopback_rejected() {
+        let result = validate_endpoint_url("https://[::1]/up");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_endpoint_url_private_10_rejected() {
+        let result = validate_endpoint_url("https://10.0.0.1/up");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("private"));
+    }
+
+    #[test]
+    fn test_validate_endpoint_url_private_172_16_rejected() {
+        let result = validate_endpoint_url("https://172.16.0.1/up");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("private"));
+    }
+
+    #[test]
+    fn test_validate_endpoint_url_private_192_168_rejected() {
+        let result = validate_endpoint_url("https://192.168.1.1/up");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("private"));
+    }
+
+    #[test]
+    fn test_validate_endpoint_url_link_local_rejected() {
+        let result = validate_endpoint_url("https://169.254.1.1/up");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("private"));
+    }
+
+    #[test]
+    fn test_validate_endpoint_url_cloud_metadata_rejected() {
+        // 169.254.169.254 is the IMDS endpoint — it's link-local, so blocked
+        let result = validate_endpoint_url("https://169.254.169.254/latest/meta-data/");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_endpoint_url_azure_imds_rejected() {
+        let result = validate_endpoint_url("https://168.63.129.16/metadata");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("private"));
+    }
+
+    #[test]
+    fn test_validate_endpoint_url_cgnat_rejected() {
+        let result = validate_endpoint_url("https://100.64.0.1/up");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("private"));
+    }
+
+    #[test]
+    fn test_validate_endpoint_url_valid_public_ip() {
+        assert!(validate_endpoint_url("https://8.8.8.8/up").is_ok());
+        assert!(validate_endpoint_url("https://1.1.1.1/up").is_ok());
+        assert!(validate_endpoint_url("https://203.0.113.1/up").is_ok());
+    }
+}

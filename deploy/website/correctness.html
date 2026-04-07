@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Proof of Correctness — Onym</title>
+    <meta name="description" content="Proof that the Onym implementation correctly realizes the SEP-XXXX zero-knowledge group membership protocol.">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --surface: #12121a;
+            --border: #1e1e2e;
+            --text: #e4e4ef;
+            --text-dim: #8888a0;
+            --accent: #6c5ce7;
+            --accent-glow: #a29bfe;
+            --green: #00b894;
+            --blue: #0984e3;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Navigation */
+        nav {
+            padding: 20px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        nav .container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text);
+            text-decoration: none;
+            letter-spacing: -0.5px;
+        }
+        .logo span { color: var(--accent-glow); }
+        .nav-links {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+        .nav-links a {
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+        .nav-links a:hover { color: var(--text); }
+        .nav-links a.active { color: var(--accent-glow); }
+
+        /* Content */
+        .content {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 80px 24px;
+        }
+        .content h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            letter-spacing: -1px;
+            margin-bottom: 12px;
+        }
+        .content .subtitle {
+            color: var(--text-dim);
+            font-size: 1.15rem;
+            margin-bottom: 48px;
+            line-height: 1.5;
+        }
+        .content h2 {
+            font-size: 1.3rem;
+            font-weight: 700;
+            margin-top: 48px;
+            margin-bottom: 12px;
+            letter-spacing: -0.3px;
+        }
+        .content h3 {
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin-top: 24px;
+            margin-bottom: 8px;
+            color: var(--text);
+        }
+        .content p {
+            color: var(--text-dim);
+            margin-bottom: 16px;
+            font-size: 1rem;
+        }
+        .content ul, .content ol {
+            color: var(--text-dim);
+            margin-bottom: 16px;
+            padding-left: 24px;
+        }
+        .content li {
+            margin-bottom: 8px;
+            font-size: 1rem;
+        }
+        .content strong {
+            color: var(--text);
+        }
+        .content em {
+            color: var(--text);
+            font-style: italic;
+        }
+        .content a {
+            color: var(--accent-glow);
+            text-decoration: none;
+        }
+        .content a:hover {
+            text-decoration: underline;
+        }
+        .content code {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 0.9em;
+            font-family: 'SF Mono', Menlo, Monaco, monospace;
+        }
+        .content pre {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin: 16px 0;
+            overflow-x: auto;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            font-family: 'SF Mono', Menlo, Monaco, monospace;
+            color: var(--text-dim);
+        }
+        .highlight-box {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            margin: 24px 0;
+        }
+        .highlight-box p {
+            margin-bottom: 0;
+            color: var(--text);
+        }
+
+        /* Theorem boxes (purple border) -- correctness properties */
+        .theorem {
+            border-left: 3px solid var(--accent);
+            background: rgba(108, 92, 231, 0.06);
+            border-radius: 0 8px 8px 0;
+            padding: 16px 20px;
+            margin: 20px 0;
+        }
+        .theorem p {
+            color: var(--text);
+            margin-bottom: 8px;
+            font-size: 0.95rem;
+        }
+        .theorem p:last-child { margin-bottom: 0; }
+        .theorem .label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--accent-glow);
+            margin-bottom: 6px;
+            font-weight: 700;
+        }
+
+        /* Definition boxes (blue border) -- invariants */
+        .definition {
+            border-left: 3px solid var(--blue);
+            background: rgba(9, 132, 227, 0.06);
+            border-radius: 0 8px 8px 0;
+            padding: 16px 20px;
+            margin: 20px 0;
+        }
+        .definition p {
+            color: var(--text);
+            margin-bottom: 8px;
+            font-size: 0.95rem;
+        }
+        .definition p:last-child { margin-bottom: 0; }
+        .definition .label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--blue);
+            margin-bottom: 6px;
+            font-weight: 700;
+        }
+
+        /* Claim boxes (green border) -- module correctness claims */
+        .claim {
+            border-left: 3px solid var(--green);
+            background: rgba(0, 184, 148, 0.06);
+            border-radius: 0 8px 8px 0;
+            padding: 16px 20px;
+            margin: 20px 0;
+        }
+        .claim p {
+            color: var(--text);
+            margin-bottom: 8px;
+            font-size: 0.95rem;
+        }
+        .claim p:last-child { margin-bottom: 0; }
+        .claim .label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--green);
+            margin-bottom: 6px;
+            font-weight: 700;
+        }
+
+        /* Math notation */
+        .math {
+            font-family: 'SF Mono', Menlo, Monaco, monospace;
+            font-size: 0.9em;
+            color: var(--accent-glow);
+        }
+
+        /* Tables */
+        .notation-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 24px 0;
+            font-size: 0.85rem;
+        }
+        .notation-table th {
+            text-align: left;
+            padding: 10px 12px;
+            border-bottom: 2px solid var(--border);
+            color: var(--text);
+            font-weight: 600;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .notation-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-dim);
+        }
+        .notation-table td:first-child {
+            font-family: 'SF Mono', Menlo, Monaco, monospace;
+            color: var(--accent-glow);
+            white-space: nowrap;
+        }
+        .notation-table tr:last-child td { border-bottom: none; }
+
+        /* Section Divider */
+        .section-divider {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 48px 0;
+        }
+
+        /* TOC */
+        .toc {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            margin: 24px 0;
+        }
+        .toc p {
+            color: var(--text);
+            font-weight: 700;
+            font-size: 0.9rem;
+            margin-bottom: 12px;
+        }
+        .toc ol {
+            color: var(--text-dim);
+            padding-left: 20px;
+            margin-bottom: 0;
+        }
+        .toc li {
+            margin-bottom: 4px;
+            font-size: 0.9rem;
+        }
+        .toc a {
+            color: var(--accent-glow);
+            text-decoration: none;
+        }
+        .toc a:hover { text-decoration: underline; }
+
+        /* Footer */
+        footer {
+            padding: 32px 0;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+        }
+        footer a {
+            color: var(--text-dim);
+            text-decoration: none;
+        }
+        footer a:hover { color: var(--text); }
+        .footer-links {
+            display: flex;
+            gap: 24px;
+            justify-content: center;
+            margin-bottom: 12px;
+        }
+
+        @media (max-width: 640px) {
+            .content { padding: 50px 24px; }
+            .content h1 { font-size: 2rem; }
+            .notation-table { font-size: 0.75rem; }
+            .notation-table th, .notation-table td { padding: 8px 6px; }
+        }
+    </style>
+</head>
+<body>
+
+<nav>
+    <div class="container">
+        <a href="/" class="logo">onym<span>.</span>chat</a>
+        <div class="nav-links">
+            <a href="/architecture">Architecture</a>
+            <a href="/math">Math</a>
+            <a href="/correctness" class="active">Correctness</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls">GitHub</a>
+        </div>
+    </div>
+</nav>
+
+<div class="content">
+    <h1>Proof of Correctness</h1>
+    <p class="subtitle">Evidence that the code correctly implements the zero-knowledge group membership protocol. Version 1.0 &mdash; April 7, 2026.</p>
+
+    <div class="highlight-box">
+        <p>This document proves that the SEP-XXXX reference implementation is <strong>correct</strong>: the code faithfully realizes the protocol specified in the SEP. This is complementary to the <a href="/math">Proof of Soundness</a>, which proves that the mathematical constructions are <strong>secure</strong>. A secure protocol implemented incorrectly is insecure. Both documents are necessary for end-to-end assurance.</p>
+    </div>
+
+    <div class="toc">
+        <p>Contents</p>
+        <ol>
+            <li><a href="#preamble">Preamble</a></li>
+            <li><a href="#model">Correctness Model</a></li>
+            <li><a href="#modules">Module-by-Module Arguments</a></li>
+            <li><a href="#cross-platform">Cross-Platform Consistency</a></li>
+            <li><a href="#conformance">Protocol Conformance Map</a></li>
+            <li><a href="#coverage">Test Coverage</a></li>
+            <li><a href="#limitations">Known Limitations</a></li>
+        </ol>
+    </div>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="preamble">1. Preamble</h2>
+
+    <h3>Scope</h3>
+    <p>This document provides a systematic correctness argument for the SEP-XXXX reference implementation. It proves that the <strong>code faithfully implements the protocol</strong> specified in the SEP specification.</p>
+    <p><strong>In scope.</strong> Functional correctness of the core Rust library, FFI bridges (C and JNI), Soroban smart contract, relayer, PN-Relay, and mobile clients. Cross-platform determinism. Protocol conformance against the SEP specification.</p>
+    <p><strong>Out of scope.</strong> Cryptographic security reductions (covered by the <a href="/math">Proof of Soundness</a>), performance optimization arguments, deployment procedures, and network-layer privacy analysis.</p>
+
+    <h3>Relationship to Proof of Soundness</h3>
+    <p>The two documents form a layered assurance argument:</p>
+    <table class="notation-table">
+        <tr><th>Layer</th><th>Document</th><th>Question Answered</th></tr>
+        <tr><td>Mathematical security</td><td>Proof of Soundness</td><td>Are the cryptographic constructions secure?</td></tr>
+        <tr><td>Implementation correctness</td><td><strong>This document</strong></td><td>Does the code implement those constructions correctly?</td></tr>
+    </table>
+    <p>Each theorem in the Proof of Soundness depends on implementation assumptions. For example, Theorem 1 (Merkle Tree Collision Resistance) assumes that the implementation uses the Poseidon hash function with the specified parameters and constructs the tree at the specified depth with zero-padded leaves. Section 5 of this document maps each theorem to the code that realizes its assumptions.</p>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="model">2. Correctness Model</h2>
+
+    <h3>Definition of Implementation Correctness</h3>
+    <p>An implementation is <strong>correct</strong> with respect to a specification if, for all inputs in the specification's domain:</p>
+    <ol>
+        <li><strong>Functional equivalence.</strong> The implementation's outputs match the specification's defined outputs.</li>
+        <li><strong>Constraint adherence.</strong> The implementation enforces all constraints and invariants required by the specification.</li>
+        <li><strong>Cross-platform determinism.</strong> All platform-specific implementations (Rust, iOS via FFI, Android via JNI) produce identical outputs for identical inputs.</li>
+        <li><strong>Failure mode correctness.</strong> The implementation rejects all inputs that the specification defines as invalid.</li>
+    </ol>
+
+    <h3>2.1 Correctness Properties</h3>
+    <p>The following 14 properties collectively define what it means for the implementation to be correct. Each property is traced to specific code, specification sections, and tests in Sections 3&ndash;6.</p>
+
+    <div class="theorem">
+        <div class="label">Property C-1 &mdash; Poseidon Parameters</div>
+        <p>Seed string, round counts (8 full, 56 partial), MDS matrix construction, and alpha exponent (5) match SEP-XXXX Section 2.2.</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Property C-2 &mdash; Poseidon Determinism</div>
+        <p><code>poseidon_hash_one</code> and <code>poseidon_hash_two</code> are deterministic pure functions: identical inputs always produce identical outputs.</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Property C-3 &mdash; Leaf Computation</div>
+        <p>Each leaf is computed as <span class="math">Poseidon(sk)</span> where <span class="math">sk</span> is the member's BLS12-381 private key scalar.</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Property C-4 &mdash; Member Ordering</div>
+        <p>Members are sorted in ascending lexicographic order by their 48-byte compressed G1 public key representation; duplicates are rejected.</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Property C-5 &mdash; Merkle Tree Construction</div>
+        <p>Binary tree of fixed depth <span class="math">d &isin; {5, 8, 11}</span>, zero-padded unused leaves, internal nodes computed as <span class="math">Poseidon(left, right)</span>.</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Property C-6 &mdash; Commitment Variant B</div>
+        <p><span class="math">Poseidon(Poseidon(root, epoch), salt)</span> where salt is interpreted as a field element via <code>from_le_bytes_mod_order</code>.</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Property C-7 &mdash; Commitment Variant A</div>
+        <p><span class="math">SHA-256(root_be || epoch_be || salt)</span> with fixed 72-byte preimage (32 + 8 + 32).</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Property C-8 &mdash; Circuit Constraints</div>
+        <p>Exactly 3 logical constraints (key ownership, Merkle membership, commitment binding) with 2 public inputs (commitment, epoch).</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Property C-9 &mdash; Proof Format</div>
+        <p>192 bytes compressed: G1 (48 bytes) || G2 (96 bytes) || G1 (48 bytes). 384 bytes uncompressed for on-chain submission.</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Property C-10 &mdash; Epoch Enforcement</div>
+        <p><span class="math">new_epoch == stored_epoch + 1</span> enforced by the contract with <code>checked_add</code> overflow protection.</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Property C-11 &mdash; Proof Replay Prevention</div>
+        <p>SHA-256 hash of uncompressed proof components (384 bytes) stored and checked before every state-changing operation.</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Property C-12 &mdash; Groth16 Pairing</div>
+        <p>Verification equation <span class="math">e(-piA, piB) &middot; e(alpha, beta) &middot; e(vk_x, gamma) &middot; e(piC, delta) = 1_GT</span> implemented via Soroban BLS12-381 host functions.</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Property C-13 &mdash; FFI Canonicality</div>
+        <p>Field elements received from C/JNI callers are checked for canonical form (value &lt; field modulus) via roundtrip encoding; non-canonical values are rejected.</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Property C-14 &mdash; Cross-Platform Determinism</div>
+        <p>Given identical inputs, the Rust library, iOS FFI, and Android JNI produce byte-identical outputs (leaf hashes, roots, commitments, proofs).</p>
+    </div>
+
+    <h3>2.2 Cross-Component Invariants</h3>
+    <p>These invariants span module boundaries and must hold throughout any execution path.</p>
+
+    <div class="definition">
+        <div class="label">INV-1 &mdash; Commitment Pipeline Consistency</div>
+        <p>The commitment computed by <code>compute_poseidon_commitment()</code> outside the circuit equals the value computed by the circuit's Constraint 3 for the same inputs. <em>Components: Poseidon, Merkle, Commitment, Circuit.</em></p>
+    </div>
+
+    <div class="definition">
+        <div class="label">INV-2 &mdash; Proof Decompression Format</div>
+        <p>The 192-byte compressed proof produced by <code>proof_to_bytes()</code> decompresses to the same 384-byte representation expected by the Soroban contract. <em>Components: Prover, FFI, Contract.</em></p>
+    </div>
+
+    <div class="definition">
+        <div class="label">INV-3 &mdash; Epoch Chain Monotonicity</div>
+        <p>The contract enforces strict <span class="math">epoch + 1</span> sequencing; the relayer does not interfere with this invariant. <em>Components: Contract, Relayer.</em></p>
+    </div>
+
+    <div class="definition">
+        <div class="label">INV-4 &mdash; Key Consistency Across Platforms</div>
+        <p>BLS12-381 secret key bytes interpreted by the C FFI, JNI FFI, iOS, and Android all produce the same field element. <em>Components: FFI (C), FFI (JNI), iOS, Android.</em></p>
+    </div>
+
+    <div class="definition">
+        <div class="label">INV-5 &mdash; Leaf Consistency Across Platforms</div>
+        <p><span class="math">Poseidon(sk)</span> computed via the C FFI equals <span class="math">Poseidon(sk)</span> computed via the JNI FFI for the same <span class="math">sk</span> bytes. <em>Components: Poseidon, FFI (C), FFI (JNI).</em></p>
+    </div>
+
+    <div class="definition">
+        <div class="label">INV-6 &mdash; Root Consistency Across Platforms</div>
+        <p>Given the same member set, the Merkle root computed via C FFI equals the root computed via JNI FFI. <em>Components: Merkle, FFI (C), FFI (JNI).</em></p>
+    </div>
+
+    <div class="definition">
+        <div class="label">INV-7 &mdash; Relayer Transparency</div>
+        <p>The relayer wraps and submits transactions but does not modify proof bytes, public inputs, or group identifiers. <em>Components: Relayer, Contract.</em></p>
+    </div>
+
+    <div class="definition">
+        <div class="label">INV-8 &mdash; PN-Relay Confidentiality</div>
+        <p>The PN-Relay cannot read the content of encrypted Nostr events; it only observes topic tags for notification routing. <em>Components: PN-Relay, Nostr.</em></p>
+    </div>
+
+    <h3>2.3 Testing Hierarchy</h3>
+    <p>The test suite is organized in four layers, from unit tests to integration tests:</p>
+    <table class="notation-table">
+        <tr><th>Layer</th><th>Scope</th><th>Count</th><th>Location</th></tr>
+        <tr><td>Unit</td><td>Individual functions</td><td>~104</td><td><code>src/*/mod.rs</code></td></tr>
+        <tr><td>FFI</td><td>C and JNI bridges</td><td>34</td><td><code>tests/ffi_tests.rs</code></td></tr>
+        <tr><td>Contract</td><td>Soroban smart contract</td><td>56</td><td><code>contracts/sep-xxxx/src/lib.rs</code></td></tr>
+        <tr><td>Service</td><td>Relayer and PN-Relay</td><td>73</td><td><code>relayer/src/</code>, <code>pn-relay/src/</code></td></tr>
+        <tr><td>Client</td><td>iOS and Android e2e</td><td>~78</td><td>Swift and Kotlin suites</td></tr>
+        <tr><td>Cross-platform</td><td>Determinism across FFI</td><td>2</td><td><code>tests/cross_platform_tests.rs</code></td></tr>
+        <tr><td><strong>Total</strong></td><td></td><td><strong>~345</strong></td><td></td></tr>
+    </table>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="modules">3. Module-by-Module Arguments</h2>
+
+    <p>Each module's correctness argument combines code inspection, specification tracing, and empirical evidence from the test suite. Below are the five core modules.</p>
+
+    <!-- 3.1 Poseidon -->
+    <h3>3.1 Poseidon Hash</h3>
+    <p><strong>Source.</strong> <code>src/poseidon/mod.rs</code> (283 lines)</p>
+    <p>Implements the Poseidon hash function over the BLS12-381 scalar field with the parameters specified in SEP-XXXX Section 2.2. Provides two entry points: <code>poseidon_hash_one(config, x)</code> for leaf hashing and <code>poseidon_hash_two(config, left, right)</code> for internal Merkle nodes and commitment binding.</p>
+
+    <div class="claim">
+        <div class="label">Claim &mdash; Poseidon Correctness</div>
+        <p><strong>Parameter fidelity (C-1).</strong> The constants <code>FULL_ROUNDS = 8</code>, <code>PARTIAL_ROUNDS = 56</code>, <code>RATE = 2</code>, <code>CAPACITY = 1</code>, <code>ALPHA = 5</code> match SEP-XXXX Section 2.2 verbatim.</p>
+        <p><strong>Round constant derivation (C-1).</strong> <code>generate_round_constants()</code> uses seed <code>"SEP-XXXX-Poseidon-BLS12-381-w3-f8-p56-a5-round-constants"</code> and derives 192 constants via iterated SHA-256 with 64-byte extension for uniform field element sampling.</p>
+        <p><strong>MDS matrix (C-1).</strong> <code>generate_mds_matrix()</code> implements the Cauchy construction <span class="math">M[i][j] = 1 / (x_i + y_j)</span> with <span class="math">x_i = i + 1</span>, <span class="math">y_j = width + j + 1</span>.</p>
+        <p><strong>Determinism (C-2).</strong> Both hash functions are pure: they allocate a fresh <code>PoseidonSponge</code>, absorb inputs, and squeeze output. No mutable state persists between calls.</p>
+    </div>
+    <p><strong>Test coverage.</strong> 11 tests: config creation, determinism, hash non-triviality, distinct inputs yield distinct outputs, round constant count, and MDS matrix invertibility.</p>
+
+    <!-- 3.2 Merkle -->
+    <h3>3.2 Merkle Tree</h3>
+    <p><strong>Source.</strong> <code>src/merkle/mod.rs</code> (536 lines)</p>
+    <p>Constructs a binary Poseidon Merkle tree of fixed depth from a set of member records. Provides canonical ordering, tree construction, root computation, and opening proof generation/verification.</p>
+
+    <div class="claim">
+        <div class="label">Claim &mdash; Merkle Correctness</div>
+        <p><strong>Canonical ordering (C-4).</strong> <code>canonicalize_members()</code> sorts members by 48-byte compressed G1 public key bytes in ascending lexicographic order. Duplicates are detected and rejected with <code>MerkleError::DuplicatePublicKey</code>.</p>
+        <p><strong>Leaf computation (C-3).</strong> Each leaf is <span class="math">poseidon_hash_one(config, sk)</span>, matching SEP-XXXX Section 2.2.</p>
+        <p><strong>Tree construction (C-5).</strong> Creates a flat array of <span class="math">2^(d+1)</span> nodes. Leaves at indices <span class="math">[2^d, 2^(d+1))</span>. Unused slots are <span class="math">F::zero()</span>. Internal nodes computed bottom-up as <span class="math">poseidon_hash_two(config, left, right)</span>. Root at index 1.</p>
+        <p><strong>Depth enforcement (C-5).</strong> Member sets exceeding <span class="math">2^depth</span> are rejected via <code>TooManyMembers</code> error.</p>
+    </div>
+    <p><strong>Test coverage.</strong> 20 tests: single-member trees, full trees, zero padding, opening proofs, canonical ordering (shuffled inputs produce same root), duplicate rejection, depth overflow.</p>
+
+    <!-- 3.3 Circuit -->
+    <h3>3.3 Circuit</h3>
+    <p><strong>Source.</strong> <code>src/circuit/mod.rs</code> (785 lines)</p>
+    <p>Defines the R1CS circuit for Groth16 proving. <code>MembershipCircuit</code> implements <code>ConstraintSynthesizer&lt;Fr&gt;</code>, generating constraints for key ownership, Merkle membership, and commitment binding.</p>
+
+    <div class="claim">
+        <div class="label">Claim &mdash; Circuit Correctness</div>
+        <p><strong>Public inputs (C-8).</strong> Exactly two values allocated as public inputs via <code>FpVar::new_input()</code>: <code>commitment_var</code> and <code>epoch_var</code>. All other values are witnesses.</p>
+        <p><strong>Constraint 1 &mdash; Key ownership.</strong> Computes <span class="math">leaf = poseidon_hash_one_gadget(cs, config, sk)</span>, the in-circuit equivalent of <span class="math">Poseidon(sk)</span>.</p>
+        <p><strong>Constraint 2 &mdash; Merkle membership.</strong> Iterates over <span class="math">d</span> levels using <code>FpVar::conditionally_select()</code> for ordering, then <code>poseidon_hash_two_gadget()</code> for parent computation. Asserts <span class="math">current == root</span>.</p>
+        <p><strong>Constraint 3 &mdash; Commitment binding.</strong> Computes <span class="math">Poseidon(Poseidon(root, epoch), salt)</span> via two <code>poseidon_hash_two_gadget()</code> calls and asserts equality with the public commitment.</p>
+    </div>
+    <p><strong>Test coverage.</strong> 18 tests: circuit satisfiability, constraint count per tier (1910, 2630, 3350), rejection of wrong secret key/path/salt/epoch/commitment, public input count (exactly 2).</p>
+
+    <!-- 3.4 Contract -->
+    <h3>3.4 Smart Contract</h3>
+    <p><strong>Source.</strong> <code>contracts/sep-xxxx/src/lib.rs</code> (1953 lines)</p>
+    <p>Soroban smart contract that stores group commitments and verifies Groth16 membership proofs on-chain using BLS12-381 host functions.</p>
+
+    <div class="claim">
+        <div class="label">Claim &mdash; Contract Correctness</div>
+        <p><strong>Epoch enforcement (C-10).</strong> <code>update_commitment()</code> uses <code>checked_add(1)</code> with strict equality check. Rejects any epoch value other than <span class="math">stored_epoch + 1</span>.</p>
+        <p><strong>Proof replay prevention (C-11).</strong> <code>proof_hash()</code> computes <span class="math">SHA-256(piA || piB || piC)</span> from 384 uncompressed bytes. Hash is stored after verification and checked before every state-changing call.</p>
+        <p><strong>Groth16 verification (C-12).</strong> Computes <span class="math">vk_x = IC[0] + commitment &middot; IC[1] + epoch &middot; IC[2]</span> via <code>g1_msm()</code>, negates <span class="math">piA</span>, and calls <code>bls.pairing_check()</code> to verify the pairing equation.</p>
+        <p><strong>Canonical input validation (C-13).</strong> Roundtrip check rejects non-canonical field element encodings.</p>
+        <p><strong>Deactivation permanence.</strong> <code>deactivate_group()</code> sets <span class="math">active = false</span> irreversibly; subsequent updates are rejected.</p>
+    </div>
+    <p><strong>Test coverage.</strong> 56 tests: initialization, epoch transitions (valid/invalid), public input mismatches, proof replay rejection, deactivation, tier limits, VK validation, history window, TTL bumping.</p>
+
+    <!-- 3.5 FFI -->
+    <h3>3.5 FFI Bridges</h3>
+    <p><strong>Sources.</strong> <code>src/ffi.rs</code> (C bridge, 1235 lines) and <code>src/jni_ffi.rs</code> (JNI bridge, 418 lines)</p>
+    <p>Both bridges follow the same pattern: read input buffers, deserialize to Rust types, call core library, serialize output, write to output buffer. Errors are communicated via C error strings or Java exceptions respectively.</p>
+
+    <div class="claim">
+        <div class="label">Claim &mdash; FFI Correctness</div>
+        <p><strong>Panic safety.</strong> Every exported function is wrapped in <code>run_ffi()</code> / <code>run_jni()</code>, which catches panics via <code>std::panic::catch_unwind()</code>. Unwinding across the FFI boundary is undefined behavior; these wrappers prevent it.</p>
+        <p><strong>Canonicality enforcement (C-13).</strong> <code>read_fr()</code> calls <code>bytes_be_to_field_checked()</code>, rejecting non-canonical field element encodings. Secret keys use <code>Fr::from_be_bytes_mod_order()</code> without the canonical check (correct: any valid scalar works for private witnesses).</p>
+        <p><strong>Structural equivalence.</strong> Both C and JNI bridges call the same core library functions. The only difference is the marshalling layer, ensuring INV-4, INV-5, and INV-6.</p>
+        <p><strong>Buffer management.</strong> C FFI transfers ownership via <code>mem::forget()</code> with corresponding <code>sep_free_buffer()</code>. Length validation via <code>require_len()</code> occurs before any deserialization.</p>
+    </div>
+    <p><strong>Test coverage.</strong> 34 C FFI tests + ~50 Android instrumented tests covering: all exported functions, null pointer handling, wrong-length inputs, non-canonical rejection, panic recovery, memory lifecycle.</p>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="cross-platform">4. Cross-Platform Consistency</h2>
+
+    <h3>4.1 Architecture</h3>
+    <p>All three platforms (Rust, iOS, Android) execute the same compiled Rust code. iOS uses C-linkage FFI with a static library. Android uses JNI with a shared library. The FFI/JNI layers perform only serialization/deserialization with no mathematical operations.</p>
+
+    <div class="highlight-box">
+        <p><strong>Key principle:</strong> All cryptographic operations are implemented exactly once, in Rust. Platform-specific code only handles marshalling. This architectural constraint is the primary guarantee of cross-platform determinism.</p>
+    </div>
+
+    <h3>4.2 Serialization Convention</h3>
+    <p>All values cross the FFI boundary as byte arrays with defined endianness: big-endian for field elements (via <code>field_to_bytes_be()</code> and <code>bytes_be_to_field_checked()</code>). Neither the Swift nor Kotlin side performs mathematical operations on these bytes &mdash; they pass them opaquely to and from the Rust layer.</p>
+
+    <h3>4.3 Determinism Claim</h3>
+
+    <div class="theorem">
+        <div class="label">Property C-14 &mdash; Cross-Platform Determinism (Detailed)</div>
+        <p>For identical inputs (secret keys, member rosters, salts, epochs), the following outputs are byte-identical across Rust, iOS/C FFI, and Android/JNI:</p>
+    </div>
+    <ul>
+        <li>Poseidon leaf hashes</li>
+        <li>Merkle roots</li>
+        <li>Poseidon commitments (Variant B)</li>
+        <li>SHA-256 commitments (Variant A)</li>
+        <li>Groth16 proofs (given the same RNG seed)</li>
+        <li>Proof serializations (192-byte and 384-byte formats)</li>
+    </ul>
+
+    <p><strong>Evidence.</strong> The cross-platform test vectors (<code>docs/cross-platform-test-vectors.json</code>) define expected outputs for specific inputs. These vectors are validated independently on each platform. The two cross-platform tests in <code>tests/cross_platform_tests.rs</code> provide additional validation.</p>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="conformance">5. Protocol Conformance Map</h2>
+
+    <h3>5.1 SEP-XXXX Section to Code Mapping</h3>
+    <p>Each requirement in the SEP specification is traced to its implementation location and the correctness properties it satisfies.</p>
+
+    <table class="notation-table">
+        <tr><th>SEP Section</th><th>Requirement</th><th>File</th><th>Properties</th></tr>
+        <tr><td>1.1</td><td>BLS12-381 G1 member identity keys</td><td><code>src/merkle/mod.rs</code></td><td>C-4</td></tr>
+        <tr><td>2.1</td><td>Member ordering by compressed G1</td><td><code>src/merkle/mod.rs</code></td><td>C-4</td></tr>
+        <tr><td>2.2</td><td>Poseidon parameters (w3, f8, p56, a5)</td><td><code>src/poseidon/mod.rs</code></td><td>C-1</td></tr>
+        <tr><td>2.2</td><td>Poseidon round constant derivation</td><td><code>src/poseidon/mod.rs</code></td><td>C-1</td></tr>
+        <tr><td>2.2</td><td>Poseidon MDS matrix (Cauchy)</td><td><code>src/poseidon/mod.rs</code></td><td>C-1</td></tr>
+        <tr><td>2.2</td><td>Leaf = Poseidon(sk)</td><td><code>src/merkle/mod.rs</code></td><td>C-3</td></tr>
+        <tr><td>2.2</td><td>Binary Merkle tree, zero-padded</td><td><code>src/merkle/mod.rs</code></td><td>C-5</td></tr>
+        <tr><td>2.3</td><td>Variant A: SHA-256(root || epoch || salt)</td><td><code>src/commitment/mod.rs</code></td><td>C-7</td></tr>
+        <tr><td>2.3</td><td>Variant B: Poseidon(Poseidon(root, epoch), salt)</td><td><code>src/commitment/mod.rs</code></td><td>C-6</td></tr>
+        <tr><td>3.3</td><td>Constraint 1: key ownership</td><td><code>src/circuit/mod.rs</code></td><td>C-8</td></tr>
+        <tr><td>3.3</td><td>Constraint 2: Merkle membership</td><td><code>src/circuit/mod.rs</code></td><td>C-8</td></tr>
+        <tr><td>3.3</td><td>Constraint 3: commitment binding</td><td><code>src/circuit/mod.rs</code></td><td>C-8</td></tr>
+        <tr><td>3.4</td><td>2 public inputs (commitment, epoch)</td><td><code>src/circuit/mod.rs</code></td><td>C-8</td></tr>
+        <tr><td>3.4</td><td>Proof format: 192 bytes compressed</td><td><code>src/prover/mod.rs</code></td><td>C-9</td></tr>
+        <tr><td>3.5</td><td>Groth16 pairing equation</td><td><code>contracts/.../lib.rs</code></td><td>C-12</td></tr>
+        <tr><td>4</td><td>create_group (epoch = 0)</td><td><code>contracts/.../lib.rs</code></td><td>C-10</td></tr>
+        <tr><td>4</td><td>update_commitment (epoch + 1)</td><td><code>contracts/.../lib.rs</code></td><td>C-10</td></tr>
+        <tr><td>4</td><td>deactivate_group</td><td><code>contracts/.../lib.rs</code></td><td>C-10</td></tr>
+        <tr><td>4</td><td>Proof replay hardening</td><td><code>contracts/.../lib.rs</code></td><td>C-11</td></tr>
+        <tr><td>5.1</td><td>Relayer pattern (fee decoupling)</td><td><code>relayer/src/handler.rs</code></td><td>INV-7</td></tr>
+        <tr><td>B</td><td>Canonical input validation</td><td><code>contracts/.../lib.rs</code></td><td>C-13</td></tr>
+    </table>
+
+    <h3>5.2 Proof-of-Soundness Theorem to Implementation Mapping</h3>
+    <p>Each theorem in the Proof of Soundness depends on the code correctly implementing specific constructions.</p>
+
+    <table class="notation-table">
+        <tr><th>Theorem</th><th>Statement</th><th>Implementation Dependency</th><th>Properties</th></tr>
+        <tr><td>Theorem 1</td><td>Merkle tree collision resistance</td><td>Poseidon hash with correct parameters; fixed-depth binary tree with zero padding</td><td>C-1, C-5</td></tr>
+        <tr><td>Theorem 2</td><td>Commitment hiding</td><td>Two-layer Poseidon commitment with fresh random salt; salt via <code>from_le_bytes_mod_order</code></td><td>C-6</td></tr>
+        <tr><td>Theorem 3</td><td>ZK membership soundness</td><td>Circuit constraints correctly encode key ownership, Merkle membership, and commitment binding</td><td>C-8</td></tr>
+        <tr><td>Theorem 4</td><td>Zero-knowledge property</td><td>Groth16 proof generation using arkworks; proof reveals only public inputs</td><td>C-8, C-9</td></tr>
+        <tr><td>Theorem 5</td><td>Epoch monotonicity</td><td>Contract enforces <span class="math">new_epoch == stored_epoch + 1</span> with <code>checked_add</code></td><td>C-10</td></tr>
+        <tr><td>Theorem 6</td><td>Proof non-replayability</td><td>SHA-256 hash of uncompressed proof stored in persistent storage; checked before every state-changing call</td><td>C-11</td></tr>
+        <tr><td>Theorem 7</td><td>Fee-payer privacy</td><td>Relayer submits transactions; contract does not inspect caller identity; proof-only authorization</td><td>INV-7</td></tr>
+        <tr><td>Theorem 8</td><td>Symmetric removal impossibility</td><td>Theoretical result about protocol design</td><td>N/A</td></tr>
+    </table>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="coverage">6. Test Coverage</h2>
+
+    <h3>6.1 Module Coverage Matrix</h3>
+
+    <table class="notation-table">
+        <tr><th>Module</th><th>File</th><th>Tests</th><th>Properties</th></tr>
+        <tr><td>Poseidon</td><td><code>src/poseidon/mod.rs</code></td><td>11</td><td>C-1, C-2</td></tr>
+        <tr><td>Merkle</td><td><code>src/merkle/mod.rs</code></td><td>20</td><td>C-3, C-4, C-5</td></tr>
+        <tr><td>Commitment</td><td><code>src/commitment/mod.rs</code></td><td>19</td><td>C-6, C-7</td></tr>
+        <tr><td>Circuit</td><td><code>src/circuit/mod.rs</code></td><td>18</td><td>C-8</td></tr>
+        <tr><td>Prover</td><td><code>src/prover/mod.rs</code></td><td>14</td><td>C-9</td></tr>
+        <tr><td>Ceremony</td><td><code>src/ceremony/</code></td><td>20</td><td>(setup)</td></tr>
+        <tr><td>Cross-platform</td><td><code>tests/</code></td><td>2</td><td>C-14</td></tr>
+        <tr><td>FFI (C)</td><td><code>tests/ffi_tests.rs</code></td><td>34</td><td>C-13, C-14</td></tr>
+        <tr><td>Contract</td><td><code>contracts/.../lib.rs</code></td><td>56</td><td>C-10, C-11, C-12, C-13</td></tr>
+        <tr><td>Relayer</td><td><code>relayer/src/</code></td><td>31</td><td>INV-7</td></tr>
+        <tr><td>PN-Relay</td><td><code>pn-relay/src/</code></td><td>42</td><td>INV-8</td></tr>
+        <tr><td>iOS</td><td><code>swift-mls/Tests/</code></td><td>~28</td><td>C-14</td></tr>
+        <tr><td>Android</td><td><code>clients/android/</code></td><td>~50</td><td>C-14</td></tr>
+        <tr><td><strong>Total</strong></td><td></td><td><strong>~345</strong></td><td></td></tr>
+    </table>
+
+    <h3>6.2 Invariant Coverage Matrix</h3>
+
+    <table class="notation-table">
+        <tr><th>Invariant</th><th>Tested By</th><th>Type</th><th>Evidence</th></tr>
+        <tr><td>INV-1</td><td>Prover module</td><td>Unit</td><td><code>prove()</code> computes commitment identically to <code>compute_poseidon_commitment()</code></td></tr>
+        <tr><td>INV-2</td><td>Prover + FFI</td><td>Unit + Integ.</td><td><code>proof_to_uncompressed_components()</code> produces 96/192/96 bytes</td></tr>
+        <tr><td>INV-3</td><td>Contract</td><td>Unit</td><td>epoch+1 accepted, epoch+0 rejected, epoch+2 rejected, overflow rejected</td></tr>
+        <tr><td>INV-4</td><td>Cross-platform, FFI</td><td>Integration</td><td>Same secret key bytes produce same field element on all platforms</td></tr>
+        <tr><td>INV-5</td><td>Cross-platform</td><td>Integration</td><td>Same <span class="math">sk</span> produces same <span class="math">Poseidon(sk)</span> via C FFI and JNI</td></tr>
+        <tr><td>INV-6</td><td>Cross-platform</td><td>Integration</td><td>Same member set produces same Merkle root via C FFI and JNI</td></tr>
+        <tr><td>INV-7</td><td>Relayer</td><td>Unit</td><td>Payload passed verbatim to <code>stellar contract invoke</code></td></tr>
+        <tr><td>INV-8</td><td>PN-Relay</td><td>Unit</td><td>Encrypted events not decrypted; only topic tags inspected</td></tr>
+    </table>
+
+    <h3>6.3 Gap Analysis</h3>
+    <p>The following areas have limited or indirect test coverage:</p>
+
+    <table class="notation-table">
+        <tr><th>Area</th><th>Coverage</th><th>Risk</th><th>Mitigation</th></tr>
+        <tr><td>End-to-end on-chain verification</td><td>No live testnet in CI</td><td>Medium</td><td>Contract tests use mock BLS12-381 host functions; manual testnet tests documented</td></tr>
+        <tr><td>Concurrent epoch transitions</td><td>Not tested</td><td>Low</td><td>Stellar's sequential transaction ordering prevents concurrency</td></tr>
+        <tr><td>Large member sets (2048)</td><td>Small-scale only</td><td>Low</td><td>No algorithmic difference between tiers; <span class="math">O(n log n)</span> construction</td></tr>
+        <tr><td>Network-layer privacy</td><td>Out of scope</td><td>Medium</td><td>Mitigated by Tor/VPN recommendations</td></tr>
+        <tr><td>Soroban host function fidelity</td><td>Assumed correct</td><td>Low</td><td>Part of Stellar protocol; independently validated</td></tr>
+        <tr><td>Non-canonical G1/G2 rejection</td><td>Implicit via proof failure</td><td>Low</td><td>Host functions perform subgroup checks</td></tr>
+    </table>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="limitations">7. Known Limitations</h2>
+
+    <ol>
+        <li><strong>No formal verification.</strong> This document provides a structured argument, not a machine-checked proof. The correctness claims depend on manual code inspection and empirical testing.</li>
+        <li><strong>Trusted setup simulation.</strong> The reference implementation's key derivation uses a simulation approach where ceremony scalars are hashed into a CSPRNG seed. Production deployments require Phase 2 MPC key derivation.</li>
+        <li><strong>arkworks dependency.</strong> Poseidon hash, Groth16 prover/verifier, and BLS12-381 arithmetic are provided by the arkworks library suite. This document does not prove the correctness of arkworks itself.</li>
+        <li><strong>Soroban host function opacity.</strong> The contract's Groth16 verification depends on Soroban's <code>bls12_381_g1_msm</code>, <code>bls12_381_pairing_check</code>, and related host functions. Their correctness is an assumption of the Stellar protocol.</li>
+        <li><strong>Cross-platform test vector coverage.</strong> The cross-platform test vectors cover a representative but not exhaustive set of inputs. Edge cases near the modulus boundary are tested in module-specific tests but not all appear in the cross-platform vectors.</li>
+        <li><strong>Post-compromise forward secrecy.</strong> As established by Theorem 8 of the Proof of Soundness, the symmetric protocol cannot cryptographically evict removed members. This is a protocol design limitation, not an implementation bug.</li>
+    </ol>
+
+    <hr class="section-divider">
+    <div class="highlight-box">
+        <p>This document is part of the <a href="https://github.com/rinat-enikeev/stellar-mls">Onym open-source project</a>. The full source code for the circuit, contract, and client implementations is available for audit. See also the <a href="/math">Proof of Soundness</a> for the mathematical security argument and the <a href="/architecture">Architecture</a> page for a less formal overview.</p>
+    </div>
+</div>
+
+<footer>
+    <div class="container">
+        <div class="footer-links">
+            <a href="/">Home</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls">GitHub</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls/tree/main/docs">Docs</a>
+            <a href="/privacy">Privacy</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls/blob/main/LICENSE">MIT License</a>
+        </div>
+        <p>onym.chat</p>
+    </div>
+</footer>
+
+</body>
+</html>

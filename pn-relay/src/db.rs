@@ -266,3 +266,193 @@ pub fn extract_tags_by_name(filter: &Value) -> Vec<(String, Vec<String>)> {
     }
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = PathBuf::from(format!(
+            "/tmp/pn_relay_db_test_{}_{}_{id}",
+            std::process::id(),
+            prefix
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn make_subscription(id: &str, filter: &str, platform: &str) -> Subscription {
+        Subscription {
+            subscription_id: id.to_string(),
+            filter_json: filter.to_string(),
+            encrypted_token: vec![1, 2, 3],
+            encrypted_notif_key: vec![4, 5, 6],
+            platform: platform.to_string(),
+            created_at: 1000,
+            last_pushed_at: 0,
+        }
+    }
+
+    #[test]
+    fn test_database_creation() {
+        let dir = unique_temp_dir("db_create");
+        let result = Database::new(&dir);
+        assert!(result.is_ok());
+        assert!(dir.join("subscriptions.db").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_insert_subscription() {
+        let dir = unique_temp_dir("db_insert");
+        let db = Database::new(&dir).unwrap();
+
+        let sub = make_subscription("test-sub-1", r##"{"#t":["abc123"]}"##, "ios");
+        db.insert_subscription(&sub).unwrap();
+
+        // Retrieve via tag query
+        let results = db.get_subscriptions_for_tag("abc123").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].subscription_id, "test-sub-1");
+        assert_eq!(results[0].platform, "ios");
+        assert_eq!(results[0].encrypted_token, vec![1, 2, 3]);
+        assert_eq!(results[0].encrypted_notif_key, vec![4, 5, 6]);
+        assert_eq!(results[0].created_at, 1000);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_insert_subscription_upsert() {
+        let dir = unique_temp_dir("db_upsert");
+        let db = Database::new(&dir).unwrap();
+
+        let sub1 = make_subscription("test-sub-1", r##"{"#t":["abc123"]}"##, "ios");
+        db.insert_subscription(&sub1).unwrap();
+
+        // Insert same ID with different data
+        let sub2 = Subscription {
+            subscription_id: "test-sub-1".to_string(),
+            filter_json: r##"{"#t":["xyz789"]}"##.to_string(),
+            encrypted_token: vec![10, 20, 30],
+            encrypted_notif_key: vec![40, 50, 60],
+            platform: "android-fcm".to_string(),
+            created_at: 2000,
+            last_pushed_at: 500,
+        };
+        db.insert_subscription(&sub2).unwrap();
+
+        // Old tag should return no results
+        let old = db.get_subscriptions_for_tag("abc123").unwrap();
+        assert_eq!(old.len(), 0);
+
+        // New tag should return the updated subscription
+        let new = db.get_subscriptions_for_tag("xyz789").unwrap();
+        assert_eq!(new.len(), 1);
+        assert_eq!(new[0].platform, "android-fcm");
+        assert_eq!(new[0].encrypted_token, vec![10, 20, 30]);
+        assert_eq!(new[0].created_at, 2000);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_update_subscription_filter() {
+        let dir = unique_temp_dir("db_update_filter");
+        let db = Database::new(&dir).unwrap();
+
+        let sub = make_subscription("test-sub-1", r##"{"#t":["old_tag"]}"##, "ios");
+        db.insert_subscription(&sub).unwrap();
+
+        db.update_subscription_filter("test-sub-1", r##"{"#t":["new_tag"]}"##)
+            .unwrap();
+
+        // Old tag should not match
+        let old = db.get_subscriptions_for_tag("old_tag").unwrap();
+        assert_eq!(old.len(), 0);
+
+        // New tag should match
+        let new = db.get_subscriptions_for_tag("new_tag").unwrap();
+        assert_eq!(new.len(), 1);
+        assert_eq!(new[0].subscription_id, "test-sub-1");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_update_subscription_not_found() {
+        let dir = unique_temp_dir("db_update_notfound");
+        let db = Database::new(&dir).unwrap();
+
+        let result = db.update_subscription_filter("nonexistent", r##"{"#t":["tag"]}"##);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not found"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_delete_subscription() {
+        let dir = unique_temp_dir("db_delete");
+        let db = Database::new(&dir).unwrap();
+
+        let sub = make_subscription("test-sub-1", r##"{"#t":["abc123"]}"##, "ios");
+        db.insert_subscription(&sub).unwrap();
+
+        db.delete_subscription("test-sub-1").unwrap();
+
+        let results = db.get_subscriptions_for_tag("abc123").unwrap();
+        assert_eq!(results.len(), 0);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_delete_subscription_not_found() {
+        let dir = unique_temp_dir("db_delete_notfound");
+        let db = Database::new(&dir).unwrap();
+
+        // Deleting a non-existent subscription should not error
+        let result = db.delete_subscription("nonexistent");
+        assert!(result.is_ok());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_subscriptions_by_tag() {
+        let dir = unique_temp_dir("db_by_tag");
+        let db = Database::new(&dir).unwrap();
+
+        let sub1 = make_subscription("sub-1", r##"{"#t":["shared_tag","unique_1"]}"##, "ios");
+        let sub2 = make_subscription("sub-2", r##"{"#t":["shared_tag","unique_2"]}"##, "android-fcm");
+        let sub3 = make_subscription("sub-3", r##"{"#t":["other_tag"]}"##, "ios");
+
+        db.insert_subscription(&sub1).unwrap();
+        db.insert_subscription(&sub2).unwrap();
+        db.insert_subscription(&sub3).unwrap();
+
+        // Query shared tag — should return sub-1 and sub-2
+        let shared = db.get_subscriptions_for_tag("shared_tag").unwrap();
+        assert_eq!(shared.len(), 2);
+        let ids: Vec<&str> = shared.iter().map(|s| s.subscription_id.as_str()).collect();
+        assert!(ids.contains(&"sub-1"));
+        assert!(ids.contains(&"sub-2"));
+
+        // Query unique tag — should return only one
+        let unique = db.get_subscriptions_for_tag("unique_1").unwrap();
+        assert_eq!(unique.len(), 1);
+        assert_eq!(unique[0].subscription_id, "sub-1");
+
+        // Query tag with no matches
+        let none = db.get_subscriptions_for_tag("no_such_tag").unwrap();
+        assert_eq!(none.len(), 0);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

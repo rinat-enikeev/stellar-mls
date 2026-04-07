@@ -479,12 +479,55 @@ pub extern "C" fn sep_generate_membership_proof(
 }
 
 #[cfg(test)]
+#[allow(unused_unsafe)]
 mod tests {
+    use super::*;
     use k256::schnorr::{
         signature::hazmat::{PrehashSigner, PrehashVerifier},
         SigningKey, VerifyingKey,
     };
     use sha2::{Digest, Sha256};
+    use std::ffi::c_char;
+
+    /// Read output bytes from a SepByteBuffer (does not free it).
+    fn read_buffer(buf: &SepByteBuffer) -> Vec<u8> {
+        if buf.ptr.is_null() || buf.len == 0 {
+            return Vec::new();
+        }
+        unsafe { slice::from_raw_parts(buf.ptr, buf.len).to_vec() }
+    }
+
+    /// Call sep_compute_leaf_hash and return the result bytes.
+    fn ffi_leaf_hash(sk: &[u8]) -> Vec<u8> {
+        let mut out = SepByteBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let mut err: *mut c_char = ptr::null_mut();
+        let ok = unsafe {
+            sep_compute_leaf_hash(sk.as_ptr(), sk.len(), &mut out, &mut err)
+        };
+        assert!(ok, "sep_compute_leaf_hash failed");
+        let result = read_buffer(&out);
+        sep_byte_buffer_free(out);
+        result
+    }
+
+    /// Call sep_compute_public_key and return the result bytes.
+    fn ffi_public_key(sk: &[u8]) -> Vec<u8> {
+        let mut out = SepByteBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let mut err: *mut c_char = ptr::null_mut();
+        let ok = unsafe {
+            sep_compute_public_key(sk.as_ptr(), sk.len(), &mut out, &mut err)
+        };
+        assert!(ok, "sep_compute_public_key failed");
+        let result = read_buffer(&out);
+        sep_byte_buffer_free(out);
+        result
+    }
 
     fn decode_hex(hex: &str) -> Vec<u8> {
         (0..hex.len())
@@ -602,5 +645,591 @@ mod tests {
             verifying_key.verify_prehash(&event_id, &old_sig).is_err(),
             "Signer::sign output must NOT pass PrehashVerifier::verify_prehash (double-hash bug)"
         );
+    }
+
+    // ================================================================
+    // Internal Helper Tests
+    // ================================================================
+
+    #[test]
+    fn test_read_fr_canonical_accepted() {
+        // A small canonical field element (1)
+        let mut bytes = [0u8; 32];
+        bytes[31] = 1;
+        assert!(read_fr(&bytes).is_ok());
+    }
+
+    #[test]
+    fn test_read_fr_zero_accepted() {
+        let bytes = [0u8; 32];
+        assert!(read_fr(&bytes).is_ok());
+    }
+
+    #[test]
+    fn test_read_fr_non_canonical_rejected() {
+        // BLS12-381 scalar field modulus r is ~2^255, so all-0xFF is >= r
+        let bytes = [0xFF; 32];
+        assert!(read_fr(&bytes).is_err());
+    }
+
+    #[test]
+    fn test_read_fr_wrong_length_rejected() {
+        let bytes = [0u8; 16];
+        assert!(read_fr(&bytes).is_err());
+    }
+
+    #[test]
+    fn test_read_fr_secret_key_accepts_non_canonical() {
+        // Non-canonical values should be accepted (reduced mod r)
+        let bytes = [0xFF; 32];
+        assert!(read_fr_secret_key(&bytes).is_ok());
+    }
+
+    #[test]
+    fn test_read_fr_secret_key_accepts_canonical() {
+        let mut bytes = [0u8; 32];
+        bytes[31] = 42;
+        assert!(read_fr_secret_key(&bytes).is_ok());
+    }
+
+    #[test]
+    fn test_read_fr_secret_key_wrong_length_rejected() {
+        let bytes = [0u8; 16];
+        assert!(read_fr_secret_key(&bytes).is_err());
+    }
+
+    // ================================================================
+    // FFI Leaf Hash Tests
+    // ================================================================
+
+    #[test]
+    fn test_ffi_compute_leaf_hash_32_bytes() {
+        let mut sk = [0u8; 32];
+        sk[31] = 1;
+        let result = ffi_leaf_hash(&sk);
+        assert_eq!(result.len(), 32);
+    }
+
+    #[test]
+    fn test_ffi_compute_leaf_hash_deterministic() {
+        let mut sk = [0u8; 32];
+        sk[31] = 42;
+        let r1 = ffi_leaf_hash(&sk);
+        let r2 = ffi_leaf_hash(&sk);
+        assert_eq!(r1, r2);
+    }
+
+    #[test]
+    fn test_ffi_compute_leaf_hash_different_keys_differ() {
+        let mut sk1 = [0u8; 32];
+        sk1[31] = 1;
+        let mut sk2 = [0u8; 32];
+        sk2[31] = 2;
+        assert_ne!(ffi_leaf_hash(&sk1), ffi_leaf_hash(&sk2));
+    }
+
+    #[test]
+    fn test_ffi_compute_leaf_hash_null_pointer_error() {
+        let mut out = SepByteBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let mut err: *mut c_char = ptr::null_mut();
+        let ok = unsafe {
+            sep_compute_leaf_hash(ptr::null(), 32, &mut out, &mut err)
+        };
+        assert!(!ok);
+        assert!(!err.is_null());
+        unsafe { sep_string_free(err) };
+    }
+
+    // ================================================================
+    // FFI Public Key Tests
+    // ================================================================
+
+    #[test]
+    fn test_ffi_compute_public_key_48_bytes() {
+        let mut sk = [0u8; 32];
+        sk[31] = 1;
+        let result = ffi_public_key(&sk);
+        assert_eq!(result.len(), 48);
+    }
+
+    #[test]
+    fn test_ffi_compute_public_key_deterministic() {
+        let mut sk = [0u8; 32];
+        sk[31] = 99;
+        let r1 = ffi_public_key(&sk);
+        let r2 = ffi_public_key(&sk);
+        assert_eq!(r1, r2);
+    }
+
+    #[test]
+    fn test_ffi_compute_public_key_different_keys_differ() {
+        let mut sk1 = [0u8; 32];
+        sk1[31] = 1;
+        let mut sk2 = [0u8; 32];
+        sk2[31] = 2;
+        assert_ne!(ffi_public_key(&sk1), ffi_public_key(&sk2));
+    }
+
+    // ================================================================
+    // FFI Merkle Root Tests
+    // ================================================================
+
+    #[test]
+    fn test_ffi_compute_merkle_root_single_member() {
+        let mut sk = [0u8; 32];
+        sk[31] = 1;
+        let pk = ffi_public_key(&sk);
+        let leaf = ffi_leaf_hash(&sk);
+
+        let mut out = SepByteBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        let mut err: *mut c_char = ptr::null_mut();
+        let ok = unsafe {
+            sep_compute_merkle_root(
+                pk.as_ptr(), pk.len(),
+                leaf.as_ptr(), leaf.len(),
+                5, // depth
+                &mut out, &mut err,
+            )
+        };
+        assert!(ok);
+        let root = read_buffer(&out);
+        assert_eq!(root.len(), 32);
+        sep_byte_buffer_free(out);
+    }
+
+    #[test]
+    fn test_ffi_compute_merkle_root_order_independent() {
+        // Create two members
+        let mut sk1 = [0u8; 32];
+        sk1[31] = 1;
+        let mut sk2 = [0u8; 32];
+        sk2[31] = 2;
+
+        let pk1 = ffi_public_key(&sk1);
+        let pk2 = ffi_public_key(&sk2);
+        let leaf1 = ffi_leaf_hash(&sk1);
+        let leaf2 = ffi_leaf_hash(&sk2);
+
+        // Order A: [member1, member2]
+        let mut pks_a = pk1.clone();
+        pks_a.extend_from_slice(&pk2);
+        let mut leaves_a = leaf1.clone();
+        leaves_a.extend_from_slice(&leaf2);
+
+        // Order B: [member2, member1]
+        let mut pks_b = pk2.clone();
+        pks_b.extend_from_slice(&pk1);
+        let mut leaves_b = leaf2.clone();
+        leaves_b.extend_from_slice(&leaf1);
+
+        let mut out_a = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut out_b = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut err: *mut c_char = ptr::null_mut();
+
+        let ok_a = unsafe {
+            sep_compute_merkle_root(
+                pks_a.as_ptr(), pks_a.len(),
+                leaves_a.as_ptr(), leaves_a.len(),
+                5, &mut out_a, &mut err,
+            )
+        };
+        let ok_b = unsafe {
+            sep_compute_merkle_root(
+                pks_b.as_ptr(), pks_b.len(),
+                leaves_b.as_ptr(), leaves_b.len(),
+                5, &mut out_b, &mut err,
+            )
+        };
+
+        assert!(ok_a);
+        assert!(ok_b);
+        let root_a = read_buffer(&out_a);
+        let root_b = read_buffer(&out_b);
+        assert_eq!(root_a, root_b, "Merkle root must be order-independent");
+
+        sep_byte_buffer_free(out_a);
+        sep_byte_buffer_free(out_b);
+    }
+
+    #[test]
+    fn test_ffi_compute_merkle_root_mismatched_counts() {
+        let mut sk = [0u8; 32];
+        sk[31] = 1;
+        let pk = ffi_public_key(&sk);
+        // Provide 2 leaf hashes but only 1 public key
+        let leaf = ffi_leaf_hash(&sk);
+        let mut double_leaf = leaf.clone();
+        double_leaf.extend_from_slice(&leaf);
+
+        let mut out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut err: *mut c_char = ptr::null_mut();
+        let ok = unsafe {
+            sep_compute_merkle_root(
+                pk.as_ptr(), pk.len(),
+                double_leaf.as_ptr(), double_leaf.len(),
+                5, &mut out, &mut err,
+            )
+        };
+        assert!(!ok);
+        assert!(!err.is_null());
+        unsafe { sep_string_free(err) };
+    }
+
+    // ================================================================
+    // FFI Commitment Tests
+    // ================================================================
+
+    #[test]
+    fn test_ffi_sha256_commitment_32_bytes() {
+        let mut root = [0u8; 32];
+        root[31] = 1;
+        let salt = [0u8; 32];
+        let mut out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut err: *mut c_char = ptr::null_mut();
+
+        let ok = unsafe {
+            sep_compute_sha256_commitment(
+                root.as_ptr(), root.len(),
+                0, // epoch
+                salt.as_ptr(), salt.len(),
+                &mut out, &mut err,
+            )
+        };
+        assert!(ok);
+        let result = read_buffer(&out);
+        assert_eq!(result.len(), 32);
+        sep_byte_buffer_free(out);
+    }
+
+    #[test]
+    fn test_ffi_poseidon_commitment_32_bytes() {
+        let mut root = [0u8; 32];
+        root[31] = 1;
+        let salt = [0u8; 32];
+        let mut out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut err: *mut c_char = ptr::null_mut();
+
+        let ok = unsafe {
+            sep_compute_poseidon_commitment(
+                root.as_ptr(), root.len(),
+                0,
+                salt.as_ptr(), salt.len(),
+                &mut out, &mut err,
+            )
+        };
+        assert!(ok);
+        let result = read_buffer(&out);
+        assert_eq!(result.len(), 32);
+        sep_byte_buffer_free(out);
+    }
+
+    #[test]
+    fn test_ffi_poseidon_and_sha256_commitment_differ() {
+        let mut root = [0u8; 32];
+        root[31] = 1;
+        let salt = [0u8; 32];
+
+        let mut out_sha = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut out_pos = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut err: *mut c_char = ptr::null_mut();
+
+        unsafe {
+            sep_compute_sha256_commitment(
+                root.as_ptr(), root.len(), 0,
+                salt.as_ptr(), salt.len(),
+                &mut out_sha, &mut err,
+            );
+            sep_compute_poseidon_commitment(
+                root.as_ptr(), root.len(), 0,
+                salt.as_ptr(), salt.len(),
+                &mut out_pos, &mut err,
+            );
+        }
+
+        let sha_result = read_buffer(&out_sha);
+        let pos_result = read_buffer(&out_pos);
+        assert_ne!(sha_result, pos_result, "SHA-256 and Poseidon commitments must differ");
+
+        sep_byte_buffer_free(out_sha);
+        sep_byte_buffer_free(out_pos);
+    }
+
+    #[test]
+    fn test_ffi_commitment_deterministic() {
+        let mut root = [0u8; 32];
+        root[31] = 5;
+        let salt = [0xAB; 32];
+
+        let compute = || {
+            let mut out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+            let mut err: *mut c_char = ptr::null_mut();
+            unsafe {
+                sep_compute_poseidon_commitment(
+                    root.as_ptr(), root.len(), 42,
+                    salt.as_ptr(), salt.len(),
+                    &mut out, &mut err,
+                );
+            }
+            let result = read_buffer(&out);
+            sep_byte_buffer_free(out);
+            result
+        };
+        assert_eq!(compute(), compute());
+    }
+
+    // ================================================================
+    // FFI Nostr Tests (via extern "C")
+    // ================================================================
+
+    #[test]
+    fn test_ffi_nostr_derive_public_key_32_bytes() {
+        let mut sk = [0u8; 32];
+        sk[31] = 1;
+        let mut out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut err: *mut c_char = ptr::null_mut();
+
+        let ok = unsafe {
+            sep_nostr_derive_public_key(
+                sk.as_ptr(), sk.len(), &mut out, &mut err,
+            )
+        };
+        assert!(ok);
+        let result = read_buffer(&out);
+        assert_eq!(result.len(), 32);
+        sep_byte_buffer_free(out);
+    }
+
+    #[test]
+    fn test_ffi_nostr_sign_verify_roundtrip() {
+        let mut sk = [0u8; 32];
+        sk[31] = 3; // BIP-340 test vector 0 secret key
+        let event_id: [u8; 32] = Sha256::digest(b"ffi-roundtrip-test").into();
+
+        // Derive public key
+        let mut pk_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut err: *mut c_char = ptr::null_mut();
+        let ok = unsafe {
+            sep_nostr_derive_public_key(sk.as_ptr(), sk.len(), &mut pk_out, &mut err)
+        };
+        assert!(ok);
+        let pk = read_buffer(&pk_out);
+
+        // Sign
+        let mut sig_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let ok = unsafe {
+            sep_nostr_sign_event_id(
+                sk.as_ptr(), sk.len(),
+                event_id.as_ptr(), event_id.len(),
+                &mut sig_out, &mut err,
+            )
+        };
+        assert!(ok);
+        let sig = read_buffer(&sig_out);
+        assert_eq!(sig.len(), 64);
+
+        // Verify
+        let ok = unsafe {
+            sep_nostr_verify_event_signature(
+                pk.as_ptr(), pk.len(),
+                event_id.as_ptr(), event_id.len(),
+                sig.as_ptr(), sig.len(),
+                &mut err,
+            )
+        };
+        assert!(ok, "valid signature must verify");
+
+        sep_byte_buffer_free(pk_out);
+        sep_byte_buffer_free(sig_out);
+    }
+
+    #[test]
+    fn test_ffi_nostr_verify_wrong_event_id_fails() {
+        let mut sk = [0u8; 32];
+        sk[31] = 3;
+        let event_id: [u8; 32] = Sha256::digest(b"correct-event").into();
+        let wrong_id: [u8; 32] = Sha256::digest(b"wrong-event").into();
+
+        let mut pk_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut sig_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut err: *mut c_char = ptr::null_mut();
+
+        unsafe {
+            sep_nostr_derive_public_key(sk.as_ptr(), sk.len(), &mut pk_out, &mut err);
+            sep_nostr_sign_event_id(
+                sk.as_ptr(), sk.len(),
+                event_id.as_ptr(), event_id.len(),
+                &mut sig_out, &mut err,
+            );
+        }
+        let pk = read_buffer(&pk_out);
+        let sig = read_buffer(&sig_out);
+
+        // Verify against wrong event ID
+        let ok = unsafe {
+            sep_nostr_verify_event_signature(
+                pk.as_ptr(), pk.len(),
+                wrong_id.as_ptr(), wrong_id.len(),
+                sig.as_ptr(), sig.len(),
+                &mut err,
+            )
+        };
+        assert!(!ok, "signature must not verify against wrong event ID");
+
+        sep_byte_buffer_free(pk_out);
+        sep_byte_buffer_free(sig_out);
+        if !err.is_null() {
+            unsafe { sep_string_free(err) };
+        }
+    }
+
+    // ================================================================
+    // FFI Memory Safety Tests
+    // ================================================================
+
+    #[test]
+    fn test_byte_buffer_free_null_safe() {
+        let buf = SepByteBuffer {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        sep_byte_buffer_free(buf); // should not crash
+    }
+
+    #[test]
+    fn test_string_free_null_safe() {
+        unsafe { sep_string_free(ptr::null_mut()) }; // should not crash
+    }
+
+    // ================================================================
+    // FFI Proof Pipeline Tests
+    // ================================================================
+
+    #[test]
+    fn test_ffi_generate_testing_proving_key() {
+        let mut out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut err: *mut c_char = ptr::null_mut();
+        let ok = unsafe {
+            sep_generate_testing_proving_key(5, 12345, &mut out, &mut err)
+        };
+        assert!(ok);
+        assert!(out.len > 0, "proving key must be non-empty");
+        sep_byte_buffer_free(out);
+    }
+
+    #[test]
+    fn test_ffi_generate_pk_deterministic() {
+        let gen = |seed: u64| {
+            let mut out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+            let mut err: *mut c_char = ptr::null_mut();
+            unsafe { sep_generate_testing_proving_key(5, seed, &mut out, &mut err) };
+            let bytes = read_buffer(&out);
+            sep_byte_buffer_free(out);
+            bytes
+        };
+        assert_eq!(gen(42), gen(42), "same seed must produce same PK");
+        assert_ne!(gen(42), gen(43), "different seeds must produce different PKs");
+    }
+
+    #[test]
+    fn test_ffi_full_proof_pipeline() {
+        // 1. Generate proving key
+        let mut pk_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut err: *mut c_char = ptr::null_mut();
+        let ok = unsafe {
+            sep_generate_testing_proving_key(5, 99, &mut pk_out, &mut err)
+        };
+        assert!(ok, "generating PK failed");
+        let pk_bytes = read_buffer(&pk_out);
+
+        // 2. Create a single member
+        let mut sk = [0u8; 32];
+        sk[31] = 7;
+        let member_pk = ffi_public_key(&sk);
+        let member_leaf = ffi_leaf_hash(&sk);
+        let salt = [0xAA; 32];
+
+        // 3. Generate membership proof
+        let mut proof_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut commitment_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let ok = unsafe {
+            sep_generate_membership_proof(
+                pk_bytes.as_ptr(), pk_bytes.len(),
+                member_pk.as_ptr(), member_pk.len(),
+                member_leaf.as_ptr(), member_leaf.len(),
+                sk.as_ptr(), sk.len(),
+                0, // epoch
+                salt.as_ptr(), salt.len(),
+                5, // depth
+                &mut proof_out, &mut commitment_out, &mut err,
+            )
+        };
+        assert!(ok, "generating proof failed");
+
+        let proof = read_buffer(&proof_out);
+        let commitment = read_buffer(&commitment_out);
+        assert_eq!(proof.len(), 192, "compressed proof must be 192 bytes");
+        assert_eq!(commitment.len(), 32, "commitment must be 32 bytes");
+
+        // 4. Decompress proof
+        let mut a_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut b_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut c_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let ok = unsafe {
+            sep_proof_to_contract_format(
+                proof.as_ptr(), proof.len(),
+                &mut a_out, &mut b_out, &mut c_out, &mut err,
+            )
+        };
+        assert!(ok, "proof decompression failed");
+
+        let a = read_buffer(&a_out);
+        let b = read_buffer(&b_out);
+        let c = read_buffer(&c_out);
+        assert_eq!(a.len(), 96, "proof_a (G1) must be 96 bytes");
+        assert_eq!(b.len(), 192, "proof_b (G2) must be 192 bytes");
+        assert_eq!(c.len(), 96, "proof_c (G1) must be 96 bytes");
+
+        // 5. Verify commitment matches separate computation
+        let mut root_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        unsafe {
+            sep_compute_merkle_root(
+                member_pk.as_ptr(), member_pk.len(),
+                member_leaf.as_ptr(), member_leaf.len(),
+                5,
+                &mut root_out, &mut err,
+            );
+        }
+        let root = read_buffer(&root_out);
+
+        let mut commit_check = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        unsafe {
+            sep_compute_poseidon_commitment(
+                root.as_ptr(), root.len(),
+                0,
+                salt.as_ptr(), salt.len(),
+                &mut commit_check, &mut err,
+            );
+        }
+        let commit_check_bytes = read_buffer(&commit_check);
+        assert_eq!(
+            commitment, commit_check_bytes,
+            "proof commitment must match separately computed Poseidon commitment"
+        );
+
+        // Free all buffers
+        sep_byte_buffer_free(pk_out);
+        sep_byte_buffer_free(proof_out);
+        sep_byte_buffer_free(commitment_out);
+        sep_byte_buffer_free(a_out);
+        sep_byte_buffer_free(b_out);
+        sep_byte_buffer_free(c_out);
+        sep_byte_buffer_free(root_out);
+        sep_byte_buffer_free(commit_check);
     }
 }

@@ -1,5 +1,6 @@
 {
-  "description": "Canonical test vectors for cross-platform (iOS/Android) interoperability. Both platforms MUST produce identical outputs for the given inputs. Generated from the SEP-XXXX specification.",
+  "description": "Canonical test vectors for cross-platform (Rust/iOS/Android) interoperability. All platforms MUST produce identical outputs for the given inputs. Generated from the Rust reference implementation.",
+  "version": 2,
 
   "topic_derivation": {
     "description": "SHA-256('sep-topic-v1' || groupSecret)[0..8] as hex string",
@@ -52,17 +53,82 @@
   },
 
   "bls_key_derivation": {
-    "description": "BLS12-381 public key (48 bytes compressed G1) and leaf hash (32 bytes) from 32-byte secret. Values must match across iOS FFI and Android JNI.",
+    "description": "BLS12-381 compressed G1 public key (48 bytes) and Poseidon leaf hash (32 bytes) from 32-byte secret key. Secret key is interpreted as big-endian and reduced mod r (Fr::from_be_bytes_mod_order).",
     "vectors": [
       {
         "secret_key_hex": "4242424242424242424242424242424242424242424242424242424242424242",
-        "expected_public_key_length": 48,
-        "expected_leaf_hash_length": 32
+        "expected_public_key_hex": "b5b99c967e4c69822f427db1f6871dd119afb95ab9646ba2e707990a3db31777a59b66f69e89c2055699b0ade7357eae",
+        "expected_leaf_hash_hex": "1fe19c284d0763e709dc2a0195cee0c40ae331ff7a7cd6efd16bc3c8a534e46c"
       },
       {
         "secret_key_hex": "0101010101010101010101010101010101010101010101010101010101010101",
-        "expected_public_key_length": 48,
-        "expected_leaf_hash_length": 32
+        "expected_public_key_hex": "aa1a1c26055a329817a5759d877a2795f9499b97d6056edde0eea39512f24e8bc874b4471f0501127abb1ea0d9f68ac1",
+        "expected_leaf_hash_hex": "5f44af31406da8025c110940b29eafcaeb42b0d34992e27dcc0ce22c11d3872e"
+      }
+    ]
+  },
+
+  "merkle_root": {
+    "description": "Poseidon Merkle tree root from sorted members. Members are sorted by compressed G1 public key (ascending lexicographic). Tree depth = 5 (Small tier).",
+    "vectors": [
+      {
+        "description": "Single member (sk=0x42..42)",
+        "members": [
+          {
+            "secret_key_hex": "4242424242424242424242424242424242424242424242424242424242424242"
+          }
+        ],
+        "depth": 5,
+        "expected_root_hex": "5215123288dcf6706347bef8a27ea55d2d53bb64270e2a69934007ea34f2f04e"
+      },
+      {
+        "description": "Two members (sk=0x42..42, sk=0x01..01)",
+        "members": [
+          {
+            "secret_key_hex": "4242424242424242424242424242424242424242424242424242424242424242"
+          },
+          {
+            "secret_key_hex": "0101010101010101010101010101010101010101010101010101010101010101"
+          }
+        ],
+        "depth": 5,
+        "expected_root_hex": "30bb9c0d5ca89a65ce7f16817c31999800ab316c7e0eb903fea7d594087fdd94"
+      }
+    ]
+  },
+
+  "poseidon_commitment": {
+    "description": "Poseidon(Poseidon(root, epoch_as_Fr), salt_as_Fr). epoch_as_Fr = Fr::from(epoch_u64). salt_as_Fr = Fr::from_le_bytes_mod_order(salt_32bytes).",
+    "vectors": [
+      {
+        "root_hex": "5215123288dcf6706347bef8a27ea55d2d53bb64270e2a69934007ea34f2f04e",
+        "epoch": 0,
+        "salt_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+        "expected_commitment_hex": "255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e"
+      },
+      {
+        "root_hex": "30bb9c0d5ca89a65ce7f16817c31999800ab316c7e0eb903fea7d594087fdd94",
+        "epoch": 5,
+        "salt_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "expected_commitment_hex": "0ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5"
+      }
+    ]
+  },
+
+  "sha256_commitment": {
+    "description": "SHA-256(root_32bytes_BE || epoch_8bytes_BE || salt_32bytes). Total preimage: 72 bytes.",
+    "vectors": [
+      {
+        "root_hex": "5215123288dcf6706347bef8a27ea55d2d53bb64270e2a69934007ea34f2f04e",
+        "epoch": 0,
+        "salt_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+        "expected_commitment_hex": "851617b0103de7c3df520bb34b6e2ae989bd9aaa23355baa5cf033255d88fa26"
+      },
+      {
+        "root_hex": "30bb9c0d5ca89a65ce7f16817c31999800ab316c7e0eb903fea7d594087fdd94",
+        "epoch": 5,
+        "salt_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "expected_commitment_hex": "58a1d00ea6f30a925ea91e791f934b08e815f4c345b445af5a9d072926df67a0"
       }
     ]
   },

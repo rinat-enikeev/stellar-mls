@@ -1,0 +1,38 @@
+{
+  "name": "Onym Chat",
+  "identifier": "chat.onym.source",
+  "subtitle": "Private Encrypted Group Chat",
+  "sourceURL": "https://onym.chat/altstore-source.json",
+  "apps": [
+    {
+      "name": "Onym Chat",
+      "bundleIdentifier": "chat.onym.ios",
+      "developerName": "Programyzer OU",
+      "subtitle": "Private Encrypted Group Chat",
+      "localizedDescription": "Onym is a private group chat app where every message is end-to-end encrypted before it leaves your device. Built on open protocols, Onym gives you verifiable privacy by design.\n\nFeatures:\n- End-to-end encryption (AES-256-GCM)\n- Zero-knowledge group membership proofs\n- Encrypted voice messages and media sharing\n- Voice and video calls\n- Cross-platform (iOS and Android)\n- Open source",
+      "iconURL": "https://onym.chat/icon.png",
+      "tintColor": "6c5ce7",
+      "category": "social",
+      "screenshots": [],
+      "versions": [
+        {
+          "version": "1.0",
+          "date": "2026-04-07",
+          "localizedDescription": "Initial release of Onym Chat.",
+          "downloadURL": "https://onym.chat/builds/onym-1.0.ipa",
+          "size": 0
+        }
+      ],
+      "appPermissions": {
+        "entitlements": [
+          "com.apple.developer.marketplace.app-distribution"
+        ],
+        "privacy": {
+          "NSCameraUsageDescription": "Camera is used to scan QR codes for group invitations.",
+          "NSPhotoLibraryUsageDescription": "Photo library access is used to share images in chats.",
+          "NSMicrophoneUsageDescription": "Microphone is used for voice messages and calls."
+        }
+      }
+    }
+  ]
+}

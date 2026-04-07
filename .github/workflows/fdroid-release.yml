@@ -30,6 +30,8 @@ jobs:
           APKSIGNER=$(find $ANDROID_HOME -name apksigner 2>/dev/null | sort -V | tail -1)
           $APKSIGNER sign \
             --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled false \
             --ks /tmp/keystore.jks \
             --ks-pass "pass:$KEYSTORE_PASSWORD" \
             --ks-key-alias "$KEY_ALIAS" \

@@ -17,9 +17,10 @@ android {
         applicationId = "chat.onym.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.0.4"
+        versionCode = 6
+        versionName = "1.0.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        vectorDrawables.useSupportLibrary = true
 
         // Read relayer/.env for build-time defaults
         val envFile = rootProject.file("../../../relayer/.env")
@@ -76,7 +77,12 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            vcsInfo.include = false
         }
+    }
+
+    aaptOptions {
+        cruncherEnabled = false
     }
 
     flavorDimensions += "distribution"
@@ -120,6 +126,12 @@ android {
         // Exclude baseline profile for reproducible builds
         resources.excludes += "assets/dexopt/baseline.prof"
         resources.excludes += "assets/dexopt/baseline.profm"
+    }
+}
+
+tasks.whenTaskAdded {
+    if (name.contains("ArtProfile")) {
+        enabled = false
     }
 }
 

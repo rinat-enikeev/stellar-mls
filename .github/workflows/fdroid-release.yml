@@ -19,6 +19,14 @@ jobs:
           chmod +x scripts/build-fdroid-release.sh
           ./scripts/build-fdroid-release.sh
 
+      - name: Zipalign APK (match F-Droid reproducible-apk-tools padding)
+        run: |
+          pip install repro-apk
+          APK=$(ls app-fdroid-arm64-v8a-release-*.apk)
+          mv "$APK" unaligned.apk
+          repro-apk zipalign --page-size 16 --pad-like-apksigner --replace unaligned.apk "$APK"
+          rm -f unaligned.apk
+
       - name: Sign APK
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}

@@ -1,1 +1,1 @@
-encrypted,chat,private,group,nostr,secure,messaging,e2e,crypto,anonymous
+encrypted,chat,private,group,nostr,secure,messaging,e2e,encryption,privacy

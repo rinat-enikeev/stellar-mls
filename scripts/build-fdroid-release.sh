@@ -35,14 +35,14 @@ set -euo pipefail
 
 # === sudo step (from fdroiddata metadata) ===
 apt-get update
-apt-get install -y rustup build-essential
+apt-get install -y rustup gcc libc-dev
 
 # === init step (from fdroiddata metadata) ===
 rustup default 1.94.1
 rustup target add aarch64-linux-android
 
 # Copy source to the SAME path F-Droid CI uses (critical for reproducible .so files)
-BUILD_DIR="/home/vagrant/build/chat.onym.android"
+BUILD_DIR="/builds/fdroid/fdroiddata/build/chat.onym.android"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 cp -a /src/. "$BUILD_DIR"
@@ -51,6 +51,9 @@ cd "$BUILD_DIR"
 # Sanity check: verify repo root layout
 test -f scripts/build-android.sh
 test -f clients/android/StellarChat/gradlew
+
+# === rm step (from fdroiddata metadata) ===
+rm -rf clients/ios
 
 # === scandelete step ===
 rm -rf kotlin-mls/src/main/jniLibs/

@@ -533,4 +533,22 @@ mod tests {
         let error = PoseidonMerkleTree::build_from_members(&config, &members, 5).unwrap_err();
         assert!(matches!(error, MerkleError::DuplicatePublicKey(_)));
     }
+
+    #[test]
+    fn test_depth_8_over_capacity_rejected() {
+        let config = make_config();
+        // depth 8 → max 256 members; 257 should fail
+        let keys: Vec<Fr> = (1..=257).map(|i| Fr::from(i as u64)).collect();
+        let error = PoseidonMerkleTree::build(&config, &keys, 8).unwrap_err();
+        assert!(matches!(error, MerkleError::TooManyMembers { actual: 257, max: 256 }));
+    }
+
+    #[test]
+    fn test_depth_11_over_capacity_rejected() {
+        let config = make_config();
+        // depth 11 → max 2048 members; 2049 should fail
+        let keys: Vec<Fr> = (1..=2049).map(|i| Fr::from(i as u64)).collect();
+        let error = PoseidonMerkleTree::build(&config, &keys, 11).unwrap_err();
+        assert!(matches!(error, MerkleError::TooManyMembers { actual: 2049, max: 2048 }));
+    }
 }

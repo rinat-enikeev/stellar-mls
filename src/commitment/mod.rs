@@ -371,4 +371,63 @@ mod tests {
         assert!(verify_poseidon_commitment(&commitment, &config, &root, 7, &salt));
         assert!(!verify_poseidon_commitment(&commitment, &config, &root, 8, &salt));
     }
+
+    // === Constant-time comparison tests ===
+
+    #[test]
+    fn test_constant_time_eq_same() {
+        assert!(constant_time_eq(&[1, 2, 3], &[1, 2, 3]));
+        assert!(constant_time_eq(&[], &[]));
+    }
+
+    #[test]
+    fn test_constant_time_eq_different() {
+        assert!(!constant_time_eq(&[1, 2, 3], &[1, 2, 4]));
+        assert!(!constant_time_eq(&[0], &[1]));
+    }
+
+    #[test]
+    fn test_constant_time_eq_different_lengths() {
+        assert!(!constant_time_eq(&[1, 2, 3], &[1, 2]));
+        assert!(!constant_time_eq(&[1, 2], &[1, 2, 3]));
+        assert!(!constant_time_eq(&[], &[1]));
+        assert!(!constant_time_eq(&[1], &[]));
+    }
+
+    // === Field element edge case tests ===
+
+    #[test]
+    fn test_field_to_bytes_be_modulus_minus_one() {
+        // Largest canonical field element: r - 1
+        let modulus_minus_one = -Fr::one();
+        let bytes = field_to_bytes_be(&modulus_minus_one);
+        let recovered: Fr = bytes_be_to_field(&bytes);
+        assert_eq!(modulus_minus_one, recovered);
+    }
+
+    #[test]
+    fn test_bytes_be_to_field_checked_rejects_non_canonical() {
+        // All-0xFF bytes exceed the BLS12-381 scalar field modulus
+        let non_canonical = [0xFFu8; 32];
+        let result = bytes_be_to_field_checked::<Fr>(&non_canonical);
+        assert!(result.is_err(), "Non-canonical bytes (>= modulus) must be rejected");
+        assert!(result.unwrap_err().contains("non-canonical"));
+    }
+
+    #[test]
+    fn test_bytes_be_to_field_checked_accepts_canonical() {
+        let val = Fr::from(12345u64);
+        let bytes = field_to_bytes_be(&val);
+        let result = bytes_be_to_field_checked::<Fr>(&bytes);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), val);
+    }
+
+    #[test]
+    fn test_bytes_be_to_field_checked_accepts_zero() {
+        let bytes = field_to_bytes_be(&Fr::zero());
+        let result = bytes_be_to_field_checked::<Fr>(&bytes);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Fr::zero());
+    }
 }

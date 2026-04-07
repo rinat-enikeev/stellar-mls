@@ -153,7 +153,7 @@ fn chunk_round_constants<F: Clone>(constants: Vec<F>, width: usize) -> Vec<Vec<F
 mod tests {
     use super::*;
     use ark_bls12_381::Fr;
-    use ark_ff::One;
+    use ark_ff::{Field, One};
 
     #[test]
     fn test_poseidon_config_creation() {
@@ -279,5 +279,27 @@ mod tests {
         let h1 = poseidon_hash_one(&config, &x);
         let h2 = poseidon_hash_two(&config, &x, &x);
         assert_ne!(h1, h2, "hash_one(x) must differ from hash_two(x, x)");
+    }
+
+    #[test]
+    fn test_round_constants_total_count_192() {
+        // width * (full + partial) = 3 * (8 + 56) = 192 total constants
+        let config = poseidon_config::<Fr>();
+        let total: usize = config.ark.iter().map(|round| round.len()).sum();
+        assert_eq!(total, 192, "Total round constants must be width * (full + partial) = 3 * 64 = 192");
+    }
+
+    #[test]
+    fn test_mds_matrix_all_elements_invertible() {
+        // Cauchy MDS matrix: every element must be invertible for security.
+        let config = poseidon_config::<Fr>();
+        for (i, row) in config.mds.iter().enumerate() {
+            for (j, elem) in row.iter().enumerate() {
+                assert!(
+                    elem.inverse().is_some(),
+                    "MDS matrix element [{i}][{j}] must be invertible"
+                );
+            }
+        }
     }
 }

@@ -43,6 +43,7 @@ pub struct ProverInput {
 }
 
 /// Public inputs for verification (2 field elements).
+#[derive(Debug)]
 pub struct PublicInputs {
     /// Poseidon commitment: `Poseidon(Poseidon(root, epoch), salt)`
     pub commitment: Fr,
@@ -603,5 +604,55 @@ mod tests {
 
         assert!(valid, "Proof with u64::MAX epoch must verify");
         assert_eq!(public_inputs.epoch, Fr::from(u64::MAX));
+    }
+
+    #[test]
+    fn test_prove_non_member_fails_at_roster_lookup() {
+        let mut rng = test_rng();
+        let setup_result = setup(5, &mut rng).expect("Setup failed");
+
+        let config = poseidon_config::<Fr>();
+        let real_keys = vec![Fr::from(100u64), Fr::from(200u64)];
+        let members: Vec<CanonicalMember<Fr>> = real_keys.iter()
+            .map(|sk| CanonicalMember {
+                public_key_bytes: compressed_public_key_bytes(sk),
+                leaf_hash: poseidon_hash_one(&config, sk),
+            })
+            .collect();
+
+        // Non-member tries to prove — their public key won't be in the roster
+        let non_member_key = Fr::from(999u64);
+        let input = ProverInput {
+            members,
+            secret_key: non_member_key,
+            epoch: 0,
+            salt: [0xAA; 32],
+            depth: 5,
+        };
+
+        let result = prove(&setup_result.proving_key, &input, &mut rng);
+        assert!(result.is_err(), "Non-member must fail during proof generation");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not present"),
+            "Error should indicate missing member, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_prove_empty_member_set_fails() {
+        let mut rng = test_rng();
+        let setup_result = setup(5, &mut rng).expect("Setup failed");
+
+        let input = ProverInput {
+            members: vec![],
+            secret_key: Fr::from(42u64),
+            epoch: 0,
+            salt: [0xAA; 32],
+            depth: 5,
+        };
+
+        let result = prove(&setup_result.proving_key, &input, &mut rng);
+        assert!(result.is_err(), "Empty member set must fail");
     }
 }

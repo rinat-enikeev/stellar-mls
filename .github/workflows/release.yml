@@ -222,6 +222,8 @@ jobs:
             DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM}" \
             CODE_SIGN_IDENTITY="Apple Distribution" \
             COMPILER_INDEX_STORE_ENABLE=NO \
+            SWIFT_COMPILATION_MODE=incremental \
+            OTHER_SWIFT_FLAGS='$(inherited) -Xfrontend -warn-long-function-bodies=500 -Xfrontend -warn-long-expression-type-checking=500' \
             archive
 
       - name: Export IPA (ad-hoc for AltStore)

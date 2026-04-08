@@ -1,0 +1,281 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -1)
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..${TAG}"
+          else
+            RANGE="${TAG}"
+          fi
+          {
+            echo "## What's Changed"
+            echo ""
+            git log "$RANGE" --pretty=format:"- %s" --no-merges
+            echo ""
+            echo ""
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG}"
+          } > release_notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release_notes.md
+
+  android-build:
+    runs-on: ubuntu-latest
+    needs: create-release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build deterministic APK in Docker
+        run: |
+          chmod +x scripts/build-fdroid-release.sh
+          ./scripts/build-fdroid-release.sh
+
+      - name: Zipalign APK
+        run: |
+          pip install repro-apk
+          APK=$(ls app-fdroid-arm64-v8a-release-*.apk)
+          mv "$APK" unaligned.apk
+          repro-apk zipalign --page-size 16 --pad-like-apksigner --replace unaligned.apk "$APK"
+          rm -f unaligned.apk
+
+      - name: Sign APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > /tmp/keystore.jks
+          APKSIGNER=$(find $ANDROID_HOME -name apksigner 2>/dev/null | sort -V | tail -1)
+          $APKSIGNER sign \
+            --ks /tmp/keystore.jks \
+            --ks-pass "pass:$KEYSTORE_PASSWORD" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --key-pass "pass:$KEY_PASSWORD" \
+            app-fdroid-arm64-v8a-release-*.apk
+          rm /tmp/keystore.jks
+
+      - name: Upload APK to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app-fdroid-arm64-v8a-release-*.apk
+
+  ios-build:
+    runs-on: macos-15
+    needs: create-release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/aarch64-apple-ios
+          key: ios-rust-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build Rust library for iOS
+        run: cargo build --release --target aarch64-apple-ios
+
+      - name: Create XCFramework (iOS device only)
+        run: |
+          mkdir -p build/staging/ios
+          cp target/aarch64-apple-ios/release/libsep_xxxx_circuits.a build/staging/ios/
+          xcodebuild -create-xcframework \
+            -library build/staging/ios/libsep_xxxx_circuits.a \
+            -headers swift-mls/Sources/CSEPMLSFFI/include \
+            -output build/SEPMLSFFI.xcframework
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: clients/ios/StellarChat
+        run: xcodegen generate
+
+      - name: Configure SSH for Match
+        env:
+          MATCH_DEPLOY_KEY: ${{ secrets.MATCH_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$MATCH_DEPLOY_KEY" > ~/.ssh/match_key
+          chmod 600 ~/.ssh/match_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<EOF
+          Host github.com
+            IdentityFile ~/.ssh/match_key
+            IdentitiesOnly yes
+          EOF
+
+      - name: Install Fastlane
+        working-directory: clients
+        run: |
+          bundle config set --local path 'vendor/bundle'
+          bundle install
+
+      - name: Write ASC API key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY_P8: ${{ secrets.ASC_PRIVATE_KEY_P8 }}
+        run: |
+          python3 -c "
+          import json, os
+          payload = {
+            'key_id': os.environ['ASC_KEY_ID'],
+            'issuer_id': os.environ['ASC_ISSUER_ID'],
+            'key': os.environ['ASC_PRIVATE_KEY_P8'].replace('\\\\n', '\n'),
+            'in_house': False
+          }
+          with open('clients/fastlane/.appstoreconnect_api_key.json', 'w') as f:
+            json.dump(payload, f, indent=2)
+          "
+
+      - name: Sync signing certificates
+        working-directory: clients
+        env:
+          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+          MATCH_APP_IDENTIFIER: "chat.onym.ios,chat.onym.ios.NotificationService"
+          MATCH_TEAM_ID: ${{ secrets.MATCH_TEAM_ID }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          APP_STORE_CONNECT_API_KEY_PATH: ${{ github.workspace }}/clients/fastlane/.appstoreconnect_api_key.json
+        run: bundle exec fastlane match adhoc --readonly
+
+      - name: Build iOS archive
+        working-directory: clients/ios/StellarChat
+        env:
+          DEVELOPMENT_TEAM: ${{ secrets.MATCH_TEAM_ID }}
+        run: |
+          xcodebuild \
+            -project StellarChat.xcodeproj \
+            -scheme StellarChat \
+            -configuration Release \
+            -destination generic/platform=iOS \
+            -archivePath ${{ github.workspace }}/build/ios/StellarChat.xcarchive \
+            DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM}" \
+            clean archive
+
+      - name: Export IPA (ad-hoc for AltStore)
+        env:
+          MATCH_TEAM_ID: ${{ secrets.MATCH_TEAM_ID }}
+        run: |
+          cat > /tmp/export_options.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>destination</key>
+            <string>export</string>
+            <key>method</key>
+            <string>ad-hoc</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>teamID</key>
+            <string>${MATCH_TEAM_ID}</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>chat.onym.ios</key>
+              <string>match AdHoc chat.onym.ios</string>
+              <key>chat.onym.ios.NotificationService</key>
+              <string>match AdHoc chat.onym.ios.NotificationService</string>
+            </dict>
+          </dict>
+          </plist>
+          PLIST
+
+          xcodebuild -exportArchive \
+            -archivePath build/ios/StellarChat.xcarchive \
+            -exportPath build/ios/ipa \
+            -exportOptionsPlist /tmp/export_options.plist
+
+      - name: Upload IPA to release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mv build/ios/ipa/StellarChat.ipa "StellarChat-${VERSION}.ipa"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: StellarChat-${{ steps.version.outputs.version }}.ipa
+
+  update-altstore:
+    runs-on: ubuntu-latest
+    needs: ios-build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Update AltStore source JSON
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+
+          # Get IPA asset info from the release
+          IPA_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/StellarChat-${VERSION}.ipa"
+          IPA_SIZE=$(gh release view "$TAG" --json assets -q ".assets[] | select(.name | endswith(\".ipa\")) | .size")
+
+          python3 -c "
+          import json
+          from datetime import date
+
+          with open('deploy/website/altstore-source.json') as f:
+              source = json.load(f)
+
+          versions = source['apps'][0]['versions']
+          versions = [v for v in versions if v.get('version') != '${VERSION}']
+          versions.insert(0, {
+              'version': '${VERSION}',
+              'date': date.today().isoformat(),
+              'localizedDescription': 'Release ${VERSION}',
+              'downloadURL': '${IPA_URL}',
+              'size': int('${IPA_SIZE}' or '0'),
+          })
+          source['apps'][0]['versions'] = versions
+
+          with open('deploy/website/altstore-source.json', 'w') as f:
+              json.dump(source, f, indent=2)
+              f.write('\n')
+          "
+
+      - name: Commit AltStore update
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add deploy/website/altstore-source.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Update AltStore source for ${TAG}"
+          git push

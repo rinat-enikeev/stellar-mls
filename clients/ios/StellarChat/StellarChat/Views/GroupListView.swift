@@ -13,11 +13,54 @@ struct GroupListView: View {
     var body: some View {
         List {
             if appState.groups.isEmpty {
-                ContentUnavailableView(
-                    "No Chats",
-                    systemImage: "bubble.left.and.bubble.right",
-                    description: Text("Create a group or join one with an invite code.")
-                )
+                VStack(spacing: 24) {
+                    Spacer()
+                    Image(systemName: "bubble.left.and.bubble.right")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.secondary)
+                    Text("Start a conversation")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                    VStack(spacing: 12) {
+                        Button { showCreateGroup = true } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Create a group")
+                                        .font(.headline)
+                                    Text("Start a private space and invite people you trust")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(16)
+                            .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
+                        }
+                        .buttonStyle(.plain)
+
+                        Button { showJoinGroup = true } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Join a group")
+                                        .font(.headline)
+                                    Text("Have an invite link or code? Join here")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(16)
+                            .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 16))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 32)
+                    Spacer()
+                }
             } else {
                 ForEach(appState.groups) { group in
                     NavigationLink(value: group.id) {

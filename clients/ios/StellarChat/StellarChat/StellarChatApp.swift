@@ -110,8 +110,11 @@ struct StellarChatApp: App {
                     appState.configurePushRelay()
                 }
                 .onOpenURL { url in
-                    // Handle onym://join?code=<base64>
-                    if url.scheme == "stellarchat", url.host == "join",
+                    // Handle https://onym.chat/join?code=<base64> (Universal Link)
+                    // and legacy onym://join?code=<base64> / stellarchat://join?code=<base64>
+                    let isUniversalLink = url.scheme == "https" && url.host == "onym.chat" && url.path.hasPrefix("/join")
+                    let isCustomScheme = (url.scheme == "stellarchat" || url.scheme == "onym") && url.host == "join"
+                    if isUniversalLink || isCustomScheme,
                        let code = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                         .queryItems?.first(where: { $0.name == "code" })?.value {
                         appState.deepLinkInviteCode = code

@@ -9,7 +9,7 @@ struct ShareInviteView: View {
     @State private var copied = false
 
     private var deepLink: String {
-        "onym://join?code=\(inviteCode)"
+        "https://onym.chat/join?code=\(inviteCode)"
     }
 
     var body: some View {

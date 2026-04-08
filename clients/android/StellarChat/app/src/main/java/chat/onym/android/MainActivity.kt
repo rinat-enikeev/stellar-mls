@@ -414,7 +414,7 @@ fun StellarChatNavHost(
                     onSendInvitation = { recipientKeyHex, onResult ->
                         groupListViewModel.sendInvitation(groupId, recipientKeyHex, onResult)
                     },
-                    inviteLink = "stellarchat://join?code=${inviteCode.encode()}",
+                    inviteLink = "https://onym.chat/join?code=${inviteCode.encode()}",
                     onTogglePushNotifications = { enabled ->
                         groupListViewModel.setPushNotifications(enabled, groupId)
                         if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&

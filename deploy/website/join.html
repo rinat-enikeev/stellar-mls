@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Join Group — Onym Chat</title>
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --surface: #12121a;
+            --border: #1e1e2e;
+            --text: #e4e4ef;
+            --text-dim: #8888a0;
+            --accent: #6c5ce7;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            text-align: center;
+            padding: 2rem;
+            max-width: 400px;
+        }
+        .icon {
+            font-size: 4rem;
+            margin-bottom: 1.5rem;
+        }
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+        .subtitle {
+            color: var(--text-dim);
+            margin-bottom: 2rem;
+            line-height: 1.5;
+        }
+        .buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+        a.btn {
+            display: block;
+            padding: 0.875rem 1.5rem;
+            border-radius: 12px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 1rem;
+            transition: opacity 0.2s;
+        }
+        a.btn:hover { opacity: 0.85; }
+        .btn-primary {
+            background: var(--accent);
+            color: #fff;
+        }
+        .btn-secondary {
+            background: var(--surface);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+        .footer {
+            margin-top: 2rem;
+            color: var(--text-dim);
+            font-size: 0.8rem;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">🔒</div>
+        <h1>You've been invited to a group</h1>
+        <p class="subtitle">Install Onym Chat to join this private, encrypted group.</p>
+        <div class="buttons">
+            <a class="btn btn-primary" href="https://github.com/rinat-enikeev/stellar-mls/releases/latest">Download for Android</a>
+            <a class="btn btn-secondary" href="https://onym.chat/altstore-source.json">Add AltStore Source (iOS)</a>
+        </div>
+        <p class="footer">
+            Onym is a private group chat app with end-to-end encryption
+            and zero-knowledge membership proofs.
+        </p>
+    </div>
+    <script>
+        // Try opening the app via custom scheme as a fallback
+        var params = new URLSearchParams(window.location.search);
+        var code = params.get('code');
+        if (code) {
+            var appUrl = 'onym://join?code=' + encodeURIComponent(code);
+            window.location.href = appUrl;
+        }
+    </script>
+</body>
+</html>

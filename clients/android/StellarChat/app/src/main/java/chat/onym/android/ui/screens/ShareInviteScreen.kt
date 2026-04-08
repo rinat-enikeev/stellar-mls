@@ -47,7 +47,7 @@ fun ShareInviteScreen(
     onSkip: () -> Unit
 ) {
     val context = LocalContext.current
-    val deepLink = "onym://join?code=$inviteCode"
+    val deepLink = "https://onym.chat/join?code=$inviteCode"
     var copied by remember { mutableStateOf(false) }
 
     Scaffold(

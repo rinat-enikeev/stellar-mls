@@ -1,0 +1,10 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "chat.onym.android",
+      "sha256_cert_fingerprints": ["40:AD:4E:78:26:F2:9B:0F:43:47:60:19:02:58:F0:0C:EC:5B:54:7B:5B:0F:D1:B0:11:F2:32:72:DB:90:AC:AD"]
+    }
+  }
+]

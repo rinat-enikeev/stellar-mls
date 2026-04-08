@@ -1,0 +1,11 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "5V5EUT3ZXJ.chat.onym.ios",
+        "paths": ["/join*"]
+      }
+    ]
+  }
+}

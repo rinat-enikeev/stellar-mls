@@ -49,7 +49,7 @@ class ChatViewModel(
                 commitment = g.commitment,
                 tierRawValue = g.tier.id
             )
-            return "stellarchat://join?code=${code.encode()}"
+            return "https://onym.chat/join?code=${code.encode()}"
         }
 
     val hasBlossomServers: Boolean

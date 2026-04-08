@@ -107,6 +107,7 @@ jobs:
         run: |
           mkdir -p build/staging/ios
           cp target/aarch64-apple-ios/release/libsep_xxxx_circuits.a build/staging/ios/
+          strip -S build/staging/ios/libsep_xxxx_circuits.a
           xcodebuild -create-xcframework \
             -library build/staging/ios/libsep_xxxx_circuits.a \
             -headers swift-mls/Sources/CSEPMLSFFI/include \

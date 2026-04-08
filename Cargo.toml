@@ -42,3 +42,9 @@ ark-relations = { version = "0.4", features = ["std"] }
 [features]
 default = ["std"]
 std = []
+
+[profile.release]
+strip = "symbols"
+opt-level = "z"
+lto = "thin"
+codegen-units = 1

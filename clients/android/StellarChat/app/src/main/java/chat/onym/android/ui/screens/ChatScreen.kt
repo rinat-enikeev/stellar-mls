@@ -368,7 +368,20 @@ fun ChatScreen(
                             }
 
                             if (message.isSystemMessage) {
-                                SystemMessage(message.text)
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    SystemMessage(message.text)
+                                    if (message.text.contains("joined the group") &&
+                                        (viewModel.group?.members?.size ?: 0) == 2) {
+                                        Text(
+                                            "Say hello — your messages are end-to-end encrypted",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                        )
+                                    }
+                                }
                             } else {
                                 val isGrouped = isGroupedWithPrevious(viewModel.messages, index)
                                 val senderAlias = contactAliasStore?.displayName(message.senderPubkey)

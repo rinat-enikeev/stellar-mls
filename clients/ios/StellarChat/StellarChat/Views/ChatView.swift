@@ -121,8 +121,19 @@ struct ChatView: View {
                                     }
 
                                     if message.isSystemMessage {
-                                        SystemMessageView(text: message.text)
-                                            .id(message.id)
+                                        VStack(spacing: 4) {
+                                            SystemMessageView(text: message.text)
+                                            if message.text.contains("joined the group"),
+                                               appState.groups.count == 1,
+                                               let group = viewModel.group,
+                                               group.members.count == 2 {
+                                                Text("Say hello — your messages are end-to-end encrypted")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.secondary.opacity(0.7))
+                                                    .frame(maxWidth: .infinity)
+                                            }
+                                        }
+                                        .id(message.id)
                                     } else {
                                         let isGrouped = isGroupedWithPrevious(at: index)
                                         let senderAlias = appState.contactAliasStore.displayName(for: message.senderPubkey)

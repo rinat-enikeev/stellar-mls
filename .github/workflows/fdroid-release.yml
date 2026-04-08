@@ -44,7 +44,29 @@ jobs:
             app-fdroid-arm64-v8a-release-*.apk
           rm /tmp/keystore.jks
 
+      - name: Generate release notes from commits
+        id: notes
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          # Find the previous tag
+          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -1)
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..${TAG}"
+          else
+            RANGE="${TAG}"
+          fi
+          # Build changelog from commit messages
+          {
+            echo "## What's Changed"
+            echo ""
+            git log "$RANGE" --pretty=format:"- %s" --no-merges
+            echo ""
+            echo ""
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG}"
+          } > release_notes.md
+
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          body_path: release_notes.md
           files: app-fdroid-arm64-v8a-release-*.apk

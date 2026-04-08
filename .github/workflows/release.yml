@@ -171,6 +171,34 @@ jobs:
           APP_STORE_CONNECT_API_KEY_PATH: ${{ github.workspace }}/clients/fastlane/.appstoreconnect_api_key.json
         run: bundle exec fastlane match adhoc --readonly
 
+      - name: Patch signing for CI (manual + match adhoc profiles)
+        working-directory: clients/ios/StellarChat
+        run: |
+          # project.yml uses CODE_SIGN_STYLE=Automatic, but CI uses fastlane
+          # match which installs profiles for manual signing. Patch the generated
+          # pbxproj to use manual signing with the correct per-target profiles.
+          python3 - <<'PYEOF'
+          pbx = "StellarChat.xcodeproj/project.pbxproj"
+          with open(pbx) as f:
+              content = f.read()
+
+          content = content.replace(
+              'CODE_SIGN_STYLE = Automatic',
+              'CODE_SIGN_STYLE = Manual'
+          )
+          content = content.replace(
+              'PRODUCT_BUNDLE_IDENTIFIER = "chat.onym.ios";',
+              'PRODUCT_BUNDLE_IDENTIFIER = "chat.onym.ios";\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "match AdHoc chat.onym.ios";'
+          )
+          content = content.replace(
+              'PRODUCT_BUNDLE_IDENTIFIER = "chat.onym.ios.NotificationService";',
+              'PRODUCT_BUNDLE_IDENTIFIER = "chat.onym.ios.NotificationService";\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "match AdHoc chat.onym.ios.NotificationService";'
+          )
+
+          with open(pbx, 'w') as f:
+              f.write(content)
+          PYEOF
+
       - name: Build iOS archive
         working-directory: clients/ios/StellarChat
         env:
@@ -183,6 +211,7 @@ jobs:
             -destination generic/platform=iOS \
             -archivePath ${{ github.workspace }}/build/ios/StellarChat.xcarchive \
             DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM}" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
             clean archive
 
       - name: Export IPA (ad-hoc for AltStore)

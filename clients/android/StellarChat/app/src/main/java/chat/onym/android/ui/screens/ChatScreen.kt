@@ -307,33 +307,42 @@ fun ChatScreen(
             }
 
             if (viewModel.messages.isEmpty()) {
-                // Empty state
+                // Empty state — encryption context + invite prompt
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .fillMaxWidth(),
+                        .fillMaxWidth()
+                        .padding(32.dp),
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    @Suppress("DEPRECATION")
                     Icon(
-                        Icons.Filled.Chat,
+                        Icons.Filled.Lock,
                         contentDescription = null,
-                        modifier = Modifier.size(48.dp),
+                        modifier = Modifier.size(36.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        "No messages yet",
+                        "This conversation is encrypted",
                         style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        fontWeight = FontWeight.Medium
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        "Send the first message to start the conversation",
+                        "Only group members can read messages here.\nInvite someone to start chatting.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
                     )
+                    if ((viewModel.group?.members?.size ?: 0) <= 1) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        OutlinedButton(onClick = { showGroupInfo = true }) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.size(4.dp))
+                            Text("Share invite link")
+                        }
+                    }
                 }
             } else {
                 Box(modifier = Modifier.weight(1f)) {

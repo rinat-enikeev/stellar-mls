@@ -85,11 +85,24 @@ struct ChatView: View {
 
             if viewModel.messages.isEmpty {
                 Spacer()
-                ContentUnavailableView(
-                    "No Messages Yet",
-                    systemImage: "bubble.left.and.bubble.right",
-                    description: Text("Send the first message to start the conversation")
-                )
+                VStack(spacing: 16) {
+                    Image(systemName: "lock.shield")
+                        .font(.system(size: 36))
+                        .foregroundStyle(.secondary.opacity(0.5))
+                    Text("This conversation is encrypted")
+                        .font(.headline)
+                    Text("Only group members can read messages here.\nInvite someone to start chatting.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    if let group = viewModel.group, group.members.count <= 1 {
+                        Button { showGroupInfo = true } label: {
+                            Label("Share invite link", systemImage: "square.and.arrow.up")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
                 Spacer()
             } else {
                 ScrollViewReader { proxy in

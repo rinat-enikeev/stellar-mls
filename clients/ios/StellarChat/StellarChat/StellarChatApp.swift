@@ -2176,7 +2176,7 @@ final class AppState {
 
     /// Set up the chat message handler on the persistent transport (runs once at init).
     private func setupChatHandler() {
-        chatTransport.onMessage = { [weak self] groupID, plaintext, event in
+        chatTransport.onMessage = { [weak self] groupID, plaintext, event, replyToID in
             guard let self else { return }
             Task { @MainActor in
                 guard self.groups.contains(where: { $0.id == groupID }) else { return }
@@ -2193,13 +2193,14 @@ final class AppState {
                     text: plaintext,
                     timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
                     isMine: event.pubkey == self.keyManager.publicKeyHex,
-                    epoch: epoch
+                    epoch: epoch,
+                    replyToID: replyToID
                 )
                 self.queueIncomingMessage(msg, groupID: groupID, event: event)
             }
         }
 
-        chatTransport.onImageMessage = { [weak self] groupID, plaintext, media, event in
+        chatTransport.onImageMessage = { [weak self] groupID, plaintext, media, event, replyToID in
             guard let self else { return }
             Task { @MainActor in
                 guard self.groups.contains(where: { $0.id == groupID }) else { return }
@@ -2217,7 +2218,8 @@ final class AppState {
                     timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
                     isMine: event.pubkey == self.keyManager.publicKeyHex,
                     mediaAttachment: media,
-                    epoch: epoch
+                    epoch: epoch,
+                    replyToID: replyToID
                 )
                 self.queueIncomingMessage(msg, groupID: groupID, event: event)
             }
@@ -2242,7 +2244,7 @@ final class AppState {
     }
 
     /// Send a chat message in a group.
-    func sendMessage(text: String, groupID: String) async throws {
+    func sendMessage(text: String, groupID: String, replyToID: String? = nil) async throws {
         guard let group = groups.first(where: { $0.id == groupID }) else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -2255,10 +2257,13 @@ final class AppState {
         // Build the event synchronously so we have its deterministic ID for the local message.
         let blsPubkey = try keyManager.blsPublicKey
         let ts = Int64(Date().timeIntervalSince1970)
-        let wrapper: [String: Any] = [
+        var wrapper: [String: Any] = [
             "v": 2, "type": "chat", "text": trimmed,
             "senderBlsPubkey": blsPubkey.base64EncodedString(), "ts": ts
         ]
+        if let replyToID {
+            wrapper["replyTo"] = replyToID
+        }
         let wrapperData = try JSONSerialization.data(withJSONObject: wrapper)
         let authenticatedText = String(data: wrapperData, encoding: .utf8)!
         let sendKey = effectiveEncryptionKey(for: group)
@@ -2280,7 +2285,8 @@ final class AppState {
             timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
             isMine: true,
             status: .sending,
-            epoch: sendEpoch
+            epoch: sendEpoch,
+            replyToID: replyToID
         )
         insertMessage(msg, into: groupID)
         seenMessageIDs[groupID, default: []].insert(msg.id)
@@ -2310,16 +2316,20 @@ final class AppState {
         else { return }
 
         let text = chatMessages[groupID]![idx].text
+        let replyToID = chatMessages[groupID]![idx].replyToID
         chatMessages[groupID]?[idx].status = .sending
 
         Task {
             do {
                 let blsPubkey = try keyManager.blsPublicKey
                 let ts = Int64(Date().timeIntervalSince1970)
-                let wrapper: [String: Any] = [
+                var wrapper: [String: Any] = [
                     "v": 2, "type": "chat", "text": text,
                     "senderBlsPubkey": blsPubkey.base64EncodedString(), "ts": ts
                 ]
+                if let replyToID {
+                    wrapper["replyTo"] = replyToID
+                }
                 let wrapperData = try JSONSerialization.data(withJSONObject: wrapper)
                 let authenticatedText = String(data: wrapperData, encoding: .utf8)!
                 let sendKey = self.effectiveEncryptionKey(for: group)
@@ -2339,7 +2349,7 @@ final class AppState {
                         self.chatMessages[groupID]?[i] = ChatMessage(
                             id: event.id, groupID: old.groupID, senderPubkey: old.senderPubkey,
                             text: old.text, timestamp: old.timestamp, isMine: old.isMine, status: .sent,
-                            epoch: sendEpoch
+                            epoch: sendEpoch, replyToID: old.replyToID
                         )
                     }
                 }
@@ -2354,7 +2364,7 @@ final class AppState {
     }
 
     /// Send an encrypted image in a group via Blossom.
-    func sendImage(imageData: Data, groupID: String) async throws {
+    func sendImage(imageData: Data, groupID: String, replyToID: String? = nil) async throws {
         guard let group = groups.first(where: { $0.id == groupID }) else { return }
 
         // Compress and extract metadata
@@ -2404,7 +2414,7 @@ final class AppState {
         if let encThumb = media.encryptedThumbnail {
             mediaDict["thumbnail"] = encThumb.base64EncodedString()
         }
-        let wrapper: [String: Any] = [
+        var wrapper: [String: Any] = [
             "v": 2,
             "type": "image",
             "text": "Sent an image",
@@ -2412,6 +2422,9 @@ final class AppState {
             "ts": ts,
             "media": mediaDict,
         ]
+        if let replyToID {
+            wrapper["replyTo"] = replyToID
+        }
         let wrapperData = try JSONSerialization.data(withJSONObject: wrapper)
         let wrapperText = String(data: wrapperData, encoding: .utf8)!
 
@@ -2436,7 +2449,8 @@ final class AppState {
             isMine: true,
             status: .sending,
             mediaAttachment: media,
-            epoch: sendEpoch
+            epoch: sendEpoch,
+            replyToID: replyToID
         )
         insertMessage(msg, into: groupID)
         seenMessageIDs[groupID, default: []].insert(msg.id)
@@ -2457,7 +2471,7 @@ final class AppState {
         }
     }
 
-    func sendVideo(videoURL: URL, groupID: String) async throws {
+    func sendVideo(videoURL: URL, groupID: String, replyToID: String? = nil) async throws {
         guard let group = groups.first(where: { $0.id == groupID }) else { return }
 
         // Compress video (or verify size)
@@ -2512,7 +2526,7 @@ final class AppState {
         if let encThumb = media.encryptedThumbnail {
             mediaDict["thumbnail"] = encThumb.base64EncodedString()
         }
-        let wrapper: [String: Any] = [
+        var wrapper: [String: Any] = [
             "v": 2,
             "type": "video",
             "text": "Sent a video",
@@ -2520,6 +2534,9 @@ final class AppState {
             "ts": ts,
             "media": mediaDict,
         ]
+        if let replyToID {
+            wrapper["replyTo"] = replyToID
+        }
         let wrapperData = try JSONSerialization.data(withJSONObject: wrapper)
         let wrapperText = String(data: wrapperData, encoding: .utf8)!
 
@@ -2544,7 +2561,8 @@ final class AppState {
             isMine: true,
             status: .sending,
             mediaAttachment: media,
-            epoch: sendEpoch
+            epoch: sendEpoch,
+            replyToID: replyToID
         )
         insertMessage(msg, into: groupID)
         seenMessageIDs[groupID, default: []].insert(msg.id)
@@ -2566,7 +2584,7 @@ final class AppState {
     }
 
     /// Send an encrypted voice message in a group via Blossom.
-    func sendVoice(audioURL: URL, groupID: String) async throws {
+    func sendVoice(audioURL: URL, groupID: String, replyToID: String? = nil) async throws {
         guard let group = groups.first(where: { $0.id == groupID }) else { return }
 
         let audioData = try Data(contentsOf: audioURL)
@@ -2605,7 +2623,7 @@ final class AppState {
             "blossomServers": media.blossomServers,
             "duration": audioDuration,
         ]
-        let wrapper: [String: Any] = [
+        var wrapper: [String: Any] = [
             "v": 2,
             "type": "audio",
             "text": "Sent a voice message",
@@ -2613,6 +2631,9 @@ final class AppState {
             "ts": ts,
             "media": mediaDict,
         ]
+        if let replyToID {
+            wrapper["replyTo"] = replyToID
+        }
         let wrapperData = try JSONSerialization.data(withJSONObject: wrapper)
         let wrapperText = String(data: wrapperData, encoding: .utf8)!
 
@@ -2632,7 +2653,8 @@ final class AppState {
             timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
             isMine: true,
             status: .sending,
-            mediaAttachment: media
+            mediaAttachment: media,
+            replyToID: replyToID
         )
         insertMessage(msg, into: groupID)
         seenMessageIDs[groupID, default: []].insert(msg.id)

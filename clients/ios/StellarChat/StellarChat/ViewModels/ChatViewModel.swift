@@ -11,6 +11,8 @@ final class ChatViewModel {
     var selectedVideoURL: URL?
     var isSendingVideo = false
     var isSendingVoice = false
+    /// The message currently being replied to, or nil.
+    var replyingToMessage: ChatMessage?
     private weak var appState: AppState?
 
     var messages: [ChatMessage] {
@@ -50,9 +52,11 @@ final class ChatViewModel {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
+        let replyToID = replyingToMessage?.id
         do {
-            try await appState?.sendMessage(text: text, groupID: groupID)
+            try await appState?.sendMessage(text: text, groupID: groupID, replyToID: replyToID)
             inputText = ""
+            replyingToMessage = nil
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -63,9 +67,11 @@ final class ChatViewModel {
         isSendingImage = true
         defer { isSendingImage = false }
 
+        let replyToID = replyingToMessage?.id
         do {
-            try await appState?.sendImage(imageData: imageData, groupID: groupID)
+            try await appState?.sendImage(imageData: imageData, groupID: groupID, replyToID: replyToID)
             selectedImageData = nil
+            replyingToMessage = nil
         } catch {
             print("[Blossom] sendImage failed: \(error)")
             errorMessage = error.localizedDescription
@@ -77,9 +83,11 @@ final class ChatViewModel {
         isSendingVideo = true
         defer { isSendingVideo = false }
 
+        let replyToID = replyingToMessage?.id
         do {
-            try await appState?.sendVideo(videoURL: videoURL, groupID: groupID)
+            try await appState?.sendVideo(videoURL: videoURL, groupID: groupID, replyToID: replyToID)
             selectedVideoURL = nil
+            replyingToMessage = nil
         } catch {
             print("[Blossom] sendVideo failed: \(error)")
             errorMessage = error.localizedDescription
@@ -90,12 +98,19 @@ final class ChatViewModel {
         isSendingVoice = true
         defer { isSendingVoice = false }
 
+        let replyToID = replyingToMessage?.id
         do {
-            try await appState?.sendVoice(audioURL: audioURL, groupID: groupID)
+            try await appState?.sendVoice(audioURL: audioURL, groupID: groupID, replyToID: replyToID)
+            replyingToMessage = nil
         } catch {
             print("[Blossom] sendVoice failed: \(error)")
             errorMessage = error.localizedDescription
         }
+    }
+
+    func parentMessage(for message: ChatMessage) -> ChatMessage? {
+        guard let replyToID = message.replyToID else { return nil }
+        return messages.first(where: { $0.id == replyToID })
     }
 
     func retryMessage(id: String) {

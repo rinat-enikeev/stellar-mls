@@ -23,11 +23,11 @@ final class NostrMessageTransport {
     }
 
     /// Callback for received and decrypted plain-text chat messages.
-    /// Parameters: (groupID, plaintext, event)
-    var onMessage: ((String, String, NostrEvent) -> Void)?
+    /// Parameters: (groupID, plaintext, event, replyToID)
+    var onMessage: ((String, String, NostrEvent, String?) -> Void)?
     /// Callback for received image messages with media attachment metadata.
-    /// Parameters: (groupID, text fallback, media attachment, event)
-    var onImageMessage: ((String, String, MediaAttachment, NostrEvent) -> Void)?
+    /// Parameters: (groupID, text fallback, media attachment, event, replyToID)
+    var onImageMessage: ((String, String, MediaAttachment, NostrEvent, String?) -> Void)?
     /// Callback for received protocol messages (state updates, salt requests/responses).
     /// Parameters: (groupID, json, event, senderBlsPubkeyHex)
     var onProtocolMessage: ((String, String, NostrEvent, String?) -> Void)?
@@ -159,6 +159,7 @@ final class NostrMessageTransport {
             }
 
             let wrapperType = wrapperJSON["type"] as? String
+            let replyToID = wrapperJSON["replyTo"] as? String
 
             if wrapperType == "call" {
                 // Call signaling — verify sender is a group member
@@ -203,7 +204,7 @@ final class NostrMessageTransport {
                         encryptedThumbnail: encryptedThumbnail,
                         duration: duration
                     )
-                    onImageMessage?(groupID, innerText, media, event)
+                    onImageMessage?(groupID, innerText, media, event, replyToID)
                 } else if !isMember {
                     SecurityLog.nonMemberMessageRejected(groupID: groupID)
                 }
@@ -214,7 +215,7 @@ final class NostrMessageTransport {
             } else {
                 let isMember = currentMembers.contains { $0.publicKeyCompressed == blsPubkey }
                 if isMember {
-                    onMessage?(groupID, innerText, event)
+                    onMessage?(groupID, innerText, event, replyToID)
                 } else {
                     SecurityLog.nonMemberMessageRejected(groupID: groupID)
                 }

@@ -111,8 +111,10 @@ struct ChatMessage: Identifiable, Codable {
     var isSystemMessage: Bool
     /// The epoch this message was sent on (for epoch branching filtering).
     var epoch: UInt64?
+    /// NIP-01 event ID of the parent message this is a reply to, or nil.
+    var replyToID: String?
 
-    init(id: String, groupID: String, senderPubkey: String, text: String, timestamp: Date, isMine: Bool, status: MessageStatus = .sent, mediaAttachment: MediaAttachment? = nil, isSystemMessage: Bool = false, epoch: UInt64? = nil) {
+    init(id: String, groupID: String, senderPubkey: String, text: String, timestamp: Date, isMine: Bool, status: MessageStatus = .sent, mediaAttachment: MediaAttachment? = nil, isSystemMessage: Bool = false, epoch: UInt64? = nil, replyToID: String? = nil) {
         self.id = id
         self.groupID = groupID
         self.senderPubkey = senderPubkey
@@ -123,6 +125,7 @@ struct ChatMessage: Identifiable, Codable {
         self.mediaAttachment = mediaAttachment
         self.isSystemMessage = isSystemMessage
         self.epoch = epoch
+        self.replyToID = replyToID
     }
 }
 

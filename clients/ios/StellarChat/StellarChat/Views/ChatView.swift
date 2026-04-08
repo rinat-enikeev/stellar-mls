@@ -166,11 +166,19 @@ struct ChatView: View {
                                     } else {
                                         let isGrouped = isGroupedWithPrevious(at: index)
                                         let senderAlias = appState.contactAliasStore.displayName(for: message.senderPubkey)
-                                        MessageBubble(message: message, isGrouped: isGrouped, senderAlias: senderAlias, onRetry: {
+                                        let replyParent = viewModel.parentMessage(for: message)
+                                        MessageBubble(message: message, isGrouped: isGrouped, senderAlias: senderAlias, replyParent: replyParent, onTapReply: { targetID in
+                                            withAnimation(.easeOut(duration: 0.3)) {
+                                                proxy.scrollTo(targetID, anchor: .center)
+                                            }
+                                        }, onRetry: {
                                             viewModel.retryMessage(id: message.id)
                                         })
                                         .id(message.id)
                                         .transition(.opacity.combined(with: .move(edge: .bottom)))
+                                        .swipeToReply {
+                                            viewModel.replyingToMessage = message
+                                        }
                                     }
                                 }
 
@@ -225,6 +233,16 @@ struct ChatView: View {
             }
 
             Divider()
+
+            // Reply preview bar
+            if let replyMessage = viewModel.replyingToMessage {
+                ReplyPreviewBar(
+                    message: replyMessage,
+                    senderAlias: appState.contactAliasStore.displayName(for: replyMessage.senderPubkey)
+                ) {
+                    viewModel.replyingToMessage = nil
+                }
+            }
 
             // Image preview bar
             if let imageData = viewModel.selectedImageData,
@@ -548,6 +566,8 @@ struct MessageBubble: View {
     let message: ChatMessage
     var isGrouped: Bool = false
     var senderAlias: String? = nil
+    var replyParent: ChatMessage? = nil
+    var onTapReply: ((String) -> Void)?
     var onRetry: (() -> Void)?
 
     private static let todayTimeFormatter: DateFormatter = {
@@ -584,22 +604,38 @@ struct MessageBubble: View {
                 }
                 HStack(alignment: .bottom, spacing: 4) {
                     if let media = message.mediaAttachment {
-                        if media.isAudio {
-                            VoiceBubbleContent(media: media, isMine: message.isMine)
-                        } else if media.isVideo {
-                            VideoBubbleContent(media: media, isMine: message.isMine)
-                        } else {
-                            ImageBubbleContent(media: media, isMine: message.isMine)
+                        VStack(alignment: .leading, spacing: 0) {
+                            if let parent = replyParent {
+                                QuotedReplyView(parent: parent, isMine: message.isMine)
+                                    .onTapGesture { onTapReply?(parent.id) }
+                            } else if message.replyToID != nil {
+                                MissingReplyView(isMine: message.isMine)
+                            }
+                            if media.isAudio {
+                                VoiceBubbleContent(media: media, isMine: message.isMine)
+                            } else if media.isVideo {
+                                VideoBubbleContent(media: media, isMine: message.isMine)
+                            } else {
+                                ImageBubbleContent(media: media, isMine: message.isMine)
+                            }
                         }
                     } else {
-                        Text(message.text)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(
-                                message.isMine ? Color.blue : Color(.systemGray5),
-                                in: RoundedRectangle(cornerRadius: 16)
-                            )
-                            .foregroundStyle(message.isMine ? .white : .primary)
+                        VStack(alignment: .leading, spacing: 0) {
+                            if let parent = replyParent {
+                                QuotedReplyView(parent: parent, isMine: message.isMine)
+                                    .onTapGesture { onTapReply?(parent.id) }
+                            } else if message.replyToID != nil {
+                                MissingReplyView(isMine: message.isMine)
+                            }
+                            Text(message.text)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                        }
+                        .background(
+                            message.isMine ? Color.blue : Color(.systemGray5),
+                            in: RoundedRectangle(cornerRadius: 16)
+                        )
+                        .foregroundStyle(message.isMine ? .white : .primary)
                     }
 
                     if message.isMine {
@@ -1126,6 +1162,165 @@ private func formatDuration(_ seconds: Int) -> String {
     let mins = seconds / 60
     let secs = seconds % 60
     return String(format: "%d:%02d", mins, secs)
+}
+
+// MARK: - Swipe to Reply
+
+struct SwipeToReplyModifier: ViewModifier {
+    let onSwipe: () -> Void
+    @State private var offset: CGFloat = 0
+    private let threshold: CGFloat = 60
+
+    func body(content: Content) -> some View {
+        content
+            .offset(x: offset)
+            .gesture(
+                DragGesture(minimumDistance: 20, coordinateSpace: .local)
+                    .onChanged { value in
+                        if value.translation.width > 0 {
+                            offset = min(value.translation.width, threshold + 20)
+                        }
+                    }
+                    .onEnded { value in
+                        if value.translation.width >= threshold {
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            onSwipe()
+                        }
+                        withAnimation(.spring(response: 0.3)) {
+                            offset = 0
+                        }
+                    }
+            )
+            .overlay(alignment: .leading) {
+                if offset > 10 {
+                    Image(systemName: "arrowshape.turn.up.left.fill")
+                        .foregroundStyle(.secondary)
+                        .opacity(min(offset / threshold, 1.0))
+                        .offset(x: -28)
+                }
+            }
+    }
+}
+
+extension View {
+    func swipeToReply(onSwipe: @escaping () -> Void) -> some View {
+        modifier(SwipeToReplyModifier(onSwipe: onSwipe))
+    }
+}
+
+// MARK: - Reply Preview Bar
+
+struct ReplyPreviewBar: View {
+    let message: ChatMessage
+    let senderAlias: String?
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color.blue)
+                .frame(width: 3)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(senderAlias ?? String(message.senderPubkey.prefix(8)) + "...")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.blue)
+
+                if let media = message.mediaAttachment {
+                    Label(mediaLabel(for: media), systemImage: mediaIcon(for: media))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else {
+                    Text(message.text)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+
+            Button { onDismiss() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 6)
+        .background(Color(.systemGray6))
+    }
+
+    private func mediaLabel(for media: MediaAttachment) -> String {
+        if media.isAudio { return "Voice message" }
+        if media.isVideo { return "Video" }
+        return "Photo"
+    }
+
+    private func mediaIcon(for media: MediaAttachment) -> String {
+        if media.isAudio { return "waveform" }
+        if media.isVideo { return "video" }
+        return "photo"
+    }
+}
+
+// MARK: - Quoted Reply
+
+struct QuotedReplyView: View {
+    let parent: ChatMessage
+    var isMine: Bool = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(isMine ? Color.white.opacity(0.5) : Color.blue.opacity(0.6))
+                .frame(width: 2.5)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(String(parent.senderPubkey.prefix(8)) + "...")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+
+                if let media = parent.mediaAttachment {
+                    Text(mediaLabel(for: media))
+                        .font(.caption2)
+                        .lineLimit(1)
+                } else {
+                    Text(parent.text)
+                        .font(.caption2)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .opacity(0.8)
+    }
+
+    private func mediaLabel(for media: MediaAttachment) -> String {
+        if media.isAudio { return "Voice message" }
+        if media.isVideo { return "Video" }
+        return "Photo"
+    }
+}
+
+struct MissingReplyView: View {
+    var isMine: Bool = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(isMine ? Color.white.opacity(0.3) : Color.secondary.opacity(0.4))
+                .frame(width: 2.5)
+            Text("Original message")
+                .font(.caption2)
+                .foregroundStyle(isMine ? .white.opacity(0.6) : .secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+    }
 }
 
 // MARK: - Avatar

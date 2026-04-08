@@ -507,7 +507,8 @@ final class PersistenceStore {
             isMine: message.isMine,
             encryptedMediaAttachment: encMedia,
             isSystemMessage: message.isSystemMessage,
-            epoch: message.epoch.map { Int($0) }
+            epoch: message.epoch.map { Int($0) },
+            replyToID: message.replyToID
         )
     }
 
@@ -530,7 +531,8 @@ final class PersistenceStore {
             isMine: persisted.isMine,
             mediaAttachment: media,
             isSystemMessage: persisted.isSystemMessage ?? false,
-            epoch: persisted.epoch.map { UInt64($0) }
+            epoch: persisted.epoch.map { UInt64($0) },
+            replyToID: persisted.replyToID
         )
     }
 }

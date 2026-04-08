@@ -162,6 +162,7 @@ final class PersistedMessage {
     var encryptedMediaAttachment: Data?
     var isSystemMessage: Bool?
     var epoch: Int?
+    var replyToID: String?
 
     init(
         id: String,
@@ -172,7 +173,8 @@ final class PersistedMessage {
         isMine: Bool,
         encryptedMediaAttachment: Data? = nil,
         isSystemMessage: Bool = false,
-        epoch: Int? = nil
+        epoch: Int? = nil,
+        replyToID: String? = nil
     ) {
         self.id = id
         self.groupID = groupID
@@ -183,5 +185,6 @@ final class PersistedMessage {
         self.encryptedMediaAttachment = encryptedMediaAttachment
         self.isSystemMessage = isSystemMessage
         self.epoch = epoch
+        self.replyToID = replyToID
     }
 }

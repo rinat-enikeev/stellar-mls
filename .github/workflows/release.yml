@@ -201,6 +201,13 @@ jobs:
               f.write(content)
           PYEOF
 
+      - name: Cache Xcode DerivedData
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData
+          key: ios-dd-${{ hashFiles('clients/ios/StellarChat/project.yml', 'clients/ios/StellarChat/StellarChat/**/*.swift') }}
+          restore-keys: ios-dd-
+
       - name: Build iOS archive
         working-directory: clients/ios/StellarChat
         env:
@@ -214,7 +221,8 @@ jobs:
             -archivePath ${{ github.workspace }}/build/ios/StellarChat.xcarchive \
             DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM}" \
             CODE_SIGN_IDENTITY="Apple Distribution" \
-            clean archive
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            archive
 
       - name: Export IPA (ad-hoc for AltStore)
         env:

@@ -81,10 +81,13 @@ jobs:
           files: app-fdroid-arm64-v8a-release-*.apk
 
   ios-build:
-    runs-on: macos-15
+    runs-on: macos-16
     needs: create-release
     steps:
       - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: sudo xcode-select -s /Applications/Xcode_26.app
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

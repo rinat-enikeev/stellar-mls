@@ -145,7 +145,7 @@ struct SettingsView: View {
             }
 
             Section("About") {
-                LabeledContent("Version") { Text("1.0.9") }
+                LabeledContent("Version") { Text("1.1.0") }
                 Text("Messages are encrypted end-to-end. Relays see only opaque ciphertext and hidden topic tags. Group IDs never appear in cleartext on the wire.")
                     .font(.caption)
                     .foregroundStyle(.secondary)

@@ -337,9 +337,9 @@ fun GroupListScreen(
 private fun OnboardingSheet(onDismiss: () -> Unit) {
     val pages = remember {
         listOf(
-            Triple(Icons.Default.Lock, "End-to-End Encrypted", "Messages are secured with MLS group encryption. Only group members can read them."),
-            Triple(Icons.Default.Person, "Create & Join Groups", "Start a new group or join one with an invite code. Add members anytime."),
-            Triple(Icons.Default.Refresh, "Key Rotation", "Group keys rotate automatically when members change, keeping conversations secure.")
+            Triple(Icons.Default.Lock, "Your messages are encrypted.\nYour metadata isn't.", "Most messengers encrypt your messages but still collect who you talk to, when, and how often. That metadata tells a complete story about you."),
+            Triple(Icons.Default.Person, "Private by design.\nAnonymous by default.", "No phone numbers. No accounts. No social graph. You prove you belong to a group without revealing who you are."),
+            Triple(Icons.Default.Refresh, "Shared control.\nNo single admin.", "When someone leaves, encryption keys rotate automatically. No one person holds the keys to your group.")
         )
     }
     val pagerState = rememberPagerState(pageCount = { pages.size })
@@ -376,7 +376,8 @@ private fun OnboardingSheet(onDismiss: () -> Unit) {
                     Text(
                         pages[page].second,
                         style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(

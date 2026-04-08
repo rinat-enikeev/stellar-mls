@@ -74,9 +74,9 @@ private struct OnboardingView: View {
     @State private var currentPage = 0
 
     private let pages: [(icon: String, title: String, subtitle: String)] = [
-        ("lock.shield.fill", "End-to-End Encrypted", "Messages are secured with MLS group encryption. Only group members can read them."),
-        ("person.3.fill", "Create & Join Groups", "Start a new group or join one with an invite code. Add members anytime."),
-        ("arrow.triangle.2.circlepath", "Key Rotation", "Group keys rotate automatically when members change, keeping conversations secure.")
+        ("eye.trianglebadge.exclamationmark", "Your messages are encrypted.\nYour metadata isn't.", "Most messengers encrypt your messages but still collect who you talk to, when, and how often. That metadata tells a complete story about you."),
+        ("person.badge.shield.checkmark", "Private by design.\nAnonymous by default.", "No phone numbers. No accounts. No social graph. You prove you belong to a group without revealing who you are."),
+        ("person.3.sequence", "Shared control.\nNo single admin.", "When someone leaves, encryption keys rotate automatically. No one person holds the keys to your group.")
     ]
 
     var body: some View {
@@ -91,6 +91,7 @@ private struct OnboardingView: View {
                         Text(page.title)
                             .font(.title2)
                             .fontWeight(.bold)
+                            .multilineTextAlignment(.center)
                         Text(page.subtitle)
                             .font(.body)
                             .foregroundStyle(.secondary)

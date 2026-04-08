@@ -20,9 +20,38 @@ struct ChatView: View {
     @State private var showCallScreen = false
     @State private var showForkSheet = false
     @State private var pushBannerDismissed = false
+    @AppStorage("hasSeenFirstGroupWelcome") private var hasSeenFirstGroupWelcome = false
 
     var body: some View {
         VStack(spacing: 0) {
+            // Welcome banner for first group
+            if !hasSeenFirstGroupWelcome, appState.groups.count == 1 {
+                HStack(spacing: 8) {
+                    Image(systemName: "hand.wave")
+                        .foregroundStyle(.primary)
+                    if let group = viewModel.group, group.members.count <= 1 {
+                        Text("Your group is ready. Messages are end-to-end encrypted — only members can read them.")
+                            .font(.caption)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Text("You're in. Your identity is protected — members see a key, not your name.")
+                            .font(.caption)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    Button {
+                        hasSeenFirstGroupWelcome = true
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(Color.accentColor.opacity(0.1))
+            }
+
             // Push notification banner
             if let group = viewModel.group,
                !group.pushNotificationsEnabled,

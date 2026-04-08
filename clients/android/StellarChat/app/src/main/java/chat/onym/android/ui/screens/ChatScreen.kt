@@ -264,6 +264,38 @@ fun ChatScreen(
                 }
             }
 
+            // Welcome banner for first group
+            val welcomePrefs = remember { context.getSharedPreferences("stellar_chat", Context.MODE_PRIVATE) }
+            var hasSeenFirstGroupWelcome by remember {
+                mutableStateOf(welcomePrefs.getBoolean("has_seen_first_group_welcome", false))
+            }
+            if (!hasSeenFirstGroupWelcome) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.primaryContainer)
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("\uD83D\uDC4B", style = MaterialTheme.typography.bodyMedium)
+                    val memberCount = viewModel.group?.members?.size ?: 0
+                    Text(
+                        if (memberCount <= 1) "Your group is ready. Messages are end-to-end encrypted — only members can read them."
+                        else "You're in. Your identity is protected — members see a key, not your name.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = {
+                        hasSeenFirstGroupWelcome = true
+                        welcomePrefs.edit().putBoolean("has_seen_first_group_welcome", true).apply()
+                    }, modifier = Modifier.size(24.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Dismiss", modifier = Modifier.size(16.dp))
+                    }
+                }
+            }
+
             // Push notification banner — show once per session if not enabled
             var pushBannerDismissed by remember { mutableStateOf(false) }
             if (!pushNotificationsEnabled && !pushBannerDismissed && onEnablePushNotifications != null) {

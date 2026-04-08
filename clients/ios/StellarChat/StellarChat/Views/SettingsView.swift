@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var relayerAuthTokenInput = ""
     @State private var contractSaveStatus: String?
     @State private var showAdvanced = false
+    @State private var showAbout = false
     @State private var newBlossomURL = ""
     @State private var blossomError: String?
     @State private var newTurnURL = ""
@@ -149,6 +150,14 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Section {
+                Button("About Stellar Chat") {
+                    showAbout = true
+                }
+            }
+        }
+        .sheet(isPresented: $showAbout) {
+            OnboardingView(hasSeenOnboarding: .constant(true), isRevisit: true)
         }
         .navigationTitle("Settings")
     }

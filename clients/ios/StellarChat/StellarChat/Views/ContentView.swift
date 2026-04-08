@@ -69,8 +69,10 @@ struct ContentView: View {
 
 // MARK: - Onboarding
 
-private struct OnboardingView: View {
+struct OnboardingView: View {
     @Binding var hasSeenOnboarding: Bool
+    var isRevisit: Bool = false
+    @Environment(\.dismiss) private var dismiss
     @State private var currentPage = 0
 
     private let pages: [(icon: String, title: String, subtitle: String)] = [
@@ -126,11 +128,14 @@ private struct OnboardingView: View {
             Button {
                 if currentPage < totalPages - 1 {
                     withAnimation { currentPage += 1 }
+                } else if isRevisit {
+                    dismiss()
                 } else {
                     hasSeenOnboarding = true
                 }
             } label: {
-                Text(currentPage < totalPages - 1 ? "Next" : "Get Started")
+                let lastPageText = isRevisit ? "Done" : "Get Started"
+                Text(currentPage < totalPages - 1 ? "Next" : lastPageText)
                     .fontWeight(.semibold)
                     .frame(maxWidth: .infinity)
             }

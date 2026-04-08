@@ -388,7 +388,7 @@ fun GroupListScreen(
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-private fun OnboardingSheet(onDismiss: () -> Unit) {
+fun OnboardingSheet(onDismiss: () -> Unit, isRevisit: Boolean = false) {
     val pages = remember {
         listOf(
             Triple(Icons.Default.Lock, "Your messages are encrypted.\nYour metadata isn't.", "Most messengers encrypt your messages but still collect who you talk to, when, and how often. That metadata tells a complete story about you."),
@@ -494,8 +494,9 @@ private fun OnboardingSheet(onDismiss: () -> Unit) {
                     .fillMaxWidth()
                     .padding(horizontal = 32.dp)
             ) {
+                val lastPageText = if (isRevisit) "Done" else "Get Started"
                 Text(
-                    if (pagerState.currentPage < totalPages - 1) "Next" else "Get Started",
+                    if (pagerState.currentPage < totalPages - 1) "Next" else lastPageText,
                     fontWeight = FontWeight.SemiBold
                 )
             }

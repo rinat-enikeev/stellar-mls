@@ -169,7 +169,7 @@ jobs:
           MATCH_TEAM_ID: ${{ secrets.MATCH_TEAM_ID }}
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
           APP_STORE_CONNECT_API_KEY_PATH: ${{ github.workspace }}/clients/fastlane/.appstoreconnect_api_key.json
-        run: bundle exec fastlane match adhoc --readonly
+        run: bundle exec fastlane match adhoc --force
 
       - name: Patch signing for CI (manual + match adhoc profiles)
         working-directory: clients/ios/StellarChat

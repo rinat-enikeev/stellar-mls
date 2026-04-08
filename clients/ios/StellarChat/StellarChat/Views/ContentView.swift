@@ -79,6 +79,8 @@ private struct OnboardingView: View {
         ("person.3.sequence", "Shared control.\nNo single admin.", "When someone leaves, encryption keys rotate automatically. No one person holds the keys to your group.")
     ]
 
+    private let totalPages = 4
+
     var body: some View {
         VStack(spacing: 0) {
             TabView(selection: $currentPage) {
@@ -101,17 +103,34 @@ private struct OnboardingView: View {
                     }
                     .tag(index)
                 }
+
+                // Screen D: Differentiator
+                VStack(spacing: 20) {
+                    Spacer()
+                    Text("What makes this different")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                    VStack(alignment: .leading, spacing: 16) {
+                        DiffRow(icon: "checkmark.circle.fill", iconColor: .green, text: "Your content is encrypted", detail: "like other apps")
+                        DiffRow(icon: "checkmark.seal.fill", iconColor: .blue, text: "Your identity is protected", detail: "unlike other apps")
+                        DiffRow(icon: "checkmark.seal.fill", iconColor: .blue, text: "Your metadata can't be harvested", detail: "unlike other apps")
+                        DiffRow(icon: "checkmark.seal.fill", iconColor: .blue, text: "No single admin holds the keys", detail: "unlike other apps")
+                    }
+                    .padding(.horizontal, 32)
+                    Spacer()
+                }
+                .tag(pages.count)
             }
             .tabViewStyle(.page(indexDisplayMode: .always))
 
             Button {
-                if currentPage < pages.count - 1 {
+                if currentPage < totalPages - 1 {
                     withAnimation { currentPage += 1 }
                 } else {
                     hasSeenOnboarding = true
                 }
             } label: {
-                Text(currentPage < pages.count - 1 ? "Next" : "Get Started")
+                Text(currentPage < totalPages - 1 ? "Next" : "Get Started")
                     .fontWeight(.semibold)
                     .frame(maxWidth: .infinity)
             }
@@ -119,6 +138,29 @@ private struct OnboardingView: View {
             .controlSize(.large)
             .padding(.horizontal, 32)
             .padding(.bottom, 32)
+        }
+    }
+}
+
+private struct DiffRow: View {
+    let icon: String
+    let iconColor: Color
+    let text: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(iconColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(text)
+                    .font(.body)
+                    .fontWeight(.medium)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 }

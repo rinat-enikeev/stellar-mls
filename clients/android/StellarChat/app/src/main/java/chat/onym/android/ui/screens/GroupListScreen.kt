@@ -342,7 +342,8 @@ private fun OnboardingSheet(onDismiss: () -> Unit) {
             Triple(Icons.Default.Refresh, "Shared control.\nNo single admin.", "When someone leaves, encryption keys rotate automatically. No one person holds the keys to your group.")
         )
     }
-    val pagerState = rememberPagerState(pageCount = { pages.size })
+    val totalPages = pages.size + 1 // +1 for differentiator page
+    val pagerState = rememberPagerState(pageCount = { totalPages })
     val scope = rememberCoroutineScope()
 
     ModalBottomSheet(
@@ -361,38 +362,61 @@ private fun OnboardingSheet(onDismiss: () -> Unit) {
                     .fillMaxWidth()
                     .height(300.dp)
             ) { page ->
-                Column(
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Icon(
-                        pages[page].first,
-                        contentDescription = null,
-                        modifier = Modifier.size(64.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.height(20.dp))
-                    Text(
-                        pages[page].second,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        pages[page].third,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 32.dp)
-                    )
+                if (page < pages.size) {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            pages[page].first,
+                            contentDescription = null,
+                            modifier = Modifier.size(64.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Text(
+                            pages[page].second,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            pages[page].third,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 32.dp)
+                        )
+                    }
+                } else {
+                    // Differentiator page
+                    Column(
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            "What makes this different",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(24.dp))
+                        DiffRow("\u2705", Color(0xFF4CAF50), "Your content is encrypted", "like other apps")
+                        Spacer(modifier = Modifier.height(16.dp))
+                        DiffRow("\u2705", MaterialTheme.colorScheme.primary, "Your identity is protected", "unlike other apps")
+                        Spacer(modifier = Modifier.height(16.dp))
+                        DiffRow("\u2705", MaterialTheme.colorScheme.primary, "Your metadata can't be harvested", "unlike other apps")
+                        Spacer(modifier = Modifier.height(16.dp))
+                        DiffRow("\u2705", MaterialTheme.colorScheme.primary, "No single admin holds the keys", "unlike other apps")
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(16.dp))
             // Page indicator dots
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                repeat(pages.size) { index ->
+                repeat(totalPages) { index ->
                     Surface(
                         shape = CircleShape,
                         color = if (index == pagerState.currentPage)
@@ -406,7 +430,7 @@ private fun OnboardingSheet(onDismiss: () -> Unit) {
             Spacer(modifier = Modifier.height(24.dp))
             Button(
                 onClick = {
-                    if (pagerState.currentPage < pages.size - 1) {
+                    if (pagerState.currentPage < totalPages - 1) {
                         scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
                     } else {
                         onDismiss()
@@ -417,10 +441,25 @@ private fun OnboardingSheet(onDismiss: () -> Unit) {
                     .padding(horizontal = 32.dp)
             ) {
                 Text(
-                    if (pagerState.currentPage < pages.size - 1) "Next" else "Get Started",
+                    if (pagerState.currentPage < totalPages - 1) "Next" else "Get Started",
                     fontWeight = FontWeight.SemiBold
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun DiffRow(icon: String, iconColor: Color, text: String, detail: String) {
+    Row(
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(icon, color = iconColor, style = MaterialTheme.typography.titleMedium)
+        Column {
+            Text(text, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            Text(detail, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

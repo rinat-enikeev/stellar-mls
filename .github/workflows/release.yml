@@ -186,13 +186,15 @@ jobs:
               'CODE_SIGN_STYLE = Automatic',
               'CODE_SIGN_STYLE = Manual'
           )
+          # Replace NotificationService first (longer match) to avoid
+          # partial match on the shorter "chat.onym.ios;" string.
           content = content.replace(
-              'PRODUCT_BUNDLE_IDENTIFIER = "chat.onym.ios";',
-              'PRODUCT_BUNDLE_IDENTIFIER = "chat.onym.ios";\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "match AdHoc chat.onym.ios";'
+              'PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios.NotificationService;',
+              'PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios.NotificationService;\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "match AdHoc chat.onym.ios.NotificationService";'
           )
           content = content.replace(
-              'PRODUCT_BUNDLE_IDENTIFIER = "chat.onym.ios.NotificationService";',
-              'PRODUCT_BUNDLE_IDENTIFIER = "chat.onym.ios.NotificationService";\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "match AdHoc chat.onym.ios.NotificationService";'
+              'PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios;',
+              'PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios;\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "match AdHoc chat.onym.ios";'
           )
 
           with open(pbx, 'w') as f:

@@ -1,0 +1,63 @@
+default_platform(:ios)
+
+platform :ios do
+  desc "Build and upload to TestFlight"
+  lane :release do
+    app_store_connect_api_key(
+      key_id: ENV['ASC_KEY_ID'],
+      issuer_id: ENV['ASC_ISSUER_ID'],
+      key_content: ENV['ASC_PRIVATE_KEY_P8'],
+      is_key_content_base64: false,
+      in_house: false
+    )
+
+    match(
+      type: "appstore",
+      app_identifier: ["chat.onym.ios", "chat.onym.ios.NotificationService"],
+      readonly: true
+    )
+
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path: "ios/StellarChat/StellarChat.xcodeproj",
+      team_id: ENV['MATCH_TEAM_ID'],
+      code_sign_identity: "Apple Distribution",
+      targets: ["StellarChat"],
+      profile_name: "match AppStore chat.onym.ios"
+    )
+
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path: "ios/StellarChat/StellarChat.xcodeproj",
+      team_id: ENV['MATCH_TEAM_ID'],
+      code_sign_identity: "Apple Distribution",
+      targets: ["StellarChatNotificationService"],
+      profile_name: "match AppStore chat.onym.ios.NotificationService"
+    )
+
+    gym(
+      project: "ios/StellarChat/StellarChat.xcodeproj",
+      scheme: "StellarChat",
+      configuration: "Release",
+      destination: "generic/platform=iOS",
+      export_method: "app-store",
+      export_options: {
+        signingStyle: "manual",
+        teamID: ENV['MATCH_TEAM_ID'],
+        provisioningProfiles: {
+          "chat.onym.ios" => "match AppStore chat.onym.ios",
+          "chat.onym.ios.NotificationService" => "match AppStore chat.onym.ios.NotificationService"
+        }
+      },
+      xcargs: "COMPILER_INDEX_STORE_ENABLE=NO DEVELOPMENT_TEAM='#{ENV['MATCH_TEAM_ID']}'",
+      output_directory: "build/ios",
+      output_name: "StellarChat.ipa"
+    )
+
+    pilot(
+      ipa: "build/ios/StellarChat.ipa",
+      skip_waiting_for_build_processing: true,
+      skip_submission: true
+    )
+  end
+end

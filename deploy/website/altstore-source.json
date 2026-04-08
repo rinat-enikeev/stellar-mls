@@ -16,16 +16,23 @@
       "screenshots": [],
       "versions": [
         {
+          "version": "1.2.10",
+          "date": "2026-04-08",
+          "localizedDescription": "Release 1.2.10",
+          "downloadURL": "https://github.com/rinat-enikeev/stellar-mls/releases/download/v1.2.10/StellarChat-1.2.10.ipa",
+          "size": 11610357
+        },
+        {
           "version": "1.2.1",
           "date": "2026-04-08",
-          "localizedDescription": "Release 1.2.1 — Reply to messages in chat (Android)",
+          "localizedDescription": "Release 1.2.1 \u2014 Reply to messages in chat (Android)",
           "downloadURL": "",
           "size": 0
         },
         {
           "version": "1.2.0",
           "date": "2026-04-08",
-          "localizedDescription": "Release 1.2.0 — Reply to messages in chat (Telegram-style)",
+          "localizedDescription": "Release 1.2.0 \u2014 Reply to messages in chat (Telegram-style)",
           "downloadURL": "",
           "size": 0
         },

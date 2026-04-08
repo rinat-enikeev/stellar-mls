@@ -140,7 +140,7 @@ jobs:
           bundle config set --local path 'vendor/bundle'
           bundle install
 
-      - name: Build and upload to TestFlight
+      - name: Build, upload to TestFlight, and export ad-hoc IPA
         working-directory: clients
         env:
           MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
@@ -150,3 +150,66 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_PRIVATE_KEY_P8: ${{ secrets.ASC_PRIVATE_KEY_P8 }}
         run: bundle exec fastlane ios release
+
+      - name: Parse version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload IPA to GitHub release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: mv clients/build/ios/adhoc/StellarChat.ipa "StellarChat-${VERSION}.ipa"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: StellarChat-${{ steps.version.outputs.version }}.ipa
+
+  update-altstore:
+    runs-on: ubuntu-latest
+    needs: ios-build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Update AltStore source JSON
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          IPA_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/StellarChat-${VERSION}.ipa"
+          IPA_SIZE=$(gh release view "$TAG" --json assets -q ".assets[] | select(.name | endswith(\".ipa\")) | .size")
+
+          python3 -c "
+          import json
+          from datetime import date
+
+          with open('deploy/website/altstore-source.json') as f:
+              source = json.load(f)
+
+          versions = source['apps'][0]['versions']
+          versions = [v for v in versions if v.get('version') != '${VERSION}']
+          versions.insert(0, {
+              'version': '${VERSION}',
+              'date': date.today().isoformat(),
+              'localizedDescription': 'Release ${VERSION}',
+              'downloadURL': '${IPA_URL}',
+              'size': int('${IPA_SIZE}' or '0'),
+          })
+          source['apps'][0]['versions'] = versions
+
+          with open('deploy/website/altstore-source.json', 'w') as f:
+              json.dump(source, f, indent=2)
+              f.write('\n')
+          "
+
+      - name: Commit AltStore update
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add deploy/website/altstore-source.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Update AltStore source for ${TAG}"
+          git push

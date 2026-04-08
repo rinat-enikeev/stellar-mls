@@ -1,7 +1,7 @@
 default_platform(:ios)
 
 platform :ios do
-  desc "Build and upload to TestFlight"
+  desc "Build, upload to TestFlight, and export ad-hoc IPA"
   lane :release do
     setup_ci
 
@@ -13,6 +13,7 @@ platform :ios do
       in_house: false
     )
 
+    # App Store signing for TestFlight
     match(
       type: "appstore",
       app_identifier: ["chat.onym.ios", "chat.onym.ios.NotificationService"],
@@ -37,6 +38,7 @@ platform :ios do
       profile_name: "match AppStore chat.onym.ios.NotificationService"
     )
 
+    # Build and export for App Store
     gym(
       project: "ios/StellarChat/StellarChat.xcodeproj",
       scheme: "StellarChat",
@@ -52,14 +54,61 @@ platform :ios do
         }
       },
       xcargs: "COMPILER_INDEX_STORE_ENABLE=NO SWIFT_COMPILATION_MODE=incremental DEVELOPMENT_TEAM='#{ENV['MATCH_TEAM_ID']}'",
-      output_directory: "build/ios",
+      output_directory: "build/ios/appstore",
       output_name: "StellarChat.ipa"
     )
 
+    # Upload to TestFlight
     pilot(
-      ipa: "build/ios/StellarChat.ipa",
+      ipa: "build/ios/appstore/StellarChat.ipa",
       skip_waiting_for_build_processing: true,
       skip_submission: true
+    )
+
+    # Ad-hoc signing for AltStore / GitHub Release
+    match(
+      type: "adhoc",
+      app_identifier: ["chat.onym.ios", "chat.onym.ios.NotificationService"],
+      readonly: true
+    )
+
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path: "ios/StellarChat/StellarChat.xcodeproj",
+      team_id: ENV['MATCH_TEAM_ID'],
+      code_sign_identity: "Apple Distribution",
+      targets: ["StellarChat"],
+      profile_name: "match AdHoc chat.onym.ios"
+    )
+
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path: "ios/StellarChat/StellarChat.xcodeproj",
+      team_id: ENV['MATCH_TEAM_ID'],
+      code_sign_identity: "Apple Distribution",
+      targets: ["StellarChatNotificationService"],
+      profile_name: "match AdHoc chat.onym.ios.NotificationService"
+    )
+
+    # Re-export the existing archive as ad-hoc
+    gym(
+      project: "ios/StellarChat/StellarChat.xcodeproj",
+      scheme: "StellarChat",
+      configuration: "Release",
+      destination: "generic/platform=iOS",
+      export_method: "ad-hoc",
+      skip_build_archive: true,
+      archive_path: "build/ios/appstore/StellarChat.xcarchive",
+      export_options: {
+        signingStyle: "manual",
+        teamID: ENV['MATCH_TEAM_ID'],
+        provisioningProfiles: {
+          "chat.onym.ios" => "match AdHoc chat.onym.ios",
+          "chat.onym.ios.NotificationService" => "match AdHoc chat.onym.ios.NotificationService"
+        }
+      },
+      output_directory: "build/ios/adhoc",
+      output_name: "StellarChat.ipa"
     )
   end
 end

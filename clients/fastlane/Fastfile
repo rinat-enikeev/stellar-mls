@@ -45,6 +45,7 @@ platform :ios do
       configuration: "Release",
       destination: "generic/platform=iOS",
       export_method: "app-store",
+      archive_path: "build/ios/appstore/StellarChat.xcarchive",
       export_options: {
         signingStyle: "manual",
         teamID: ENV['MATCH_TEAM_ID'],

@@ -59,7 +59,8 @@ data class PersistedMessage(
     val encryptedMediaAttachment: ByteArray? = null,
     @ColumnInfo(defaultValue = "0")
     val isSystemMessage: Boolean = false,
-    val epoch: Int? = null
+    val epoch: Int? = null,
+    val replyToID: String? = null
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

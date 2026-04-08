@@ -59,11 +59,11 @@ class NostrMessageTransport(
     /** Called when any relay's connection state changes. */
     var onConnectionChange: (() -> Unit)? = null
 
-    var onMessage: ((groupID: String, senderPubkey: String, text: String, eventID: String, timestamp: Long, epoch: Long?) -> Unit)? = null
+    var onMessage: ((groupID: String, senderPubkey: String, text: String, eventID: String, timestamp: Long, epoch: Long?, replyToID: String?) -> Unit)? = null
     /** Called when a decrypted message is a protocol message (state update, salt request/response). */
     var onProtocolMessage: ((groupID: String, json: String, eventID: String, senderPubkey: String, senderBlsPubkeyHex: String?) -> Unit)? = null
     /** Called when a decrypted message is an image message with media attachment. */
-    var onImageMessage: ((groupID: String, text: String, media: chat.onym.android.model.MediaAttachment, eventID: String, senderPubkey: String, timestamp: Long, epoch: Long?) -> Unit)? = null
+    var onImageMessage: ((groupID: String, text: String, media: chat.onym.android.model.MediaAttachment, eventID: String, senderPubkey: String, timestamp: Long, epoch: Long?, replyToID: String?) -> Unit)? = null
     /** Callback for received call signaling messages (offer, answer, ice, hangup, busy, reject). */
     var onCallSignal: ((groupID: String, callJson: JSONObject, senderPubkey: ByteArray, eventID: String) -> Unit)? = null
     /** Callback for relay OK responses: (eventID, accepted). Used for delivery status. */
@@ -144,7 +144,8 @@ class NostrMessageTransport(
         text: String,
         overrideKey: ByteArray? = null,
         overrideTopicTag: String? = null,
-        epoch: Long? = null
+        epoch: Long? = null,
+        replyToID: String? = null
     ): NostrEvent {
         val key = overrideKey ?: group.encryptionKey
         // v2 wrapper: includes version, type discriminator, and sender timestamp
@@ -155,6 +156,7 @@ class NostrMessageTransport(
             put("senderBlsPubkey", android.util.Base64.encodeToString(
                 keyManager.blsPublicKey(), android.util.Base64.NO_WRAP))
             put("ts", System.currentTimeMillis() / 1000)
+            if (replyToID != null) put("replyTo", replyToID)
         }
         val authenticatedText = wrapper.toString()
         val envelopeJson = GroupCrypto.encrypt(authenticatedText, key)
@@ -277,6 +279,7 @@ class NostrMessageTransport(
             val innerText = wrapper?.optString("text") ?: ""
             val blsPubkeyB64 = wrapper?.optString("senderBlsPubkey")
             val wrapperType = wrapper?.optString("type", "chat") ?: "chat"
+            val replyToID = wrapper?.optString("replyTo", "")?.takeIf { it.isNotEmpty() }
 
             // N-6: Reject messages without BLS sender authentication.
             // Call signals have empty text (payload is in "call" field), so only
@@ -330,7 +333,7 @@ class NostrMessageTransport(
                         ?.let { android.util.Base64.decode(it, android.util.Base64.NO_WRAP) },
                     duration = duration
                 )
-                onImageMessage?.invoke(groupID, innerText, media, event.id, event.pubkey, event.displayMilliseconds, eventEpoch)
+                onImageMessage?.invoke(groupID, innerText, media, event.id, event.pubkey, event.displayMilliseconds, eventEpoch, replyToID)
             } else {
                 // Check inner text for protocol messages (state updates, salt, etc.)
                 if (isProtocolMessage(innerText)) {
@@ -345,7 +348,7 @@ class NostrMessageTransport(
                     val isMember = currentMembers.any { it.publicKeyCompressed.contentEquals(blsPubkey) }
                     if (isMember) {
                         onMessage?.invoke(groupID, event.pubkey, innerText,
-                            event.id, event.displayMilliseconds, eventEpoch)
+                            event.id, event.displayMilliseconds, eventEpoch, replyToID)
                     } else {
                         if (chat.onym.android.BuildConfig.DEBUG) android.util.Log.w("MsgTransport", "BLS rejected: members=${currentMembers.size}")
                         chat.onym.android.SecurityLog.nonMemberMessageRejected(groupID)

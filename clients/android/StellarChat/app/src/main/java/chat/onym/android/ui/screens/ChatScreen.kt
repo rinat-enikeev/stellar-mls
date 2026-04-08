@@ -9,6 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -91,7 +92,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import chat.onym.android.blossom.BlossomClient
 import chat.onym.android.blossom.ImageCache
@@ -420,10 +423,22 @@ fun ChatScreen(
                             } else {
                                 val isGrouped = isGroupedWithPrevious(viewModel.messages, index)
                                 val senderAlias = contactAliasStore?.displayName(message.senderPubkey)
-                                Box(modifier = Modifier.animateItem()) {
-                                    MessageBubble(message, isGrouped, senderAlias = senderAlias, onRetry = {
-                                        viewModel.retryMessage(message.id)
-                                    })
+                                val replyParent = viewModel.parentMessage(message)
+                                SwipeToReply(onSwipe = { viewModel.replyingToMessage = message }) {
+                                    Box(modifier = Modifier.animateItem()) {
+                                        MessageBubble(
+                                            message, isGrouped, senderAlias = senderAlias,
+                                            replyParent = replyParent,
+                                            onTapReply = { targetID ->
+                                                val targetIndex = viewModel.messages.indexOfFirst { it.id == targetID }
+                                                if (targetIndex >= 0) {
+                                                    val reversedIdx = viewModel.messages.size - 1 - targetIndex
+                                                    scope.launch { listState.animateScrollToItem(reversedIdx) }
+                                                }
+                                            },
+                                            onRetry = { viewModel.retryMessage(message.id) }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -596,6 +611,16 @@ fun ChatScreen(
                     }
                 }
             } else {
+                // Reply preview bar
+                viewModel.replyingToMessage?.let { replyMessage ->
+                    val replySenderAlias = contactAliasStore?.displayName(replyMessage.senderPubkey)
+                    ReplyPreviewBar(
+                        message = replyMessage,
+                        senderAlias = replySenderAlias,
+                        onDismiss = { viewModel.replyingToMessage = null }
+                    )
+                }
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -735,7 +760,7 @@ private fun formatDateSeparator(date: Date): String {
 }
 
 @Composable
-fun MessageBubble(message: ChatMessage, isGrouped: Boolean = false, senderAlias: String? = null, onRetry: (() -> Unit)? = null) {
+fun MessageBubble(message: ChatMessage, isGrouped: Boolean = false, senderAlias: String? = null, replyParent: ChatMessage? = null, onTapReply: ((String) -> Unit)? = null, onRetry: (() -> Unit)? = null) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -782,6 +807,12 @@ fun MessageBubble(message: ChatMessage, isGrouped: Boolean = false, senderAlias:
                         else MaterialTheme.colorScheme.surfaceVariant
                     )
             ) {
+                if (replyParent != null) {
+                    QuotedReplyView(parent = replyParent, isMine = message.isMine,
+                        onClick = { onTapReply?.invoke(replyParent.id) })
+                } else if (message.replyToID != null) {
+                    MissingReplyView(isMine = message.isMine)
+                }
                 when {
                     message.mediaAttachment.mimeType.startsWith("audio/") ->
                         VoiceBubbleContent(media = message.mediaAttachment, isMine = message.isMine)
@@ -818,16 +849,22 @@ fun MessageBubble(message: ChatMessage, isGrouped: Boolean = false, senderAlias:
                         if (message.isMine) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.surfaceVariant
                     )
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Column {
+                    if (replyParent != null) {
+                        QuotedReplyView(parent = replyParent, isMine = message.isMine,
+                            onClick = { onTapReply?.invoke(replyParent.id) })
+                    } else if (message.replyToID != null) {
+                        MissingReplyView(isMine = message.isMine)
+                    }
                     Text(
                         text = message.text,
                         color = if (message.isMine) Color.White
-                        else MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                     )
                     Row(
-                        modifier = Modifier.align(Alignment.End),
+                        modifier = Modifier.align(Alignment.End).padding(horizontal = 12.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
@@ -1403,5 +1440,162 @@ private fun formatMessageTimestamp(date: Date): String {
         SimpleDateFormat("h:mm a", Locale.getDefault()).format(date)
     } else {
         SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()).format(date)
+    }
+}
+
+// MARK: - Swipe to Reply
+
+@Composable
+fun SwipeToReply(onSwipe: () -> Unit, content: @Composable () -> Unit) {
+    val view = LocalView.current
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    val threshold = 60.dp
+    val thresholdPx = with(androidx.compose.ui.platform.LocalDensity.current) { threshold.toPx() }
+
+    Box(
+        modifier = Modifier
+            .offset(x = with(androidx.compose.ui.platform.LocalDensity.current) { offsetX.toDp() })
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        if (offsetX >= thresholdPx) {
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK)
+                            onSwipe()
+                        }
+                        offsetX = 0f
+                    },
+                    onDragCancel = { offsetX = 0f },
+                    onHorizontalDrag = { _, dragAmount ->
+                        offsetX = (offsetX + dragAmount).coerceIn(0f, thresholdPx + 20.dp.toPx())
+                    }
+                )
+            }
+    ) {
+        content()
+    }
+}
+
+// MARK: - Reply Preview Bar
+
+@Composable
+fun ReplyPreviewBar(message: ChatMessage, senderAlias: String?, onDismiss: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .height(32.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(MaterialTheme.colorScheme.primary)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = senderAlias ?: (message.senderPubkey.take(8) + "..."),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            val previewText = when {
+                message.mediaAttachment?.mimeType?.startsWith("audio/") == true -> "Voice message"
+                message.mediaAttachment?.mimeType?.startsWith("video/") == true -> "Video"
+                message.mediaAttachment != null -> "Photo"
+                else -> message.text
+            }
+            Text(
+                text = previewText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "Cancel reply",
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+// MARK: - Quoted Reply
+
+@Composable
+fun QuotedReplyView(parent: ChatMessage, isMine: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .width(2.5.dp)
+                .height(24.dp)
+                .clip(RoundedCornerShape(1.5.dp))
+                .background(
+                    if (isMine) Color.White.copy(alpha = 0.5f)
+                    else MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                )
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Column {
+            Text(
+                text = parent.senderPubkey.take(8) + "...",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = if (isMine) Color.White.copy(alpha = 0.8f)
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+            )
+            val previewText = when {
+                parent.mediaAttachment?.mimeType?.startsWith("audio/") == true -> "Voice message"
+                parent.mediaAttachment?.mimeType?.startsWith("video/") == true -> "Video"
+                parent.mediaAttachment != null -> "Photo"
+                else -> parent.text
+            }
+            Text(
+                text = previewText,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (isMine) Color.White.copy(alpha = 0.7f)
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+fun MissingReplyView(isMine: Boolean) {
+    Row(
+        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .width(2.5.dp)
+                .height(24.dp)
+                .clip(RoundedCornerShape(1.5.dp))
+                .background(
+                    if (isMine) Color.White.copy(alpha = 0.3f)
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                )
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = "Original message",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (isMine) Color.White.copy(alpha = 0.6f)
+            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+        )
     }
 }

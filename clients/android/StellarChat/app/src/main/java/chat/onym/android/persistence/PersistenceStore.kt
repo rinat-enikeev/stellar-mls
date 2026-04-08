@@ -200,7 +200,8 @@ class PersistenceStore(context: Context) {
             isMine = message.isMine,
             encryptedMediaAttachment = encMedia,
             isSystemMessage = message.isSystemMessage,
-            epoch = message.epoch?.toInt()
+            epoch = message.epoch?.toInt(),
+            replyToID = message.replyToID
         )
     }
 
@@ -220,7 +221,8 @@ class PersistenceStore(context: Context) {
             isMine = persisted.isMine,
             mediaAttachment = media,
             isSystemMessage = persisted.isSystemMessage,
-            epoch = persisted.epoch?.toLong()
+            epoch = persisted.epoch?.toLong(),
+            replyToID = persisted.replyToID
         )
     }
 

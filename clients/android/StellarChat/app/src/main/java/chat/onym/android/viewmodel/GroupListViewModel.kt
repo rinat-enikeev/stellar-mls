@@ -2245,7 +2245,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Set up handler for incoming chat messages — stores in chatMessages, persists to store. */
     private fun setupChatMessageHandler() {
-        transport.onMessage = { groupID, senderPubkey, text, eventID, timestampMs, epoch ->
+        transport.onMessage = { groupID, senderPubkey, text, eventID, timestampMs, epoch, replyToID ->
             val seen = seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }
             if (seen.add(eventID)) {
                 val msg = ChatMessage(
@@ -2255,7 +2255,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     text = text,
                     timestamp = Date(timestampMs),
                     isMine = senderPubkey == keyManager.publicKeyHex,
-                    epoch = epoch
+                    epoch = epoch,
+                    replyToID = replyToID
                 )
                 // Append to trigger Compose recomposition. Arrival order prevents
                 // messages received after epoch transition from jumping into the middle.
@@ -2293,7 +2294,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Set up handler for incoming image messages — stores in chatMessages with media attachment. */
     private fun setupImageMessageHandler() {
-        transport.onImageMessage = { groupID, text, media, eventID, senderPubkey, timestampMs, epoch ->
+        transport.onImageMessage = { groupID, text, media, eventID, senderPubkey, timestampMs, epoch, replyToID ->
             val seen = seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }
             if (seen.add(eventID)) {
                 val msg = ChatMessage(
@@ -2304,7 +2305,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     timestamp = Date(timestampMs),
                     isMine = senderPubkey == keyManager.publicKeyHex,
                     mediaAttachment = media,
-                    epoch = epoch
+                    epoch = epoch,
+                    replyToID = replyToID
                 )
                 chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
                 viewModelScope.launch {
@@ -2353,7 +2355,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /** Send a chat message in a group. */
-    fun sendMessage(groupID: String, text: String) {
+    fun sendMessage(groupID: String, text: String, replyToID: String? = null) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
         val group = groups.find { it.id == groupID } ?: return
@@ -2372,7 +2374,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             group, trimmed,
             overrideKey = key,
             overrideTopicTag = topicTag,
-            epoch = epoch
+            epoch = epoch,
+            replyToID = replyToID
         )
 
         val msg = ChatMessage(
@@ -2383,7 +2386,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             timestamp = Date(event.displayMilliseconds),
             isMine = true,
             status = MessageStatus.SENDING,
-            epoch = epoch
+            epoch = epoch,
+            replyToID = replyToID
         )
         chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
         seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }.add(event.id)
@@ -2408,7 +2412,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             group, failedMsg.text,
             overrideKey = effectiveEncryptionKey(group),
             overrideTopicTag = effectiveTopicTag(group),
-            epoch = effectiveEpoch(group)
+            epoch = effectiveEpoch(group),
+            replyToID = failedMsg.replyToID
         )
         // Update the message ID to the new event and mark as SENDING (OK handler will set SENT/FAILED)
         val current = chatMessages[groupID]?.toMutableList() ?: return
@@ -2420,7 +2425,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /** Send an encrypted image in a group via Blossom. */
-    fun sendImage(groupID: String, imageData: ByteArray) {
+    fun sendImage(groupID: String, imageData: ByteArray, replyToID: String? = null) {
         val group = groups.find { it.id == groupID } ?: return
 
         viewModelScope.launch {
@@ -2473,6 +2478,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     put("senderBlsPubkey", android.util.Base64.encodeToString(
                         keyManager.blsPublicKey(), android.util.Base64.NO_WRAP))
                     put("ts", System.currentTimeMillis() / 1000)
+                    if (replyToID != null) put("replyTo", replyToID)
                 }
 
                 val effKey = effectiveEncryptionKey(group)
@@ -2503,7 +2509,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     isMine = true,
                     status = MessageStatus.SENDING,
                     mediaAttachment = media,
-                    epoch = effEpoch
+                    epoch = effEpoch,
+                    replyToID = replyToID
                 )
                 chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
                 seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }.add(event.id)
@@ -2516,7 +2523,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun sendVideo(groupID: String, context: Context, uri: android.net.Uri) {
+    fun sendVideo(groupID: String, context: Context, uri: android.net.Uri, replyToID: String? = null) {
         val group = groups.find { it.id == groupID } ?: return
 
         viewModelScope.launch {
@@ -2584,6 +2591,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     put("senderBlsPubkey", android.util.Base64.encodeToString(
                         keyManager.blsPublicKey(), android.util.Base64.NO_WRAP))
                     put("ts", System.currentTimeMillis() / 1000)
+                    if (replyToID != null) put("replyTo", replyToID)
                 }
 
                 val effKey = effectiveEncryptionKey(group)
@@ -2613,7 +2621,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     isMine = true,
                     status = MessageStatus.SENDING,
                     mediaAttachment = media,
-                    epoch = effEpoch
+                    epoch = effEpoch,
+                    replyToID = replyToID
                 )
                 chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
                 seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }.add(event.id)
@@ -2627,7 +2636,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /** Send an encrypted voice message in a group via Blossom. */
-    fun sendVoice(groupID: String, audioFile: java.io.File) {
+    fun sendVoice(groupID: String, audioFile: java.io.File, replyToID: String? = null) {
         val group = groups.find { it.id == groupID } ?: return
 
         viewModelScope.launch {
@@ -2678,6 +2687,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     put("senderBlsPubkey", android.util.Base64.encodeToString(
                         keyManager.blsPublicKey(), android.util.Base64.NO_WRAP))
                     put("ts", System.currentTimeMillis() / 1000)
+                    if (replyToID != null) put("replyTo", replyToID)
                 }
 
                 val effKey = effectiveEncryptionKey(group)
@@ -2702,7 +2712,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     isMine = true,
                     status = chat.onym.android.model.MessageStatus.SENDING,
                     mediaAttachment = media,
-                    epoch = effEpoch
+                    epoch = effEpoch,
+                    replyToID = replyToID
                 )
                 val current = (chatMessages[groupID] ?: emptyList()) + msg
                 chatMessages[groupID] = current.sortedWith(

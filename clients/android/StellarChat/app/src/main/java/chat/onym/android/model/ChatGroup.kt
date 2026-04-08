@@ -102,7 +102,9 @@ data class ChatMessage(
     val mediaAttachment: MediaAttachment? = null,
     val isSystemMessage: Boolean = false,
     /** The epoch under which this message was encrypted (from the event's epoch tag). */
-    val epoch: Long? = null
+    val epoch: Long? = null,
+    /** NIP-01 event ID of the parent message this is a reply to, or null. */
+    val replyToID: String? = null
 )
 
 /** Encrypted media attachment metadata, embedded inside E2EE message envelopes. */

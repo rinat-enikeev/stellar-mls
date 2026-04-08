@@ -16,6 +16,13 @@
       "screenshots": [],
       "versions": [
         {
+          "version": "1.2.1",
+          "date": "2026-04-08",
+          "localizedDescription": "Release 1.2.1 — Reply to messages in chat (Android)",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
           "version": "1.2.0",
           "date": "2026-04-08",
           "localizedDescription": "Release 1.2.0 — Reply to messages in chat (Telegram-style)",

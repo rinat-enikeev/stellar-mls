@@ -18,6 +18,7 @@ class ChatViewModel(
     var selectedVideoUri by mutableStateOf<Uri?>(null)
     var isSendingVideo by mutableStateOf(false)
     var isSendingVoice by mutableStateOf(false)
+    var replyingToMessage by mutableStateOf<ChatMessage?>(null)
 
     val messages: List<ChatMessage>
         get() {
@@ -79,8 +80,10 @@ class ChatViewModel(
     fun sendMessage() {
         val text = inputText.trim()
         if (text.isEmpty()) return
-        groupListViewModel.sendMessage(groupID, text)
+        val replyToID = replyingToMessage?.id
+        groupListViewModel.sendMessage(groupID, text, replyToID)
         inputText = ""
+        replyingToMessage = null
     }
 
     fun retryMessage(messageID: String) {
@@ -89,23 +92,34 @@ class ChatViewModel(
 
     fun sendImage(imageData: ByteArray) {
         isSendingImage = true
-        groupListViewModel.sendImage(groupID, imageData)
+        val replyToID = replyingToMessage?.id
+        groupListViewModel.sendImage(groupID, imageData, replyToID)
         selectedImageUri = null
         isSendingImage = false
+        replyingToMessage = null
     }
 
     fun sendVideo(context: Context) {
         val uri = selectedVideoUri ?: return
         isSendingVideo = true
-        groupListViewModel.sendVideo(groupID, context, uri)
+        val replyToID = replyingToMessage?.id
+        groupListViewModel.sendVideo(groupID, context, uri, replyToID)
         selectedVideoUri = null
         isSendingVideo = false
+        replyingToMessage = null
     }
 
     fun sendVoice(audioFile: java.io.File) {
         isSendingVoice = true
-        groupListViewModel.sendVoice(groupID, audioFile)
+        val replyToID = replyingToMessage?.id
+        groupListViewModel.sendVoice(groupID, audioFile, replyToID)
         isSendingVoice = false
+        replyingToMessage = null
+    }
+
+    fun parentMessage(message: ChatMessage): ChatMessage? {
+        val replyToID = message.replyToID ?: return null
+        return messages.find { it.id == replyToID }
     }
 
     override fun onCleared() {

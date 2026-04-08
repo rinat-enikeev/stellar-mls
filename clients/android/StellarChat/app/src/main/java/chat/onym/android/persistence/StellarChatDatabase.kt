@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PersistedTransportBundle::class, PersistedPendingRekey::class,
         PersistedEpochSnapshot::class
     ],
-    version = 9
+    version = 10
 )
 abstract class StellarChatDatabase : RoomDatabase() {
     abstract fun dao(): StellarChatDao
@@ -100,13 +100,19 @@ abstract class StellarChatDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN replyToID TEXT")
+            }
+        }
+
         fun getInstance(context: Context): StellarChatDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     StellarChatDatabase::class.java,
                     "stellar_chat.db"
-                ).addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+                ).addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
                 .fallbackToDestructiveMigration()
                 .build().also { instance = it }
             }

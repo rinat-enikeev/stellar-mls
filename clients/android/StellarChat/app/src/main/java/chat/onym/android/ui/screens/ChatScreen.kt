@@ -52,6 +52,8 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -89,6 +91,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import chat.onym.android.blossom.BlossomClient
 import chat.onym.android.blossom.ImageCache
@@ -369,7 +372,7 @@ fun ChatScreen(
                     )
                     if ((viewModel.group?.members?.size ?: 0) <= 1) {
                         Spacer(modifier = Modifier.height(16.dp))
-                        OutlinedButton(onClick = { showGroupInfo = true }) {
+                        OutlinedButton(onClick = { onGroupInfo() }) {
                             Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.size(4.dp))
                             Text("Share invite link")

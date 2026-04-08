@@ -49,7 +49,7 @@ platform :ios do
           "chat.onym.ios.NotificationService" => "match AppStore chat.onym.ios.NotificationService"
         }
       },
-      xcargs: "COMPILER_INDEX_STORE_ENABLE=NO DEVELOPMENT_TEAM='#{ENV['MATCH_TEAM_ID']}'",
+      xcargs: "COMPILER_INDEX_STORE_ENABLE=NO SWIFT_COMPILATION_MODE=incremental DEVELOPMENT_TEAM='#{ENV['MATCH_TEAM_ID']}'",
       output_directory: "build/ios",
       output_name: "StellarChat.ipa"
     )

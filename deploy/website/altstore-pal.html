@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Install Onym via AltStore PAL</title>
+    <meta name="description" content="Install Onym Chat on iPhone in the EU via AltStore PAL — Apple-notarized alternative distribution.">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --surface: #12121a;
+            --border: #1e1e2e;
+            --text: #e4e4ef;
+            --text-dim: #8888a0;
+            --accent: #6c5ce7;
+            --accent-glow: #a29bfe;
+            --green: #00b894;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        nav {
+            padding: 20px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        nav .container {
+            max-width: 1100px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text);
+            text-decoration: none;
+            letter-spacing: -0.5px;
+        }
+        .logo span { color: var(--accent-glow); }
+        nav a.gh-link {
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+        nav a.gh-link:hover { color: var(--text); }
+
+        .hero {
+            padding: 80px 0 40px;
+            text-align: center;
+        }
+        .hero-badge {
+            display: inline-block;
+            padding: 6px 16px;
+            border-radius: 20px;
+            border: 1px solid var(--border);
+            color: var(--accent-glow);
+            font-size: 0.8rem;
+            font-weight: 500;
+            margin-bottom: 24px;
+            letter-spacing: 0.5px;
+        }
+        .hero h1 {
+            font-size: clamp(2rem, 5vw, 2.75rem);
+            font-weight: 800;
+            line-height: 1.15;
+            margin-bottom: 18px;
+            letter-spacing: -1px;
+        }
+        .hero h1 em {
+            font-style: normal;
+            background: linear-gradient(135deg, var(--accent), var(--accent-glow));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .hero p {
+            font-size: 1.05rem;
+            color: var(--text-dim);
+            max-width: 560px;
+            margin: 0 auto 36px;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 28px;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+            cursor: pointer;
+            border: 1px solid transparent;
+        }
+        .btn-primary {
+            background: var(--accent);
+            color: #fff;
+        }
+        .btn-primary:hover {
+            background: var(--accent-glow);
+            transform: translateY(-1px);
+        }
+        .btn-ghost {
+            background: var(--surface);
+            color: var(--text);
+            border-color: var(--border);
+        }
+        .btn-ghost:hover {
+            border-color: var(--accent);
+        }
+        .btn svg {
+            width: 20px;
+            height: 20px;
+            fill: currentColor;
+        }
+
+        .source-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            margin: 24px 0;
+            text-align: left;
+        }
+        .source-card .label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--accent-glow);
+            margin-bottom: 10px;
+        }
+        .source-url {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 12px 14px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.9rem;
+            color: var(--text);
+            overflow-x: auto;
+        }
+        .source-url code {
+            flex: 1;
+            white-space: nowrap;
+        }
+        .copy-btn {
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 8px 14px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s;
+            flex-shrink: 0;
+        }
+        .copy-btn:hover { background: var(--accent-glow); }
+        .copy-btn.copied { background: var(--green); }
+
+        .steps {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 28px 32px;
+            margin-top: 32px;
+            text-align: left;
+        }
+        .steps h2 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 18px;
+        }
+        .steps ol {
+            padding-left: 20px;
+            color: var(--text-dim);
+        }
+        .steps li {
+            margin-bottom: 10px;
+            font-size: 0.95rem;
+        }
+        .steps li strong {
+            color: var(--text);
+            font-weight: 600;
+        }
+        .steps a {
+            color: var(--accent-glow);
+            text-decoration: none;
+        }
+        .steps a:hover { text-decoration: underline; }
+
+        .note {
+            margin-top: 28px;
+            padding: 16px 20px;
+            background: rgba(108, 92, 231, 0.06);
+            border: 1px solid rgba(162, 155, 254, 0.2);
+            border-radius: 12px;
+            font-size: 0.85rem;
+            color: var(--text-dim);
+            text-align: left;
+        }
+        .note strong { color: var(--accent-glow); }
+
+        footer {
+            padding: 40px 0 32px;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+            margin-top: 60px;
+        }
+        footer a {
+            color: var(--text-dim);
+            text-decoration: none;
+        }
+        footer a:hover { color: var(--text); }
+        .footer-links {
+            display: flex;
+            gap: 24px;
+            justify-content: center;
+            margin-bottom: 12px;
+        }
+
+        @media (max-width: 640px) {
+            .hero { padding: 50px 0 30px; }
+            .steps { padding: 22px 20px; }
+            .source-url { font-size: 0.8rem; }
+        }
+    </style>
+</head>
+<body>
+
+<nav>
+    <div class="container">
+        <a href="/" class="logo">onym<span>.</span>chat</a>
+        <div style="display:flex;gap:20px;align-items:center">
+            <a href="/architecture" class="gh-link">Architecture</a>
+            <a href="/math" class="gh-link">Math</a>
+            <a href="/correctness" class="gh-link">Correctness</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls" class="gh-link">GitHub</a>
+        </div>
+    </div>
+</nav>
+
+<section class="hero">
+    <div class="container">
+        <div class="hero-badge">EU · iOS 18+ · Apple-notarized</div>
+        <h1>Install Onym via <em>AltStore PAL</em></h1>
+        <p>Onym Chat is distributed through AltStore PAL — Apple's official alternative marketplace for iPhones in the European Union. Every build is reviewed and notarized by Apple.</p>
+
+        <a href="altstore-pal://source?url=https%3A%2F%2Fonym.chat%2Faltstore-source.json" class="btn btn-primary" id="open-pal-btn">
+            <svg viewBox="0 0 24 24"><path d="M12 2 2 7v10l10 5 10-5V7zm0 2.2 7.5 3.75L12 11.7 4.5 7.95zM4 9.6l7 3.5v7.3l-7-3.5zm16 0v7.3l-7 3.5v-7.3z"/></svg>
+            Open in AltStore PAL
+        </a>
+
+        <div class="source-card">
+            <div class="label">Source URL</div>
+            <div class="source-url">
+                <code id="source-url">https://onym.chat/altstore-source.json</code>
+                <button class="copy-btn" id="copy-btn" type="button">Copy</button>
+            </div>
+        </div>
+
+        <div class="steps">
+            <h2>Manual install (if the button above doesn't open)</h2>
+            <ol>
+                <li>Install <strong><a href="https://altstore.io/pal" target="_blank" rel="noopener">AltStore PAL</a></strong> on your iPhone (EU only — requires iOS 17.4+).</li>
+                <li>Open AltStore PAL and go to the <strong>Sources</strong> tab.</li>
+                <li>Tap the <strong>+</strong> button in the top-right and paste the source URL above.</li>
+                <li>Open the new <strong>Onym Chat</strong> source and tap <strong>Get</strong> to install.</li>
+            </ol>
+        </div>
+
+        <div class="note">
+            <strong>Outside the EU?</strong> AltStore PAL is only available on iPhones registered to an EU country. Use the <a href="https://testflight.apple.com/join/uTmqzTDE" style="color:var(--accent-glow)">TestFlight beta</a> on the home page instead.
+        </div>
+    </div>
+</section>
+
+<footer>
+    <div class="container">
+        <div class="footer-links">
+            <a href="/">Home</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls">GitHub</a>
+            <a href="/privacy">Privacy</a>
+            <a href="https://github.com/rinat-enikeev/stellar-mls/blob/main/LICENSE">MIT License</a>
+        </div>
+        <p>onym.chat</p>
+    </div>
+</footer>
+
+<script>
+(function () {
+    var btn = document.getElementById('copy-btn');
+    var src = document.getElementById('source-url').textContent.trim();
+    btn.addEventListener('click', function () {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(src).then(function () {
+                btn.textContent = 'Copied';
+                btn.classList.add('copied');
+                setTimeout(function () {
+                    btn.textContent = 'Copy';
+                    btn.classList.remove('copied');
+                }, 1500);
+            });
+        } else {
+            var r = document.createRange();
+            r.selectNodeContents(document.getElementById('source-url'));
+            var sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(r);
+        }
+    });
+})();
+</script>
+
+</body>
+</html>

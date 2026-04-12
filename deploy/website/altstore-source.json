@@ -3,10 +3,12 @@
   "identifier": "chat.onym.source",
   "subtitle": "Private Encrypted Group Chat",
   "sourceURL": "https://onym.chat/altstore-source.json",
+  "fediUsername": "onym",
   "apps": [
     {
       "name": "Onym Chat",
       "bundleIdentifier": "chat.onym.ios",
+      "marketplaceID": "6761677301",
       "developerName": "Programyzer OU",
       "subtitle": "Private Encrypted Group Chat",
       "localizedDescription": "Onym is a private group chat app where every message is end-to-end encrypted before it leaves your device. Built on open protocols, Onym gives you verifiable privacy by design.\n\nFeatures:\n- End-to-end encryption (AES-256-GCM)\n- Zero-knowledge group membership proofs\n- Encrypted voice messages and media sharing\n- Voice and video calls\n- Cross-platform (iOS and Android)\n- Open source",
@@ -16,60 +18,13 @@
       "screenshots": [],
       "versions": [
         {
-          "version": "1.2.10",
-          "date": "2026-04-08",
-          "localizedDescription": "Release 1.2.10",
-          "downloadURL": "https://github.com/rinat-enikeev/stellar-mls/releases/download/v1.2.10/StellarChat-1.2.10.ipa",
-          "size": 11610357
-        },
-        {
-          "version": "1.2.1",
-          "date": "2026-04-08",
-          "localizedDescription": "Release 1.2.1 \u2014 Reply to messages in chat (Android)",
-          "downloadURL": "",
-          "size": 0
-        },
-        {
           "version": "1.2.0",
-          "date": "2026-04-08",
-          "localizedDescription": "Release 1.2.0 \u2014 Reply to messages in chat (Telegram-style)",
-          "downloadURL": "",
-          "size": 0
-        },
-        {
-          "version": "1.1.2",
-          "date": "2026-04-08",
-          "localizedDescription": "Release 1.1.2",
-          "downloadURL": "",
-          "size": 0
-        },
-        {
-          "version": "1.1.1",
-          "date": "2026-04-08",
-          "localizedDescription": "Release 1.1.1",
-          "downloadURL": "",
-          "size": 0
-        },
-        {
-          "version": "1.1.0",
-          "date": "2026-04-08",
-          "localizedDescription": "Release 1.1.0",
-          "downloadURL": "",
-          "size": 0
-        },
-        {
-          "version": "1.0.9",
-          "date": "2026-04-08",
-          "localizedDescription": "Release 1.0.9",
-          "downloadURL": "",
-          "size": 0
-        },
-        {
-          "version": "1.0",
-          "date": "2026-04-07",
-          "localizedDescription": "Initial release of Onym Chat.",
-          "downloadURL": "https://onym.chat/builds/onym-1.0.ipa",
-          "size": 0
+          "buildVersion": "15",
+          "date": "2026-04-11",
+          "localizedDescription": "Release 1.2.0 — Reply to messages in chat (Telegram-style). First build distributed via AltStore PAL after Apple notarization.",
+          "downloadURL": "https://onym.chat/adp/1.2.0/manifest.json",
+          "size": 22786156,
+          "minOSVersion": "18.0"
         }
       ],
       "appPermissions": {

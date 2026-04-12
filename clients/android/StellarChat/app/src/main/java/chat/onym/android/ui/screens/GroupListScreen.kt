@@ -20,9 +20,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -391,9 +391,9 @@ fun GroupListScreen(
 fun OnboardingSheet(onDismiss: () -> Unit, isRevisit: Boolean = false) {
     val pages = remember {
         listOf(
-            Triple(Icons.Default.Lock, "Your messages are encrypted.\nYour metadata isn't.", "Most messengers encrypt your messages but still collect who you talk to, when, and how often. That metadata tells a complete story about you."),
-            Triple(Icons.Default.Person, "Private by design.\nAnonymous by default.", "No phone numbers. No accounts. No social graph. You prove you belong to a group without revealing who you are."),
-            Triple(Icons.Default.Refresh, "Shared control.\nNo single admin.", "When someone leaves, encryption keys rotate automatically. No one person holds the keys to your group.")
+            Triple(Icons.Default.VisibilityOff, "Now your messages and metadata are encrypted", "Most messengers encrypt your messages but still collect who you talk to, when, and how often. That metadata tells a complete story about you."),
+            Triple(Icons.Default.Person, "Private by design.\nAnonymous by default.", "No phone numbers. No accounts. No social graph. Even other group members won't know anything about you beyond what you choose to share."),
+            Triple(Icons.Default.Refresh, "Truly shared ownership.\nNo super-admin.", "Your group's legacy doesn't depend on a single super-admin. From the start, set transparent rules for adding and removing members — like via voting.")
         )
     }
     val totalPages = pages.size + 1 // +1 for differentiator page

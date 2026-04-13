@@ -1,0 +1,5 @@
+# Secrets + local-only state. Only *.env.example is committed.
+*.env
+!*.env.example
+n8n/credentials.json
+keys/

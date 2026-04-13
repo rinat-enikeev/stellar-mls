@@ -1,0 +1,177 @@
+{
+  "name": "01 QA agent issue",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "qa-issue",
+        "responseMode": "onReceived",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "a1000000-0000-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "webhookId": "qa-issue"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "b1000000-0000-0000-0000-000000000001",
+              "leftValue": "={{ ($json.body.issue.labels || []).map(l => l.name).includes('agent-task') }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "b1000000-0000-0000-0000-000000000002",
+              "leftValue": "={{ ['opened', 'reopened', 'labeled'].includes($json.body.action) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-0000-0000-000000000002",
+      "name": "Is agent-task?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c1000000-0000-0000-0000-000000000001",
+              "name": "issueNumber",
+              "value": "={{ $json.body.issue.number }}",
+              "type": "number"
+            },
+            {
+              "id": "c1000000-0000-0000-0000-000000000002",
+              "name": "issueTitle",
+              "value": "={{ $json.body.issue.title }}",
+              "type": "string"
+            },
+            {
+              "id": "c1000000-0000-0000-0000-000000000003",
+              "name": "issueBody",
+              "value": "={{ $json.body.issue.body || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "c1000000-0000-0000-0000-000000000004",
+              "name": "repoOwner",
+              "value": "={{ $json.body.repository.owner.login }}",
+              "type": "string"
+            },
+            {
+              "id": "c1000000-0000-0000-0000-000000000005",
+              "name": "repoName",
+              "value": "={{ $json.body.repository.name }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-0000-0000-000000000003",
+      "name": "Extract issue fields",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [680, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst prompt = `Issue #${j.issueNumber}: ${j.issueTitle}\n\n${j.issueBody}\n\nImplement a fix. Keep the change minimal and focused on the reported problem. Commit with a clear message and exit when done.\n`;\nreturn [{ json: { ...j, promptB64: Buffer.from(prompt, 'utf8').toString('base64') } }];\n"
+      },
+      "id": "a1000000-0000-0000-0000-000000000006",
+      "name": "Encode prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [790, 220]
+    },
+    {
+      "parameters": {
+        "resource": "command",
+        "command": "=set +e\nset -o pipefail\nBRANCH=\"agent/issue-{{ $json.issueNumber }}\"\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngit fetch origin main 2>&1\ngit checkout -B \"$BRANCH\" origin/main 2>&1\necho {{ $json.promptB64 }} | base64 -d > /tmp/prompt-{{ $json.issueNumber }}.txt\nclaude --print < /tmp/prompt-{{ $json.issueNumber }}.txt\nCLAUDE_RC=$?\nrm -f /tmp/prompt-{{ $json.issueNumber }}.txt\necho \"CLAUDE_RC=$CLAUDE_RC\"\nif git diff --quiet origin/main..HEAD; then\n  echo \"PR_URL=\"\n  echo \"ERROR: no changes produced by claude\" >&2\n  exit 0\nfi\ngit push -u origin \"$BRANCH\" --force 2>&1\nPUSH_RC=$?\necho \"PUSH_RC=$PUSH_RC\"\nif [ $PUSH_RC -ne 0 ]; then\n  echo \"PR_URL=\"\n  exit 0\nfi\nEXISTING=$(gh pr list --head \"$BRANCH\" --state open --json url --jq '.[0].url' 2>&1)\nif [ -n \"$EXISTING\" ] && [ \"${EXISTING#https://}\" != \"$EXISTING\" ]; then\n  echo \"PR_URL=$EXISTING\"\n  echo \"reused existing PR\"\n  exit 0\nfi\nGH_OUT=$(gh pr create --fill --base main --head \"$BRANCH\" --label ai-generated 2>&1)\nGH_RC=$?\necho \"GH_RC=$GH_RC\"\necho \"GH_OUT<<__END__\"\necho \"$GH_OUT\"\necho \"__END__\"\nPR_URL=$(printf '%s\\n' \"$GH_OUT\" | grep -Eo 'https://github.com/[^ ]+/pull/[0-9]+' | tail -1)\necho \"PR_URL=$PR_URL\"\nexit 0\n"
+      },
+      "id": "a1000000-0000-0000-0000-000000000004",
+      "name": "Run claude in qa-agent",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [900, 220],
+      "credentials": {
+        "sshPassword": {
+          "id": "REPLACE_ME",
+          "name": "qa-agent SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "issue",
+        "operation": "createComment",
+        "owner": "={{ $('Extract issue fields').item.json.repoOwner }}",
+        "repository": "={{ $('Extract issue fields').item.json.repoName }}",
+        "issueNumber": "={{ $('Extract issue fields').item.json.issueNumber }}",
+        "body": "=qa-agent opened {{ $json.stdout.split('PR_URL=')[1]?.trim() || '(no PR — see logs)' }}"
+      },
+      "id": "a1000000-0000-0000-0000-000000000005",
+      "name": "Comment on issue",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [1120, 220],
+      "credentials": {
+        "githubApi": {
+          "id": "REPLACE_ME",
+          "name": "qa-bot GitHub"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Is agent-task?", "type": "main", "index": 0 }]]
+    },
+    "Is agent-task?": {
+      "main": [
+        [{ "node": "Extract issue fields", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Extract issue fields": {
+      "main": [[{ "node": "Encode prompt", "type": "main", "index": 0 }]]
+    },
+    "Encode prompt": {
+      "main": [[{ "node": "Run claude in qa-agent", "type": "main", "index": 0 }]]
+    },
+    "Run claude in qa-agent": {
+      "main": [[{ "node": "Comment on issue", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

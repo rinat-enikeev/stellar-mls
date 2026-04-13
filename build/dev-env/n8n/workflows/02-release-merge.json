@@ -1,0 +1,128 @@
+{
+  "name": "02 Release merge",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "release-merge",
+        "responseMode": "onReceived",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "a2000000-0000-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "webhookId": "release-merge"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "b2000000-0000-0000-0000-000000000001",
+              "leftValue": "={{ $json.body.action }}",
+              "rightValue": "closed",
+              "operator": { "type": "string", "operation": "equals" }
+            },
+            {
+              "id": "b2000000-0000-0000-0000-000000000002",
+              "leftValue": "={{ $json.body.pull_request.merged }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            },
+            {
+              "id": "b2000000-0000-0000-0000-000000000003",
+              "leftValue": "={{ $json.body.pull_request.base.ref }}",
+              "rightValue": "main",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a2000000-0000-0000-0000-000000000002",
+      "name": "PR merged to main?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const pr = $input.first().json.body.pull_request;\nconst labels = (pr.labels || []).map(l => l.name);\nlet bump = 'patch';\nif (labels.includes('release:major')) bump = 'major';\nelse if (labels.includes('release:minor')) bump = 'minor';\nreturn [{ json: {\n  bump,\n  prNumber: pr.number,\n  prTitle: pr.title,\n  repoOwner: $input.first().json.body.repository.owner.login,\n  repoName: $input.first().json.body.repository.name\n}}];\n"
+      },
+      "id": "a2000000-0000-0000-0000-000000000003",
+      "name": "Compute bump",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 220]
+    },
+    {
+      "parameters": {
+        "resource": "command",
+        "command": "=set -eo pipefail\ncd ~/workspace\ngit fetch origin main --tags\ngit checkout main\ngit reset --hard origin/main\nLATEST=$(git tag --list 'v*' --sort=-v:refname | head -1 | sed 's/^v//')\nLATEST=\"${LATEST:-0.0.0}\"\nIFS='.' read -r MAJ MIN PAT <<<\"$LATEST\"\ncase \"{{ $json.bump }}\" in\n  major) MAJ=$((MAJ+1)); MIN=0; PAT=0 ;;\n  minor) MIN=$((MIN+1)); PAT=0 ;;\n  patch) PAT=$((PAT+1)) ;;\nesac\nNEW=\"$MAJ.$MIN.$PAT\"\necho \"bumping $LATEST -> $NEW\"\nif [ -x ./scripts/sync-versions.sh ]; then\n  ./scripts/sync-versions.sh \"$NEW\"\n  git add -A\n  git commit -m \"release: v$NEW (PR #{{ $json.prNumber }})\" || true\nfi\ngit tag \"v$NEW\"\ngit push origin main --tags\necho \"NEW_TAG=v$NEW\"\n"
+      },
+      "id": "a2000000-0000-0000-0000-000000000004",
+      "name": "Tag release",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [900, 220],
+      "credentials": {
+        "sshPassword": {
+          "id": "REPLACE_ME",
+          "name": "release-agent SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "issue",
+        "operation": "createComment",
+        "owner": "={{ $('Compute bump').item.json.repoOwner }}",
+        "repository": "={{ $('Compute bump').item.json.repoName }}",
+        "issueNumber": "={{ $('Compute bump').item.json.prNumber }}",
+        "body": "=release-agent pushed {{ $json.stdout.split('NEW_TAG=')[1]?.trim() || '(see logs)' }} — GitHub Actions will build and publish."
+      },
+      "id": "a2000000-0000-0000-0000-000000000005",
+      "name": "Comment on PR",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [1120, 220],
+      "credentials": {
+        "githubApi": {
+          "id": "REPLACE_ME",
+          "name": "release-bot GitHub"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "PR merged to main?", "type": "main", "index": 0 }]]
+    },
+    "PR merged to main?": {
+      "main": [
+        [{ "node": "Compute bump", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Compute bump": {
+      "main": [[{ "node": "Tag release", "type": "main", "index": 0 }]]
+    },
+    "Tag release": {
+      "main": [[{ "node": "Comment on PR", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

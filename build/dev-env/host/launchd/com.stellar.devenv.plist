@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Launches the stellar-mls dev-env docker compose stack at login.
+  Install to ~/Library/LaunchAgents/com.stellar.devenv.plist and edit the
+  WorkingDirectory below to match your actual checkout path. Requires
+  Docker Desktop to auto-start at login (Docker Desktop → Settings →
+  General → Start Docker Desktop when you log in). OrbStack users can
+  replace `docker` with their CLI if they prefer.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.stellar.devenv</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/stellar-builder/Developer/stellar-mls/build/dev-env</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/docker</string>
+        <string>compose</string>
+        <string>-f</string>
+        <string>docker-compose.dev.yml</string>
+        <string>up</string>
+        <string>-d</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/stellar-builder/logs/devenv.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/stellar-builder/logs/devenv.err.log</string>
+</dict>
+</plist>

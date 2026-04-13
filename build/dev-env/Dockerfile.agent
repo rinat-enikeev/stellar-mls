@@ -1,0 +1,64 @@
+# stellar-mls dev-env agent image.
+#
+# Adds sshd, Claude Code CLI, gh, tmux, and a non-root `agent` user on top of
+# the arm64-native base image. One image serves both the qa-agent and
+# release-agent containers — differentiated purely by runtime env (ROLE set
+# per service in docker-compose, per-container env files, separate volumes).
+# ROLE is NOT baked at build time because both services share this image tag.
+
+FROM stellar-mls/dev-env-base:latest
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG AGENT_USER=agent
+ARG AGENT_UID=1000
+
+ENV HOME=/home/${AGENT_USER} \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+# System packages: openssh-server for sshd, tmux/mosh for persistent sessions,
+# sudo so agent-entrypoint can drop into the agent user for first-run, jq for
+# JSON plumbing in scripts, gnupg for apt repo signing keys.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        openssh-server tmux mosh jq sudo vim-tiny less \
+        ca-certificates gnupg \
+    && mkdir -p /run/sshd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node 20 LTS from NodeSource (arm64 available) → Claude Code CLI.
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g @anthropic-ai/claude-code \
+    && rm -rf /var/lib/apt/lists/*
+
+# GitHub CLI from the official apt repo (arm64 package exists).
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
+
+# Per-role non-root user. /cache is owned by agent so cargo/rustup/gradle
+# volumes persist per-container without chown races on every boot.
+RUN useradd -m -u ${AGENT_UID} -s /bin/bash ${AGENT_USER} \
+    && usermod -p '*' ${AGENT_USER} \
+    && mkdir -p ${HOME}/.ssh ${HOME}/workspace ${HOME}/.config \
+    && chown -R ${AGENT_USER}:${AGENT_USER} ${HOME} /cache
+
+# sshd hardening + entrypoint scripts.
+COPY ssh/sshd_config /etc/ssh/sshd_config
+COPY ssh/motd /etc/motd
+COPY entrypoint/agent-entrypoint.sh /usr/local/bin/agent-entrypoint
+COPY entrypoint/first-run.sh /usr/local/bin/first-run
+COPY bin/remote-xcodebuild.sh /usr/local/bin/remote-xcodebuild
+COPY bin/remote-jnilibs.sh /usr/local/bin/remote-jnilibs
+RUN chmod 0755 \
+        /usr/local/bin/agent-entrypoint \
+        /usr/local/bin/first-run \
+        /usr/local/bin/remote-xcodebuild \
+        /usr/local/bin/remote-jnilibs
+
+EXPOSE 22
+ENTRYPOINT ["/usr/local/bin/agent-entrypoint"]

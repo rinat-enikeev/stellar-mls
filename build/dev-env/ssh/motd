@@ -1,0 +1,10 @@
+
+  stellar-mls dev-env agent container
+  ------------------------------------
+  workspace: ~/workspace
+  role:      $ROLE   (set at container build time)
+  tmux:      use `tmux new -A -s main` to attach/reattach
+
+  remote-xcodebuild <sha>     — build iOS on the Mac host
+  remote-jnilibs    <sha>     — build Android JNI libs on the Mac host
+

@@ -1,0 +1,151 @@
+{
+  "name": "03 PR build comment",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pr-build-comment",
+        "responseMode": "onReceived",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "a3000000-0000-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "webhookId": "pr-build-comment"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "b3000000-0000-0000-0000-000000000001",
+              "leftValue": "={{ $json.body.action }}",
+              "rightValue": "created",
+              "operator": { "type": "string", "operation": "equals" }
+            },
+            {
+              "id": "b3000000-0000-0000-0000-000000000002",
+              "leftValue": "={{ !!$json.body.issue.pull_request }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            },
+            {
+              "id": "b3000000-0000-0000-0000-000000000003",
+              "leftValue": "={{ /^\\/build\\s+(ios|android)\\b/i.test(($json.body.comment.body || '').trim()) }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a3000000-0000-0000-0000-000000000002",
+      "name": "Is /build comment?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst match = (body.comment.body || '').trim().match(/^\\/build\\s+(ios|android)\\b/i);\nconst target = match ? match[1].toLowerCase() : 'ios';\nreturn [{ json: {\n  target,\n  prNumber: body.issue.number,\n  repoOwner: body.repository.owner.login,\n  repoName: body.repository.name,\n  repoFull: body.repository.full_name\n}}];\n"
+      },
+      "id": "a3000000-0000-0000-0000-000000000003",
+      "name": "Parse command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 220]
+    },
+    {
+      "parameters": {
+        "resource": "pullRequest",
+        "operation": "get",
+        "owner": "={{ $json.repoOwner }}",
+        "repository": "={{ $json.repoName }}",
+        "pullRequestNumber": "={{ $json.prNumber }}"
+      },
+      "id": "a3000000-0000-0000-0000-000000000004",
+      "name": "Get PR head SHA",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [900, 220],
+      "credentials": {
+        "githubApi": {
+          "id": "REPLACE_ME",
+          "name": "qa-bot GitHub"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "command",
+        "command": "=set -eo pipefail\ncd ~/workspace\nSHA=\"{{ $json.head.sha }}\"\nTARGET=\"{{ $('Parse command').item.json.target }}\"\ngit fetch origin\ngit checkout \"$SHA\"\nif [ \"$TARGET\" = \"ios\" ]; then\n  # Push to the bare repo on the Mac host so the dispatcher can check it out.\n  git remote get-url mac-host >/dev/null 2>&1 || git remote add mac-host \"ssh://${MAC_HOST_USER}@${MAC_HOST}:${MAC_HOST_PORT}/Users/stellar-builder/work/stellar-mls.git\"\n  git push mac-host \"$SHA:refs/heads/build-$SHA\" --force\n  remote-xcodebuild \"$SHA\"\nelse\n  git remote get-url mac-host >/dev/null 2>&1 || git remote add mac-host \"ssh://${MAC_HOST_USER}@${MAC_HOST}:${MAC_HOST_PORT}/Users/stellar-builder/work/stellar-mls.git\"\n  git push mac-host \"$SHA:refs/heads/build-$SHA\" --force\n  remote-jnilibs \"$SHA\"\n  ./gradlew :app:assembleRelease\n  ls -lh app/build/outputs/apk/release/*.apk || true\nfi\n"
+      },
+      "id": "a3000000-0000-0000-0000-000000000005",
+      "name": "Run build in qa-agent",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [1120, 220],
+      "credentials": {
+        "sshPassword": {
+          "id": "REPLACE_ME",
+          "name": "qa-agent SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "issue",
+        "operation": "createComment",
+        "owner": "={{ $('Parse command').item.json.repoOwner }}",
+        "repository": "={{ $('Parse command').item.json.repoName }}",
+        "issueNumber": "={{ $('Parse command').item.json.prNumber }}",
+        "body": "=Build finished for {{ $('Parse command').item.json.target }} on `{{ $('Get PR head SHA').item.json.head.sha }}`:\n\n```\n{{ $json.stdout.slice(-1500) }}\n```"
+      },
+      "id": "a3000000-0000-0000-0000-000000000006",
+      "name": "Post build result",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [1340, 220],
+      "credentials": {
+        "githubApi": {
+          "id": "REPLACE_ME",
+          "name": "qa-bot GitHub"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Is /build comment?", "type": "main", "index": 0 }]]
+    },
+    "Is /build comment?": {
+      "main": [
+        [{ "node": "Parse command", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Parse command": {
+      "main": [[{ "node": "Get PR head SHA", "type": "main", "index": 0 }]]
+    },
+    "Get PR head SHA": {
+      "main": [[{ "node": "Run build in qa-agent", "type": "main", "index": 0 }]]
+    },
+    "Run build in qa-agent": {
+      "main": [[{ "node": "Post build result", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

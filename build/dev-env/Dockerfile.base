@@ -1,0 +1,77 @@
+# stellar-mls dev-env base image.
+#
+# Built for linux/arm64 so it runs natively on the Apple Silicon Mac mini.
+# Rust + JDK + Android SDK (Gradle + platform/build-tools only, NO NDK).
+#
+# Android JNI builds are delegated to the Mac host via SSH, because Google
+# does not ship a linux-aarch64 Android NDK (only darwin-aarch64). Gradle
+# in this container picks up pre-built .so files from build/android/jniLibs/
+# that are produced on the host and tar-streamed back. See the remote-jnilibs
+# wrapper installed into the agent layer for details.
+#
+# This image deliberately does not match build/dev-builder/Dockerfile — that
+# image stays pinned to amd64 for F-Droid reproducible builds and must not
+# be touched. Dev-env is a separate, faster, arm64-native track for
+# interactive work inside Claude Code agent containers.
+
+FROM debian:trixie-slim
+
+ARG DEBIAN_FRONTEND=noninteractive
+# Debian trixie ships OpenJDK 21 as the default. AGP 8.7 + Gradle 8.10 both
+# support JDK 21 for Android builds, and the Android SDK cmdline-tools run
+# under it fine.
+ARG JDK_VERSION=21
+ARG ANDROID_CMDLINE_VERSION=11076708
+ARG ANDROID_PLATFORM=android-34
+ARG ANDROID_BUILD_TOOLS=34.0.0
+ARG RUST_VERSION=1.94.1
+
+ENV ANDROID_HOME=/opt/android-sdk \
+    ANDROID_SDK_ROOT=/opt/android-sdk \
+    CARGO_HOME=/cache/cargo \
+    RUSTUP_HOME=/cache/rustup \
+    GRADLE_USER_HOME=/cache/gradle \
+    PATH=/cache/cargo/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:$PATH
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git unzip zip xz-utils \
+        openjdk-${JDK_VERSION}-jdk-headless \
+        gcc libc-dev pkg-config \
+        ruby ruby-dev make \
+        python3 python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Android command-line tools (Java bundle, arch-independent).
+RUN mkdir -p ${ANDROID_HOME}/cmdline-tools \
+    && curl -sSLo /tmp/cmdline.zip \
+        "https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_CMDLINE_VERSION}_latest.zip" \
+    && unzip -q /tmp/cmdline.zip -d ${ANDROID_HOME}/cmdline-tools \
+    && mv ${ANDROID_HOME}/cmdline-tools/cmdline-tools ${ANDROID_HOME}/cmdline-tools/latest \
+    && rm /tmp/cmdline.zip
+
+# Accept licenses and install SDK components (no NDK — delegated to host).
+RUN yes | sdkmanager --licenses > /dev/null \
+    && sdkmanager --install \
+        "platform-tools" \
+        "platforms;${ANDROID_PLATFORM}" \
+        "build-tools;${ANDROID_BUILD_TOOLS}" > /dev/null
+
+# Rust toolchain — native aarch64-unknown-linux-gnu host. No Android cross
+# targets: Rust→Android compilation happens on the Mac host where the NDK
+# toolchain exists.
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --default-toolchain ${RUST_VERSION} --profile minimal \
+    && /cache/cargo/bin/rustup --version \
+    && /cache/cargo/bin/rustc --version --verbose
+
+# UTF-8 locale for fastlane (it refuses to run cleanly otherwise).
+# C.UTF-8 ships with glibc in trixie, no locale generation needed.
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+
+# fastlane — arch-independent Ruby gem. Kept available for future in-container
+# lanes (version sync, metadata generation, etc.); signing lanes still run on
+# the host where the keychain lives.
+RUN gem install --no-document fastlane
+
+WORKDIR /workspace
+CMD ["bash"]

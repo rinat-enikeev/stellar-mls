@@ -1,0 +1,119 @@
+# stellar-mls dev-env compose stack.
+#
+# Three services on three networks:
+#   - qa-agent      on qa-net + orchestration, ssh on 127.0.0.1:2201
+#   - release-agent on release-net + orchestration, ssh on 127.0.0.1:2202
+#   - n8n           on orchestration, ui on 127.0.0.1:5678
+#
+# Agent containers are isolated: separate docker networks, separate named
+# volumes, separate env files. n8n joins only the `orchestration` network
+# to reach the agents via SSH (no docker-socket mount — n8n has no root on
+# the host).
+#
+# All published ports are loopback-only. The iPhone reaches the containers
+# via ProxyJump through the Mac host's sshd on 2222.
+
+name: stellar-devenv
+
+x-agent-base: &agent-base
+  image: stellar-mls/dev-env-agent:latest
+  tmpfs:
+    - /run
+    - /run/sshd
+  cap_drop: [ALL]
+  cap_add:
+    - CHOWN
+    - SETUID
+    - SETGID
+    - DAC_OVERRIDE
+    - FOWNER
+    - NET_BIND_SERVICE
+    - SYS_CHROOT   # sshd needs this to create privilege-separation chroot
+    - AUDIT_WRITE  # sshd logs session open/close via auditd interface
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+
+services:
+  qa-agent:
+    <<: *agent-base
+    container_name: stellar-qa-agent
+    hostname: qa-agent
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+      platforms:
+        - linux/arm64
+    environment:
+      ROLE: qa
+    env_file:
+      - path: ./qa.env
+        required: false
+    ports:
+      - "127.0.0.1:2201:22"
+    volumes:
+      - qa-home:/home/agent
+      - qa-cache:/cache
+    networks:
+      - qa-net
+      - orchestration
+
+  release-agent:
+    <<: *agent-base
+    container_name: stellar-release-agent
+    hostname: release-agent
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+      platforms:
+        - linux/arm64
+    environment:
+      ROLE: release
+    env_file:
+      - path: ./release.env
+        required: false
+    ports:
+      - "127.0.0.1:2202:22"
+    volumes:
+      - release-home:/home/agent
+      - release-cache:/cache
+    networks:
+      - release-net
+      - orchestration
+
+  n8n:
+    image: n8nio/n8n:latest
+    platform: linux/arm64
+    container_name: stellar-n8n
+    hostname: n8n
+    env_file:
+      - path: ./n8n.env
+        required: false
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: http
+      N8N_SECURE_COOKIE: "false"
+    ports:
+      - "127.0.0.1:5678:5678"
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ./n8n/workflows:/workflows:ro
+    networks:
+      - orchestration
+    restart: unless-stopped
+
+volumes:
+  qa-home:
+  qa-cache:
+  release-home:
+  release-cache:
+  n8n-data:
+
+networks:
+  qa-net:
+    driver: bridge
+  release-net:
+    driver: bridge
+  orchestration:
+    driver: bridge

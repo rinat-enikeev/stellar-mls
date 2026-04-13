@@ -23,8 +23,20 @@ target
 .DS_Store
 .claude
 
-# XCFramework build output (binary artifacts)
-build/
+# XCFramework build output (binary artifacts). build/* rather than
+# build/ so individual subtrees can be re-included below.
+build/*
+# ...but the dev-env tree is source, not a build artifact. Secrets
+# inside it are handled by build/dev-env/.gitignore.
+!build/dev-env/
+
+# Gradle / Kotlin build outputs anywhere in the tree
+# (root `build/*` is anchored, so it doesn't catch kotlin-mls/build,
+# clients/android/StellarChat/build, or app/build).
+# Uses `build/*` shape (not `build/`) so git still descends into the
+# directory and the dev-env re-include below stays effective.
+**/build/*
+!build/dev-env/
 
 # Xcode
 DerivedData/

@@ -219,7 +219,7 @@ private fun CameraPreview(onCodeScanned: (String) -> Unit) {
 
         // Instruction text below the reticle
         Text(
-            text = "Point camera at QR code",
+            text = "Scan a group invitation QR code\nshared by a group member",
             color = Color.White,
             textAlign = TextAlign.Center,
             modifier = Modifier

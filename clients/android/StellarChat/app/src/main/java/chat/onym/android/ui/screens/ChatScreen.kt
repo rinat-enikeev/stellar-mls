@@ -1237,6 +1237,19 @@ fun FullScreenVideoPlayer(videoFile: java.io.File, onDismiss: () -> Unit) {
     }
 }
 
+private object ActiveVoicePlayback {
+    private var stopCurrent: (() -> Unit)? = null
+
+    fun register(stop: () -> Unit) {
+        stopCurrent?.invoke()
+        stopCurrent = stop
+    }
+
+    fun unregister(stop: () -> Unit) {
+        if (stopCurrent === stop) stopCurrent = null
+    }
+}
+
 @Composable
 fun VoiceBubbleContent(media: MediaAttachment, isMine: Boolean) {
     val context = LocalContext.current
@@ -1249,8 +1262,21 @@ fun VoiceBubbleContent(media: MediaAttachment, isMine: Boolean) {
     ) }
     val mediaPlayer = remember { mutableStateOf<android.media.MediaPlayer?>(null) }
 
+    val stopPlayback: () -> Unit = remember(media.blobHash) {
+        {
+            mediaPlayer.value?.let {
+                if (it.isPlaying) it.stop()
+                it.release()
+            }
+            mediaPlayer.value = null
+            isPlaying = false
+            progress = 0f
+        }
+    }
+
     androidx.compose.runtime.DisposableEffect(media.blobHash) {
         onDispose {
+            ActiveVoicePlayback.unregister(stopPlayback)
             mediaPlayer.value?.release()
             mediaPlayer.value = null
         }
@@ -1269,6 +1295,7 @@ fun VoiceBubbleContent(media: MediaAttachment, isMine: Boolean) {
                     mediaPlayer.value?.pause()
                     isPlaying = false
                 } else if (audioData != null) {
+                    ActiveVoicePlayback.register(stopPlayback)
                     playAudio(mediaPlayer, audioData!!, context,
                         onProgress = { progress = it },
                         onComplete = { isPlaying = false; progress = 0f })
@@ -1286,6 +1313,7 @@ fun VoiceBubbleContent(media: MediaAttachment, isMine: Boolean) {
                             chat.onym.android.blossom.AudioCache.put(media.blobHash, plain)
                             audioData = plain
                             isLoading = false
+                            ActiveVoicePlayback.register(stopPlayback)
                             playAudio(mediaPlayer, plain, context,
                                 onProgress = { progress = it },
                                 onComplete = { isPlaying = false; progress = 0f })

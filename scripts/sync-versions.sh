@@ -42,8 +42,10 @@ echo "Build number: $BUILD_NUMBER"
 echo
 
 # 1. Android — build.gradle.kts
-sed -i '' "s/versionCode = [0-9]*/versionCode = $BUILD_NUMBER/" "$GRADLE"
-sed -i '' "s/versionName = \"[^\"]*\"/versionName = \"$VERSION\"/" "$GRADLE"
+# Portable in-place sed: BSD sed (macOS) requires a backup suffix after -i,
+# GNU sed (Linux) does not accept '' as a suffix argument. Use perl instead.
+perl -i -pe "s/versionCode = [0-9]+/versionCode = $BUILD_NUMBER/" "$GRADLE"
+perl -i -pe "s/versionName = \"[^\"]*\"/versionName = \"$VERSION\"/" "$GRADLE"
 echo "Updated $GRADLE"
 
 # 2. iOS — project.yml (both targets)

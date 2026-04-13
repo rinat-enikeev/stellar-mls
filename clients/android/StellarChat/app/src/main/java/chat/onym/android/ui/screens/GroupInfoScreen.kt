@@ -55,6 +55,8 @@ import androidx.compose.ui.unit.dp
 import chat.onym.android.model.ChatGroup
 import chat.onym.android.model.EpochSnapshot
 import chat.onym.android.model.toHex
+import chat.onym.android.persistence.ContactAliasStore
+import chat.onym.android.persistence.StellarChatDao
 import chat.onym.android.ui.components.QRScannerView
 import com.stellarmls.mls.SEPGroupMemberLeaf
 import kotlinx.coroutines.delay
@@ -76,6 +78,8 @@ fun GroupInfoScreen(
     onSendInvitation: ((recipientKeyHex: String, onResult: (Result<Unit>) -> Unit) -> Unit)? = null,
     inviteLink: String? = null,
     onTogglePushNotifications: ((Boolean) -> Unit)? = null,
+    contactAliasStore: ContactAliasStore? = null,
+    dao: StellarChatDao? = null,
     onBack: () -> Unit
 ) {
     val isMember = group.members.any { it.publicKeyCompressed.contentEquals(myBlsPubkey) }
@@ -93,6 +97,9 @@ fun GroupInfoScreen(
     var inviteStatus by remember { mutableStateOf<String?>(null) }
     var inviteLinkCopied by remember { mutableStateOf(false) }
     var showScanner by remember { mutableStateOf(false) }
+    // Member alias
+    var aliasTarget by remember { mutableStateOf<String?>(null) }
+    var aliasText by remember { mutableStateOf("") }
 
     if (showScanner) {
         Box(modifier = Modifier.fillMaxSize()) {
@@ -186,16 +193,30 @@ fun GroupInfoScreen(
 
                     for (member in group.members) {
                         val isMe = member.publicKeyCompressed.contentEquals(myBlsPubkey)
+                        val hex = member.publicKeyCompressed.toHex()
+                        val alias = contactAliasStore?.displayName(hex)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .clickable {
+                                    aliasText = alias ?: ""
+                                    aliasTarget = hex
+                                }
                                 .padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
+                                if (alias != null) {
+                                    Text(
+                                        alias,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
                                 Text(
-                                    member.publicKeyCompressed.toHex().take(16) + "...",
-                                    style = MaterialTheme.typography.bodySmall
+                                    hex.take(16) + "...",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (alias != null) MaterialTheme.colorScheme.onSurfaceVariant
+                                        else MaterialTheme.colorScheme.onSurface
                                 )
                                 if (isMe) {
                                     Text(
@@ -563,6 +584,46 @@ fun GroupInfoScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showRotateKeyDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (aliasTarget != null && contactAliasStore != null && dao != null) {
+        AlertDialog(
+            onDismissRequest = { aliasTarget = null },
+            title = { Text("Set Name") },
+            text = {
+                Column {
+                    Text(
+                        (aliasTarget?.take(16) ?: "") + "...",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = aliasText,
+                        onValueChange = { aliasText = it },
+                        label = { Text("Display name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val pubkey = aliasTarget ?: return@TextButton
+                    scope.launch {
+                        contactAliasStore.setAlias(pubkey, aliasText, dao)
+                    }
+                    aliasTarget = null
+                }) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { aliasTarget = null }) {
                     Text("Cancel")
                 }
             }

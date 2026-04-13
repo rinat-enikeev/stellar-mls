@@ -42,6 +42,7 @@ struct ForkGroupView: View {
                             let isExcluded = excludedMembers.contains(member.publicKeyCompressed)
                             let pubkeyHex = member.publicKeyCompressed.map { String(format: "%02x", $0) }.joined()
                             let isRemover = pubkeyHex == originalGroup.removedByPubkeyHex
+                            let alias = appState.contactAliasStore.displayName(for: pubkeyHex)
                             Button {
                                 if !isMe {
                                     if isExcluded {
@@ -53,9 +54,14 @@ struct ForkGroupView: View {
                             } label: {
                                 HStack {
                                     VStack(alignment: .leading) {
+                                        if let alias {
+                                            Text(alias)
+                                                .font(.caption)
+                                        }
                                         Text(pubkeyHex.prefix(16) + "...")
-                                            .font(.caption)
+                                            .font(.caption2)
                                             .monospaced()
+                                            .foregroundStyle(alias != nil ? .secondary : .primary)
                                         if isMe {
                                             Text("You")
                                                 .font(.caption2)

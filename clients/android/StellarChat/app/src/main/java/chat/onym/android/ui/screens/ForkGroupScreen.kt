@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import chat.onym.android.model.ChatGroup
 import chat.onym.android.model.EpochSnapshot
 import chat.onym.android.model.toHex
+import chat.onym.android.persistence.ContactAliasStore
 import com.stellarmls.mls.SEPGroupMemberLeaf
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -51,6 +52,7 @@ fun ForkGroupScreen(
     removedByPubkeyHex: String? = null,
     onCreateFork: (excludingMembers: List<ByteArray>, forkName: String?, onResult: (Result<ChatGroup>) -> Unit) -> Unit,
     onNavigateToGroup: (String) -> Unit,
+    contactAliasStore: ContactAliasStore? = null,
     onBack: () -> Unit
 ) {
     // Find the latest epoch where user was a member
@@ -156,6 +158,7 @@ fun ForkGroupScreen(
                         val hex = member.publicKeyCompressed.toHex()
                         val isExcluded = excludedMembers.containsKey(hex)
                         val isRemover = hex == removedByPubkeyHex
+                        val alias = contactAliasStore?.displayName(hex)
 
                         Row(
                             modifier = Modifier
@@ -168,9 +171,17 @@ fun ForkGroupScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
+                                if (alias != null) {
+                                    Text(
+                                        alias,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
                                 Text(
                                     hex.take(16) + "...",
-                                    style = MaterialTheme.typography.bodySmall
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (alias != null) MaterialTheme.colorScheme.onSurfaceVariant
+                                        else MaterialTheme.colorScheme.onSurface
                                 )
                                 if (isMe) {
                                     Text(

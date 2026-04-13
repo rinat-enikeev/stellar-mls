@@ -109,6 +109,14 @@ fun JoinGroupScreen(
                 .padding(padding)
                 .padding(16.dp)
         ) {
+            Text(
+                "Paste or scan a group invitation code shared by an existing group member.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             OutlinedTextField(
                 value = viewModel.inviteText,
                 onValueChange = {

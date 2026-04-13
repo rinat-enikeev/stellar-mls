@@ -12,6 +12,7 @@ val isFdroidReleaseBuild = gradle.startParameter.taskNames.any { task ->
 android {
     namespace = "chat.onym.android"
     compileSdk = 35
+    buildToolsVersion = "35.0.0"
 
     defaultConfig {
         applicationId = "chat.onym.android"

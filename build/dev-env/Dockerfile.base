@@ -41,6 +41,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
+# Android build-tools ships aapt2 as linux/amd64 only. On arm64 hosts (Apple
+# Silicon Mac mini) Docker Desktop's Rosetta handler can execute the binary,
+# but it needs the x86_64 dynamic linker + libstdc++ present inside the
+# container. Enable multiarch and install the minimum runtime so aapt2 runs
+# under emulation while the rest of the build stays native arm64.
+RUN dpkg --add-architecture amd64 \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libc6:amd64 libstdc++6:amd64 zlib1g:amd64 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Android command-line tools (Java bundle, arch-independent).
 RUN mkdir -p ${ANDROID_HOME}/cmdline-tools \
     && curl -sSLo /tmp/cmdline.zip \
@@ -50,11 +61,18 @@ RUN mkdir -p ${ANDROID_HOME}/cmdline-tools \
     && rm /tmp/cmdline.zip
 
 # Accept licenses and install SDK components (no NDK — delegated to host).
+# AGP 8.7.x defaults to build-tools 34.0.0 when the project doesn't pin
+# buildToolsVersion explicitly, so install that alongside the current target.
+# Gradle auto-install would otherwise try to write into /opt/android-sdk at
+# build time, which fails because /opt is root-owned.
 RUN yes | sdkmanager --licenses > /dev/null \
     && sdkmanager --install \
         "platform-tools" \
         "platforms;${ANDROID_PLATFORM}" \
-        "build-tools;${ANDROID_BUILD_TOOLS}" > /dev/null
+        "platforms;android-34" \
+        "build-tools;${ANDROID_BUILD_TOOLS}" \
+        "build-tools;34.0.0" > /dev/null \
+    && chmod -R a+rX ${ANDROID_HOME}
 
 # Rust toolchain — native aarch64-unknown-linux-gnu host. No Android cross
 # targets: Rust→Android compilation happens on the Mac host where the NDK

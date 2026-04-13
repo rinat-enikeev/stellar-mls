@@ -19,7 +19,7 @@ AllowUsers agent
 # Expose build env to non-interactive SSH (UsePAM is off, so /etc/environment
 # is not loaded; Debian bash skips ~/.bashrc for non-interactive shells). n8n
 # drives builds via `ssh agent@qa-agent '<cmd>'` — these need to be visible.
-SetEnv ANDROID_HOME=/opt/android-sdk ANDROID_SDK_ROOT=/opt/android-sdk JAVA_HOME=/usr/lib/jvm/default-java
+SetEnv ANDROID_HOME=/opt/android-sdk ANDROID_SDK_ROOT=/opt/android-sdk
 
 # No forwarding — prevents a compromised container from tunneling out.
 AllowTcpForwarding no

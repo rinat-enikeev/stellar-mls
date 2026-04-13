@@ -1559,6 +1559,19 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun lookupContactInboxKeys(): Map<String, String> {
+        val ownBlsHex = keyManager.blsPublicKey().toHex()
+        val result = mutableMapOf<String, String>()
+        for ((_, bundles) in transportBundles) {
+            for ((blsHex, bundle) in bundles) {
+                if (blsHex == ownBlsHex) continue
+                if (result.containsKey(blsHex)) continue
+                result[blsHex] = bundle.x25519InboxPubkey.toHex()
+            }
+        }
+        return result
+    }
+
     /** Check if all members have transport bundles for a group. */
     private fun allMembersHaveBundles(groupID: String, members: List<SEPGroupMemberLeaf>): Boolean {
         val bundles = transportBundles[groupID] ?: return false

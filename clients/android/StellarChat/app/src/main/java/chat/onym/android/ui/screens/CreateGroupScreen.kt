@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,11 +15,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -42,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import chat.onym.android.model.toHex
 import chat.onym.android.nostr.InvitationTransport
 import chat.onym.android.ui.components.QRCodeImage
 import chat.onym.android.ui.components.QRScannerView
@@ -165,6 +170,8 @@ private fun InputContent(
     onShowScanner: () -> Unit,
     context: Context
 ) {
+    var showContactPicker by remember { mutableStateOf(false) }
+
     OutlinedTextField(
         value = viewModel.groupName,
         onValueChange = { viewModel.groupName = it },
@@ -255,6 +262,15 @@ private fun InputContent(
                 }
             }
 
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = { showContactPicker = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Invite from Contacts", style = MaterialTheme.typography.bodySmall)
+            }
+
             viewModel.keyValidationError?.let { error ->
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
@@ -271,6 +287,18 @@ private fun InputContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+    }
+
+    if (showContactPicker) {
+        ContactPickerDialog(
+            groupListViewModel = groupListViewModel,
+            alreadyAdded = viewModel.participantKeys.toSet(),
+            onContactSelected = { inboxKeyHex ->
+                viewModel.keyInput = inboxKeyHex
+                viewModel.addParticipant(keyManager.keyAgreementPublicKeyHex)
+            },
+            onDismiss = { showContactPicker = false }
+        )
     }
 
     Spacer(modifier = Modifier.height(16.dp))
@@ -505,4 +533,92 @@ private fun StatusRow(
             }
         )
     }
+}
+
+private data class InvitableContact(
+    val blsPubkeyHex: String,
+    val inboxKeyHex: String,
+    val groupNames: String
+)
+
+@Composable
+private fun ContactPickerDialog(
+    groupListViewModel: GroupListViewModel,
+    alreadyAdded: Set<String>,
+    onContactSelected: (inboxKeyHex: String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val contactInboxKeys = remember { groupListViewModel.lookupContactInboxKeys() }
+    val aliasStore = groupListViewModel.contactAliasStore
+
+    val invitableContacts = remember(groupListViewModel.groups, contactInboxKeys) {
+        val memberGroups = mutableMapOf<String, MutableSet<String>>()
+        for (group in groupListViewModel.groups) {
+            for (member in group.members) {
+                val hex = member.publicKeyCompressed.toHex()
+                if (contactInboxKeys.containsKey(hex)) {
+                    memberGroups.getOrPut(hex) { mutableSetOf() }.add(group.name)
+                }
+            }
+        }
+        memberGroups.entries.mapNotNull { (blsHex, groupNameSet) ->
+            val inboxKey = contactInboxKeys[blsHex] ?: return@mapNotNull null
+            InvitableContact(blsHex, inboxKey, groupNameSet.joinToString(", "))
+        }.sortedBy { aliasStore.displayName(it.blsPubkeyHex) ?: it.blsPubkeyHex }
+    }
+
+    val availableContacts = invitableContacts.filter { !alreadyAdded.contains(it.inboxKeyHex) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Invite from Contacts") },
+        text = {
+            if (availableContacts.isEmpty()) {
+                Text(
+                    if (invitableContacts.isEmpty()) "No contacts with known inbox keys."
+                    else "All available contacts have already been added.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                LazyColumn {
+                    items(availableContacts, key = { it.blsPubkeyHex }) { contact ->
+                        val alias = aliasStore.displayName(contact.blsPubkeyHex)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onContactSelected(contact.inboxKeyHex)
+                                    onDismiss()
+                                }
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            ContactAvatar(pubkey = contact.blsPubkeyHex, alias = alias)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    alias ?: (contact.blsPubkeyHex.take(12) + "..."),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                if (contact.groupNames.isNotEmpty()) {
+                                    Text(
+                                        contact.groupNames,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }

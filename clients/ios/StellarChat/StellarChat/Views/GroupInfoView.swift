@@ -21,6 +21,10 @@ struct GroupInfoView: View {
     // Copy invite link
     @State private var inviteLinkCopied = false
 
+    // Member alias
+    @State private var aliasTarget: String?
+    @State private var aliasText = ""
+
     // Epoch pin confirmation
     @State private var epochToPin: UInt64?
     @State private var showPinConfirmation = false
@@ -134,12 +138,18 @@ struct GroupInfoView: View {
 
                 Section("Members") {
                     ForEach(group.members, id: \.publicKeyCompressed) { member in
+                        let pubkeyHex = member.publicKeyCompressed.map { String(format: "%02x", $0) }.joined()
+                        let alias = appState.contactAliasStore.displayName(for: pubkeyHex)
                         HStack {
                             VStack(alignment: .leading) {
-                                let pubkeyHex = member.publicKeyCompressed.map { String(format: "%02x", $0) }.joined()
+                                if let alias {
+                                    Text(alias)
+                                        .font(.caption)
+                                }
                                 Text(pubkeyHex.prefix(16) + "...")
-                                    .font(.caption)
+                                    .font(.caption2)
                                     .monospaced()
+                                    .foregroundStyle(alias != nil ? .secondary : .primary)
 
                                 if isMyKey(member) {
                                     Text("You")
@@ -158,6 +168,21 @@ struct GroupInfoView: View {
                                     Image(systemName: "person.badge.minus")
                                 }
                                 .disabled(isRemovingMember)
+                            }
+                        }
+                        .contextMenu {
+                            Button {
+                                aliasText = alias ?? ""
+                                aliasTarget = pubkeyHex
+                            } label: {
+                                Label("Set Name", systemImage: "pencil")
+                            }
+                            if alias != nil {
+                                Button(role: .destructive) {
+                                    appState.contactAliasStore.removeAlias(pubkey: pubkeyHex)
+                                } label: {
+                                    Label("Remove Name", systemImage: "trash")
+                                }
                             }
                         }
                     }
@@ -336,6 +361,23 @@ struct GroupInfoView: View {
                     removalStatusIsError = false
                 }
                 Button("Cancel", role: .cancel) {}
+            }
+            .alert("Set Name", isPresented: .init(
+                get: { aliasTarget != nil },
+                set: { if !$0 { aliasTarget = nil } }
+            )) {
+                TextField("Display name", text: $aliasText)
+                Button("Save") {
+                    if let pubkey = aliasTarget {
+                        appState.contactAliasStore.setAlias(pubkey: pubkey, name: aliasText)
+                    }
+                    aliasTarget = nil
+                }
+                Button("Cancel", role: .cancel) { aliasTarget = nil }
+            } message: {
+                if let pubkey = aliasTarget {
+                    Text(String(pubkey.prefix(16)) + "...")
+                }
             }
             .sheet(isPresented: $showScanner) {
                 QRScannerView { scannedCode in

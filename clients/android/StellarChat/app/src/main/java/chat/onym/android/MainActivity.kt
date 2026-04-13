@@ -423,6 +423,8 @@ fun StellarChatNavHost(
                             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                         }
                     },
+                    contactAliasStore = groupListViewModel.contactAliasStore,
+                    dao = groupListViewModel.store.dao,
                     onBack = { navController.popBackStack() }
                 )
             }
@@ -447,6 +449,7 @@ fun StellarChatNavHost(
                             popUpTo("fork/$groupId") { inclusive = true }
                         }
                     },
+                    contactAliasStore = groupListViewModel.contactAliasStore,
                     onBack = { navController.popBackStack() }
                 )
             }

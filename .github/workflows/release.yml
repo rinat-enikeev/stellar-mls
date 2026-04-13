@@ -81,7 +81,7 @@ jobs:
           files: app-fdroid-arm64-v8a-release-*.apk
 
   ios-build:
-    runs-on: macos-16
+    runs-on: macos-26
     needs: create-release
     steps:
       - uses: actions/checkout@v4

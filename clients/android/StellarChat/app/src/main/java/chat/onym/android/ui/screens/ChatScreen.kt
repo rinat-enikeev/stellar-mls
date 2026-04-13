@@ -395,11 +395,6 @@ fun ChatScreen(
                         itemsIndexed(viewModel.messages.asReversed(), key = { _, msg -> msg.id }) { reversedIndex, message ->
                             val index = viewModel.messages.size - 1 - reversedIndex
 
-                            // Date separator
-                            if (shouldShowDateSeparator(viewModel.messages, index)) {
-                                DateSeparator(message.timestamp)
-                            }
-
                             // Unread message separator
                             if (message.id == viewModel.firstUnreadMessageID) {
                                 UnreadSeparator()
@@ -440,6 +435,12 @@ fun ChatScreen(
                                         )
                                     }
                                 }
+                            }
+
+                            // Date separator — rendered after message content so that
+                            // reverseLayout places it visually above the message
+                            if (shouldShowDateSeparator(viewModel.messages, index)) {
+                                DateSeparator(message.timestamp)
                             }
                         }
                     }

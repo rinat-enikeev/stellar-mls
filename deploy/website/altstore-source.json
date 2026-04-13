@@ -18,10 +18,17 @@
       "screenshots": [],
       "versions": [
         {
+          "version": "1.2.11",
+          "date": "2026-04-13",
+          "localizedDescription": "Release 1.2.11",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
           "version": "1.2.0",
           "buildVersion": "15",
           "date": "2026-04-11",
-          "localizedDescription": "Release 1.2.0 — Reply to messages in chat (Telegram-style). First build distributed via AltStore PAL after Apple notarization.",
+          "localizedDescription": "Release 1.2.0 \u2014 Reply to messages in chat (Telegram-style). First build distributed via AltStore PAL after Apple notarization.",
           "downloadURL": "https://onym.chat/adp/1.2.0/manifest.json",
           "size": 22786156,
           "minOSVersion": "18.0"

@@ -70,7 +70,7 @@ jobs:
           ./gradlew assembleFdroidDebug --no-daemon --stacktrace
 
   ios-build:
-    runs-on: macos-26
+    runs-on: [self-hosted, macOS, ARM64]
     steps:
       - uses: actions/checkout@v4
 

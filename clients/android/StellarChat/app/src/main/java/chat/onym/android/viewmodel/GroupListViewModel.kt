@@ -2271,9 +2271,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     epoch = epoch,
                     replyToID = replyToID
                 )
-                // Append to trigger Compose recomposition. Arrival order prevents
-                // messages received after epoch transition from jumping into the middle.
-                chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
+                val updated = (chatMessages[groupID] ?: emptyList()) + msg
+                chatMessages[groupID] = updated.sortedWith(
+                    compareBy<chat.onym.android.model.ChatMessage> { it.timestamp }.thenBy { it.id })
                 viewModelScope.launch {
                     try { store.saveMessage(msg) } catch (_: Exception) { }
                 }

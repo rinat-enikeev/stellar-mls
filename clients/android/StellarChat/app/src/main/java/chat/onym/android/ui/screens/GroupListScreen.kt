@@ -391,9 +391,9 @@ fun GroupListScreen(
 fun OnboardingSheet(onDismiss: () -> Unit, isRevisit: Boolean = false) {
     val pages = remember {
         listOf(
-            Triple(Icons.Default.Lock, "Your messages are encrypted.\nYour metadata isn't.", "Most messengers encrypt your messages but still collect who you talk to, when, and how often. That metadata tells a complete story about you."),
-            Triple(Icons.Default.Person, "Private by design.\nAnonymous by default.", "No phone numbers. No accounts. No social graph. You prove you belong to a group without revealing who you are."),
-            Triple(Icons.Default.Refresh, "Shared control.\nNo single admin.", "When someone leaves, encryption keys rotate automatically. No one person holds the keys to your group.")
+            Triple(Icons.Default.Lock, "Now your messages and\nmetadata are encrypted", "Most messengers encrypt your messages but still collect who you talk to, when, and how often. That metadata tells a complete story about you."),
+            Triple(Icons.Default.Person, "Private by design.\nAnonymous by default.", "No phone numbers. No accounts. No social graph. Even other group members won't know anything about you beyond what you choose to share."),
+            Triple(Icons.Default.Refresh, "Truly shared ownership.\nNo super-admin.", "Your group's legacy doesn't depend on a single super-admin. From the start, set transparent rules for adding and removing members — like via voting.")
         )
     }
     val totalPages = pages.size + 1 // +1 for differentiator page

@@ -81,6 +81,17 @@ class InvitationTransport(private val keyManager: KeyManager) {
         }
     }
 
+    fun ensureConnected(relayURLs: List<String>) {
+        if (connections.none { it.isConnected } && relayURLs.isNotEmpty()) {
+            if (chat.onym.android.BuildConfig.DEBUG) {
+                android.util.Log.d("InvitationTransport", "ensureConnected: no active connections, reconnecting to ${relayURLs.size} relays")
+            }
+            connections.forEach { it.disconnect() }
+            connections.clear()
+            connect(relayURLs)
+        }
+    }
+
     fun disconnect() {
         subscriptionJobs.values.forEach { it.cancel() }
         subscriptionJobs.clear()

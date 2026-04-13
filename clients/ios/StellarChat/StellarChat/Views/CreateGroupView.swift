@@ -70,7 +70,7 @@ struct CreateGroupView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     switch phase {
                     case .input:
-                        Button("Create") { startCreation() }
+                        Button(participantKeys.isEmpty ? "Create" : "Create & Invite") { startCreation() }
                             .disabled(groupName.trimmingCharacters(in: .whitespaces).isEmpty)
                     case .done:
                         Button("Done") {

@@ -165,7 +165,7 @@ class CreateGroupViewModel : ViewModel() {
                 }
 
                 // Send invitations
-                sendInvitations(group, invitationTransport, keyManager)
+                sendInvitations(group, invitationTransport, keyManager, groupListViewModel.relayURLs.toList())
                 phase = CreationPhase.DONE
             } catch (e: Exception) {
                 errorMessage = e.message
@@ -191,7 +191,7 @@ class CreateGroupViewModel : ViewModel() {
             result.fold(
                 onSuccess = {
                     onChainStatus = OnChainPublishStatus.Published
-                    sendInvitations(group, invitationTransport, keyManager)
+                    sendInvitations(group, invitationTransport, keyManager, groupListViewModel.relayURLs.toList())
                     phase = CreationPhase.DONE
                 },
                 onFailure = {
@@ -203,11 +203,12 @@ class CreateGroupViewModel : ViewModel() {
 
     fun skipOnChainAndContinue(
         invitationTransport: InvitationTransport,
-        keyManager: KeyManager
+        keyManager: KeyManager,
+        relayURLs: List<String>
     ) {
         val group = createdGroup ?: return
         viewModelScope.launch {
-            sendInvitations(group, invitationTransport, keyManager)
+            sendInvitations(group, invitationTransport, keyManager, relayURLs)
             phase = CreationPhase.DONE
         }
     }
@@ -215,10 +216,15 @@ class CreateGroupViewModel : ViewModel() {
     private suspend fun sendInvitations(
         group: ChatGroup,
         invitationTransport: InvitationTransport,
-        keyManager: KeyManager
+        keyManager: KeyManager,
+        relayURLs: List<String>
     ) {
         if (participantKeys.isEmpty()) return
         phase = CreationPhase.INVITING
+
+        withContext(Dispatchers.IO) {
+            invitationTransport.ensureConnected(relayURLs)
+        }
 
         for ((index, key) in participantKeys.withIndex()) {
             if (index > 0) delay(500) // Space out relay publishes to avoid rate limiting

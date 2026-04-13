@@ -260,7 +260,7 @@ private fun InputContent(
                     onClick = { viewModel.addParticipant(keyManager.keyAgreementPublicKeyHex) },
                     enabled = viewModel.keyInput.trim().length == 64
                 ) {
-                    Text("Add", style = MaterialTheme.typography.bodySmall)
+                    Text("Add Participant", style = MaterialTheme.typography.bodySmall)
                 }
             }
 
@@ -317,7 +317,10 @@ private fun InputContent(
         modifier = Modifier.fillMaxWidth(),
         enabled = viewModel.groupName.isNotBlank()
     ) {
-        Text("Create Group")
+        Text(
+            if (viewModel.participantKeys.isNotEmpty()) "Create Group & Send Invitations"
+            else "Create Group"
+        )
     }
 }
 
@@ -365,7 +368,7 @@ private fun ProgressContent(
                             }
                             Spacer(modifier = Modifier.width(8.dp))
                             TextButton(onClick = {
-                                viewModel.skipOnChainAndContinue(invitationTransport, keyManager)
+                                viewModel.skipOnChainAndContinue(invitationTransport, keyManager, groupListViewModel.relayURLs.toList())
                             }) {
                                 Text("Skip", color = Color(0xFFFF9800))
                             }

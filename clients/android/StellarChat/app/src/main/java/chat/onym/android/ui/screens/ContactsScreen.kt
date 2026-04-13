@@ -61,7 +61,7 @@ fun ContactsScreen(
         val map = mutableMapOf<String, Pair<MutableSet<String>, Date>>()
         for ((groupID, messages) in chatMessages) {
             for (msg in messages) {
-                if (msg.isMine) continue
+                if (msg.isMine || msg.isSystemMessage) continue
                 val entry = map.getOrPut(msg.senderPubkey) { Pair(mutableSetOf(), Date(0)) }
                 entry.first.add(groupID)
                 if (msg.timestamp.after(entry.second)) {

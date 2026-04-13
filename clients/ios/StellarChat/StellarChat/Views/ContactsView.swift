@@ -9,7 +9,7 @@ struct ContactsView: View {
         var map: [String: (groups: Set<String>, lastSeen: Date)] = [:]
 
         for (groupID, messages) in appState.chatMessages {
-            for message in messages where !message.isMine {
+            for message in messages where !message.isMine && !message.isSystemMessage {
                 var entry = map[message.senderPubkey] ?? (Set(), .distantPast)
                 entry.groups.insert(groupID)
                 entry.lastSeen = max(entry.lastSeen, message.timestamp)

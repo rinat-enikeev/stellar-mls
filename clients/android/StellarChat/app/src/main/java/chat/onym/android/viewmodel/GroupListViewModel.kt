@@ -2466,12 +2466,24 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             epoch = effectiveEpoch(group),
             replyToID = failedMsg.replyToID
         )
-        // Update the message ID to the new event and mark as SENDING (OK handler will set SENT/FAILED)
+
+        // Mark new event ID as seen before relay echo can arrive.
+        seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }.add(event.id)
+
         val current = chatMessages[groupID]?.toMutableList() ?: return
-        val i = current.indexOfFirst { it.id == messageID }
-        if (i >= 0) {
-            current[i] = current[i].copy(id = event.id, status = MessageStatus.SENDING)
+        val alreadyEchoed = current.any { it.id == event.id }
+        if (alreadyEchoed) {
+            current.removeAll { it.id == messageID }
             chatMessages[groupID] = current
+            viewModelScope.launch { try { store.deleteMessage(messageID) } catch (_: Exception) { } }
+        } else {
+            val i = current.indexOfFirst { it.id == messageID }
+            if (i >= 0) {
+                val newMsg = current[i].copy(id = event.id, status = MessageStatus.SENDING)
+                current[i] = newMsg
+                chatMessages[groupID] = current
+                viewModelScope.launch { try { store.replaceMessage(messageID, newMsg) } catch (_: Exception) { } }
+            }
         }
     }
 

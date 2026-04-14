@@ -2370,16 +2370,28 @@ final class AppState {
                     kind: 44114, tags: [["t", sendTopic], ["epoch", "\(sendEpoch)"]], content: content, keyManager: keyManager,
                     ephemeralSigner: try RustBackedNostrSigner.ephemeral()
                 )
+
+                // Mark new event ID as seen before publishing so the relay
+                // echo is deduplicated and cannot create a duplicate message.
+                self.seenMessageIDs[groupID, default: []].insert(event.id)
+
                 try await chatTransport.publishToRelays(event)
                 await MainActor.run {
-                    // Replace the message with updated ID and sent status
-                    if let i = self.chatMessages[groupID]?.firstIndex(where: { $0.id == messageID }) {
-                        let old = self.chatMessages[groupID]![i]
-                        self.chatMessages[groupID]?[i] = ChatMessage(
-                            id: event.id, groupID: old.groupID, senderPubkey: old.senderPubkey,
-                            text: old.text, timestamp: old.timestamp, isMine: old.isMine, status: .sent,
-                            epoch: sendEpoch, replyToID: old.replyToID
-                        )
+                    let newMsg = ChatMessage(
+                        id: event.id, groupID: groupID, senderPubkey: self.keyManager.publicKeyHex,
+                        text: text, timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
+                        isMine: true, status: .sent,
+                        epoch: sendEpoch, replyToID: replyToID
+                    )
+
+                    // If the relay echo arrived before this block, a message
+                    // with event.id already exists — just remove the old entry.
+                    if self.chatMessages[groupID]?.contains(where: { $0.id == event.id }) == true {
+                        self.chatMessages[groupID]?.removeAll { $0.id == messageID }
+                        self.store.deleteMessageAsync(id: messageID)
+                    } else if let i = self.chatMessages[groupID]?.firstIndex(where: { $0.id == messageID }) {
+                        self.chatMessages[groupID]?[i] = newMsg
+                        self.store.replaceMessageAsync(oldID: messageID, with: newMsg)
                     }
                 }
             } catch {

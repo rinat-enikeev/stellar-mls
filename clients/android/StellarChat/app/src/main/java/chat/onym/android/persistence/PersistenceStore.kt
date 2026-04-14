@@ -5,6 +5,7 @@ import chat.onym.android.crypto.StorageEncryption
 import chat.onym.android.model.ChatGroup
 import chat.onym.android.model.ChatMessage
 import chat.onym.android.model.EpochSnapshot
+import chat.onym.android.model.MessageStatus
 import chat.onym.android.model.toHex
 import com.stellarmls.mls.SEPGroupMemberLeaf
 import com.stellarmls.mls.SEPTier
@@ -40,6 +41,18 @@ class PersistenceStore(context: Context) {
 
     suspend fun saveMessage(message: ChatMessage) {
         dao.saveMessage(encryptMessage(message))
+    }
+
+    suspend fun deleteMessage(id: String) {
+        dao.deleteMessage(id)
+    }
+
+    suspend fun replaceMessage(oldID: String, message: ChatMessage) {
+        dao.replaceMessageTransaction(oldID, encryptMessage(message))
+    }
+
+    suspend fun updateMessageStatus(id: String, status: MessageStatus) {
+        dao.updateMessageStatus(id, status.name)
     }
 
     // -- Transport Bundles --
@@ -203,7 +216,8 @@ class PersistenceStore(context: Context) {
             encryptedMediaAttachment = encMedia,
             isSystemMessage = message.isSystemMessage,
             epoch = message.epoch?.toInt(),
-            replyToID = message.replyToID
+            replyToID = message.replyToID,
+            status = message.status.name
         )
     }
 
@@ -214,6 +228,7 @@ class PersistenceStore(context: Context) {
                 deserializeMediaAttachment(json)
             } catch (_: Exception) { null }
         }
+        val status = try { MessageStatus.valueOf(persisted.status) } catch (_: Exception) { MessageStatus.SENT }
         return ChatMessage(
             id = persisted.id,
             groupID = persisted.groupID,
@@ -221,6 +236,7 @@ class PersistenceStore(context: Context) {
             text = StorageEncryption.decryptString(persisted.encryptedText),
             timestamp = Date(persisted.timestamp),
             isMine = persisted.isMine,
+            status = if (status == MessageStatus.SENDING) MessageStatus.FAILED else status,
             mediaAttachment = media,
             isSystemMessage = persisted.isSystemMessage,
             epoch = persisted.epoch?.toLong(),

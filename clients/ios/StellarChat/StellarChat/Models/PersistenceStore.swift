@@ -149,6 +149,37 @@ final class PersistenceStore {
         }
     }
 
+    func deleteMessage(id: String) {
+        let descriptor = FetchDescriptor<PersistedMessage>(
+            predicate: #Predicate { $0.id == id }
+        )
+        if let existing = try? context.fetch(descriptor) {
+            for item in existing { context.delete(item) }
+        }
+        try? context.save()
+    }
+
+    func deleteMessageAsync(id: String) {
+        let id = id
+        Self.writeQueue.async {
+            autoreleasepool {
+                guard let writer = try? PersistenceStore() else { return }
+                writer.deleteMessage(id: id)
+            }
+        }
+    }
+
+    func replaceMessageAsync(oldID: String, with message: ChatMessage) {
+        let message = message
+        Self.writeQueue.async {
+            autoreleasepool {
+                guard let writer = try? PersistenceStore() else { return }
+                writer.deleteMessage(id: oldID)
+                writer.saveMessage(message)
+            }
+        }
+    }
+
     func saveGroupAsync(_ group: ChatGroup) {
         let group = group
         Self.writeQueue.async {

@@ -42,6 +42,11 @@ class PersistenceStore(context: Context) {
         dao.saveMessage(encryptMessage(message))
     }
 
+    suspend fun replaceMessage(oldID: String, message: ChatMessage) {
+        dao.deleteMessage(oldID)
+        dao.saveMessage(encryptMessage(message))
+    }
+
     // -- Transport Bundles --
 
     suspend fun loadTransportBundles(groupID: String): Map<String, com.stellarmls.mls.SEPMemberTransportBundle> {

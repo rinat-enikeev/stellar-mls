@@ -22,6 +22,9 @@ interface StellarChatDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun saveMessage(message: PersistedMessage)
 
+    @Query("DELETE FROM messages WHERE id = :id")
+    suspend fun deleteMessage(id: String)
+
     @Query("DELETE FROM messages WHERE groupID = :groupID")
     suspend fun deleteMessages(groupID: String)
 

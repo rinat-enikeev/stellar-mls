@@ -2312,11 +2312,12 @@ final class AppState {
     func retryMessage(groupID: String, messageID: String) {
         guard let group = groups.first(where: { $0.id == groupID }),
               let idx = chatMessages[groupID]?.firstIndex(where: { $0.id == messageID }),
-              chatMessages[groupID]?[idx].status == .failed
+              chatMessages[groupID]?[idx].status == .failed,
+              let failedMsg = chatMessages[groupID]?[idx]
         else { return }
 
-        let text = chatMessages[groupID]![idx].text
-        let replyToID = chatMessages[groupID]![idx].replyToID
+        let text = failedMsg.text
+        let replyToID = failedMsg.replyToID
         chatMessages[groupID]?[idx].status = .sending
 
         Task {
@@ -2341,21 +2342,33 @@ final class AppState {
                 let event = try NostrEvent.build(
                     kind: 44114, tags: [["t", sendTopic], ["epoch", "\(sendEpoch)"]], content: content, keyManager: keyManager
                 )
-                try await chatTransport.publishToRelays(event)
+
                 await MainActor.run {
-                    // Replace the message with updated ID and sent status
                     if let i = self.chatMessages[groupID]?.firstIndex(where: { $0.id == messageID }) {
                         let old = self.chatMessages[groupID]![i]
-                        self.chatMessages[groupID]?[i] = ChatMessage(
+                        let retrying = ChatMessage(
                             id: event.id, groupID: old.groupID, senderPubkey: old.senderPubkey,
-                            text: old.text, timestamp: old.timestamp, isMine: old.isMine, status: .sent,
+                            text: old.text, timestamp: old.timestamp, isMine: old.isMine, status: .sending,
                             epoch: sendEpoch, replyToID: old.replyToID
                         )
+                        self.chatMessages[groupID]?[i] = retrying
+                        self.seenMessageIDs[groupID, default: []].insert(event.id)
+                        self.store.replaceMessageAsync(oldID: messageID, with: retrying)
+                    }
+                }
+
+                try await chatTransport.publishToRelays(event)
+                await MainActor.run {
+                    if let i = self.chatMessages[groupID]?.firstIndex(where: { $0.id == event.id }) {
+                        self.chatMessages[groupID]?[i].status = .sent
                     }
                 }
             } catch {
                 await MainActor.run {
-                    if let i = self.chatMessages[groupID]?.firstIndex(where: { $0.id == messageID }) {
+                    let searchID = messageID
+                    if let i = self.chatMessages[groupID]?.firstIndex(where: { $0.id == searchID }) {
+                        self.chatMessages[groupID]?[i].status = .failed
+                    } else if let i = self.chatMessages[groupID]?.firstIndex(where: { $0.text == text && $0.status == .sending }) {
                         self.chatMessages[groupID]?[i].status = .failed
                     }
                 }

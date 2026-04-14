@@ -2421,19 +2421,35 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         updated[idx] = failedMsg.copy(status = MessageStatus.SENDING)
         chatMessages[groupID] = updated
 
-        val event = transport.send(
-            group, failedMsg.text,
-            overrideKey = effectiveEncryptionKey(group),
-            overrideTopicTag = effectiveTopicTag(group),
-            epoch = effectiveEpoch(group),
-            replyToID = failedMsg.replyToID
-        )
-        // Update the message ID to the new event and mark as SENDING (OK handler will set SENT/FAILED)
+        val event = try {
+            transport.send(
+                group, failedMsg.text,
+                overrideKey = effectiveEncryptionKey(group),
+                overrideTopicTag = effectiveTopicTag(group),
+                epoch = effectiveEpoch(group),
+                replyToID = failedMsg.replyToID
+            )
+        } catch (e: Exception) {
+            Log.e("GroupListVM", "retryMessage: transport.send failed", e)
+            val reverted = chatMessages[groupID]?.toMutableList() ?: return
+            val ri = reverted.indexOfFirst { it.id == messageID }
+            if (ri >= 0) {
+                reverted[ri] = reverted[ri].copy(status = MessageStatus.FAILED)
+                chatMessages[groupID] = reverted
+            }
+            return
+        }
+
         val current = chatMessages[groupID]?.toMutableList() ?: return
         val i = current.indexOfFirst { it.id == messageID }
         if (i >= 0) {
-            current[i] = current[i].copy(id = event.id, status = MessageStatus.SENDING)
+            val retrying = current[i].copy(id = event.id, status = MessageStatus.SENDING)
+            current[i] = retrying
             chatMessages[groupID] = current
+            seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }.add(event.id)
+            viewModelScope.launch {
+                try { store.replaceMessage(messageID, retrying) } catch (_: Exception) { }
+            }
         }
     }
 

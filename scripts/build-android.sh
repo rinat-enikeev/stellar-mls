@@ -66,7 +66,7 @@ LIB_NAME="libsep_xxxx_circuits.so"
 # - build-id=none: no build-id in .so (differs across machines)
 # - hash-style=gnu: consistent hash style across platforms
 # - remap-path-prefix: strip build paths from binaries
-export RUSTFLAGS="${RUSTFLAGS:-} -C codegen-units=1 -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--hash-style=gnu --remap-path-prefix=$REPO_ROOT=/build --remap-path-prefix=$HOME/.cargo/registry=/cargo-registry --remap-path-prefix=$HOME/.rustup/toolchains=/rustup-toolchains"
+export RUSTFLAGS="${RUSTFLAGS:-} -C codegen-units=1 -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--hash-style=gnu -C link-arg=-Wl,-z,max-page-size=16384 --remap-path-prefix=$REPO_ROOT=/build --remap-path-prefix=$HOME/.cargo/registry=/cargo-registry --remap-path-prefix=$HOME/.rustup/toolchains=/rustup-toolchains"
 export SOURCE_DATE_EPOCH=0
 export CARGO_TARGET_DIR="$REPO_ROOT/target"
 

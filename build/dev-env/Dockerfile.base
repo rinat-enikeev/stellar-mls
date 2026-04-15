@@ -74,6 +74,9 @@ RUN yes | sdkmanager --licenses > /dev/null \
         "build-tools;34.0.0" > /dev/null \
     && chmod -R a+rX ${ANDROID_HOME}
 
+
+RUN apt-get update && apt-get install -y git-lfs && rm -rf /var/lib/apt/lists/*
+
 # Rust toolchain — native aarch64-unknown-linux-gnu host. No Android cross
 # targets: Rust→Android compilation happens on the Mac host where the NDK
 # toolchain exists.

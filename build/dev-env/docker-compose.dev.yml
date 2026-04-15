@@ -95,7 +95,7 @@ services:
       N8N_PROTOCOL: http
       N8N_SECURE_COOKIE: "false"
     ports:
-      - "127.0.0.1:5678:5678"
+      - "0.0.0.0:5678:5678"
     volumes:
       - n8n-data:/home/node/.n8n
       - ./n8n/workflows:/workflows:ro

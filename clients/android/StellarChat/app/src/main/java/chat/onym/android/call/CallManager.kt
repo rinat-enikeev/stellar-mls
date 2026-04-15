@@ -123,7 +123,7 @@ class CallManager(private val context: Context) {
                     put("mediaType", if (video) "video" else "audio")
                     put("sdp", sdp.description)
                 }
-                sendSignal?.invoke(signal)
+                scope.launch { sendSignal?.invoke(signal) }
             }
         }, mediaConstraints(video))
 
@@ -235,7 +235,7 @@ class CallManager(private val context: Context) {
                     put("callId", callId)
                     put("sdp", sdp.description)
                 }
-                sendSignal?.invoke(signal)
+                scope.launch { sendSignal?.invoke(signal) }
             }
         }, mediaConstraints(isVideoCall))
 
@@ -402,7 +402,7 @@ class CallManager(private val context: Context) {
             override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {
                 val track = receiver?.track()
                 if (track is VideoTrack) {
-                    remoteVideoTrack = track
+                    scope.launch { remoteVideoTrack = track }
                 }
             }
 
@@ -423,7 +423,7 @@ class CallManager(private val context: Context) {
                     put("sdpMid", candidate.sdpMid)
                     put("sdpMLineIndex", candidate.sdpMLineIndex)
                 }
-                sendSignal?.invoke(signal)
+                scope.launch { sendSignal?.invoke(signal) }
             }
 
             override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {}
@@ -439,9 +439,11 @@ class CallManager(private val context: Context) {
                     PeerConnection.IceConnectionState.CLOSED -> ICEStatus.CLOSED
                     else -> ICEStatus.NEW
                 }
-                iceStatus = status
-                if (chat.onym.android.BuildConfig.DEBUG) {
-                    Log.d(TAG, "ICE state: ${status.name}")
+                scope.launch {
+                    iceStatus = status
+                    if (chat.onym.android.BuildConfig.DEBUG) {
+                        Log.d(TAG, "ICE state: ${status.name}")
+                    }
                 }
 
                 if (newState == PeerConnection.IceConnectionState.FAILED ||

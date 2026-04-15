@@ -1,9 +1,12 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.3.0)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -17,13 +20,14 @@ jobs:
           fetch-depth: 0
 
       - name: Generate release notes
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
           PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -1)
           if [ -n "$PREV_TAG" ]; then
-            RANGE="${PREV_TAG}..${TAG}"
+            RANGE="${PREV_TAG}..HEAD"
           else
-            RANGE="${TAG}"
+            RANGE="HEAD"
           fi
           {
             echo "## What's Changed"
@@ -37,6 +41,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag }}
+          target_commitish: ${{ github.sha }}
           body_path: release_notes.md
 
   android-build:
@@ -78,6 +84,7 @@ jobs:
       - name: Upload APK to release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag }}
           files: app-fdroid-arm64-v8a-release-*.apk
 
   ios-build:
@@ -210,7 +217,9 @@ jobs:
 
       - name: Parse version from tag
         id: version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+        env:
+          TAG: ${{ inputs.tag }}
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Upload IPA to GitHub release
         env:
@@ -219,6 +228,7 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag }}
           files: StellarChat-${{ steps.version.outputs.version }}.ipa
 
   update-altstore:
@@ -232,8 +242,8 @@ jobs:
       - name: Update AltStore source JSON
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
           VERSION="${TAG#v}"
           IPA_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/StellarChat-${VERSION}.ipa"
           IPA_SIZE=$(gh release view "$TAG" --json assets -q ".assets[] | select(.name | endswith(\".ipa\")) | .size")
@@ -262,8 +272,9 @@ jobs:
           "
 
       - name: Commit AltStore update
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add deploy/website/altstore-source.json

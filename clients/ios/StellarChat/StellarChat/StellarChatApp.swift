@@ -1015,7 +1015,8 @@ final class AppState {
                     let content = sealedData.base64EncodedString()
                     let recipientInboxTag = GroupCrypto.hiddenInboxTag(recipientPublicKey: bundle.x25519InboxPubkey)
                     let tags = InvitationTransport.eventTags(recipientInboxTag: recipientInboxTag)
-                    let event = try NostrEvent.build(kind: 34113, tags: tags, content: content, keyManager: km)
+                    let event = try NostrEvent.build(kind: 34113, tags: tags, content: content, keyManager: km,
+                                                     ephemeralSigner: try RustBackedNostrSigner.ephemeral())
                     try await publishEvent(event, relayURLs: urls)
                     sentCount += 1
                     #if DEBUG
@@ -1987,7 +1988,8 @@ final class AppState {
                 let content = sealedData.base64EncodedString()
                 let recipientInboxTag = GroupCrypto.hiddenInboxTag(recipientPublicKey: req.requesterBundle.x25519InboxPubkey)
                 let tags = InvitationTransport.eventTags(recipientInboxTag: recipientInboxTag)
-                let event = try NostrEvent.build(kind: 34113, tags: tags, content: content, keyManager: keyManager)
+                let event = try NostrEvent.build(kind: 34113, tags: tags, content: content, keyManager: keyManager,
+                                                 ephemeralSigner: try RustBackedNostrSigner.ephemeral())
                 try await publishEvent(event, relayURLs: relayURLs)
                 #if DEBUG
                 print("[AppState] Re-sent rekey envelope epoch=\(req.epoch) to requester")
@@ -2046,7 +2048,8 @@ final class AppState {
                     let content = sealedData.base64EncodedString()
                     let recipientInboxTag = GroupCrypto.hiddenInboxTag(recipientPublicKey: bundle.x25519InboxPubkey)
                     let tags = InvitationTransport.eventTags(recipientInboxTag: recipientInboxTag)
-                    let event = try NostrEvent.build(kind: 34113, tags: tags, content: content, keyManager: keyManager)
+                    let event = try NostrEvent.build(kind: 34113, tags: tags, content: content, keyManager: keyManager,
+                                                     ephemeralSigner: try RustBackedNostrSigner.ephemeral())
                     try await publishEvent(event, relayURLs: relayURLs)
                 } catch {
                     #if DEBUG
@@ -2176,7 +2179,7 @@ final class AppState {
 
     /// Set up the chat message handler on the persistent transport (runs once at init).
     private func setupChatHandler() {
-        chatTransport.onMessage = { [weak self] groupID, plaintext, event, replyToID in
+        chatTransport.onMessage = { [weak self] groupID, plaintext, senderBlsHex, event, replyToID in
             guard let self else { return }
             Task { @MainActor in
                 guard self.groups.contains(where: { $0.id == groupID }) else { return }
@@ -2186,13 +2189,14 @@ final class AppState {
 
                 let epochTag = event.tags.first(where: { $0.first == "epoch" }).flatMap { $0.dropFirst().first }
                 let epoch = epochTag.flatMap { UInt64($0) }
+                let myBlsHex = (try? self.keyManager.blsPublicKey).map { $0.map { String(format: "%02x", $0) }.joined() } ?? ""
                 let msg = ChatMessage(
                     id: event.id,
                     groupID: groupID,
-                    senderPubkey: event.pubkey,
+                    senderPubkey: senderBlsHex,
                     text: plaintext,
                     timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
-                    isMine: event.pubkey == self.keyManager.publicKeyHex,
+                    isMine: senderBlsHex == myBlsHex,
                     epoch: epoch,
                     replyToID: replyToID
                 )
@@ -2200,7 +2204,7 @@ final class AppState {
             }
         }
 
-        chatTransport.onImageMessage = { [weak self] groupID, plaintext, media, event, replyToID in
+        chatTransport.onImageMessage = { [weak self] groupID, plaintext, media, senderBlsHex, event, replyToID in
             guard let self else { return }
             Task { @MainActor in
                 guard self.groups.contains(where: { $0.id == groupID }) else { return }
@@ -2210,13 +2214,14 @@ final class AppState {
 
                 let epochTag = event.tags.first(where: { $0.first == "epoch" }).flatMap { $0.dropFirst().first }
                 let epoch = epochTag.flatMap { UInt64($0) }
+                let myBlsHex = (try? self.keyManager.blsPublicKey).map { $0.map { String(format: "%02x", $0) }.joined() } ?? ""
                 let msg = ChatMessage(
                     id: event.id,
                     groupID: groupID,
-                    senderPubkey: event.pubkey,
+                    senderPubkey: senderBlsHex,
                     text: plaintext,
                     timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
-                    isMine: event.pubkey == self.keyManager.publicKeyHex,
+                    isMine: senderBlsHex == myBlsHex,
                     mediaAttachment: media,
                     epoch: epoch,
                     replyToID: replyToID
@@ -2273,14 +2278,15 @@ final class AppState {
         let envelopeData = try JSONEncoder().encode(envelope)
         let content = envelopeData.base64EncodedString()
         let event = try NostrEvent.build(
-            kind: 44114, tags: [["t", sendTopic], ["epoch", "\(sendEpoch)"]], content: content, keyManager: keyManager
+            kind: 44114, tags: [["t", sendTopic], ["epoch", "\(sendEpoch)"]], content: content, keyManager: keyManager,
+            ephemeralSigner: try RustBackedNostrSigner.ephemeral()
         )
 
         // Optimistic UI: show the message locally BEFORE waiting for relay publish.
         let msg = ChatMessage(
             id: event.id,
             groupID: groupID,
-            senderPubkey: keyManager.publicKeyHex,
+            senderPubkey: blsPubkey.map { String(format: "%02x", $0) }.joined(),
             text: trimmed,
             timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
             isMine: true,
@@ -2339,7 +2345,8 @@ final class AppState {
                 let envelopeData = try JSONEncoder().encode(envelope)
                 let content = envelopeData.base64EncodedString()
                 let event = try NostrEvent.build(
-                    kind: 44114, tags: [["t", sendTopic], ["epoch", "\(sendEpoch)"]], content: content, keyManager: keyManager
+                    kind: 44114, tags: [["t", sendTopic], ["epoch", "\(sendEpoch)"]], content: content, keyManager: keyManager,
+                    ephemeralSigner: try RustBackedNostrSigner.ephemeral()
                 )
                 try await chatTransport.publishToRelays(event)
                 await MainActor.run {
@@ -2436,14 +2443,15 @@ final class AppState {
         let envelopeData = try JSONEncoder().encode(envelope)
         let content = envelopeData.base64EncodedString()
         let event = try NostrEvent.build(
-            kind: 44114, tags: [["t", sendTopic], ["epoch", "\(sendEpoch)"]], content: content, keyManager: keyManager
+            kind: 44114, tags: [["t", sendTopic], ["epoch", "\(sendEpoch)"]], content: content, keyManager: keyManager,
+            ephemeralSigner: try RustBackedNostrSigner.ephemeral()
         )
 
         // Optimistic UI: show locally before relay publish
         let msg = ChatMessage(
             id: event.id,
             groupID: groupID,
-            senderPubkey: keyManager.publicKeyHex,
+            senderPubkey: blsPubkey.map { String(format: "%02x", $0) }.joined(),
             text: "Sent an image",
             timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
             isMine: true,
@@ -2548,14 +2556,15 @@ final class AppState {
         let envelopeData = try JSONEncoder().encode(envelope)
         let content = envelopeData.base64EncodedString()
         let event = try NostrEvent.build(
-            kind: 44114, tags: [["t", sendTopic], ["epoch", "\(sendEpoch)"]], content: content, keyManager: keyManager
+            kind: 44114, tags: [["t", sendTopic], ["epoch", "\(sendEpoch)"]], content: content, keyManager: keyManager,
+            ephemeralSigner: try RustBackedNostrSigner.ephemeral()
         )
 
         // Optimistic UI: show locally before relay publish
         let msg = ChatMessage(
             id: event.id,
             groupID: groupID,
-            senderPubkey: keyManager.publicKeyHex,
+            senderPubkey: blsPubkey.map { String(format: "%02x", $0) }.joined(),
             text: "Sent a video",
             timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
             isMine: true,
@@ -2641,14 +2650,15 @@ final class AppState {
         let envelopeData = try JSONEncoder().encode(envelope)
         let content = envelopeData.base64EncodedString()
         let event = try NostrEvent.build(
-            kind: 44114, tags: [["t", group.topicTag]], content: content, keyManager: keyManager
+            kind: 44114, tags: [["t", group.topicTag]], content: content, keyManager: keyManager,
+            ephemeralSigner: try RustBackedNostrSigner.ephemeral()
         )
 
         // Optimistic UI
         let msg = ChatMessage(
             id: event.id,
             groupID: groupID,
-            senderPubkey: keyManager.publicKeyHex,
+            senderPubkey: blsPubkey.map { String(format: "%02x", $0) }.joined(),
             text: "Sent a voice message",
             timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
             isMine: true,
@@ -2770,7 +2780,7 @@ final class AppState {
                             #endif
                             break
                         }
-                        let rateKey = "\(event.pubkey):\(request.epoch)"
+                        let rateKey = "\(senderBlsPubkeyHex ?? ""):\(request.epoch)"
                         guard !self.saltRequestsResponded.contains(rateKey) else { break }
                         self.saltRequestsResponded.insert(rateKey)
                         if let group = self.groups.first(where: { $0.id == groupID }),
@@ -2814,7 +2824,8 @@ final class AppState {
                                 #endif
                                 self.chatTransport.currentMembers = self.groups.flatMap(\.members)
                             }
-                            let removerName = self.contactAliasStore?.displayName(for: event.pubkey) ?? (String(event.pubkey.prefix(8)) + "...")
+                            let removerHex = senderBlsPubkeyHex ?? ""
+                            let removerName = self.contactAliasStore?.displayName(for: removerHex) ?? (String(removerHex.prefix(8)) + "...")
                             self.insertSystemMessage(groupID: groupID, text: "You were removed from this group by \(removerName)", event: "self-removed", epoch: notice.epoch)
                             #if DEBUG
                             print("[AppState] Self-removed from group=\(groupID.prefix(8)) epoch=\(notice.epoch)")

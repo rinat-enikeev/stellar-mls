@@ -194,6 +194,19 @@ struct SwiftMLSTests {
         #expect(signature.count == 64)
     }
 
+    @Test
+    func ephemeralNostrSignersAreUniqueAndProduceValidKeys() throws {
+        let a = try RustBackedNostrSigner.ephemeral()
+        let b = try RustBackedNostrSigner.ephemeral()
+
+        let pubA = try a.publicKey()
+        let pubB = try b.publicKey()
+
+        #expect(pubA.count == 32)
+        #expect(pubB.count == 32)
+        #expect(pubA != pubB, "Two ephemeral signers must not produce the same pubkey")
+    }
+
     private func fieldBytes(_ value: UInt64) -> Data {
         var bytes = Data(repeating: 0, count: 32)
         var bigEndian = value.bigEndian

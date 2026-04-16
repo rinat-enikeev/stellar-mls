@@ -6,6 +6,7 @@ import chat.onym.android.crypto.NostrEvent
 import chat.onym.android.crypto.NostrEventBuilder
 import chat.onym.android.model.BootstrapPayload
 import chat.onym.android.model.PendingInvitation
+import com.stellarmls.mls.RustBackedNostrSigner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -146,7 +147,8 @@ class InvitationTransport(private val keyManager: KeyManager) {
             kind = PRIMARY_KIND,
             tags = tags,
             content = contentBase64,
-            keyManager = keyManager
+            keyManager = keyManager,
+            ephemeralSigner = RustBackedNostrSigner.ephemeral()
         )
 
         check(connections.isNotEmpty()) { "No relay connections available for sendInvitation" }

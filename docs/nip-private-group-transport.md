@@ -389,12 +389,22 @@ Implementations SHOULD consider:
 - batching
 - optional dummy traffic where stronger traffic-analysis resistance is required
 
+## Outer Event Identity
+
+For group-broadcast (kind `44114`) and per-recipient inbox (kind `34113`) events, senders MUST generate a fresh 32-byte secp256k1 secret per event, derive its x-only public key, and sign the NIP-01 event ID with it. The secret MUST NOT be persisted or reused across events. This prevents relays from clustering events by a stable outer author pubkey and reconstructing co-membership or sender activity graphs from ciphertext metadata.
+
+Inner authenticity is proven by a BLS12-381 `senderBlsPubkey` field inside the encrypted wrapper, which recipients MUST verify against the MLS group roster for the event's epoch. This inner check — not the outer Nostr pubkey — is the real sender authentication for kinds `44114` and `34113`.
+
+For Blossom upload authorization (kind `24242`), the device's long-term Nostr key MAY be used so servers can enforce stable per-uploader quotas. Blossom events do not belong to a group and do not participate in the co-membership concern above.
+
+Receivers MUST NOT use the outer event `pubkey` as a sender identity for display, rate-limiting, ACL, or replay bookkeeping on kinds `44114` / `34113`; they MUST derive sender identity from the decrypted BLS pubkey.
+
 ## Security Considerations
 
 - Clients MUST verify invitation and message context against Stellar SEP state where applicable
 - Hidden routing tags are transport hints only and MUST NOT be treated as authority signals
 - Rotating hidden group topics on epoch or secret changes is important to reduce ex-member observability
-- Stable Nostr device keys improve usability but increase sender linkability
+- Outer event keys for kinds `44114` and `34113` MUST be ephemeral per-event; inner authenticity is proven by the BLS `senderBlsPubkey` against the MLS roster. Only kind `24242` (Blossom) retains a stable device-level Nostr key, and only for upload authorization (no co-membership exposure)
 - Device-seed compromise can correlate transport and membership layers if both are derived from the same root
 
 ## Compatibility

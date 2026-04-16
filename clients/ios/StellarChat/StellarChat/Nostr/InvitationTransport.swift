@@ -133,7 +133,8 @@ final class InvitationTransport {
             kind: Self.primaryKind,
             tags: tags,
             content: content,
-            keyManager: keyManager
+            keyManager: keyManager,
+            ephemeralSigner: try RustBackedNostrSigner.ephemeral()
         )
 
         let conns = Array(connections.values)

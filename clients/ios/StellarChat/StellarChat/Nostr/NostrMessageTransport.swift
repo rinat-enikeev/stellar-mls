@@ -23,11 +23,13 @@ final class NostrMessageTransport {
     }
 
     /// Callback for received and decrypted plain-text chat messages.
-    /// Parameters: (groupID, plaintext, event, replyToID)
-    var onMessage: ((String, String, NostrEvent, String?) -> Void)?
+    /// Parameters: (groupID, plaintext, senderBlsPubkeyHex, event, replyToID)
+    /// senderBlsPubkeyHex is the stable sender identity from the encrypted wrapper.
+    /// The outer event.pubkey is ephemeral per-event and MUST NOT be used as sender identity.
+    var onMessage: ((String, String, String, NostrEvent, String?) -> Void)?
     /// Callback for received image messages with media attachment metadata.
-    /// Parameters: (groupID, text fallback, media attachment, event, replyToID)
-    var onImageMessage: ((String, String, MediaAttachment, NostrEvent, String?) -> Void)?
+    /// Parameters: (groupID, text fallback, media attachment, senderBlsPubkeyHex, event, replyToID)
+    var onImageMessage: ((String, String, MediaAttachment, String, NostrEvent, String?) -> Void)?
     /// Callback for received protocol messages (state updates, salt requests/responses).
     /// Parameters: (groupID, json, event, senderBlsPubkeyHex)
     var onProtocolMessage: ((String, String, NostrEvent, String?) -> Void)?
@@ -204,7 +206,8 @@ final class NostrMessageTransport {
                         encryptedThumbnail: encryptedThumbnail,
                         duration: duration
                     )
-                    onImageMessage?(groupID, innerText, media, event, replyToID)
+                    let senderBlsHex = blsPubkey.map { String(format: "%02x", $0) }.joined()
+                    onImageMessage?(groupID, innerText, media, senderBlsHex, event, replyToID)
                 } else if !isMember {
                     SecurityLog.nonMemberMessageRejected(groupID: groupID)
                 }
@@ -215,7 +218,8 @@ final class NostrMessageTransport {
             } else {
                 let isMember = currentMembers.contains { $0.publicKeyCompressed == blsPubkey }
                 if isMember {
-                    onMessage?(groupID, innerText, event, replyToID)
+                    let senderBlsHex = blsPubkey.map { String(format: "%02x", $0) }.joined()
+                    onMessage?(groupID, innerText, senderBlsHex, event, replyToID)
                 } else {
                     SecurityLog.nonMemberMessageRejected(groupID: groupID)
                 }
@@ -294,7 +298,8 @@ final class NostrMessageTransport {
             kind: 44114,
             tags: tags,
             content: content,
-            keyManager: keyManager
+            keyManager: keyManager,
+            ephemeralSigner: try RustBackedNostrSigner.ephemeral()
         )
 
         try await publishToRelays(event)
@@ -345,7 +350,8 @@ final class NostrMessageTransport {
             kind: 44114,
             tags: tags,
             content: content,
-            keyManager: keyManager
+            keyManager: keyManager,
+            ephemeralSigner: try RustBackedNostrSigner.ephemeral()
         )
 
         try await publishToRelays(event)

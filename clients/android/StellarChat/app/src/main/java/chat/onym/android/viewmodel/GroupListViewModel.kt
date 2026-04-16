@@ -38,6 +38,7 @@ import chat.onym.android.persistence.PersistenceStore
 import chat.onym.android.crypto.StorageEncryption
 import chat.onym.android.push.PushNotificationManager
 import chat.onym.android.push.PushTokenProviderFactory
+import com.stellarmls.mls.RustBackedNostrSigner
 import com.stellarmls.mls.SEPCommitmentBuilder
 import com.stellarmls.mls.SEPGroupMemberLeaf
 import com.stellarmls.mls.SEPGroupRenamed
@@ -663,7 +664,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 val contentBase64 = android.util.Base64.encodeToString(sealed.toByteArray(), android.util.Base64.NO_WRAP)
                 val recipientInboxTag = GroupCrypto.hiddenInboxTag(requesterBundle.x25519InboxPubkey)
                 val tags = InvitationTransport.eventTags(recipientInboxTag)
-                val event = chat.onym.android.crypto.NostrEventBuilder.build(34113, tags, contentBase64, keyManager)
+                val event = chat.onym.android.crypto.NostrEventBuilder.build(
+                    34113, tags, contentBase64, keyManager,
+                    ephemeralSigner = RustBackedNostrSigner.ephemeral()
+                )
                 publishEvent(event, relayURLs.toList())
                 if (BuildConfig.DEBUG) Log.d("GroupListVM", "Re-sent rekey envelope epoch=$epoch to requester")
             } catch (e: Exception) {
@@ -720,7 +724,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     val contentBase64 = android.util.Base64.encodeToString(sealed.toByteArray(), android.util.Base64.NO_WRAP)
                     val recipientInboxTag = GroupCrypto.hiddenInboxTag(bundle.x25519InboxPubkey)
                     val tags = InvitationTransport.eventTags(recipientInboxTag)
-                    val event = chat.onym.android.crypto.NostrEventBuilder.build(34113, tags, contentBase64, keyManager)
+                    val event = chat.onym.android.crypto.NostrEventBuilder.build(
+                        34113, tags, contentBase64, keyManager,
+                        ephemeralSigner = RustBackedNostrSigner.ephemeral()
+                    )
                     publishEvent(event, relayURLs.toList())
                 } catch (e: Exception) {
                     if (BuildConfig.DEBUG) Log.e("GroupListVM", "Resend failed for ${hex.take(8)}: ${e.message}")
@@ -1442,7 +1449,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     val contentBase64 = android.util.Base64.encodeToString(sealed.toByteArray(), android.util.Base64.NO_WRAP)
                     val recipientInboxTag = GroupCrypto.hiddenInboxTag(bundle.x25519InboxPubkey)
                     val tags = InvitationTransport.eventTags(recipientInboxTag)
-                    val event = chat.onym.android.crypto.NostrEventBuilder.build(34113, tags, contentBase64, keyManager)
+                    val event = chat.onym.android.crypto.NostrEventBuilder.build(
+                        34113, tags, contentBase64, keyManager,
+                        ephemeralSigner = RustBackedNostrSigner.ephemeral()
+                    )
                     publishEvent(event, relayURLs.toList())
                     sentCount++
                     if (BuildConfig.DEBUG) Log.d("Rekey", "ENVELOPE_SENT groupID=${groupID.take(8)} epoch=${candidate.epoch} recipient=${hex.take(8)} eventID=${event.id.take(12)}")
@@ -2267,7 +2277,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     senderPubkey = senderPubkey,
                     text = text,
                     timestamp = Date(timestampMs),
-                    isMine = senderPubkey == keyManager.publicKeyHex,
+                    isMine = senderPubkey == keyManager.blsPublicKey().toHex(),
                     epoch = epoch,
                     replyToID = replyToID
                 )
@@ -2316,7 +2326,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     senderPubkey = senderPubkey,
                     text = text,
                     timestamp = Date(timestampMs),
-                    isMine = senderPubkey == keyManager.publicKeyHex,
+                    isMine = senderPubkey == keyManager.blsPublicKey().toHex(),
                     mediaAttachment = media,
                     epoch = epoch,
                     replyToID = replyToID
@@ -2394,7 +2404,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         val msg = ChatMessage(
             id = event.id,
             groupID = groupID,
-            senderPubkey = keyManager.publicKeyHex,
+            senderPubkey = keyManager.blsPublicKey().toHex(),
             text = trimmed,
             timestamp = Date(event.displayMilliseconds),
             isMine = true,
@@ -2507,7 +2517,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     kind = 44114,
                     tags = tags,
                     content = content,
-                    keyManager = keyManager
+                    keyManager = keyManager,
+                    ephemeralSigner = RustBackedNostrSigner.ephemeral()
                 )
 
                 // Publish to all relays
@@ -2516,7 +2527,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 val msg = ChatMessage(
                     id = event.id,
                     groupID = groupID,
-                    senderPubkey = keyManager.publicKeyHex,
+                    senderPubkey = keyManager.blsPublicKey().toHex(),
                     text = "\uD83D\uDDBC\uFE0F Image",
                     timestamp = Date(event.displayMilliseconds),
                     isMine = true,
@@ -2620,7 +2631,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     kind = 44114,
                     tags = tags,
                     content = content,
-                    keyManager = keyManager
+                    keyManager = keyManager,
+                    ephemeralSigner = RustBackedNostrSigner.ephemeral()
                 )
 
                 transport.publish(event)
@@ -2628,7 +2640,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 val msg = ChatMessage(
                     id = event.id,
                     groupID = groupID,
-                    senderPubkey = keyManager.publicKeyHex,
+                    senderPubkey = keyManager.blsPublicKey().toHex(),
                     text = "Sent a video",
                     timestamp = Date(event.displayMilliseconds),
                     isMine = true,
@@ -2712,14 +2724,15 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 val tags = mutableListOf(listOf("t", effTopicTag))
                 tags.add(listOf("epoch", effEpoch.toString()))
                 val event = chat.onym.android.crypto.NostrEventBuilder.build(
-                    kind = 44114, tags = tags, content = content, keyManager = keyManager)
+                    kind = 44114, tags = tags, content = content, keyManager = keyManager,
+                    ephemeralSigner = RustBackedNostrSigner.ephemeral())
 
                 transport.publish(event)
 
                 val msg = chat.onym.android.model.ChatMessage(
                     id = event.id,
                     groupID = groupID,
-                    senderPubkey = keyManager.publicKeyHex,
+                    senderPubkey = keyManager.blsPublicKey().toHex(),
                     text = "Sent a voice message",
                     timestamp = java.util.Date(event.displayMilliseconds),
                     isMine = true,
@@ -2764,7 +2777,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             envelopeJson.toByteArray(), android.util.Base64.NO_WRAP)
         val tags = listOf(listOf("t", effectiveTopicTag(group)))
         val event = NostrEventBuilder.build(
-            kind = 44114, tags = tags, content = content, keyManager = keyManager)
+            kind = 44114, tags = tags, content = content, keyManager = keyManager,
+            ephemeralSigner = RustBackedNostrSigner.ephemeral())
         transport.publish(event)
     }
 
@@ -2782,7 +2796,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Set up handler for protocol messages received on the group channel. */
     private fun setupProtocolMessageHandler() {
-        transport.onProtocolMessage = { groupID, json, eventID, senderPubkey, senderBlsPubkeyHex ->
+        transport.onProtocolMessage = { groupID, json, eventID, senderPubkey ->
             // Replay protection: skip already-processed protocol events (H-7)
             // N-8: Evict oldest entries when set exceeds max size
             val isNew = synchronized(processedProtocolEventIDs) {
@@ -2867,7 +2881,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                             if (selfRemoved) {
                                 val noticeEpoch = obj.getLong("epoch")
                                 // Use BLS pubkey from the message wrapper (extracted by transport)
-                                val removerBlsHex = senderBlsPubkeyHex
+                                val removerBlsHex = senderPubkey
                                 val idx = groups.indexOfFirst { it.id == groupID }
                                 if (idx >= 0) {
                                     var g = cloneGroup(groups[idx])

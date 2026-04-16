@@ -7,6 +7,7 @@ import chat.onym.android.crypto.NostrEvent
 import chat.onym.android.crypto.NostrEventBuilder
 import chat.onym.android.model.ChatGroup
 import chat.onym.android.model.toHex
+import com.stellarmls.mls.RustBackedNostrSigner
 import com.stellarmls.mls.SEPGroupMemberLeaf
 import com.stellarmls.mls.SEPGroupRenamed
 import com.stellarmls.mls.SEPGroupStateUpdate
@@ -59,10 +60,14 @@ class NostrMessageTransport(
     /** Called when any relay's connection state changes. */
     var onConnectionChange: (() -> Unit)? = null
 
+    /** senderPubkey is the sender's BLS12-381 compressed pubkey as hex (stable identity from the encrypted wrapper).
+     *  The outer Nostr event pubkey is ephemeral per-event and MUST NOT be used as sender identity. */
     var onMessage: ((groupID: String, senderPubkey: String, text: String, eventID: String, timestamp: Long, epoch: Long?, replyToID: String?) -> Unit)? = null
-    /** Called when a decrypted message is a protocol message (state update, salt request/response). */
-    var onProtocolMessage: ((groupID: String, json: String, eventID: String, senderPubkey: String, senderBlsPubkeyHex: String?) -> Unit)? = null
-    /** Called when a decrypted message is an image message with media attachment. */
+    /** Called when a decrypted message is a protocol message (state update, salt request/response).
+     *  senderPubkey is the sender's BLS12-381 compressed pubkey as hex. */
+    var onProtocolMessage: ((groupID: String, json: String, eventID: String, senderPubkey: String) -> Unit)? = null
+    /** Called when a decrypted message is an image message with media attachment.
+     *  senderPubkey is the sender's BLS12-381 compressed pubkey as hex. */
     var onImageMessage: ((groupID: String, text: String, media: chat.onym.android.model.MediaAttachment, eventID: String, senderPubkey: String, timestamp: Long, epoch: Long?, replyToID: String?) -> Unit)? = null
     /** Callback for received call signaling messages (offer, answer, ice, hangup, busy, reject). */
     var onCallSignal: ((groupID: String, callJson: JSONObject, senderPubkey: ByteArray, eventID: String) -> Unit)? = null
@@ -175,7 +180,8 @@ class NostrMessageTransport(
             kind = 44114,
             tags = tags,
             content = content,
-            keyManager = keyManager
+            keyManager = keyManager,
+            ephemeralSigner = RustBackedNostrSigner.ephemeral()
         )
 
         var published = false
@@ -216,7 +222,8 @@ class NostrMessageTransport(
             kind = 44114,
             tags = tags,
             content = content,
-            keyManager = keyManager
+            keyManager = keyManager,
+            ephemeralSigner = RustBackedNostrSigner.ephemeral()
         )
 
         var published = false
@@ -333,21 +340,21 @@ class NostrMessageTransport(
                         ?.let { android.util.Base64.decode(it, android.util.Base64.NO_WRAP) },
                     duration = duration
                 )
-                onImageMessage?.invoke(groupID, innerText, media, event.id, event.pubkey, event.displayMilliseconds, eventEpoch, replyToID)
+                onImageMessage?.invoke(groupID, innerText, media, event.id, blsPubkey.toHex(), event.displayMilliseconds, eventEpoch, replyToID)
             } else {
                 // Check inner text for protocol messages (state updates, salt, etc.)
                 if (isProtocolMessage(innerText)) {
                     // Update currentMembers SYNCHRONOUSLY before processing the next event,
                     // so that chat messages arriving right after are not rejected.
                     applyMemberChanges(innerText)
-                    val senderBlsHex = try { android.util.Base64.decode(blsPubkeyB64, android.util.Base64.NO_WRAP).toHex() } catch (_: Exception) { null }
-                    onProtocolMessage?.invoke(groupID, innerText, event.id, event.pubkey, senderBlsHex)
+                    val senderBlsHex = try { android.util.Base64.decode(blsPubkeyB64, android.util.Base64.NO_WRAP).toHex() } catch (_: Exception) { "" }
+                    onProtocolMessage?.invoke(groupID, innerText, event.id, senderBlsHex)
                 } else {
                     // Chat message — verify BLS pubkey is in member list (H-4)
                     val blsPubkey = android.util.Base64.decode(blsPubkeyB64, android.util.Base64.NO_WRAP)
                     val isMember = currentMembers.any { it.publicKeyCompressed.contentEquals(blsPubkey) }
                     if (isMember) {
-                        onMessage?.invoke(groupID, event.pubkey, innerText,
+                        onMessage?.invoke(groupID, blsPubkey.toHex(), innerText,
                             event.id, event.displayMilliseconds, eventEpoch, replyToID)
                     } else {
                         if (chat.onym.android.BuildConfig.DEBUG) android.util.Log.w("MsgTransport", "BLS rejected: members=${currentMembers.size}")

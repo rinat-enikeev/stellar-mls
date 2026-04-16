@@ -3,7 +3,7 @@ default_platform(:ios)
 platform :ios do
   desc "Build, upload to TestFlight, and export ad-hoc IPA"
   lane :release do
-    setup_ci
+    setup_ci(force: true)
 
     app_store_connect_api_key(
       key_id: ENV['ASC_KEY_ID'],
@@ -115,7 +115,7 @@ platform :ios do
 
   desc "Ad-hoc build for PR test builds — no TestFlight, no App Store"
   lane :build_local do
-    setup_ci
+    setup_ci(force: true)
 
     match(
       type: "adhoc",

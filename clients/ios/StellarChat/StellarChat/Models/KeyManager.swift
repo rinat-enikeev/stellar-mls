@@ -318,6 +318,13 @@ final class KeyManager: Codable {
         if status == errSecItemNotFound {
             return nil
         }
+        // Simulator/CI builds without code signing lack the keychain-access-groups
+        // entitlement and return errSecMissingEntitlement (-34018). Treat as "no
+        // stored key" so the app generates ephemeral keys for the session.
+        // Signed device builds never produce this status.
+        if status == errSecMissingEntitlement {
+            return nil
+        }
         throw KeyManagerError.keychainReadFailed(key: key, status: status)
     }
 
@@ -334,11 +341,17 @@ final class KeyManager: Codable {
             kSecAttrAccount as String: key,
         ]
         let deleteStatus = SecItemDelete(deleteQuery as CFDictionary)
+        if deleteStatus == errSecMissingEntitlement {
+            return
+        }
         if deleteStatus != errSecSuccess && deleteStatus != errSecItemNotFound {
             throw KeyManagerError.keychainWriteFailed(key: key, status: deleteStatus)
         }
 
         let addStatus = SecItemAdd(query as CFDictionary, nil)
+        if addStatus == errSecMissingEntitlement {
+            return
+        }
         if addStatus != errSecSuccess {
             throw KeyManagerError.keychainWriteFailed(key: key, status: addStatus)
         }

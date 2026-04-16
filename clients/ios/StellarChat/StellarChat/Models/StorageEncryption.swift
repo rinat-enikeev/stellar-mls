@@ -11,13 +11,17 @@ enum StorageEncryption {
     /// Shared Keychain access group so the NSE can read the same root key.
     private static let accessGroup = "group.chat.onym.ios"
 
+    /// Memoized root secret so the session stays consistent even when the
+    /// Keychain write silently fails (e.g. simulator builds without the
+    /// keychain-access-groups entitlement under `CODE_SIGNING_ALLOWED=NO`).
+    private static let cachedRootSecret: Data = loadOrCreateRootSecret()
+
     /// AES-256-GCM key derived from a Keychain-stored root secret.
     /// The root secret is generated once and stored in the Keychain with
     /// kSecAttrAccessibleWhenUnlockedThisDeviceOnly protection.
     static var storageKey: SymmetricKey {
-        let rootSecret = loadOrCreateRootSecret()
-        return HKDF<SHA256>.deriveKey(
-            inputKeyMaterial: SymmetricKey(data: rootSecret),
+        HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: cachedRootSecret),
             salt: Data("chat.onym.ios.storage".utf8),
             info: Data("local-storage-v1".utf8),
             outputByteCount: 32

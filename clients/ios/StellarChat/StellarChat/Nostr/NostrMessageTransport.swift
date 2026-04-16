@@ -31,8 +31,11 @@ final class NostrMessageTransport {
     /// Parameters: (groupID, text fallback, media attachment, senderBlsPubkeyHex, event, replyToID)
     var onImageMessage: ((String, String, MediaAttachment, String, NostrEvent, String?) -> Void)?
     /// Callback for received protocol messages (state updates, salt requests/responses).
-    /// Parameters: (groupID, json, event, senderBlsPubkeyHex)
-    var onProtocolMessage: ((String, String, NostrEvent, String?) -> Void)?
+    /// Parameters: (groupID, json, eventID, senderBlsPubkeyHex)
+    /// The outer NostrEvent is deliberately not exposed — event.pubkey is an ephemeral
+    /// per-event transport key and MUST NOT be used as sender identity. Use
+    /// senderBlsPubkeyHex (from the BLS-authenticated inner wrapper) instead.
+    var onProtocolMessage: ((String, String, String, String?) -> Void)?
     /// Callback for received call signaling messages (offer, answer, ice, hangup, busy, reject).
     /// Parameters: (groupID, call JSON dict, senderBlsPubkey, event)
     var onCallSignal: ((String, [String: Any], Data, NostrEvent) -> Void)?
@@ -214,7 +217,7 @@ final class NostrMessageTransport {
             } else if SEPProtocolMessage.parse(innerText) != nil {
                 applyMemberChanges(from: innerText)
                 let senderBlsHex = blsPubkey.map { String(format: "%02x", $0) }.joined()
-                onProtocolMessage?(groupID, innerText, event, senderBlsHex)
+                onProtocolMessage?(groupID, innerText, event.id, senderBlsHex)
             } else {
                 let isMember = currentMembers.contains { $0.publicKeyCompressed == blsPubkey }
                 if isMember {

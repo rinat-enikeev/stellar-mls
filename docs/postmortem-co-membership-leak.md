@@ -4,7 +4,7 @@
 **Severity:** HIGH (privacy)
 **Duration of vulnerability:** From initial group chat implementation through 2026-04-16
 **Platforms affected:** iOS and Android
-**Status:** Resolved — commit `0d6d041` on `rinat/ephemerial`
+**Status:** Resolved — commit `b36c9dd` on `rinat/ephemerial`
 
 ---
 
@@ -81,7 +81,7 @@ Two coupled misalignments:
 
 ## The fix
 
-See commit `0d6d041`. In short:
+See commit `b36c9dd`. In short:
 
 - `RustBackedNostrSigner.ephemeral()` (Kotlin + Swift): CSPRNG-backed 32-byte secret, single-use.
 - `NostrEventBuilder.build` / `NostrEvent.build` grew an optional `ephemeralSigner` parameter; when provided it replaces the `KeyManager` identity for pubkey + signature.

@@ -2723,17 +2723,17 @@ final class AppState {
 
     /// Set up the protocol message handler (runs once at init).
     private func setupProtocolHandler() {
-        chatTransport.onProtocolMessage = { [weak self] groupID, json, event, senderBlsPubkeyHex in
+        chatTransport.onProtocolMessage = { [weak self] groupID, json, eventID, senderBlsPubkeyHex in
             guard let self,
                   let data = json.data(using: .utf8) else { return }
 
             Task { @MainActor in
                 // Replay protection (H-7)
-                guard !self.processedProtocolEventIDs.contains(event.id) else { return }
+                guard !self.processedProtocolEventIDs.contains(eventID) else { return }
                 if self.processedProtocolEventIDs.count >= Self.maxDedupSetSize {
                     self.processedProtocolEventIDs.removeFirst()
                 }
-                self.processedProtocolEventIDs.insert(event.id)
+                self.processedProtocolEventIDs.insert(eventID)
 
                 guard self.groups.contains(where: { $0.id == groupID }) else { return }
 

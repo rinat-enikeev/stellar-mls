@@ -159,7 +159,9 @@ struct MemberOrderingTests {
             salt: Data(repeating: 0, count: 32),
             tierRawValue: 0,
             commitment: nil,
-            senderNostrPubkey: "abc123"
+            senderNostrPubkey: "abc123",
+            senderAttestation: nil,
+            senderTransportBundle: nil
         )
 
         let group = payload.toChatGroup()
@@ -191,7 +193,9 @@ struct MemberOrderingTests {
             salt: Data(repeating: 0, count: 32),
             tierRawValue: 0,
             commitment: nil,
-            senderNostrPubkey: "abc123"
+            senderNostrPubkey: "abc123",
+            senderAttestation: nil,
+            senderTransportBundle: nil
         )
 
         let group = payload.toChatGroup()

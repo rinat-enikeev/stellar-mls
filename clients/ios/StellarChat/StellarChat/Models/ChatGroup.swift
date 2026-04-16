@@ -29,6 +29,9 @@ struct ChatGroup: Identifiable, Codable {
     var removedByPubkeyHex: String?
     /// Whether push notifications are enabled for this group (opt-in, defaults to off).
     var pushNotificationsEnabled: Bool = false
+    /// Timestamp of the latest message (sent, received, or system) in this group.
+    /// Drives chat-list ordering (most recent first). nil = no messages yet.
+    var lastMessageAt: Date?
 
     /// Nostr subscription topic tag for this group.
     /// Derivation (SEP-XXXX §3.1): `topicTag = hex(SHA-256("sep-topic-v1" || groupSecret)[0..8])`

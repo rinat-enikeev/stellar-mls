@@ -22,6 +22,7 @@ final class PersistedGroup {
     var forkedAtEpoch: Int?
     var removedByPubkeyHex: String?
     var pushNotificationsEnabled: Bool
+    var lastMessageAt: Date?
 
     init(
         id: String,
@@ -39,7 +40,8 @@ final class PersistedGroup {
         forkedFromGroupID: String? = nil,
         forkedAtEpoch: Int? = nil,
         removedByPubkeyHex: String? = nil,
-        pushNotificationsEnabled: Bool = false
+        pushNotificationsEnabled: Bool = false,
+        lastMessageAt: Date? = nil
     ) {
         self.id = id
         self.encryptedName = encryptedName
@@ -57,6 +59,7 @@ final class PersistedGroup {
         self.forkedAtEpoch = forkedAtEpoch
         self.removedByPubkeyHex = removedByPubkeyHex
         self.pushNotificationsEnabled = pushNotificationsEnabled
+        self.lastMessageAt = lastMessageAt
     }
 }
 

@@ -7,7 +7,7 @@ import androidx.room.Query
 
 @Dao
 interface StellarChatDao {
-    @Query("SELECT * FROM groups ORDER BY createdAt ASC")
+    @Query("SELECT * FROM groups ORDER BY lastMessageAt DESC, createdAt DESC")
     suspend fun loadGroups(): List<PersistedGroup>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

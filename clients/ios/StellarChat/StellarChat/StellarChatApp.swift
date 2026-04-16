@@ -414,6 +414,15 @@ final class AppState {
         }
     }
 
+    /// Bump the in-memory group's `lastMessageAt` to max(existing, timestamp).
+    /// Drives live chat-list reordering. Persistence is handled by
+    /// `PersistenceStore.saveMessage`, so no extra save is issued here.
+    func bumpGroupLastMessage(groupID: String, timestamp: Date) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        if let existing = groups[index].lastMessageAt, existing >= timestamp { return }
+        groups[index].lastMessageAt = timestamp
+    }
+
     func markGroupPublished(groupID: String) {
         if let index = groups.firstIndex(where: { $0.id == groupID }) {
             groups[index].isPublishedOnChain = true
@@ -461,6 +470,7 @@ final class AppState {
         var messages = chatMessages[groupID, default: []]
         Self.insertIntoArray(&messages, message: message)
         chatMessages[groupID] = messages
+        bumpGroupLastMessage(groupID: groupID, timestamp: message.timestamp)
     }
 
     /// Queue an incoming message for batch insertion. Multiple messages arriving
@@ -492,12 +502,21 @@ final class AppState {
                 : $0.msg.id < $1.msg.id
         }
         var localMessages = chatMessages
+        var latestPerGroup: [String: Date] = [:]
         for (msg, groupID, _) in sortedBatch {
             var arr = localMessages[groupID, default: []]
             arr.append(msg)
             localMessages[groupID] = arr
+            if let cur = latestPerGroup[groupID] {
+                if msg.timestamp > cur { latestPerGroup[groupID] = msg.timestamp }
+            } else {
+                latestPerGroup[groupID] = msg.timestamp
+            }
         }
         chatMessages = localMessages
+        for (groupID, ts) in latestPerGroup {
+            bumpGroupLastMessage(groupID: groupID, timestamp: ts)
+        }
 
         // Persistence, unread counts, timestamps — these don't trigger chat view re-renders
         var localUnread = unreadCounts
@@ -1120,6 +1139,7 @@ final class AppState {
         var messages = chatMessages[groupID, default: []]
         messages.append(msg)
         chatMessages[groupID] = messages
+        bumpGroupLastMessage(groupID: groupID, timestamp: msg.timestamp)
         store.saveMessageAsync(msg)
     }
 
@@ -1711,6 +1731,9 @@ final class AppState {
             )
         }
         chatMessages[newGroupIDHex] = copiedMessages
+        if let latest = copiedMessages.map(\.timestamp).max() {
+            bumpGroupLastMessage(groupID: newGroupIDHex, timestamp: latest)
+        }
         for msg in copiedMessages {
             store.saveMessageAsync(msg)
         }
@@ -3094,6 +3117,7 @@ final class AppState {
             msgs.append(msg)
             chatMessages[groupID] = msgs
             seenMessageIDs[groupID, default: []].insert(id)
+            bumpGroupLastMessage(groupID: groupID, timestamp: msg.timestamp)
 
             // Persist
             store.saveMessageAsync(msg)

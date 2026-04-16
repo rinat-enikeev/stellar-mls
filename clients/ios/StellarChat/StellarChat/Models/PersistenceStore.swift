@@ -124,7 +124,19 @@ final class PersistenceStore {
 
         guard let persisted = encryptMessage(message) else { return }
         context.insert(persisted)
+        bumpLastMessageAt(groupID: message.groupID, timestamp: message.timestamp)
         try? context.save()
+    }
+
+    /// Set the owning group's `lastMessageAt` to max(existing, timestamp).
+    /// Called from saveMessage so every persisted message promotes the chat.
+    private func bumpLastMessageAt(groupID: String, timestamp: Date) {
+        let descriptor = FetchDescriptor<PersistedGroup>(
+            predicate: #Predicate { $0.id == groupID }
+        )
+        guard let group = (try? context.fetch(descriptor))?.first else { return }
+        if let existing = group.lastMessageAt, existing >= timestamp { return }
+        group.lastMessageAt = timestamp
     }
 
     func saveMessageAsync(_ message: ChatMessage) {
@@ -444,7 +456,8 @@ final class PersistenceStore {
             forkedFromGroupID: group.forkedFromGroupID,
             forkedAtEpoch: group.forkedAtEpoch.map { Int($0) },
             removedByPubkeyHex: group.removedByPubkeyHex,
-            pushNotificationsEnabled: group.pushNotificationsEnabled
+            pushNotificationsEnabled: group.pushNotificationsEnabled,
+            lastMessageAt: group.lastMessageAt
         )
     }
 
@@ -485,6 +498,7 @@ final class PersistenceStore {
         group.forkedAtEpoch = persisted.forkedAtEpoch.map { UInt64($0) }
         group.removedByPubkeyHex = persisted.removedByPubkeyHex
         group.pushNotificationsEnabled = persisted.pushNotificationsEnabled
+        group.lastMessageAt = persisted.lastMessageAt
         return group
     }
 

@@ -10,6 +10,14 @@ struct GroupListView: View {
     @State private var verifyingGroupID: String?
     @State private var showVerificationAlert = false
 
+    /// Chat list ordered by latest activity (most recent first). Falls back to
+    /// `createdAt` for chats that haven't received any message yet.
+    private var sortedGroups: [ChatGroup] {
+        appState.groups.sorted { lhs, rhs in
+            (lhs.lastMessageAt ?? lhs.createdAt) > (rhs.lastMessageAt ?? rhs.createdAt)
+        }
+    }
+
     var body: some View {
         List {
             if appState.groups.isEmpty {
@@ -62,7 +70,7 @@ struct GroupListView: View {
                     Spacer()
                 }
             } else {
-                ForEach(appState.groups) { group in
+                ForEach(sortedGroups) { group in
                     NavigationLink(value: group.id) {
                         GroupRow(
                             group: group,

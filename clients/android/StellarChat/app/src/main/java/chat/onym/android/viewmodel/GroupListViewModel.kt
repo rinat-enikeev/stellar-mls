@@ -1538,7 +1538,30 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             isSystemMessage = true
         )
         chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
+        bumpGroupLastMessage(groupID, msg.timestamp.time)
         viewModelScope.launch { try { store.saveMessage(msg) } catch (_: Exception) { } }
+    }
+
+    /** Set the owning group's `lastMessageAt` to max(existing, timestampMs) and re-sort
+     *  the in-memory [groups] list so the chat list reorders live (most recent first).
+     *  Persists the bumped group row so the order survives a restart. */
+    private fun bumpGroupLastMessage(groupID: String, timestampMs: Long) {
+        val idx = groups.indexOfFirst { it.id == groupID }
+        if (idx < 0) return
+        val g = groups[idx]
+        if (g.lastMessageAt >= timestampMs) return
+        g.lastMessageAt = timestampMs
+        groups[idx] = g
+        val currentIDs = groups.map { it.id }
+        val sortedIDs = groups.sortedByDescending {
+            if (it.lastMessageAt > 0) it.lastMessageAt else it.createdAt.time
+        }.map { it.id }
+        if (sortedIDs != currentIDs) {
+            val byID = groups.associateBy { it.id }
+            groups.clear()
+            sortedIDs.forEach { id -> byID[id]?.let { groups.add(it) } }
+        }
+        viewModelScope.launch { try { store.saveGroup(g) } catch (_: Exception) { } }
     }
 
     // -- Transport Bundle Management --
@@ -1875,6 +1898,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 }
                 chatMessages[forkedGroup.id] = copiedMessages.toMutableList()
+                copiedMessages.maxOfOrNull { it.timestamp.time }?.let {
+                    bumpGroupLastMessage(forkedGroup.id, it)
+                }
                 withContext(Dispatchers.IO) {
                     for (msg in copiedMessages) {
                         try { store.saveMessage(msg) } catch (_: Exception) { }
@@ -2284,6 +2310,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 // Append to trigger Compose recomposition. Arrival order prevents
                 // messages received after epoch transition from jumping into the middle.
                 chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
+                bumpGroupLastMessage(groupID, msg.timestamp.time)
                 viewModelScope.launch {
                     try { store.saveMessage(msg) } catch (_: Exception) { }
                 }
@@ -2332,6 +2359,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     replyToID = replyToID
                 )
                 chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
+                bumpGroupLastMessage(groupID, msg.timestamp.time)
                 viewModelScope.launch {
                     try { store.saveMessage(msg) } catch (_: Exception) { }
                 }
@@ -2414,6 +2442,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         )
         chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
         seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }.add(event.id)
+        bumpGroupLastMessage(groupID, msg.timestamp.time)
         viewModelScope.launch {
             try { store.saveMessage(msg) } catch (_: Exception) { }
         }
@@ -2538,6 +2567,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 )
                 chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
                 seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }.add(event.id)
+                bumpGroupLastMessage(groupID, msg.timestamp.time)
                 launch {
                     try { store.saveMessage(msg) } catch (_: Exception) { }
                 }
@@ -2651,6 +2681,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 )
                 chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
                 seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }.add(event.id)
+                bumpGroupLastMessage(groupID, msg.timestamp.time)
                 launch {
                     try { store.saveMessage(msg) } catch (_: Exception) { }
                 }
@@ -2745,6 +2776,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 chatMessages[groupID] = current.sortedWith(
                     compareBy<chat.onym.android.model.ChatMessage> { it.timestamp }.thenBy { it.id })
                 seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }.add(event.id)
+                bumpGroupLastMessage(groupID, msg.timestamp.time)
                 launch {
                     try { store.saveMessage(msg) } catch (_: Exception) { }
                 }

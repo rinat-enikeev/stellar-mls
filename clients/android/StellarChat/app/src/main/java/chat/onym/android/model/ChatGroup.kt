@@ -42,7 +42,10 @@ data class ChatGroup(
     /** BLS pubkey hex of the member who removed us from this group (null if not removed). */
     var removedByPubkeyHex: String? = null,
     /** Whether push notifications are enabled for this group (opt-in, defaults to off). */
-    var pushNotificationsEnabled: Boolean = false
+    var pushNotificationsEnabled: Boolean = false,
+    /** Timestamp (ms since epoch) of the latest message in this group. Drives chat-list
+     *  ordering (most recent first). 0 = no messages yet, falls back to [createdAt]. */
+    var lastMessageAt: Long = 0
 ) {
     /** Group ID as raw bytes (hex string → ByteArray). */
     val groupIDData: ByteArray get() = id.hexToBytes()

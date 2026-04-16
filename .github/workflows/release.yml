@@ -174,15 +174,20 @@ jobs:
       - name: Pick iOS Simulator destination
         id: sim
         run: |
-          # Pick the newest available iPhone simulator name; fail loud if none.
-          NAME=$(xcrun simctl list devicetypes iphone --json \
-            | python3 -c "import json,sys; d=json.load(sys.stdin)['devicetypes']; \
-                         names=[x['name'] for x in d if 'iPhone' in x['name']]; \
+          # Pick an existing iPhone simulator device (devicetypes list includes
+          # retired models with no created simulator). Fail loud if none.
+          NAME=$(xcrun simctl list devices available --json \
+            | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; \
+                         names=[dev['name'] for runtime,devs in d.items() \
+                                if 'iOS' in runtime \
+                                for dev in devs if 'iPhone' in dev['name']]; \
                          print(names[-1] if names else '', end='')")
           if [ -z "$NAME" ]; then
-            echo "No iPhone simulator devicetype available on runner" >&2
+            echo "No iPhone simulator device available on runner" >&2
+            xcrun simctl list devices available >&2
             exit 1
           fi
+          echo "Using simulator: $NAME"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
       - name: Test StellarChat

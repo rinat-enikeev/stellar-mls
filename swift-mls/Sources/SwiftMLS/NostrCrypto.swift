@@ -20,4 +20,14 @@ public struct RustBackedNostrSigner: SEPNostrEventSigner, Sendable {
         }
         return try RustBridge.signNostrEventID(secretKey: secretKey, eventID: eventID)
     }
+
+    /// Fresh per-event signer backed by a random 32-byte secp256k1 scalar from the OS CSPRNG.
+    public static func ephemeral() throws -> RustBackedNostrSigner {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        let status = SecRandomCopyBytes(kSecRandomDefault, 32, &bytes)
+        guard status == errSecSuccess else {
+            throw SEPError.ffiFailure("SecRandomCopyBytes failed: OSStatus \(status)")
+        }
+        return try RustBackedNostrSigner(secretKey: Data(bytes))
+    }
 }

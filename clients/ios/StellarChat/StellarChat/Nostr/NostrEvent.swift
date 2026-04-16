@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import SwiftMLS
 
 struct NostrEvent: Codable, Identifiable {
     let id: String
@@ -54,13 +55,24 @@ struct NostrEvent: Codable, Identifiable {
 
     /// Build a NIP-01 event, computing the event ID and signing it.
     /// Appends an app-specific `["ms", "<unix_ms>"]` tag for sub-second ordering.
+    ///
+    /// When `ephemeralSigner` is non-nil, the outer pubkey and Schnorr signature come
+    /// from that per-event key instead of the device identity. Used for kinds 44114/34113
+    /// to prevent relays from clustering co-membership via stable sender pubkeys —
+    /// inner sender authentication is proven by BLS inside ciphertext.
     static func build(
         kind: Int,
         tags: [[String]],
         content: String,
-        keyManager: KeyManager
+        keyManager: KeyManager,
+        ephemeralSigner: RustBackedNostrSigner? = nil
     ) throws -> NostrEvent {
-        let pubkeyHex = keyManager.publicKeyHex
+        let pubkeyHex: String
+        if let signer = ephemeralSigner {
+            pubkeyHex = try signer.publicKey().map { String(format: "%02x", $0) }.joined()
+        } else {
+            pubkeyHex = keyManager.publicKeyHex
+        }
         let unixMs = Int64(Date().timeIntervalSince1970 * 1000)
         let createdAt = unixMs / 1000
 
@@ -75,7 +87,12 @@ struct NostrEvent: Codable, Identifiable {
         let eventID = Data(hash)
         let eventIDHex = eventID.map { String(format: "%02x", $0) }.joined()
 
-        let signature = try keyManager.signEventID(eventID)
+        let signature: Data
+        if let signer = ephemeralSigner {
+            signature = try signer.signEventID(eventID)
+        } else {
+            signature = try keyManager.signEventID(eventID)
+        }
         let sigHex = signature.map { String(format: "%02x", $0) }.joined()
 
         return NostrEvent(

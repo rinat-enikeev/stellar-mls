@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import SwiftMLS
 
 @testable import StellarChat
 
@@ -114,5 +115,31 @@ struct NostrEventTests {
         )
         // displayMilliseconds should return the ms tag value
         #expect(event.displayMilliseconds > 0)
+    }
+
+    @Test("Ephemeral-signed events have distinct pubkeys and IDs for identical content")
+    func ephemeralSignerUniqueness() throws {
+        let keyManager = try KeyManager()
+        let e1 = try NostrEvent.build(
+            kind: 44114,
+            tags: [["t", "topic"]],
+            content: "same",
+            keyManager: keyManager,
+            ephemeralSigner: try RustBackedNostrSigner.ephemeral()
+        )
+        let e2 = try NostrEvent.build(
+            kind: 44114,
+            tags: [["t", "topic"]],
+            content: "same",
+            keyManager: keyManager,
+            ephemeralSigner: try RustBackedNostrSigner.ephemeral()
+        )
+        #expect(e1.pubkey != e2.pubkey, "Ephemeral outer pubkeys must differ per event")
+        #expect(e1.id != e2.id, "Event IDs must differ because pubkey is part of the ID preimage")
+        #expect(e1.verifyEventID() == true)
+        #expect(e2.verifyEventID() == true)
+        // Ephemeral pubkey must not match the device's long-term Nostr identity key.
+        #expect(e1.pubkey != keyManager.publicKeyHex)
+        #expect(e2.pubkey != keyManager.publicKeyHex)
     }
 }

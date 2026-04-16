@@ -1,6 +1,7 @@
 package chat.onym.android.crypto
 
 import chat.onym.android.model.toHex
+import com.stellarmls.mls.RustBackedNostrSigner
 import org.json.JSONArray
 import java.security.MessageDigest
 
@@ -51,14 +52,20 @@ data class NostrEvent(
 
 object NostrEventBuilder {
     /** Build a NIP-01 event with computed ID and real Schnorr signature.
-     *  Appends an app-specific `["ms", "<unix_ms>"]` tag for sub-second ordering. */
+     *  Appends an app-specific `["ms", "<unix_ms>"]` tag for sub-second ordering.
+     *
+     *  When [ephemeralSigner] is non-null, the outer pubkey and Schnorr signature come
+     *  from that per-event key instead of the device identity. Used for kinds 44114/34113
+     *  to prevent relays from clustering co-membership via stable sender pubkeys —
+     *  inner sender authentication is proven by BLS inside ciphertext. */
     fun build(
         kind: Int,
         tags: List<List<String>>,
         content: String,
-        keyManager: KeyManager
+        keyManager: KeyManager,
+        ephemeralSigner: RustBackedNostrSigner? = null
     ): NostrEvent {
-        val pubkeyHex = keyManager.publicKeyHex
+        val pubkeyHex = ephemeralSigner?.publicKey()?.toHex() ?: keyManager.publicKeyHex
         val unixMs = System.currentTimeMillis()
         val createdAt = unixMs / 1000
 
@@ -79,7 +86,7 @@ object NostrEventBuilder {
         val eventIDHex = hash.toHex()
 
         // Real secp256k1 Schnorr signature via Rust FFI
-        val signature = keyManager.signEventID(hash)
+        val signature = ephemeralSigner?.signEventId(hash) ?: keyManager.signEventID(hash)
         val sigHex = signature.toHex()
 
         return NostrEvent(

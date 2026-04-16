@@ -17,4 +17,13 @@ class RustBackedNostrSigner(private val secretKey: ByteArray) {
         require(eventId.size == 32) { "event ID must be 32 bytes" }
         return RustBridge.nostrSignEventId(secretKey, eventId)
     }
+
+    companion object {
+        /** Fresh per-event signer backed by a random 32-byte secp256k1 scalar from the JCE CSPRNG. */
+        fun ephemeral(): RustBackedNostrSigner {
+            val secret = ByteArray(32)
+            java.security.SecureRandom().nextBytes(secret)
+            return RustBackedNostrSigner(secret)
+        }
+    }
 }

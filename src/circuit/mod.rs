@@ -39,6 +39,8 @@ use ark_r1cs_std::fields::fp::FpVar;
 
 use crate::poseidon::poseidon_config;
 
+pub mod update;
+
 /// The SEP-XXXX membership circuit.
 ///
 /// Proves: "I know a secret key whose Poseidon hash is a leaf in the

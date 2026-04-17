@@ -11,7 +11,10 @@ use ark_snark::SNARK;
 use ark_std::rand::Rng;
 
 use crate::circuit::MembershipCircuit;
-use crate::commitment::{Salt, compute_poseidon_commitment};
+use crate::circuit::update::UpdateCircuit;
+use crate::commitment::{
+    bytes_be_to_field_checked, field_to_bytes_be, Salt, compute_poseidon_commitment,
+};
 use crate::merkle::{CanonicalMember, PoseidonMerkleTree, canonicalize_members, compressed_public_key_bytes};
 use crate::poseidon::poseidon_config;
 
@@ -126,6 +129,221 @@ pub fn verify(
         public_inputs.epoch,
     ];
 
+    let result = Groth16::<Bls12_381>::verify_with_processed_vk(pvk, &inputs, proof)?;
+    Ok(result)
+}
+
+// ============================================================
+// UpdateCircuit prover — binds (C_old, epoch_old, C_new) into the proof.
+// See docs/update-circuit-binding-design.md §5.
+// ============================================================
+
+/// Input needed to generate an update-transition proof.
+///
+/// Canonicalisation matches `ProverInput`: members are supplied as
+/// `CanonicalMember` records (public-key bytes + precomputed leaf hash);
+/// the prover internally sorts them by compressed G1 bytes so the
+/// resulting commitment is deterministic regardless of input ordering.
+pub struct UpdateProverInput {
+    /// The old tree's member roster.
+    pub members_old: Vec<CanonicalMember<Fr>>,
+    /// The new tree's member roster.
+    pub members_new: Vec<CanonicalMember<Fr>>,
+    /// The prover's secret key (must hash to a leaf in `members_old`).
+    pub secret_key: Fr,
+    /// The epoch of the old state. The new epoch is derived as
+    /// `epoch_old + 1` both in-circuit and in the returned public inputs.
+    pub epoch_old: u64,
+    /// The old state's salt.
+    pub salt_old: Salt,
+    /// The new state's salt.
+    pub salt_new: Salt,
+    /// Tree depth (must match the setup circuit and both rosters' tier).
+    pub depth: usize,
+}
+
+/// Public inputs for an update proof (3 field elements).
+///
+/// Allocation order — and therefore Groth16 IC-vector indexing order —
+/// is `(c_old, epoch_old, c_new)`. Do not reorder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpdatePublicInputs {
+    /// Old commitment: `Poseidon(Poseidon(root_old, epoch_old), salt_old)`.
+    pub c_old: Fr,
+    /// Epoch of the old state, as a field element.
+    pub epoch_old: Fr,
+    /// New commitment: `Poseidon(Poseidon(root_new, epoch_old + 1), salt_new)`.
+    pub c_new: Fr,
+}
+
+impl UpdatePublicInputs {
+    /// Wire-format version byte. Distinguishes the 3-scalar update-proof
+    /// public inputs from the 2-scalar membership-proof public inputs.
+    pub const VERSION: u8 = 2;
+
+    /// Serialised length: 1 version byte + 32 C_old + 8 epoch_old + 32 C_new.
+    pub const SERIALIZED_LEN: usize = 1 + 32 + 8 + 32;
+
+    /// Serialise to the 73-byte wire format:
+    /// `version || c_old_be || epoch_old_be || c_new_be`.
+    pub fn serialize(&self) -> [u8; Self::SERIALIZED_LEN] {
+        let mut out = [0u8; Self::SERIALIZED_LEN];
+        out[0] = Self::VERSION;
+        out[1..33].copy_from_slice(&field_to_bytes_be(&self.c_old));
+
+        // Recover u64 from the Fr by reading the low 8 bytes of the LE
+        // representation. This is lossy in general but safe here because
+        // the field element was constructed from a u64 by the prover.
+        let epoch_u64 = fr_to_u64(&self.epoch_old);
+        out[33..41].copy_from_slice(&epoch_u64.to_be_bytes());
+
+        out[41..73].copy_from_slice(&field_to_bytes_be(&self.c_new));
+        out
+    }
+
+    /// Deserialise from the 73-byte wire format. Rejects length mismatch
+    /// or version mismatch.
+    pub fn deserialize(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() != Self::SERIALIZED_LEN {
+            return Err(format!(
+                "UpdatePublicInputs length mismatch: got {}, expected {}",
+                bytes.len(),
+                Self::SERIALIZED_LEN
+            ));
+        }
+        if bytes[0] != Self::VERSION {
+            return Err(format!(
+                "UpdatePublicInputs version mismatch: got {:#04x}, expected {:#04x}",
+                bytes[0],
+                Self::VERSION
+            ));
+        }
+
+        let mut c_old_be = [0u8; 32];
+        c_old_be.copy_from_slice(&bytes[1..33]);
+        let c_old = bytes_be_to_field_checked::<Fr>(&c_old_be)
+            .map_err(|e| format!("c_old: {}", e))?;
+
+        let mut epoch_be = [0u8; 8];
+        epoch_be.copy_from_slice(&bytes[33..41]);
+        let epoch_old = Fr::from(u64::from_be_bytes(epoch_be));
+
+        let mut c_new_be = [0u8; 32];
+        c_new_be.copy_from_slice(&bytes[41..73]);
+        let c_new = bytes_be_to_field_checked::<Fr>(&c_new_be)
+            .map_err(|e| format!("c_new: {}", e))?;
+
+        Ok(Self { c_old, epoch_old, c_new })
+    }
+
+    /// Return the three scalars in pinned allocation order for Groth16 verify.
+    pub fn to_scalars(&self) -> [Fr; 3] {
+        [self.c_old, self.epoch_old, self.c_new]
+    }
+}
+
+/// Reconstruct a `u64` from an `Fr` that was built via `Fr::from(u: u64)`.
+fn fr_to_u64(f: &Fr) -> u64 {
+    use ark_ff::{BigInteger, PrimeField};
+    let repr = f.into_bigint();
+    let le = repr.to_bytes_le();
+    let mut out = [0u8; 8];
+    let n = le.len().min(8);
+    out[..n].copy_from_slice(&le[..n]);
+    u64::from_le_bytes(out)
+}
+
+/// Run the trusted setup for the update circuit at a given depth.
+pub fn setup_update<R: Rng + rand::CryptoRng>(
+    depth: usize,
+    rng: &mut R,
+) -> Result<SetupResult, Box<dyn std::error::Error>> {
+    let empty_circuit = UpdateCircuit::<Fr>::empty(depth);
+    let (pk, vk) = Groth16::<Bls12_381>::circuit_specific_setup(empty_circuit, rng)?;
+    let pvk = Groth16::<Bls12_381>::process_vk(&vk)?;
+    Ok(SetupResult {
+        proving_key: pk,
+        verifying_key: vk,
+        prepared_vk: pvk,
+    })
+}
+
+/// Generate an update-transition proof.
+///
+/// Workflow:
+/// 1. Canonicalise both rosters and build both Poseidon Merkle trees.
+/// 2. Locate the prover's canonical index in the old tree; build its
+///    authentication path.
+/// 3. Derive `C_old = Poseidon(Poseidon(root_old, epoch_old), salt_old)`
+///    and `C_new = Poseidon(Poseidon(root_new, epoch_old + 1), salt_new)`.
+/// 4. Run Groth16 over `UpdateCircuit` with the three public inputs
+///    `(C_old, epoch_old, C_new)`.
+pub fn prove_update<R: Rng + rand::CryptoRng>(
+    pk: &ProvingKey<Bls12_381>,
+    input: &UpdateProverInput,
+    rng: &mut R,
+) -> Result<(Proof<Bls12_381>, UpdatePublicInputs), Box<dyn std::error::Error>> {
+    let config = poseidon_config::<Fr>();
+
+    let ordered_old = canonicalize_members(&input.members_old)?;
+    let ordered_new = canonicalize_members(&input.members_new)?;
+
+    let prover_pk_bytes = compressed_public_key_bytes(&input.secret_key);
+    let prover_leaf = compute_leaf_hash(&input.secret_key);
+    let prover_index_old = ordered_old
+        .iter()
+        .position(|m| m.public_key_bytes == prover_pk_bytes)
+        .ok_or("prover public key not present in old member roster")?;
+    if ordered_old[prover_index_old].leaf_hash != prover_leaf {
+        return Err("old roster leaf hash does not match prover secret key".into());
+    }
+
+    let tree_old = PoseidonMerkleTree::build_from_members(&config, &ordered_old, input.depth)?;
+    let tree_new = PoseidonMerkleTree::build_from_members(&config, &ordered_new, input.depth)?;
+    let root_old = tree_old.root();
+    let root_new = tree_new.root();
+    let merkle_proof = tree_old.prove(prover_index_old);
+
+    let c_old = compute_poseidon_commitment(&config, &root_old, input.epoch_old, &input.salt_old);
+    let c_new = compute_poseidon_commitment(
+        &config,
+        &root_new,
+        input.epoch_old + 1,
+        &input.salt_new,
+    );
+
+    let circuit = UpdateCircuit::new(
+        c_old,
+        input.epoch_old,
+        c_new,
+        input.secret_key,
+        root_old,
+        input.salt_old,
+        merkle_proof.path,
+        merkle_proof.leaf_index,
+        root_new,
+        input.salt_new,
+        input.depth,
+    );
+
+    let proof = Groth16::<Bls12_381>::prove(pk, circuit, rng)?;
+
+    let public_inputs = UpdatePublicInputs {
+        c_old,
+        epoch_old: Fr::from(input.epoch_old),
+        c_new,
+    };
+
+    Ok((proof, public_inputs))
+}
+
+/// Verify an update-transition proof with a prepared verifying key.
+pub fn verify_update(
+    pvk: &PreparedVerifyingKey<Bls12_381>,
+    proof: &Proof<Bls12_381>,
+    public_inputs: &UpdatePublicInputs,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let inputs = public_inputs.to_scalars();
     let result = Groth16::<Bls12_381>::verify_with_processed_vk(pvk, &inputs, proof)?;
     Ok(result)
 }
@@ -654,5 +872,159 @@ mod tests {
 
         let result = prove(&setup_result.proving_key, &input, &mut rng);
         assert!(result.is_err(), "Empty member set must fail");
+    }
+
+    // ========================================================
+    // UpdateCircuit prover tests
+    // ========================================================
+
+    fn make_members(keys: &[Fr]) -> Vec<CanonicalMember<Fr>> {
+        let config = poseidon_config::<Fr>();
+        keys.iter()
+            .map(|sk| CanonicalMember {
+                public_key_bytes: compressed_public_key_bytes(sk),
+                leaf_hash: poseidon_hash_one(&config, sk),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_prove_update_round_trip() {
+        let mut rng = test_rng();
+        let setup_result = setup_update(5, &mut rng).expect("update setup failed");
+
+        let old_keys = vec![Fr::from(100u64), Fr::from(200u64)];
+        let new_keys = vec![Fr::from(100u64), Fr::from(200u64), Fr::from(300u64)];
+
+        let input = UpdateProverInput {
+            members_old: make_members(&old_keys),
+            members_new: make_members(&new_keys),
+            secret_key: old_keys[0],
+            epoch_old: 0,
+            salt_old: [0xAA; 32],
+            salt_new: [0xBB; 32],
+            depth: 5,
+        };
+
+        let (proof, public_inputs) =
+            prove_update(&setup_result.proving_key, &input, &mut rng).expect("prove failed");
+
+        let valid = verify_update(&setup_result.prepared_vk, &proof, &public_inputs)
+            .expect("verify failed");
+        assert!(valid, "valid update proof must verify");
+    }
+
+    #[test]
+    fn test_prove_update_canonical_member_order() {
+        let mut rng = test_rng();
+        let setup_result = setup_update(5, &mut rng).expect("update setup failed");
+
+        let old_keys = vec![Fr::from(100u64), Fr::from(200u64)];
+        let new_keys_sorted = vec![Fr::from(100u64), Fr::from(200u64), Fr::from(300u64)];
+        let new_keys_shuffled = vec![Fr::from(300u64), Fr::from(100u64), Fr::from(200u64)];
+
+        let members_old = make_members(&old_keys);
+
+        let base = UpdateProverInput {
+            members_old: members_old.clone(),
+            members_new: make_members(&new_keys_sorted),
+            secret_key: old_keys[0],
+            epoch_old: 0,
+            salt_old: [0xAA; 32],
+            salt_new: [0xBB; 32],
+            depth: 5,
+        };
+        let shuffled = UpdateProverInput {
+            members_old,
+            members_new: make_members(&new_keys_shuffled),
+            secret_key: old_keys[0],
+            epoch_old: 0,
+            salt_old: [0xAA; 32],
+            salt_new: [0xBB; 32],
+            depth: 5,
+        };
+
+        let (_, pi_a) = prove_update(&setup_result.proving_key, &base, &mut rng).unwrap();
+        let (_, pi_b) = prove_update(&setup_result.proving_key, &shuffled, &mut rng).unwrap();
+
+        assert_eq!(pi_a.c_new, pi_b.c_new, "canonical order must yield the same C_new");
+    }
+
+    #[test]
+    fn test_prove_update_wrong_sk_fails() {
+        let mut rng = test_rng();
+        let setup_result = setup_update(5, &mut rng).expect("update setup failed");
+
+        let old_keys = vec![Fr::from(100u64), Fr::from(200u64)];
+        let new_keys = vec![Fr::from(100u64), Fr::from(200u64), Fr::from(300u64)];
+
+        let input = UpdateProverInput {
+            members_old: make_members(&old_keys),
+            members_new: make_members(&new_keys),
+            // Key 999 is not in members_old.
+            secret_key: Fr::from(999u64),
+            epoch_old: 0,
+            salt_old: [0xAA; 32],
+            salt_new: [0xBB; 32],
+            depth: 5,
+        };
+
+        let result = prove_update(&setup_result.proving_key, &input, &mut rng);
+        assert!(result.is_err(), "sk not in old roster must fail to prove");
+    }
+
+    #[test]
+    fn test_update_public_inputs_serialize_roundtrip() {
+        let c_old = Fr::from(0x1111_2222_3333_4444u64);
+        let c_new = Fr::from(0xAAAA_BBBB_CCCC_DDDDu64);
+        let pi = UpdatePublicInputs {
+            c_old,
+            epoch_old: Fr::from(42u64),
+            c_new,
+        };
+        let bytes = pi.serialize();
+        assert_eq!(bytes.len(), UpdatePublicInputs::SERIALIZED_LEN);
+        assert_eq!(bytes[0], UpdatePublicInputs::VERSION);
+        // Big-endian u64 at offset 33..41.
+        assert_eq!(&bytes[33..41], &42u64.to_be_bytes());
+
+        let round = UpdatePublicInputs::deserialize(&bytes).expect("deserialize");
+        assert_eq!(round.c_old, pi.c_old);
+        assert_eq!(round.epoch_old, pi.epoch_old);
+        assert_eq!(round.c_new, pi.c_new);
+    }
+
+    #[test]
+    fn test_update_public_inputs_version_mismatch_rejected() {
+        let pi = UpdatePublicInputs {
+            c_old: Fr::from(1u64),
+            epoch_old: Fr::from(0u64),
+            c_new: Fr::from(2u64),
+        };
+        let mut bytes = pi.serialize().to_vec();
+        bytes[0] = 0x01; // wrong version
+        let err = UpdatePublicInputs::deserialize(&bytes);
+        assert!(err.is_err(), "wrong version must be rejected");
+    }
+
+    #[test]
+    fn test_update_public_inputs_length_mismatch_rejected() {
+        let mut bytes = vec![UpdatePublicInputs::VERSION];
+        bytes.extend_from_slice(&[0u8; 50]); // < 73
+        let err = UpdatePublicInputs::deserialize(&bytes);
+        assert!(err.is_err(), "wrong length must be rejected");
+    }
+
+    #[test]
+    fn test_update_public_inputs_scalar_order_pinned() {
+        let pi = UpdatePublicInputs {
+            c_old: Fr::from(0xCAFEu64),
+            epoch_old: Fr::from(7u64),
+            c_new: Fr::from(0xBEEFu64),
+        };
+        let scalars = pi.to_scalars();
+        assert_eq!(scalars[0], pi.c_old);
+        assert_eq!(scalars[1], pi.epoch_old);
+        assert_eq!(scalars[2], pi.c_new);
     }
 }

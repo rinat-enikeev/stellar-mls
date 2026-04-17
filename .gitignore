@@ -89,6 +89,7 @@ deploy/certbot/webroot/
 
 # Keyset proving keys (large binaries, already copied to app assets)
 keyset-v*/*/proving_key.bin
+keyset-v*/*/update_proving_key.bin
 
 # AltStore PAL Alternative Distribution Packages (large notarized binaries, scp'd to onym.chat)
 /deploy/website/adp/

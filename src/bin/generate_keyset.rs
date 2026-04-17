@@ -7,22 +7,25 @@
 //! Usage:
 //!   cargo run --release --bin generate_keyset -- --out-dir keyset-v1
 //!
-//! Output:
-//!   keyset-v1/
+//! Output (v2 onwards includes UpdateCircuit keys — the #59 fix):
+//!   keyset-vN/
 //!     small/proving_key.bin
 //!     small/verifying_key.bin
-//!     medium/proving_key.bin
-//!     medium/verifying_key.bin
-//!     large/proving_key.bin
-//!     large/verifying_key.bin
-//!     vk-small.json          (contract-ready VK)
+//!     small/update_proving_key.bin        (UpdateCircuit, v2+)
+//!     small/update_verifying_key.bin      (UpdateCircuit, v2+)
+//!     medium/ (same as small)
+//!     large/ (same as small)
+//!     vk-small.json                        (contract-ready membership VK)
 //!     vk-medium.json
 //!     vk-large.json
-//!     metadata.json           (version, hashes, tier info)
+//!     vk-update-small.json                 (UpdateCircuit VK, v2+)
+//!     vk-update-medium.json
+//!     vk-update-large.json
+//!     metadata.json                        (version, hashes, tier info)
 
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use ark_bls12_381::{Bls12_381, G1Affine, G2Affine};
 use ark_groth16::{ProvingKey, VerifyingKey};
@@ -53,6 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!();
 
     let mut tier_metadata = Vec::new();
+    let include_update_circuit = version_at_least(&version, 2);
 
     for tier in TIERS {
         eprintln!("  {} tier (depth {}, max {} members)", tier.name, tier.depth, tier.max_members);
@@ -60,28 +64,71 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let tier_dir = out_dir.join(tier.name);
         fs::create_dir_all(&tier_dir)?;
 
-        // Generate with real randomness
+        // Membership circuit
         let mut rng = OsRng;
         let setup = prover::setup(tier.depth, &mut rng)?;
 
-        // Serialize proving key (compressed)
         let pk_bytes = serialize_proving_key(&setup.proving_key)?;
         let pk_path = tier_dir.join("proving_key.bin");
         fs::write(&pk_path, &pk_bytes)?;
         let pk_hash = sha256_hex(&pk_bytes);
         eprintln!("    proving_key.bin: {} bytes, sha256:{}", pk_bytes.len(), &pk_hash);
 
-        // Serialize verifying key (compressed)
         let vk_bytes = serialize_verifying_key(&setup.verifying_key)?;
         let vk_path = tier_dir.join("verifying_key.bin");
         fs::write(&vk_path, &vk_bytes)?;
         let vk_hash = sha256_hex(&vk_bytes);
         eprintln!("    verifying_key.bin: {} bytes, sha256:{}", vk_bytes.len(), &vk_hash);
 
-        // Write contract-ready VK JSON
         let vk_json = verification_key_json(&setup.verifying_key);
         let vk_json_path = out_dir.join(format!("vk-{}.json", tier.name));
         fs::write(&vk_json_path, &vk_json)?;
+
+        // UpdateCircuit (#59 fix) — v2+ only
+        let update_entry = if include_update_circuit {
+            let mut update_rng = OsRng;
+            let update_setup = prover::setup_update(tier.depth, &mut update_rng)?;
+
+            let update_pk_bytes = serialize_proving_key(&update_setup.proving_key)?;
+            let update_pk_path = tier_dir.join("update_proving_key.bin");
+            fs::write(&update_pk_path, &update_pk_bytes)?;
+            let update_pk_hash = sha256_hex(&update_pk_bytes);
+            eprintln!(
+                "    update_proving_key.bin: {} bytes, sha256:{}",
+                update_pk_bytes.len(), &update_pk_hash,
+            );
+
+            let update_vk_bytes = serialize_verifying_key(&update_setup.verifying_key)?;
+            let update_vk_path = tier_dir.join("update_verifying_key.bin");
+            fs::write(&update_vk_path, &update_vk_bytes)?;
+            let update_vk_hash = sha256_hex(&update_vk_bytes);
+            eprintln!(
+                "    update_verifying_key.bin: {} bytes, sha256:{}",
+                update_vk_bytes.len(), &update_vk_hash,
+            );
+
+            let update_vk_json = verification_key_json(&update_setup.verifying_key);
+            let update_vk_json_path = out_dir.join(format!("vk-update-{}.json", tier.name));
+            fs::write(&update_vk_json_path, &update_vk_json)?;
+
+            Some((update_pk_hash, update_pk_bytes.len(), update_vk_hash, update_vk_bytes.len()))
+        } else {
+            None
+        };
+
+        let update_json = match update_entry {
+            Some((upk_hash, upk_len, uvk_hash, uvk_len)) => format!(
+                concat!(
+                    ",\n",
+                    "      \"update_proving_key_sha256\": \"{}\",\n",
+                    "      \"update_proving_key_bytes\": {},\n",
+                    "      \"update_verifying_key_sha256\": \"{}\",\n",
+                    "      \"update_verifying_key_bytes\": {}",
+                ),
+                upk_hash, upk_len, uvk_hash, uvk_len,
+            ),
+            None => String::new(),
+        };
 
         tier_metadata.push(format!(
             concat!(
@@ -92,12 +139,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "      \"proving_key_sha256\": \"{}\",\n",
                 "      \"proving_key_bytes\": {},\n",
                 "      \"verifying_key_sha256\": \"{}\",\n",
-                "      \"verifying_key_bytes\": {}\n",
+                "      \"verifying_key_bytes\": {}{}\n",
                 "    }}"
             ),
             tier.name, tier.depth, tier.max_members,
             pk_hash, pk_bytes.len(),
             vk_hash, vk_bytes.len(),
+            update_json,
         ));
     }
 
@@ -216,6 +264,15 @@ fn nibble_to_hex(nibble: u8) -> char {
         0..=9 => (b'0' + nibble) as char,
         10..=15 => (b'a' + (nibble - 10)) as char,
         _ => unreachable!(),
+    }
+}
+
+/// Returns true when the parsed keyset version is >= `min`.
+/// Falls back to treating unrecognized versions as >= min (forward compatibility).
+fn version_at_least(version: &str, min: u32) -> bool {
+    match version.trim_start_matches('v').parse::<u32>() {
+        Ok(n) => n >= min,
+        Err(_) => true,
     }
 }
 

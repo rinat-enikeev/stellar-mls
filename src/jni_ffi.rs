@@ -25,7 +25,7 @@ use crate::merkle::{
     CanonicalMember, PoseidonMerkleTree, COMPRESSED_G1_PUBLIC_KEY_LEN, compressed_public_key_bytes,
 };
 use crate::poseidon::poseidon_config;
-use crate::prover::{self, ProverInput};
+use crate::prover::{self, ProverInput, UpdateProverInput, UpdatePublicInputs};
 
 const FR_BYTES: usize = 32;
 
@@ -414,5 +414,106 @@ pub extern "system" fn Java_com_stellarmls_mls_RustBridge_proofToContractFormat(
         let proof = prover::proof_from_bytes(&compressed).map_err(|e| e.to_string())?;
         let (a, b, c) = prover::proof_to_uncompressed_components(&proof);
         Ok(pack_three(&a, &b, &c))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_stellarmls_mls_RustBridge_generateTestingUpdateProvingKey(
+    mut env: JNIEnv,
+    _class: JClass,
+    depth: i32,
+    seed: i64,
+) -> jbyteArray {
+    run_jni(&mut env, move || {
+        let mut rng = ChaCha20Rng::seed_from_u64(seed as u64);
+        let setup = prover::setup_update(depth as usize, &mut rng).map_err(|e| e.to_string())?;
+        let mut bytes = Vec::new();
+        setup
+            .proving_key
+            .serialize_compressed(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        Ok(bytes)
+    })
+}
+
+/// Returns packed: [4-byte proof_len BE][proof][4-byte public_inputs_len BE][public_inputs]
+/// where `public_inputs` is the 73-byte `UpdatePublicInputs` wire format.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "system" fn Java_com_stellarmls_mls_RustBridge_generateUpdateProof(
+    mut env: JNIEnv,
+    _class: JClass,
+    proving_key: JByteArray,
+    old_member_public_keys: JByteArray,
+    old_leaf_hashes: JByteArray,
+    new_member_public_keys: JByteArray,
+    new_leaf_hashes: JByteArray,
+    secret_key: JByteArray,
+    epoch_old: i64,
+    salt_old: JByteArray,
+    salt_new: JByteArray,
+    depth: i32,
+) -> jbyteArray {
+    let pk_key_bytes = get_bytes(&mut env, &proving_key);
+    let old_pk_bytes = get_bytes(&mut env, &old_member_public_keys);
+    let old_lh_bytes = get_bytes(&mut env, &old_leaf_hashes);
+    let new_pk_bytes = get_bytes(&mut env, &new_member_public_keys);
+    let new_lh_bytes = get_bytes(&mut env, &new_leaf_hashes);
+    let sk_bytes = get_bytes(&mut env, &secret_key);
+    let salt_old_bytes = get_bytes(&mut env, &salt_old);
+    let salt_new_bytes = get_bytes(&mut env, &salt_new);
+    run_jni(&mut env, move || {
+        let proving_key_obj = ProvingKey::<Bls12_381>::deserialize_compressed(&pk_key_bytes[..])
+            .map_err(|e| e.to_string())?;
+        let members_old = parse_members(&old_pk_bytes, &old_lh_bytes)?;
+        let members_new = parse_members(&new_pk_bytes, &new_lh_bytes)?;
+        let secret_key_fr = parse_fr_secret_key(&sk_bytes)?;
+        if salt_old_bytes.len() != SALT_LEN {
+            return Err(format!("old salt must be {} bytes", SALT_LEN));
+        }
+        if salt_new_bytes.len() != SALT_LEN {
+            return Err(format!("new salt must be {} bytes", SALT_LEN));
+        }
+        let salt_old_arr: Salt = salt_old_bytes
+            .try_into()
+            .map_err(|_| "old salt conversion".to_string())?;
+        let salt_new_arr: Salt = salt_new_bytes
+            .try_into()
+            .map_err(|_| "new salt conversion".to_string())?;
+        let input = UpdateProverInput {
+            members_old,
+            members_new,
+            secret_key: secret_key_fr,
+            epoch_old: epoch_old as u64,
+            salt_old: salt_old_arr,
+            salt_new: salt_new_arr,
+            depth: depth as usize,
+        };
+        let mut rng = OsRng;
+        let (proof, public_inputs) =
+            prover::prove_update(&proving_key_obj, &input, &mut rng).map_err(|e| e.to_string())?;
+        let proof_bytes = prover::proof_to_bytes(&proof);
+        let pi_bytes = public_inputs.serialize().to_vec();
+        Ok(pack_two(&proof_bytes, &pi_bytes))
+    })
+}
+
+/// Parse the 73-byte update public-inputs wire format.
+/// Returns packed: [4-byte c_old_len][c_old][4-byte epoch_old_len][epoch_old][4-byte c_new_len][c_new]
+/// Fails loudly on version mismatch or length mismatch.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_stellarmls_mls_RustBridge_parseUpdatePublicInputs(
+    mut env: JNIEnv,
+    _class: JClass,
+    public_inputs: JByteArray,
+) -> jbyteArray {
+    let bytes = get_bytes(&mut env, &public_inputs);
+    run_jni(&mut env, move || {
+        let pi = UpdatePublicInputs::deserialize(&bytes)?;
+        let c_old = field_to_bytes_be(&pi.c_old).to_vec();
+        // Bytes 33..41 of the wire format contain the u64 epoch_old big-endian.
+        let epoch_old_be = bytes[33..41].to_vec();
+        let c_new = field_to_bytes_be(&pi.c_new).to_vec();
+        Ok(pack_three(&c_old, &epoch_old_be, &c_new))
     })
 }

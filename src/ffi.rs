@@ -21,7 +21,7 @@ use crate::merkle::{
     CanonicalMember, PoseidonMerkleTree, COMPRESSED_G1_PUBLIC_KEY_LEN, compressed_public_key_bytes,
 };
 use crate::poseidon::poseidon_config;
-use crate::prover::{self, ProverInput};
+use crate::prover::{self, ProverInput, UpdateProverInput, UpdatePublicInputs};
 
 const FR_BYTES: usize = 32;
 
@@ -474,6 +474,154 @@ pub extern "C" fn sep_generate_membership_proof(
             out_commitment,
             field_to_bytes_be(&public_inputs.commitment).to_vec(),
         )?;
+        Ok(())
+    })
+}
+
+// ============================================================
+// UpdateCircuit FFI — see docs/update-circuit-binding-design.md §7.
+// ============================================================
+
+/// Generate a testing proving key for the update circuit at the given depth.
+/// For ceremony-generated keys (mainnet), use the keyset-v2 PK bundle instead.
+#[unsafe(no_mangle)]
+pub extern "C" fn sep_generate_testing_update_proving_key(
+    depth: usize,
+    seed: u64,
+    out_proving_key: *mut SepByteBuffer,
+    out_error: *mut *mut c_char,
+) -> bool {
+    run_ffi(out_error, || {
+        let mut rng = ChaCha20Rng::seed_from_u64(seed);
+        let setup = prover::setup_update(depth, &mut rng).map_err(|e| e.to_string())?;
+        let mut bytes = Vec::new();
+        setup
+            .proving_key
+            .serialize_compressed(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        write_buffer(out_proving_key, bytes)
+    })
+}
+
+/// Generate an update-transition proof.
+///
+/// Returns:
+/// - `out_proof` — 192-byte compressed Groth16 proof.
+/// - `out_public_inputs` — 73-byte `UpdatePublicInputs` wire format
+///   (1 version byte 0x02 + 32 c_old BE + 8 epoch_old BE u64 + 32 c_new BE).
+///
+/// Both output buffers are heap-allocated by the callee; the caller must
+/// release them with `sep_byte_buffer_free`.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn sep_generate_update_proof(
+    proving_key_ptr: *const u8,
+    proving_key_len: usize,
+    old_public_keys_ptr: *const u8,
+    old_public_keys_len: usize,
+    old_leaf_hashes_ptr: *const u8,
+    old_leaf_hashes_len: usize,
+    new_public_keys_ptr: *const u8,
+    new_public_keys_len: usize,
+    new_leaf_hashes_ptr: *const u8,
+    new_leaf_hashes_len: usize,
+    secret_key_ptr: *const u8,
+    secret_key_len: usize,
+    epoch_old: u64,
+    salt_old_ptr: *const u8,
+    salt_old_len: usize,
+    salt_new_ptr: *const u8,
+    salt_new_len: usize,
+    depth: usize,
+    out_proof: *mut SepByteBuffer,
+    out_public_inputs: *mut SepByteBuffer,
+    out_error: *mut *mut c_char,
+) -> bool {
+    run_ffi(out_error, || {
+        let proving_key_bytes = read_bytes(proving_key_ptr, proving_key_len, "proving key")?;
+
+        let old_pk_bytes = read_bytes(
+            old_public_keys_ptr,
+            old_public_keys_len,
+            "old member public keys",
+        )?;
+        let old_leaf_bytes =
+            read_bytes(old_leaf_hashes_ptr, old_leaf_hashes_len, "old leaf hashes")?;
+        let new_pk_bytes = read_bytes(
+            new_public_keys_ptr,
+            new_public_keys_len,
+            "new member public keys",
+        )?;
+        let new_leaf_bytes =
+            read_bytes(new_leaf_hashes_ptr, new_leaf_hashes_len, "new leaf hashes")?;
+
+        let sk_bytes = read_bytes(secret_key_ptr, secret_key_len, "secret key")?;
+        let salt_old_bytes = read_bytes(salt_old_ptr, salt_old_len, "old salt")?;
+        let salt_new_bytes = read_bytes(salt_new_ptr, salt_new_len, "new salt")?;
+
+        let proving_key = ProvingKey::<Bls12_381>::deserialize_compressed(proving_key_bytes)
+            .map_err(|e| e.to_string())?;
+
+        let old_public_keys = read_public_key_vector(old_pk_bytes)?;
+        let old_leaf_hashes = read_field_vector(old_leaf_bytes)?;
+        let members_old = build_members(old_public_keys, old_leaf_hashes)?;
+
+        let new_public_keys = read_public_key_vector(new_pk_bytes)?;
+        let new_leaf_hashes = read_field_vector(new_leaf_bytes)?;
+        let members_new = build_members(new_public_keys, new_leaf_hashes)?;
+
+        let secret_key = read_fr_secret_key(sk_bytes)?;
+        let salt_old = read_salt(salt_old_bytes)?;
+        let salt_new = read_salt(salt_new_bytes)?;
+
+        let input = UpdateProverInput {
+            members_old,
+            members_new,
+            secret_key,
+            epoch_old,
+            salt_old,
+            salt_new,
+            depth,
+        };
+
+        let mut rng = OsRng;
+        let (proof, public_inputs) =
+            prover::prove_update(&proving_key, &input, &mut rng).map_err(|e| e.to_string())?;
+
+        write_buffer(out_proof, prover::proof_to_bytes(&proof))?;
+        write_buffer(out_public_inputs, public_inputs.serialize().to_vec())?;
+        Ok(())
+    })
+}
+
+/// Parse a 73-byte `UpdatePublicInputs` wire-format buffer.
+///
+/// Returns three separate byte outputs for consumer convenience:
+/// - `out_c_old` — 32 bytes big-endian.
+/// - `out_epoch_old` — 8 bytes big-endian u64.
+/// - `out_c_new` — 32 bytes big-endian.
+///
+/// Fails loudly on version mismatch (byte 0 != 0x02) or length mismatch.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn sep_parse_update_public_inputs(
+    public_inputs_ptr: *const u8,
+    public_inputs_len: usize,
+    out_c_old: *mut SepByteBuffer,
+    out_epoch_old: *mut SepByteBuffer,
+    out_c_new: *mut SepByteBuffer,
+    out_error: *mut *mut c_char,
+) -> bool {
+    run_ffi(out_error, || {
+        let bytes = read_bytes(public_inputs_ptr, public_inputs_len, "update public inputs")?;
+        let pi = UpdatePublicInputs::deserialize(bytes)?;
+        write_buffer(out_c_old, field_to_bytes_be(&pi.c_old).to_vec())?;
+
+        // Reconstruct the u64 for the epoch output.
+        let epoch_be = &bytes[33..41];
+        write_buffer(out_epoch_old, epoch_be.to_vec())?;
+
+        write_buffer(out_c_new, field_to_bytes_be(&pi.c_new).to_vec())?;
         Ok(())
     })
 }
@@ -1231,5 +1379,213 @@ mod tests {
         sep_byte_buffer_free(c_out);
         sep_byte_buffer_free(root_out);
         sep_byte_buffer_free(commit_check);
+    }
+
+    #[test]
+    fn test_ffi_generate_testing_update_pk() {
+        let mut out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut err: *mut c_char = ptr::null_mut();
+        let ok = unsafe {
+            sep_generate_testing_update_proving_key(5, 9999, &mut out, &mut err)
+        };
+        assert!(ok, "generating update PK failed");
+        assert!(out.len > 0, "update PK must be non-empty");
+        sep_byte_buffer_free(out);
+    }
+
+    #[test]
+    fn test_ffi_update_proof_round_trip() {
+        // 1. Update proving key.
+        let mut pk_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut err: *mut c_char = ptr::null_mut();
+        assert!(unsafe {
+            sep_generate_testing_update_proving_key(5, 77, &mut pk_out, &mut err)
+        });
+        let pk_bytes = read_buffer(&pk_out);
+
+        // 2. Two-member old roster, add a third for new roster.
+        let mut sk_a = [0u8; 32];
+        sk_a[31] = 3;
+        let pk_a = ffi_public_key(&sk_a);
+        let lh_a = ffi_leaf_hash(&sk_a);
+
+        let mut sk_b = [0u8; 32];
+        sk_b[31] = 5;
+        let pk_b = ffi_public_key(&sk_b);
+        let lh_b = ffi_leaf_hash(&sk_b);
+
+        let mut sk_c = [0u8; 32];
+        sk_c[31] = 9;
+        let pk_c = ffi_public_key(&sk_c);
+        let lh_c = ffi_leaf_hash(&sk_c);
+
+        let mut old_pks = Vec::new();
+        old_pks.extend_from_slice(&pk_a);
+        old_pks.extend_from_slice(&pk_b);
+        let mut old_lhs = Vec::new();
+        old_lhs.extend_from_slice(&lh_a);
+        old_lhs.extend_from_slice(&lh_b);
+
+        let mut new_pks = Vec::new();
+        new_pks.extend_from_slice(&pk_a);
+        new_pks.extend_from_slice(&pk_b);
+        new_pks.extend_from_slice(&pk_c);
+        let mut new_lhs = Vec::new();
+        new_lhs.extend_from_slice(&lh_a);
+        new_lhs.extend_from_slice(&lh_b);
+        new_lhs.extend_from_slice(&lh_c);
+
+        let salt_old = [0x11u8; 32];
+        let salt_new = [0x22u8; 32];
+
+        // 3. Generate update proof.
+        let mut proof_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut pi_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let ok = unsafe {
+            sep_generate_update_proof(
+                pk_bytes.as_ptr(), pk_bytes.len(),
+                old_pks.as_ptr(), old_pks.len(),
+                old_lhs.as_ptr(), old_lhs.len(),
+                new_pks.as_ptr(), new_pks.len(),
+                new_lhs.as_ptr(), new_lhs.len(),
+                sk_a.as_ptr(), sk_a.len(),
+                7, // epoch_old
+                salt_old.as_ptr(), salt_old.len(),
+                salt_new.as_ptr(), salt_new.len(),
+                5,
+                &mut proof_out, &mut pi_out, &mut err,
+            )
+        };
+        assert!(ok, "sep_generate_update_proof failed");
+
+        let proof_bytes = read_buffer(&proof_out);
+        let pi_bytes = read_buffer(&pi_out);
+        assert_eq!(proof_bytes.len(), 192, "compressed proof must be 192 bytes");
+        assert_eq!(pi_bytes.len(), 73, "update public-inputs must be 73 bytes");
+        assert_eq!(pi_bytes[0], 0x02, "version byte must be 0x02");
+
+        // 4. Parse public inputs via FFI.
+        let mut c_old_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut epoch_old_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut c_new_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let ok = unsafe {
+            sep_parse_update_public_inputs(
+                pi_bytes.as_ptr(), pi_bytes.len(),
+                &mut c_old_out, &mut epoch_old_out, &mut c_new_out, &mut err,
+            )
+        };
+        assert!(ok, "sep_parse_update_public_inputs failed");
+
+        let c_old = read_buffer(&c_old_out);
+        let epoch_old = read_buffer(&epoch_old_out);
+        let c_new = read_buffer(&c_new_out);
+        assert_eq!(c_old.len(), 32);
+        assert_eq!(epoch_old.len(), 8);
+        assert_eq!(c_new.len(), 32);
+        let epoch_val = u64::from_be_bytes(epoch_old.as_slice().try_into().unwrap());
+        assert_eq!(epoch_val, 7, "parsed epoch_old must match input");
+
+        // 5. Cross-check c_old against a freshly computed Poseidon commitment
+        //    over the old roster at epoch_old.
+        let mut root_old_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        unsafe {
+            sep_compute_merkle_root(
+                old_pks.as_ptr(), old_pks.len(),
+                old_lhs.as_ptr(), old_lhs.len(),
+                5,
+                &mut root_old_out, &mut err,
+            );
+        }
+        let root_old = read_buffer(&root_old_out);
+
+        let mut c_old_check = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        unsafe {
+            sep_compute_poseidon_commitment(
+                root_old.as_ptr(), root_old.len(),
+                7,
+                salt_old.as_ptr(), salt_old.len(),
+                &mut c_old_check, &mut err,
+            );
+        }
+        let c_old_check_bytes = read_buffer(&c_old_check);
+        assert_eq!(
+            c_old, c_old_check_bytes,
+            "c_old from proof must match separately computed commitment"
+        );
+
+        // 6. Cross-check c_new over the new roster at epoch_old + 1.
+        let mut root_new_out = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        unsafe {
+            sep_compute_merkle_root(
+                new_pks.as_ptr(), new_pks.len(),
+                new_lhs.as_ptr(), new_lhs.len(),
+                5,
+                &mut root_new_out, &mut err,
+            );
+        }
+        let root_new = read_buffer(&root_new_out);
+
+        let mut c_new_check = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        unsafe {
+            sep_compute_poseidon_commitment(
+                root_new.as_ptr(), root_new.len(),
+                8, // epoch_old + 1
+                salt_new.as_ptr(), salt_new.len(),
+                &mut c_new_check, &mut err,
+            );
+        }
+        let c_new_check_bytes = read_buffer(&c_new_check);
+        assert_eq!(
+            c_new, c_new_check_bytes,
+            "c_new from proof must match separately computed commitment at epoch_old + 1"
+        );
+
+        sep_byte_buffer_free(pk_out);
+        sep_byte_buffer_free(proof_out);
+        sep_byte_buffer_free(pi_out);
+        sep_byte_buffer_free(c_old_out);
+        sep_byte_buffer_free(epoch_old_out);
+        sep_byte_buffer_free(c_new_out);
+        sep_byte_buffer_free(root_old_out);
+        sep_byte_buffer_free(c_old_check);
+        sep_byte_buffer_free(root_new_out);
+        sep_byte_buffer_free(c_new_check);
+    }
+
+    #[test]
+    fn test_ffi_parse_update_public_inputs_rejects_wrong_version() {
+        let mut bytes = vec![0u8; 73];
+        bytes[0] = 0x01; // wrong version
+        let mut c_old = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut epoch_old = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut c_new = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut err: *mut c_char = ptr::null_mut();
+        let ok = unsafe {
+            sep_parse_update_public_inputs(
+                bytes.as_ptr(), bytes.len(),
+                &mut c_old, &mut epoch_old, &mut c_new, &mut err,
+            )
+        };
+        assert!(!ok, "wrong version byte must fail");
+        assert!(!err.is_null(), "error must be populated");
+        sep_string_free(err);
+    }
+
+    #[test]
+    fn test_ffi_parse_update_public_inputs_rejects_wrong_length() {
+        let bytes = vec![0x02u8; 40]; // correct version, wrong length
+        let mut c_old = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut epoch_old = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut c_new = SepByteBuffer { ptr: ptr::null_mut(), len: 0 };
+        let mut err: *mut c_char = ptr::null_mut();
+        let ok = unsafe {
+            sep_parse_update_public_inputs(
+                bytes.as_ptr(), bytes.len(),
+                &mut c_old, &mut epoch_old, &mut c_new, &mut err,
+            )
+        };
+        assert!(!ok, "wrong length must fail");
+        assert!(!err.is_null(), "error must be populated");
+        sep_string_free(err);
     }
 }

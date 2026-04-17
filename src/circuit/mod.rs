@@ -255,7 +255,7 @@ impl ConstraintSynthesizer<Fr> for MembershipCircuit<Fr> {
 // ================================================================
 
 /// In-circuit Poseidon hash of one field element.
-fn poseidon_hash_one_gadget(
+pub(crate) fn poseidon_hash_one_gadget(
     cs: ConstraintSystemRef<Fr>,
     config: &PoseidonConfig<Fr>,
     input: &FpVar<Fr>,
@@ -270,7 +270,7 @@ fn poseidon_hash_one_gadget(
 }
 
 /// In-circuit Poseidon hash of two field elements.
-fn poseidon_hash_two_gadget(
+pub(crate) fn poseidon_hash_two_gadget(
     cs: ConstraintSystemRef<Fr>,
     config: &PoseidonConfig<Fr>,
     left: &FpVar<Fr>,

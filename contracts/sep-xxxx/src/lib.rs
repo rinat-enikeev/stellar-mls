@@ -80,6 +80,13 @@ pub enum Error {
     TierGroupLimitReached = 13,
     /// Restricted mode: only admin can create groups (N-26).
     AdminOnly = 14,
+    /// A supplied commitment is not a canonical BLS12-381 Fr encoding
+    /// (>= modulus, or otherwise fails the roundtrip canonical check).
+    /// Introduced with the UpdateCircuit binding fix (#59).
+    InvalidCommitmentEncoding = 15,
+    /// An unsupported `VkKind` value was passed to `update_vk`.
+    /// Introduced with the UpdateCircuit binding fix (#59).
+    UnknownVkKind = 16,
 }
 
 // ================================================================
@@ -149,6 +156,34 @@ pub struct PublicInputs {
     pub epoch: u64,
 }
 
+/// Public inputs for the update-transition Groth16 proof (`UpdateCircuit`).
+///
+/// The circuit proves that a valid member of the group at `(c_old, epoch_old)`
+/// authorises a transition to `c_new = Poseidon(Poseidon(root_new, epoch_old + 1), salt_new)`.
+/// All three fields are cryptographically bound by the proof — none are free
+/// for the caller to mutate post-proof (#59 fix).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UpdatePublicInputs {
+    /// Pre-transition commitment. MUST equal the current on-chain commitment.
+    pub c_old: BytesN<32>,
+    /// Pre-transition epoch. MUST equal the current on-chain epoch.
+    pub epoch_old: u64,
+    /// Post-transition commitment. Persisted on success; cryptographically
+    /// bound by the proof (this is the whole point of `UpdateCircuit`).
+    pub c_new: BytesN<32>,
+}
+
+/// Selector for which verification-key family is being set or rotated.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum VkKind {
+    /// Membership circuit VK (3 IC points: IC[0], IC[1]=commitment, IC[2]=epoch).
+    Membership,
+    /// Update-transition circuit VK (4 IC points: IC[0], IC[1]=c_old, IC[2]=epoch_old, IC[3]=c_new).
+    Update,
+}
+
 /// Groth16 verification key stored as raw bytes (contract-storage friendly).
 ///
 /// **Design note (M-9):** Verification keys are stored per tier, not per group.
@@ -203,8 +238,12 @@ pub struct Groth16Proof {
 pub enum DataKey {
     /// Contract admin address (instance storage).
     Admin,
-    /// Verification key for tier 0/1/2 (persistent storage).
+    /// Membership-circuit verification key for tier 0/1/2 (persistent storage).
     VK(u32),
+    /// Update-circuit verification key for tier 0/1/2 (persistent storage).
+    /// Introduced with the #59 UpdateCircuit binding fix. Separate from `VK`
+    /// so the two key families can rotate independently.
+    UpdateVK(u32),
     /// Current group state (persistent storage).
     Group(BytesN<32>),
     /// Group history — rolling window of past entries (persistent storage).
@@ -231,14 +270,19 @@ impl SepXxxxContract {
     /// Initialize the contract with verification keys for all three tiers.
     ///
     /// Must be called exactly once. The `admin` address is recorded and
-    /// required for future admin operations. Each VK must have exactly
-    /// 3 IC points (for the 2 public inputs: commitment and epoch).
+    /// required for future admin operations. Each membership VK must have
+    /// exactly 3 IC points (commitment + epoch); each update VK must have
+    /// exactly 4 IC points (c_old + epoch_old + c_new). The update VKs are
+    /// introduced by the #59 fix to close the `update_commitment` binding gap.
     pub fn initialize(
         env: Env,
         admin: Address,
         vk_small: VerificationKeyData,
         vk_medium: VerificationKeyData,
         vk_large: VerificationKeyData,
+        update_vk_small: VerificationKeyData,
+        update_vk_medium: VerificationKeyData,
+        update_vk_large: VerificationKeyData,
     ) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
@@ -246,6 +290,12 @@ impl SepXxxxContract {
         admin.require_auth();
 
         if vk_small.ic.len() != 3 || vk_medium.ic.len() != 3 || vk_large.ic.len() != 3 {
+            return Err(Error::InvalidVkLength);
+        }
+        if update_vk_small.ic.len() != 4
+            || update_vk_medium.ic.len() != 4
+            || update_vk_large.ic.len() != 4
+        {
             return Err(Error::InvalidVkLength);
         }
 
@@ -259,11 +309,23 @@ impl SepXxxxContract {
         env.storage()
             .persistent()
             .set(&DataKey::VK(2), &vk_large);
+        env.storage()
+            .persistent()
+            .set(&DataKey::UpdateVK(0), &update_vk_small);
+        env.storage()
+            .persistent()
+            .set(&DataKey::UpdateVK(1), &update_vk_medium);
+        env.storage()
+            .persistent()
+            .set(&DataKey::UpdateVK(2), &update_vk_large);
 
         for tier in 0..3u32 {
             env.storage()
                 .persistent()
                 .extend_ttl(&DataKey::VK(tier), LEDGER_THRESHOLD, LEDGER_BUMP);
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::UpdateVK(tier), LEDGER_THRESHOLD, LEDGER_BUMP);
         }
 
         Ok(())
@@ -271,13 +333,14 @@ impl SepXxxxContract {
 
     // ---- Admin Operations ----
 
-    /// N-12: Update a verification key for a specific tier.
+    /// N-12: Update a verification key for a specific tier and kind.
     ///
-    /// Requires admin authorization. The new VK must have exactly 3 IC points.
-    /// This enables key rotation without contract redeployment if a circuit
-    /// vulnerability is discovered.
+    /// Requires admin authorization. Membership VKs must have 3 IC points;
+    /// update VKs must have 4 IC points. Enables independent key rotation
+    /// per kind without contract redeployment.
     pub fn update_vk(
         env: Env,
+        kind: VkKind,
         tier: u32,
         new_vk: VerificationKeyData,
     ) -> Result<(), Error> {
@@ -292,14 +355,20 @@ impl SepXxxxContract {
         if tier > 2 {
             return Err(Error::InvalidTier);
         }
-        if new_vk.ic.len() != 3 {
+
+        let (key, expected_ic_len) = match kind {
+            VkKind::Membership => (DataKey::VK(tier), 3u32),
+            VkKind::Update => (DataKey::UpdateVK(tier), 4u32),
+        };
+
+        if new_vk.ic.len() != expected_ic_len {
             return Err(Error::InvalidVkLength);
         }
 
-        env.storage().persistent().set(&DataKey::VK(tier), &new_vk);
+        env.storage().persistent().set(&key, &new_vk);
         env.storage()
             .persistent()
-            .extend_ttl(&DataKey::VK(tier), LEDGER_THRESHOLD, LEDGER_BUMP);
+            .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP);
 
         Ok(())
     }
@@ -446,23 +515,25 @@ impl SepXxxxContract {
 
     /// Update a group's commitment (epoch transition).
     ///
-    /// `new_epoch` MUST equal `stored_epoch + 1`. The proof is verified
-    /// against the **current** commitment and epoch (via `public_inputs`),
-    /// proving the updater is a member *before* the transition.
+    /// **#59 fix — binding the new commitment.** This function no longer
+    /// accepts a free-form `new_commitment` / `new_epoch` pair. The new
+    /// commitment is the cryptographically-bound public input `c_new`
+    /// of an `UpdateCircuit` Groth16 proof, which the contract verifies
+    /// against the tier's update VK. The new epoch is derived on-chain
+    /// as `stored_epoch + 1` and is never a client-supplied value.
     ///
-    /// N-14: **Design note:** This function uses proof-based authorization only
-    /// (no `caller.require_auth()`). Any Stellar account can call it — only a
-    /// valid Groth16 membership proof is required. This is intentional: the
-    /// protocol is proof-based, not identity-based. The proof replay mechanism
-    /// (C-2) prevents exact re-submission. For environments where address
-    /// binding is desired, an optional `caller: Address` parameter can be added.
+    /// Callers supply `public_inputs = (c_old, epoch_old, c_new)`; the
+    /// contract rejects the call unless `c_old` and `epoch_old` match the
+    /// current stored state, and `c_new` is a canonical Fr encoding.
+    ///
+    /// N-14: Uses proof-based authorisation only (no `caller.require_auth()`).
+    /// The fix above ensures N-14 no longer amplifies any binding gap — the
+    /// only surface left is the proof itself.
     pub fn update_commitment(
         env: Env,
         group_id: BytesN<32>,
-        new_commitment: BytesN<32>,
-        new_epoch: u64,
         proof: Groth16Proof,
-        public_inputs: PublicInputs,
+        public_inputs: UpdatePublicInputs,
     ) -> Result<(), Error> {
         Self::require_initialized(&env)?;
 
@@ -476,20 +547,35 @@ impl SepXxxxContract {
             return Err(Error::GroupInactive);
         }
         // N-22: Use checked_add to guard against u64 overflow (theoretical).
-        let expected_epoch = current.epoch.checked_add(1).ok_or(Error::InvalidEpoch)?;
-        if new_epoch != expected_epoch {
-            return Err(Error::InvalidEpoch);
-        }
-        if public_inputs.commitment != current.commitment
-            || public_inputs.epoch != current.epoch
+        let new_epoch = current.epoch.checked_add(1).ok_or(Error::InvalidEpoch)?;
+
+        if public_inputs.c_old != current.commitment
+            || public_inputs.epoch_old != current.epoch
         {
             return Err(Error::PublicInputsMismatch);
         }
 
+        // #59: Reject non-canonical c_new encodings. Fr::from_bytes silently
+        // reduces mod r, which would let a caller craft two byte-distinct
+        // but field-equivalent c_new values with the same proof. The
+        // roundtrip check forces exactly one canonical representation.
+        let c_new_fr = Fr::from_bytes(public_inputs.c_new.clone());
+        let c_new_canonical: BytesN<32> = c_new_fr.to_bytes();
+        if c_new_canonical != public_inputs.c_new {
+            return Err(Error::InvalidCommitmentEncoding);
+        }
+
         Self::check_proof_replay(&env, &proof)?;
 
-        let vk = Self::load_vk(&env, current.tier)?;
-        if !verify_groth16_proof(&env, &vk, &proof, &current.commitment, current.epoch) {
+        let vk = Self::load_update_vk(&env, current.tier)?;
+        if !verify_groth16_proof_update(
+            &env,
+            &vk,
+            &proof,
+            &current.commitment,
+            current.epoch,
+            &public_inputs.c_new,
+        ) {
             return Err(Error::InvalidProof);
         }
 
@@ -500,7 +586,7 @@ impl SepXxxxContract {
         Self::archive_entry(&env, &group_id, &current);
 
         let new_entry = CommitmentEntry {
-            commitment: new_commitment.clone(),
+            commitment: public_inputs.c_new.clone(),
             epoch: new_epoch,
             timestamp,
             tier: current.tier,
@@ -513,7 +599,7 @@ impl SepXxxxContract {
 
         CommitmentUpdated {
             group_id,
-            commitment: new_commitment,
+            commitment: public_inputs.c_new,
             epoch: new_epoch,
             timestamp,
         }
@@ -695,6 +781,13 @@ impl SepXxxxContract {
             .ok_or(Error::NotInitialized)
     }
 
+    fn load_update_vk(env: &Env, tier: u32) -> Result<VerificationKeyData, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::UpdateVK(tier))
+            .ok_or(Error::NotInitialized)
+    }
+
     fn bump_group(env: &Env, group_id: &BytesN<32>) {
         env.storage().persistent().extend_ttl(
             &DataKey::Group(group_id.clone()),
@@ -828,6 +921,69 @@ fn u64_to_u256_be(val: u64) -> [u8; 32] {
     bytes
 }
 
+/// Verify an UpdateCircuit Groth16 proof with 3 public inputs: `(c_old, epoch_old, c_new)`.
+///
+/// The IC vector has exactly 4 elements (validated at `initialize` / `update_vk`
+/// time). `vk_x = IC[0] + c_old·IC[1] + epoch_old·IC[2] + c_new·IC[3]`.
+///
+/// Pairing check: `e(-π_A, π_B) · e(α, β) · e(vk_x, γ) · e(π_C, δ) = 1_GT`.
+fn verify_groth16_proof_update(
+    env: &Env,
+    vk: &VerificationKeyData,
+    proof: &Groth16Proof,
+    c_old: &BytesN<32>,
+    epoch_old: u64,
+    c_new: &BytesN<32>,
+) -> bool {
+    let bls = env.crypto().bls12_381();
+
+    let proof_a = G1Affine::from_bytes(proof.a.clone());
+    let proof_b = G2Affine::from_bytes(proof.b.clone());
+    let proof_c = G1Affine::from_bytes(proof.c.clone());
+
+    let alpha = G1Affine::from_bytes(vk.alpha_g1.clone());
+    let beta = G2Affine::from_bytes(vk.beta_g2.clone());
+    let gamma = G2Affine::from_bytes(vk.gamma_g2.clone());
+    let delta = G2Affine::from_bytes(vk.delta_g2.clone());
+
+    // ic.len() was validated == 4 at set time, but guard against storage tampering.
+    if vk.ic.len() != 4 {
+        return false;
+    }
+    let ic0 = G1Affine::from_bytes(vk.ic.get(0).unwrap());
+    let ic1 = G1Affine::from_bytes(vk.ic.get(1).unwrap());
+    let ic2 = G1Affine::from_bytes(vk.ic.get(2).unwrap());
+    let ic3 = G1Affine::from_bytes(vk.ic.get(3).unwrap());
+
+    // Canonical check on c_old (same roundtrip rule as the membership verifier).
+    let c_old_fr = Fr::from_bytes(c_old.clone());
+    let c_old_canonical: BytesN<32> = c_old_fr.to_bytes();
+    if c_old_canonical != *c_old {
+        return false;
+    }
+    // Canonical check on c_new (defence-in-depth; `update_commitment` already enforces this).
+    let c_new_fr = Fr::from_bytes(c_new.clone());
+    let c_new_canonical: BytesN<32> = c_new_fr.to_bytes();
+    if c_new_canonical != *c_new {
+        return false;
+    }
+
+    let epoch_bytes = Bytes::from_array(env, &u64_to_u256_be(epoch_old));
+    let epoch_fr = Fr::from_u256(U256::from_be_bytes(env, &epoch_bytes));
+
+    let msm_points: Vec<G1Affine> = vec![env, ic1, ic2, ic3];
+    let msm_scalars: Vec<Fr> = vec![env, c_old_fr, epoch_fr, c_new_fr];
+    let msm_result = bls.g1_msm(msm_points, msm_scalars);
+    let vk_x = bls.g1_add(&ic0, &msm_result);
+
+    let neg_a = -proof_a;
+
+    let g1s: Vec<G1Affine> = vec![env, neg_a, alpha, vk_x, proof_c];
+    let g2s: Vec<G2Affine> = vec![env, proof_b, beta, gamma, delta];
+
+    bls.pairing_check(g1s, g2s)
+}
+
 // ================================================================
 // Tests
 // ================================================================
@@ -858,6 +1014,18 @@ mod test {
         }
     }
 
+    fn mock_update_vk(env: &Env) -> VerificationKeyData {
+        let g1 = BytesN::from_array(env, &[0u8; 96]);
+        let g2 = BytesN::from_array(env, &[0u8; 192]);
+        VerificationKeyData {
+            alpha_g1: g1.clone(),
+            beta_g2: g2.clone(),
+            gamma_g2: g2.clone(),
+            delta_g2: g2,
+            ic: vec![env, g1.clone(), g1.clone(), g1.clone(), g1],
+        }
+    }
+
     fn mock_proof(env: &Env) -> Groth16Proof {
         Groth16Proof {
             a: BytesN::from_array(env, &[0u8; 96]),
@@ -870,7 +1038,8 @@ mod test {
     fn test_initialize() {
         let (env, client, admin) = setup_env();
         let vk = mock_vk(&env);
-        client.initialize(&admin, &vk, &vk, &vk);
+        let uvk = mock_update_vk(&env);
+        client.initialize(&admin, &vk, &vk, &vk, &uvk, &uvk, &uvk);
     }
 
     #[test]
@@ -878,8 +1047,9 @@ mod test {
     fn test_double_initialize_rejected() {
         let (env, client, admin) = setup_env();
         let vk = mock_vk(&env);
-        client.initialize(&admin, &vk, &vk, &vk);
-        client.initialize(&admin, &vk, &vk, &vk);
+        let uvk = mock_update_vk(&env);
+        client.initialize(&admin, &vk, &vk, &vk, &uvk, &uvk, &uvk);
+        client.initialize(&admin, &vk, &vk, &vk, &uvk, &uvk, &uvk);
     }
 
     #[test]
@@ -897,8 +1067,37 @@ mod test {
             ic: vec![&env, g1.clone(), g1],
         };
         let good_vk = mock_vk(&env);
+        let uvk = mock_update_vk(&env);
 
-        client.initialize(&admin, &bad_vk, &good_vk, &good_vk);
+        client.initialize(&admin, &bad_vk, &good_vk, &good_vk, &uvk, &uvk, &uvk);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #9)")]
+    fn test_invalid_update_vk_length_rejected() {
+        // Update VK with 3 IC points (should be 4).
+        let (env, client, admin) = setup_env();
+        let g1 = BytesN::from_array(&env, &[0u8; 96]);
+        let g2 = BytesN::from_array(&env, &[0u8; 192]);
+        let bad_update_vk = VerificationKeyData {
+            alpha_g1: g1.clone(),
+            beta_g2: g2.clone(),
+            gamma_g2: g2.clone(),
+            delta_g2: g2,
+            ic: vec![&env, g1.clone(), g1.clone(), g1],
+        };
+        let good_vk = mock_vk(&env);
+        let good_update_vk = mock_update_vk(&env);
+
+        client.initialize(
+            &admin,
+            &good_vk,
+            &good_vk,
+            &good_vk,
+            &bad_update_vk,
+            &good_update_vk,
+            &good_update_vk,
+        );
     }
 
     #[test]
@@ -906,7 +1105,8 @@ mod test {
     fn test_group_not_found() {
         let (env, client, admin) = setup_env();
         let vk = mock_vk(&env);
-        client.initialize(&admin, &vk, &vk, &vk);
+        let uvk = mock_update_vk(&env);
+        client.initialize(&admin, &vk, &vk, &vk, &uvk, &uvk, &uvk);
 
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         client.get_state(&group_id);
@@ -917,7 +1117,8 @@ mod test {
     fn test_invalid_tier_rejected() {
         let (env, client, admin) = setup_env();
         let vk = mock_vk(&env);
-        client.initialize(&admin, &vk, &vk, &vk);
+        let uvk = mock_update_vk(&env);
+        client.initialize(&admin, &vk, &vk, &vk, &uvk, &uvk, &uvk);
 
         let caller = Address::generate(&env);
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
@@ -950,7 +1151,8 @@ mod test {
     fn test_public_inputs_mismatch_on_create() {
         let (env, client, admin) = setup_env();
         let vk = mock_vk(&env);
-        client.initialize(&admin, &vk, &vk, &vk);
+        let uvk = mock_update_vk(&env);
+        client.initialize(&admin, &vk, &vk, &vk, &uvk, &uvk, &uvk);
 
         let caller = Address::generate(&env);
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
@@ -968,7 +1170,8 @@ mod test {
     fn test_public_inputs_wrong_epoch_on_create() {
         let (env, client, admin) = setup_env();
         let vk = mock_vk(&env);
-        client.initialize(&admin, &vk, &vk, &vk);
+        let uvk = mock_update_vk(&env);
+        client.initialize(&admin, &vk, &vk, &vk, &uvk, &uvk, &uvk);
 
         let caller = Address::generate(&env);
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
@@ -994,7 +1197,8 @@ mod test {
     fn setup_initialized() -> (Env, SepXxxxContractClient<'static>, Address, Address) {
         let (env, client, admin) = setup_env();
         let vk = mock_vk(&env);
-        client.initialize(&admin, &vk, &vk, &vk);
+        let uvk = mock_update_vk(&env);
+        client.initialize(&admin, &vk, &vk, &vk, &uvk, &uvk, &uvk);
         let contract_id = client.address.clone();
         (env, client, admin, contract_id)
     }
@@ -1174,6 +1378,17 @@ mod test {
     // ================================================================
     // update_commitment Error Paths
     // ================================================================
+    //
+    // #59: `new_commitment` / `new_epoch` are no longer client-supplied.
+    // The new commitment is the proof's public input `c_new`; the new
+    // epoch is derived on-chain as `stored_epoch + 1`. Tests that used to
+    // provide a mismatched `new_epoch` and expect #11 InvalidEpoch have
+    // been removed — that code path no longer exists.
+
+    fn c_new_ok(env: &Env) -> BytesN<32> {
+        // 32-byte all-zeroes is canonical Fr (zero element).
+        BytesN::from_array(env, &[0u8; 32])
+    }
 
     #[test]
     #[should_panic(expected = "Error(Contract, #1)")]
@@ -1181,17 +1396,12 @@ mod test {
         let (env, client, _admin) = setup_env();
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
-        let pi = PublicInputs {
-            commitment: commitment.clone(),
-            epoch: 0,
+        let upi = UpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: 0,
+            c_new: c_new_ok(&env),
         };
-        client.update_commitment(
-            &group_id,
-            &commitment,
-            &1,
-            &mock_proof(&env),
-            &pi,
-        );
+        client.update_commitment(&group_id, &mock_proof(&env), &upi);
     }
 
     #[test]
@@ -1200,17 +1410,12 @@ mod test {
         let (env, client, _admin, _cid) = setup_initialized();
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
-        let pi = PublicInputs {
-            commitment: commitment.clone(),
-            epoch: 0,
+        let upi = UpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: 0,
+            c_new: c_new_ok(&env),
         };
-        client.update_commitment(
-            &group_id,
-            &commitment,
-            &1,
-            &mock_proof(&env),
-            &pi,
-        );
+        client.update_commitment(&group_id, &mock_proof(&env), &upi);
     }
 
     #[test]
@@ -1221,154 +1426,50 @@ mod test {
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
         inject_inactive_group(&env, &contract_id, &group_id, &commitment, 5, 0);
 
-        let pi = PublicInputs {
-            commitment: commitment.clone(),
-            epoch: 5,
+        let upi = UpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: 5,
+            c_new: c_new_ok(&env),
         };
-        client.update_commitment(
-            &group_id,
-            &BytesN::from_array(&env, &[3u8; 32]),
-            &6,
-            &mock_proof(&env),
-            &pi,
-        );
+        client.update_commitment(&group_id, &mock_proof(&env), &upi);
     }
 
     #[test]
     #[should_panic(expected = "Error(Contract, #10)")]
-    fn test_update_commitment_wrong_commitment_pi() {
+    fn test_update_commitment_wrong_c_old() {
         let (env, client, _admin, contract_id) = setup_initialized();
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
         inject_group(&env, &contract_id, &group_id, &commitment, 5, 0);
 
-        // PI commitment doesn't match stored commitment
-        let pi = PublicInputs {
-            commitment: BytesN::from_array(&env, &[9u8; 32]),
-            epoch: 5,
+        let upi = UpdatePublicInputs {
+            c_old: BytesN::from_array(&env, &[9u8; 32]),
+            epoch_old: 5,
+            c_new: c_new_ok(&env),
         };
-        client.update_commitment(
-            &group_id,
-            &BytesN::from_array(&env, &[3u8; 32]),
-            &6,
-            &mock_proof(&env),
-            &pi,
-        );
+        client.update_commitment(&group_id, &mock_proof(&env), &upi);
     }
 
     #[test]
     #[should_panic(expected = "Error(Contract, #10)")]
-    fn test_update_commitment_wrong_epoch_pi() {
+    fn test_update_commitment_wrong_epoch_old() {
         let (env, client, _admin, contract_id) = setup_initialized();
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
         inject_group(&env, &contract_id, &group_id, &commitment, 5, 0);
 
-        // PI epoch doesn't match stored epoch
-        let pi = PublicInputs {
-            commitment: commitment.clone(),
-            epoch: 3,
+        let upi = UpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: 3, // stored is 5
+            c_new: c_new_ok(&env),
         };
-        client.update_commitment(
-            &group_id,
-            &BytesN::from_array(&env, &[3u8; 32]),
-            &6,
-            &mock_proof(&env),
-            &pi,
-        );
+        client.update_commitment(&group_id, &mock_proof(&env), &upi);
     }
 
     // ================================================================
-    // Epoch Enforcement — Theorem 5
+    // Epoch Enforcement — #59 fix derives new_epoch on-chain.
+    // Only the u64::MAX overflow path survives as a dedicated test.
     // ================================================================
-
-    #[test]
-    #[should_panic(expected = "Error(Contract, #11)")]
-    fn test_epoch_must_be_stored_plus_one() {
-        let (env, client, _admin, contract_id) = setup_initialized();
-        let group_id = BytesN::from_array(&env, &[1u8; 32]);
-        let commitment = BytesN::from_array(&env, &[2u8; 32]);
-        inject_group(&env, &contract_id, &group_id, &commitment, 5, 0);
-
-        // new_epoch=7, but stored is 5, so expected is 6
-        let pi = PublicInputs {
-            commitment: commitment.clone(),
-            epoch: 5,
-        };
-        client.update_commitment(
-            &group_id,
-            &BytesN::from_array(&env, &[3u8; 32]),
-            &7,
-            &mock_proof(&env),
-            &pi,
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "Error(Contract, #11)")]
-    fn test_epoch_cannot_go_backwards() {
-        let (env, client, _admin, contract_id) = setup_initialized();
-        let group_id = BytesN::from_array(&env, &[1u8; 32]);
-        let commitment = BytesN::from_array(&env, &[2u8; 32]);
-        inject_group(&env, &contract_id, &group_id, &commitment, 10, 0);
-
-        // new_epoch=5 < stored=10
-        let pi = PublicInputs {
-            commitment: commitment.clone(),
-            epoch: 10,
-        };
-        client.update_commitment(
-            &group_id,
-            &BytesN::from_array(&env, &[3u8; 32]),
-            &5,
-            &mock_proof(&env),
-            &pi,
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "Error(Contract, #11)")]
-    fn test_epoch_cannot_repeat_current() {
-        let (env, client, _admin, contract_id) = setup_initialized();
-        let group_id = BytesN::from_array(&env, &[1u8; 32]);
-        let commitment = BytesN::from_array(&env, &[2u8; 32]);
-        inject_group(&env, &contract_id, &group_id, &commitment, 5, 0);
-
-        // new_epoch=5 == stored=5 (must be 6)
-        let pi = PublicInputs {
-            commitment: commitment.clone(),
-            epoch: 5,
-        };
-        client.update_commitment(
-            &group_id,
-            &BytesN::from_array(&env, &[3u8; 32]),
-            &5,
-            &mock_proof(&env),
-            &pi,
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "Error(Contract, #11)")]
-    fn test_epoch_cannot_skip_ahead() {
-        let (env, client, _admin, contract_id) = setup_initialized();
-        let group_id = BytesN::from_array(&env, &[1u8; 32]);
-        let commitment = BytesN::from_array(&env, &[2u8; 32]);
-        inject_group(&env, &contract_id, &group_id, &commitment, 0, 0);
-
-        // new_epoch=100, stored=0, expected=1
-        let pi = PublicInputs {
-            commitment: commitment.clone(),
-            epoch: 0,
-        };
-        client.update_commitment(
-            &group_id,
-            &BytesN::from_array(&env, &[3u8; 32]),
-            &100,
-            &mock_proof(&env),
-            &pi,
-        );
-    }
 
     #[test]
     #[should_panic(expected = "Error(Contract, #11)")]
@@ -1376,20 +1477,37 @@ mod test {
         let (env, client, _admin, contract_id) = setup_initialized();
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
-        // Inject group at u64::MAX — checked_add(1) overflows
+        // Inject group at u64::MAX — checked_add(1) overflows.
         inject_group(&env, &contract_id, &group_id, &commitment, u64::MAX, 0);
 
-        let pi = PublicInputs {
-            commitment: commitment.clone(),
-            epoch: u64::MAX,
+        let upi = UpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: u64::MAX,
+            c_new: c_new_ok(&env),
         };
-        client.update_commitment(
-            &group_id,
-            &BytesN::from_array(&env, &[3u8; 32]),
-            &0,
-            &mock_proof(&env),
-            &pi,
-        );
+        client.update_commitment(&group_id, &mock_proof(&env), &upi);
+    }
+
+    // ================================================================
+    // #59: Non-canonical c_new is rejected up front.
+    // ================================================================
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #15)")]
+    fn test_update_commitment_rejects_non_canonical_c_new() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        let commitment = BytesN::from_array(&env, &[2u8; 32]);
+        inject_group(&env, &contract_id, &group_id, &commitment, 5, 0);
+
+        // All-0xFF is >= BLS12-381 Fr modulus — not a canonical encoding.
+        let non_canonical = BytesN::from_array(&env, &[0xFFu8; 32]);
+        let upi = UpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: 5,
+            c_new: non_canonical,
+        };
+        client.update_commitment(&group_id, &mock_proof(&env), &upi);
     }
 
     // ================================================================
@@ -1424,17 +1542,12 @@ mod test {
         let proof = mock_proof(&env);
         inject_used_proof(&env, &contract_id, &proof);
 
-        let pi = PublicInputs {
-            commitment: commitment.clone(),
-            epoch: 5,
+        let upi = UpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: 5,
+            c_new: c_new_ok(&env),
         };
-        client.update_commitment(
-            &group_id,
-            &BytesN::from_array(&env, &[3u8; 32]),
-            &6,
-            &proof,
-            &pi,
-        );
+        client.update_commitment(&group_id, &proof, &upi);
     }
 
     #[test]
@@ -1542,16 +1655,25 @@ mod test {
     fn test_update_vk_succeeds() {
         let (env, client, _admin, _cid) = setup_initialized();
         let new_vk = mock_vk(&env);
-        client.update_vk(&0u32, &new_vk);
+        client.update_vk(&VkKind::Membership, &0u32, &new_vk);
     }
 
     #[test]
     fn test_update_vk_all_tiers() {
         let (env, client, _admin, _cid) = setup_initialized();
         let new_vk = mock_vk(&env);
-        client.update_vk(&0u32, &new_vk);
-        client.update_vk(&1u32, &new_vk);
-        client.update_vk(&2u32, &new_vk);
+        client.update_vk(&VkKind::Membership, &0u32, &new_vk);
+        client.update_vk(&VkKind::Membership, &1u32, &new_vk);
+        client.update_vk(&VkKind::Membership, &2u32, &new_vk);
+    }
+
+    #[test]
+    fn test_update_update_vk_succeeds() {
+        let (env, client, _admin, _cid) = setup_initialized();
+        let new_update_vk = mock_update_vk(&env);
+        client.update_vk(&VkKind::Update, &0u32, &new_update_vk);
+        client.update_vk(&VkKind::Update, &1u32, &new_update_vk);
+        client.update_vk(&VkKind::Update, &2u32, &new_update_vk);
     }
 
     #[test]
@@ -1559,7 +1681,7 @@ mod test {
     fn test_update_vk_invalid_tier() {
         let (env, client, _admin, _cid) = setup_initialized();
         let vk = mock_vk(&env);
-        client.update_vk(&3u32, &vk);
+        client.update_vk(&VkKind::Membership, &3u32, &vk);
     }
 
     #[test]
@@ -1575,7 +1697,25 @@ mod test {
             delta_g2: g2,
             ic: vec![&env, g1.clone(), g1], // only 2 IC points, need 3
         };
-        client.update_vk(&0u32, &bad_vk);
+        client.update_vk(&VkKind::Membership, &0u32, &bad_vk);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #9)")]
+    fn test_update_update_vk_wrong_ic_length() {
+        // Passing a 3-IC VK for VkKind::Update must fail (Update wants 4 IC).
+        let (env, client, _admin, _cid) = setup_initialized();
+        let wrong_vk = mock_vk(&env); // has 3 IC, not 4
+        client.update_vk(&VkKind::Update, &0u32, &wrong_vk);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #9)")]
+    fn test_update_membership_vk_wrong_ic_length() {
+        // Passing a 4-IC update VK for VkKind::Membership must fail.
+        let (env, client, _admin, _cid) = setup_initialized();
+        let wrong_vk = mock_update_vk(&env); // has 4 IC, not 3
+        client.update_vk(&VkKind::Membership, &0u32, &wrong_vk);
     }
 
     #[test]
@@ -1583,7 +1723,7 @@ mod test {
     fn test_update_vk_not_initialized() {
         let (env, client, _admin) = setup_env();
         let vk = mock_vk(&env);
-        client.update_vk(&0u32, &vk);
+        client.update_vk(&VkKind::Membership, &0u32, &vk);
     }
 
     // ================================================================

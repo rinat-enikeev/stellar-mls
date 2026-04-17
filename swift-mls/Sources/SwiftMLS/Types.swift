@@ -63,6 +63,39 @@ public struct SEPMembershipProofBundle: Codable, Equatable, Sendable {
     }
 }
 
+/// Public inputs for the UpdateCircuit (#59 fix).
+///
+/// The contract binds `cNew` cryptographically via the proof, so the relayer
+/// and contract no longer accept a client-supplied `new_commitment`. JSON keys
+/// use snake_case to match the relayer payload schema.
+public struct SEPUpdatePublicInputs: Codable, Equatable, Sendable {
+    public let cOld: Data
+    public let epochOld: UInt64
+    public let cNew: Data
+
+    public init(cOld: Data, epochOld: UInt64, cNew: Data) {
+        self.cOld = cOld
+        self.epochOld = epochOld
+        self.cNew = cNew
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case cOld = "c_old"
+        case epochOld = "epoch_old"
+        case cNew = "c_new"
+    }
+}
+
+public struct SEPUpdateProofBundle: Codable, Equatable, Sendable {
+    public let proof: Data
+    public let publicInputs: SEPUpdatePublicInputs
+
+    public init(proof: Data, publicInputs: SEPUpdatePublicInputs) {
+        self.proof = proof
+        self.publicInputs = publicInputs
+    }
+}
+
 public struct SEPGroupMemberLeaf: Codable, Equatable, Sendable {
     public let publicKeyCompressed: Data
     public let leafHash: Data
@@ -109,15 +142,11 @@ public struct SEPCreateGroupRequest: Codable, Equatable, Sendable {
 
 public struct SEPUpdateCommitmentRequest: Codable, Equatable, Sendable {
     public let groupID: Data
-    public let newCommitment: Data
-    public let newEpoch: UInt64
     public let proof: Data
-    public let publicInputs: SEPPublicInputs
+    public let publicInputs: SEPUpdatePublicInputs
 
-    public init(groupID: Data, newCommitment: Data, newEpoch: UInt64, proof: Data, publicInputs: SEPPublicInputs) {
+    public init(groupID: Data, proof: Data, publicInputs: SEPUpdatePublicInputs) {
         self.groupID = groupID
-        self.newCommitment = newCommitment
-        self.newEpoch = newEpoch
         self.proof = proof
         self.publicInputs = publicInputs
     }

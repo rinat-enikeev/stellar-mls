@@ -117,4 +117,44 @@ bool sep_generate_membership_proof(
     char **out_error
 );
 
+bool sep_generate_testing_update_proving_key(
+    size_t depth,
+    uint64_t seed,
+    sep_byte_buffer_t *out_proving_key,
+    char **out_error
+);
+
+bool sep_generate_update_proof(
+    const uint8_t *proving_key_ptr,
+    size_t proving_key_len,
+    const uint8_t *old_public_keys_ptr,
+    size_t old_public_keys_len,
+    const uint8_t *old_leaf_hashes_ptr,
+    size_t old_leaf_hashes_len,
+    const uint8_t *new_public_keys_ptr,
+    size_t new_public_keys_len,
+    const uint8_t *new_leaf_hashes_ptr,
+    size_t new_leaf_hashes_len,
+    const uint8_t *secret_key_ptr,
+    size_t secret_key_len,
+    uint64_t epoch_old,
+    const uint8_t *salt_old_ptr,
+    size_t salt_old_len,
+    const uint8_t *salt_new_ptr,
+    size_t salt_new_len,
+    size_t depth,
+    sep_byte_buffer_t *out_proof,
+    sep_byte_buffer_t *out_public_inputs,
+    char **out_error
+);
+
+bool sep_parse_update_public_inputs(
+    const uint8_t *public_inputs_ptr,
+    size_t public_inputs_len,
+    sep_byte_buffer_t *out_c_old,
+    sep_byte_buffer_t *out_epoch_old,
+    sep_byte_buffer_t *out_c_new,
+    char **out_error
+);
+
 #endif

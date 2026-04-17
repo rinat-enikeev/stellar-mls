@@ -664,7 +664,6 @@ final class AppState {
             oldEpoch: oldEpoch,
             oldSalt: oldSalt,
             newMembers: group.members,
-            newEpoch: group.epoch,
             newSalt: group.salt,
             blsSecretKey: keyManager.blsSecretKey,
             tier: group.tier

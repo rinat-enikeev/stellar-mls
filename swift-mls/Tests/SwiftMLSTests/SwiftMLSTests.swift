@@ -195,6 +195,71 @@ struct SwiftMLSTests {
     }
 
     @Test
+    func updateProofRoundTripViaRustBridge() throws {
+        let tier: SEPTier = .small
+        let provingKey = try SEPProofGenerator.generateTestingUpdateProvingKey(tier: tier, seed: 11)
+
+        let secretKeys = [fieldBytes(11), fieldBytes(22)]
+        let oldMembers = try secretKeys.map { sk in
+            SEPGroupMemberLeaf(
+                publicKeyCompressed: try SEPCommitmentBuilder.computePublicKey(secretKey: sk),
+                leafHash: try SEPCommitmentBuilder.computeLeafHash(secretKey: sk)
+            )
+        }
+        let newSecretKeys = secretKeys + [fieldBytes(33)]
+        let newMembers = try newSecretKeys.map { sk in
+            SEPGroupMemberLeaf(
+                publicKeyCompressed: try SEPCommitmentBuilder.computePublicKey(secretKey: sk),
+                leafHash: try SEPCommitmentBuilder.computeLeafHash(secretKey: sk)
+            )
+        }
+        let saltOld = Data(repeating: 0x33, count: 32)
+        let saltNew = Data(repeating: 0x44, count: 32)
+
+        let bundle = try SEPProofGenerator.generateUpdateProof(
+            provingKey: provingKey,
+            oldMembers: oldMembers,
+            newMembers: newMembers,
+            secretKey: secretKeys[0],
+            epochOld: 9,
+            saltOld: saltOld,
+            saltNew: saltNew,
+            tier: tier
+        )
+
+        #expect(bundle.proof.count == 192)
+        #expect(bundle.publicInputs.cOld.count == 32)
+        #expect(bundle.publicInputs.cNew.count == 32)
+        #expect(bundle.publicInputs.epochOld == 9)
+
+        let oldRoot = try SEPCommitmentBuilder.computeMerkleRoot(members: oldMembers, tier: tier)
+        let expectedCOld = try SEPCommitmentBuilder.computePoseidonCommitment(
+            poseidonRoot: oldRoot, epoch: 9, salt: saltOld
+        )
+        #expect(bundle.publicInputs.cOld == expectedCOld)
+
+        let newRoot = try SEPCommitmentBuilder.computeMerkleRoot(members: newMembers, tier: tier)
+        let expectedCNew = try SEPCommitmentBuilder.computePoseidonCommitment(
+            poseidonRoot: newRoot, epoch: 10, salt: saltNew
+        )
+        #expect(bundle.publicInputs.cNew == expectedCNew)
+    }
+
+    @Test
+    func updatePublicInputsEncodesSnakeCaseJSON() throws {
+        let pi = SEPUpdatePublicInputs(
+            cOld: Data(repeating: 0x01, count: 32),
+            epochOld: 7,
+            cNew: Data(repeating: 0x02, count: 32)
+        )
+        let encoded = try JSONEncoder().encode(pi)
+        let json = try #require(try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        #expect(json["c_old"] != nil)
+        #expect(json["epoch_old"] as? Int == 7)
+        #expect(json["c_new"] != nil)
+    }
+
+    @Test
     func ephemeralNostrSignersAreUniqueAndProduceValidKeys() throws {
         let a = try RustBackedNostrSigner.ephemeral()
         let b = try RustBackedNostrSigner.ephemeral()

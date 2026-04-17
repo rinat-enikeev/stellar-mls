@@ -56,6 +56,11 @@ actor OnChainService {
     /// Cached proving keys per tier (loaded from bundle on first use).
     private var provingKeys: [SEPTier: Data] = [:]
 
+    /// Cached UpdateCircuit proving keys per tier. #59 fix: distinct circuit
+    /// from the membership circuit, bundled in keyset-v2 after the ceremony.
+    /// Until keyset-v2 lands (Phase 8), dev builds fall back to a testing key.
+    private var updateProvingKeys: [SEPTier: Data] = [:]
+
     private static let maxRetries = 3
     private static let baseRetryDelay: TimeInterval = 1.0
 
@@ -108,6 +113,18 @@ actor OnChainService {
         }
         let pk = try Self.loadProvingKeyFromBundle(tier: tier)
         provingKeys[tier] = pk
+        return pk
+    }
+
+    /// Load or return a cached UpdateCircuit proving key for the given tier.
+    /// TODO(Phase 8): load from `keyset-v2/update-<tier>.bin` with hash check.
+    /// Dev fallback generates a deterministic testing key.
+    func ensureUpdateProvingKey(tier: SEPTier) throws -> Data {
+        if let cached = updateProvingKeys[tier] {
+            return cached
+        }
+        let pk = try SEPProofGenerator.generateTestingUpdateProvingKey(tier: tier)
+        updateProvingKeys[tier] = pk
         return pk
     }
 
@@ -245,46 +262,37 @@ actor OnChainService {
 
     /// Publish a commitment update after a membership change.
     ///
-    /// 1. Generates a membership proof at the OLD state (proving current membership).
-    /// 2. Decompresses the proof to uncompressed format (384 bytes).
-    /// 3. Computes the new Poseidon commitment from the new state.
-    /// 4. Submits `update_commitment` to the Soroban contract.
+    /// #59: binds the new commitment inside the UpdateCircuit proof so the
+    /// contract can cryptographically accept `c_new` as the persisted value.
+    /// The new epoch is derived in-circuit as `epoch_old + 1`.
     func publishCommitmentUpdate(
         groupIDData: Data,
         oldMembers: [SEPGroupMemberLeaf],
         oldEpoch: UInt64,
         oldSalt: Data,
         newMembers: [SEPGroupMemberLeaf],
-        newEpoch: UInt64,
         newSalt: Data,
         blsSecretKey: Data,
         tier: SEPTier
     ) async throws -> SEPSubmissionResponse {
-        // Proof is generated against the OLD (current on-chain) state
-        let oldProofBundle = try generateProof(
-            members: oldMembers,
-            blsSecretKey: blsSecretKey,
-            epoch: oldEpoch,
-            salt: oldSalt,
+        let updatePK = try ensureUpdateProvingKey(tier: tier)
+        let bundle = try SEPProofGenerator.generateUpdateProof(
+            provingKey: updatePK,
+            oldMembers: oldMembers,
+            newMembers: newMembers,
+            secretKey: blsSecretKey,
+            epochOld: oldEpoch,
+            saltOld: oldSalt,
+            saltNew: newSalt,
             tier: tier
         )
 
-        let uncompressedProof = try proofForContract(oldProofBundle.proof)
-
-        // Compute the new Poseidon commitment for the updated state
-        let newRoot = try SEPCommitmentBuilder.computeMerkleRoot(members: newMembers, tier: tier)
-        let newPoseidonCommitment = try SEPCommitmentBuilder.computePoseidonCommitment(
-            poseidonRoot: newRoot,
-            epoch: newEpoch,
-            salt: newSalt
-        )
+        let uncompressedProof = try proofForContract(bundle.proof)
 
         let request = SEPUpdateCommitmentRequest(
             groupID: groupIDData,
-            newCommitment: newPoseidonCommitment,
-            newEpoch: newEpoch,
             proof: uncompressedProof,
-            publicInputs: oldProofBundle.publicInputs
+            publicInputs: bundle.publicInputs
         )
         return try await withRetry { try await self.contractClient.updateCommitment(request) }
     }

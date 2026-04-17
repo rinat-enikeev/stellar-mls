@@ -246,6 +246,113 @@ enum RustBridge {
         )
     }
 
+    static func generateTestingUpdateProvingKey(depth: Int, seed: UInt64) throws -> Data {
+        try withSingleOutputBuffer { buffer, errorPointer in
+            sep_generate_testing_update_proving_key(depth, seed, buffer, errorPointer)
+        }
+    }
+
+    static func generateUpdateProof(
+        provingKey: Data,
+        oldMembers: [SEPGroupMemberLeaf],
+        newMembers: [SEPGroupMemberLeaf],
+        secretKey: Data,
+        epochOld: UInt64,
+        saltOld: Data,
+        saltNew: Data,
+        depth: Int
+    ) throws -> SEPUpdateProofBundle {
+        let flattenedOld = try flattenMembers(oldMembers)
+        let flattenedNew = try flattenMembers(newMembers)
+        try validateFieldElement(secretKey)
+        try validateSalt(saltOld)
+        try validateSalt(saltNew)
+
+        let provingKeyArray = [UInt8](provingKey)
+        let oldPublicKeysArray = [UInt8](flattenedOld.publicKeys)
+        let oldLeafHashesArray = [UInt8](flattenedOld.leafHashes)
+        let newPublicKeysArray = [UInt8](flattenedNew.publicKeys)
+        let newLeafHashesArray = [UInt8](flattenedNew.leafHashes)
+        let secretKeyArray = [UInt8](secretKey)
+        let saltOldArray = [UInt8](saltOld)
+        let saltNewArray = [UInt8](saltNew)
+
+        var proofBuffer = sep_byte_buffer_t(ptr: nil, len: 0)
+        var publicInputsBuffer = sep_byte_buffer_t(ptr: nil, len: 0)
+        var rawError: UnsafeMutablePointer<CChar>?
+
+        let success = sep_generate_update_proof(
+            provingKeyArray,
+            provingKeyArray.count,
+            oldPublicKeysArray,
+            oldPublicKeysArray.count,
+            oldLeafHashesArray,
+            oldLeafHashesArray.count,
+            newPublicKeysArray,
+            newPublicKeysArray.count,
+            newLeafHashesArray,
+            newLeafHashesArray.count,
+            secretKeyArray,
+            secretKeyArray.count,
+            epochOld,
+            saltOldArray,
+            saltOldArray.count,
+            saltNewArray,
+            saltNewArray.count,
+            depth,
+            &proofBuffer,
+            &publicInputsBuffer,
+            &rawError
+        )
+
+        if !success {
+            if proofBuffer.ptr != nil { sep_byte_buffer_free(proofBuffer) }
+            if publicInputsBuffer.ptr != nil { sep_byte_buffer_free(publicInputsBuffer) }
+            throw consumeRustError(rawError)
+        }
+
+        let proof = consumeBuffer(proofBuffer)
+        let publicInputsWire = consumeBuffer(publicInputsBuffer)
+        let parsed = try parseUpdatePublicInputs(wireFormat: publicInputsWire)
+        return SEPUpdateProofBundle(proof: proof, publicInputs: parsed)
+    }
+
+    static func parseUpdatePublicInputs(wireFormat: Data) throws -> SEPUpdatePublicInputs {
+        var cOldBuffer = sep_byte_buffer_t(ptr: nil, len: 0)
+        var epochOldBuffer = sep_byte_buffer_t(ptr: nil, len: 0)
+        var cNewBuffer = sep_byte_buffer_t(ptr: nil, len: 0)
+        var rawError: UnsafeMutablePointer<CChar>?
+
+        let success = wireFormat.withUnsafeBytes { wireBytes in
+            sep_parse_update_public_inputs(
+                wireBytes.bindMemory(to: UInt8.self).baseAddress,
+                wireFormat.count,
+                &cOldBuffer,
+                &epochOldBuffer,
+                &cNewBuffer,
+                &rawError
+            )
+        }
+
+        if !success {
+            if cOldBuffer.ptr != nil { sep_byte_buffer_free(cOldBuffer) }
+            if epochOldBuffer.ptr != nil { sep_byte_buffer_free(epochOldBuffer) }
+            if cNewBuffer.ptr != nil { sep_byte_buffer_free(cNewBuffer) }
+            throw consumeRustError(rawError)
+        }
+
+        let cOld = consumeBuffer(cOldBuffer)
+        let epochOldBytes = consumeBuffer(epochOldBuffer)
+        let cNew = consumeBuffer(cNewBuffer)
+
+        guard epochOldBytes.count == 8 else {
+            throw SEPError.ffiFailure("sep_parse_update_public_inputs returned \(epochOldBytes.count)-byte epoch_old (expected 8)")
+        }
+        let epochOld = epochOldBytes.reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+
+        return SEPUpdatePublicInputs(cOld: cOld, epochOld: epochOld, cNew: cNew)
+    }
+
     private static func withSingleOutputBuffer(
         _ body: (_ buffer: UnsafeMutablePointer<sep_byte_buffer_t>, _ error: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) -> Bool
     ) throws -> Data {

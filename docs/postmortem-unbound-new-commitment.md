@@ -314,6 +314,31 @@ NOT bind: caller identity, new_commitment, fee-payer, transaction
 envelope. Each of these may or may not be a security issue depending on
 the deployment model — enumerate before shipping."*
 
+### 6. The defect class is structurally unique to `update_commitment`
+
+Of the three contract entry points that consume a `Groth16Proof`
+(`create_group`, `update_commitment`, `deactivate_group`), only
+`update_commitment` persists a state value that is not itself a public
+input of the proof. `create_group` (`contracts/sep-xxxx/src/lib.rs:384,
+:408`) stores the same `commitment` the proof verifies against — the
+equality is enforced at `:384` and the MSM at `:408` uses the same
+value, so there is no "new commitment outside the proof" to rebind.
+`deactivate_group` (`:568-632`) stores no new commitment at all; the
+state transition is a boolean flag flip on the already-verified current
+entry, introducing no attacker-controllable bytes.
+
+The structural asymmetry is visible only when the three call sites are
+compared side-by-side with one concrete question held fixed: *which
+persisted bytes are covered by the proof's public inputs, and which are
+not?* None of the prior reviews posed that question explicitly across
+all three sites. A future audit methodology that tabulates, per
+Groth16-verifying entry point, the set difference
+`{persisted bytes} \ {public inputs covered by the proof}` would have
+surfaced this instance on the first pass and would surface any future
+instance of the same class on its first pass. The long-term prevention
+item below proposes encoding this check in CI so the question is asked
+by the build, not left to the reviewer's initiative.
+
 ---
 
 ## Why it was easy to miss

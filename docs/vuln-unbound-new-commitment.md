@@ -308,6 +308,37 @@ The attack does **not** require:
 - Execution of any circuit.
 - Stellar account authorisation tied to the group (`update_commitment` is intentionally caller‑agnostic — see N‑14).
 
+**N‑14 amplification.** `update_commitment` authorises the caller through the Groth16 proof alone (no `require_auth`, `:453-458`). Combined with the binding gap, this means the attacker does not need to be in the request path at all: any Stellar account can submit a crafted `update_commitment` once the proof bytes and public inputs are observed anywhere — the client's outbound payload, the relayer's outbound transaction, a mempool entry, or a ledger event from a failed‑but‑broadcast prior attempt. N‑14 was a deliberate design choice to preserve proof‑based (not identity‑based) authorisation; in the presence of this gap it removes the last speed bump an attacker would otherwise face. The capability bar for hijacking a group therefore collapses from "control the relayer" or "front‑run the mempool" to "observe a single `update_commitment` payload anywhere on its path from client to ledger close".
+
+---
+
+## Scope of the gap — why only `update_commitment`
+
+Three contract entry points consume a `Groth16Proof`. Only one of them is vulnerable to the rebinding attack. The asymmetry is instructive.
+
+### `create_group` (`:352-445`) — not vulnerable
+
+The `commitment` parameter being persisted is the *same* value the proof verifies against. Two explicit checks establish the binding:
+
+- `:384` enforces `public_inputs.commitment == commitment` and `public_inputs.epoch == 0`. If the caller supplies a `commitment` that differs from `public_inputs.commitment`, the function returns `PublicInputsMismatch` before any proof verification or state write.
+- `:408` verifies the proof via `verify_groth16_proof(&env, &vk, &proof, &commitment, 0)`. The same `commitment` used in the equality check is the one fed into the pairing computation.
+
+A malicious relayer or mempool front‑runner who attempts to swap `commitment` while keeping `proof` and `public_inputs` unchanged is rejected at `:384` (inequality with `public_inputs.commitment`). If they also swap `public_inputs.commitment` to match, the pairing check at `:408` fails because the Groth16 verifier computes `vk_x` over the new scalar and the proof does not verify for the new instance. In short: `create_group` has no "new commitment outside the proof" problem because there is no *new* commitment — the one being stored is the one being proved. Binding is enforced by construction.
+
+### `deactivate_group` (`:568-632`) — not vulnerable
+
+The operation does not persist any new commitment. The state transition is a boolean flag flip (`active: true → false`, `:601-605`). The proof authenticates membership at the current state; the effect is to freeze that state, not to replace it with a new one. `public_inputs` is cross‑checked against on‑chain state at `:585-589` and the proof is verified at `:594` against the same `current.commitment, current.epoch` pair. No state value is introduced outside the proof's public‑input scope, so there is nothing to rebind.
+
+### `update_commitment` (`:459-523`) — uniquely vulnerable
+
+`update_commitment` is the only entry point that introduces a value — `new_commitment` at `:462` — that is *not* itself a public input of the verified proof. That value is persisted unconditionally at `:502-511` once the (unrelated) proof over `(current.commitment, current.epoch)` verifies. The set difference `{persisted bytes} \ {public inputs covered by the proof}` is non‑empty, and in the absence of any linking constraint the difference is attacker‑controlled.
+
+### Pattern — defect class
+
+The defect class is structural: **it arises whenever a ZK‑gated function persists a state value that is outside the circuit's public‑input scope.** Future audits of similar protocols should, for every Groth16‑verifying entry point, compute `{persisted bytes} \ {public inputs covered by the proof}` and ensure it is empty — or, where non‑empty by design, establish that every element of the difference is bound to the proof by some other means (e.g. an on‑chain equality check against a derived value that *is* a public input, as with `public_inputs.commitment == commitment` at `:384`).
+
+The `UpdateCircuit` fix in [`update-circuit-binding-design.md`](update-circuit-binding-design.md) closes this specific instance by promoting `C_new` to a public input of a dedicated update‑transition circuit. Because the gap is unique to `update_commitment` within the current codebase, no parallel fix is required for `create_group` or `deactivate_group`. A longer‑term preventative measure — a CI check that flags any contract function consuming a `Groth16Proof` plus persisted state bytes not appearing in the paired `PublicInputs` struct — is tracked in the [postmortem](postmortem-unbound-new-commitment.md#prevention).
+
 ---
 
 ## Why existing mitigations do not close the gap
@@ -323,6 +354,8 @@ Purpose: prevents using a proof from a previous epoch against the current state.
 ### Proof‑hash replay protection (`:489, :726-749`)
 
 Purpose: prevents exact resubmission of a previously‑accepted proof. Effect on this attack: **none, and possibly negative**. The attacker submits the victim's proof **first**, with a mutated `new_commitment`. The victim's subsequent submission then fails the proof‑hash replay check, not because it was replayed in any attack sense but because it is now byte‑identical to the attacker's prior use. The victim sees the replay‑rejection error and has no easy way to learn that a rebinding occurred.
+
+Specifically, the replay key is `SHA-256(π_A ‖ π_B ‖ π_C)` — computed in `proof_hash` at `:715-722` and consumed by `check_proof_replay` at `:726-736`, over the 192‑byte compressed proof alone. It does not include the transaction envelope, the public inputs, `group_id`, `new_epoch`, or `new_commitment`. Any value outside those 192 bytes is freely mutable by anyone who sees the proof. The scope is correct for its stated purpose (preventing exact re‑submission of an accepted proof), but it is precisely what makes the first‑submission attack invisible to the replay check: the attacker's transaction and the victim's transaction carry the same 192 proof bytes, so whichever lands first consumes the only slot and the other is rejected.
 
 A related subtlety: Groth16 proofs are re‑randomisable. `(a, b, c)` can be transformed to `(a', b', c')` that verifies the same statement. So `A` could re‑randomise the victim's proof before submitting to avoid the proof‑hash collision — then the victim's own submission would not be rejected as a replay but as a state mismatch (the epoch has already advanced past `public_inputs.epoch`). Either way, `A` wins.
 

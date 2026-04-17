@@ -29,8 +29,10 @@ The cryptographic and transport foundations are solid on both platforms:
 - HKDF key derivation is deterministic — same Nostr secret produces identical derived keys on iOS and Android
 - Secure key storage (iOS Keychain, Android EncryptedSharedPreferences)
 - Local persistence (SwiftData on iOS, Room on Android) with field-level encryption
-- Soroban contract: create group, update commitment, verify membership, deactivate
+- Soroban contract: create group, update commitment, verify membership, deactivate — with `update_commitment` binding the new commitment as a Groth16 public input via the dedicated `R_Update` circuit (closes the unbound-new-commitment gap documented in `docs/vuln-unbound-new-commitment.md`; see lesson below)
 - Message size limits (1 MB), event ID verification, WebSocket ping keepalive
+
+**Lesson — statement ≠ operation.** A ZK proof soundness theorem over statement `(C, e)` is not automatically soundness for the *operation* of writing a new state. Whenever a contract persists a value that is not itself a public input of the proof, the caller can substitute that value at the envelope layer without invalidating the proof. The `R_Update` circuit (3 public inputs `(c_old, epoch_old, c_new)`) closes that gap for `update_commitment`. Future ZK-gated contract entry points should catalogue `{persisted bytes} \ {public inputs}` on day one; any non-empty difference is a binding bug.
 
 ---
 

@@ -7,8 +7,8 @@ Author: @rinat-enikeev
 Track: Standard
 Status: Draft
 Created: 2026-03-30
-Updated: 2026-04-02
-Version: 0.0.5
+Updated: 2026-04-17
+Version: 0.0.6
 Discussion: https://github.com/orgs/stellar/discussions/1903
 ```
 
@@ -369,6 +369,59 @@ This means the contract never learns the member list, the salt, or the identity 
 
 The constant verification cost is a core property. A 2,048-member group is indistinguishable from a 2-member group from the contract's perspective.
 
+#### 3.7 Update circuit (`R_Update`)
+
+Sections 3.1–3.6 describe the membership circuit used by `create_group`, `verify_membership`, and `deactivate_group`. State *transitions* (`update_commitment`) require a second circuit, `R_Update`, whose statement binds the new commitment as a *public input* of the proof rather than as an envelope-level parameter. This closes a binding gap where a membership-only proof authorises a caller but does not bind the new state they are permitted to write. See [update-circuit-binding-design.md](update-circuit-binding-design.md) and [vuln-unbound-new-commitment.md](vuln-unbound-new-commitment.md) for the full design and motivation.
+
+`R_Update` takes exactly three public inputs in this fixed order:
+
+```
+public_inputs = (C_old, epoch_old, C_new)
+```
+
+where `C_old, C_new ∈ Fr` are Poseidon commitments as defined in §2.3 Variant B and `epoch_old ∈ Fr` is the epoch being transitioned *from*. The new epoch is `epoch_old + 1` and is never itself a public input — it is constrained inside the circuit.
+
+The circuit has three constraints:
+
+**Constraint (1) — prover is a member of the old committed state.**
+
+The prover supplies witnesses `sk, root_old, salt_old, merkle_path, leaf_index` and the circuit enforces:
+
+```
+Poseidon(sk) == MerkleOpen(leaf_index, merkle_path, root_old)
+Poseidon(Poseidon(root_old, epoch_old), salt_old) == C_old      (public)
+```
+
+**Constraint (2) — `C_new` is a canonical commitment over `epoch_old + 1`.**
+
+The prover supplies witnesses `root_new, salt_new` and the circuit enforces:
+
+```
+Poseidon(Poseidon(root_new, epoch_old + 1), salt_new) == C_new  (public)
+```
+
+The `+ 1` is a field-element increment performed inside the circuit; the contract never accepts an attacker-chosen `new_epoch`.
+
+**Constraint (3) — epoch monotonicity.**
+
+Constraint (2) fixes the new-epoch witness to `epoch_old + 1`. The contract additionally compares the on-chain stored epoch against `epoch_old` in `public_inputs`, so any attempt to submit a proof for a different epoch-pair is rejected at state-binding check time without touching the verifier.
+
+Because `C_new` is a public input, the pairing equation rejects any envelope in which `C_new` has been substituted. The attacker-controlled new commitment is therefore cryptographically bound to the proof, not to the transaction envelope.
+
+The update-circuit proof wire format is:
+
+```
+UpdatePublicInputs (73 bytes)
+    version:    u8         = 0x02
+    c_old:      Fr (32B, big-endian)
+    epoch_old:  u64 (8B, big-endian)
+    c_new:      Fr (32B, big-endian)
+```
+
+Parsers MUST reject wrong length, wrong version byte, and any `c_old`/`c_new` that is not a canonical Fr element (i.e., ≥ the BLS12-381 scalar modulus `r`). Canonical test vectors are in [`docs/cross-platform-test-vectors.json`](cross-platform-test-vectors.json) under `update_public_inputs_wire_format`.
+
+The update verification key (`vk_update`) has four `IC` points (one constant + one per public input) and is distinct from the membership verification key for the same tier; a tiered deployment therefore holds *two* verification keys per tier.
+
 ---
 
 ### 4. Contract Interface
@@ -431,17 +484,19 @@ Parameters:
 | Name | Type | Description |
 |------|------|-------------|
 | `group_id` | `BytesN<32>` | Identifies the group |
-| `new_commitment` | `BytesN<32>` | Commitment for the new epoch |
-| `new_epoch` | `u64` | MUST equal `stored_epoch + 1` |
-| `proof` | `Bytes` | ZK proof that the caller is a member of the **current** epoch's committed set |
-| `public_inputs` | `PublicInputs` | `{commitment: current_commitment, epoch: current_epoch}` |
+| `proof` | `Bytes` | ZK proof produced by `R_Update` (see §3.7) |
+| `public_inputs` | `UpdatePublicInputs` | `{c_old, epoch_old, c_new}` — 73-byte wire format, version byte 0x02 |
 
 Invariants:
-- `group_id` MUST exist
-- `new_epoch == stored_epoch + 1` — strict monotonicity enforced
-- Proof is verified against the **current** commitment, not the new one. This proves the updater is a legitimate member before the transition.
-- No address-based authorization is required beyond a valid proof. The contract authorizes the state transition by proof validity and public-input equality only.
+- `group_id` MUST exist and MUST NOT be deactivated
+- Contract MUST check `public_inputs.c_old == stored.commitment` and `public_inputs.epoch_old == stored.epoch`; otherwise reject with a state-binding error before any pairing.
+- Proof MUST verify under the tier's update verification key `vk_update` against the three public inputs `(c_old, epoch_old, c_new)` in fixed order.
+- The new stored state is `(commitment := c_new, epoch := epoch_old + 1)`. The contract does NOT accept a caller-provided `new_epoch` or `new_commitment` parameter; both are bound by the proof.
+- `c_new` MUST be a canonical Fr element; non-canonical encodings are rejected before verification.
+- No address-based authorization is required beyond a valid proof.
 - Emits a `CommitmentUpdated` event
+
+Backward-incompatible change from v0.0.5: prior revisions exposed `new_commitment` and `new_epoch` as top-level parameters verified only against the *current* commitment. That encoding allowed a party who observed a valid proof to substitute a different `new_commitment` without invalidating the proof. The `R_Update` circuit defined in §3.7 binds `c_new` as a public input and eliminates this attack. See [vuln-unbound-new-commitment.md](vuln-unbound-new-commitment.md) for the full vulnerability analysis.
 
 #### `verify_membership`
 
@@ -524,6 +579,8 @@ These operations do not affect proof format or client interoperability, but they
 #### Proof replay hardening
 
 Implementations SHOULD reject any state-changing operation (`create_group`, `update_commitment`, `deactivate_group`) that reuses an identical serialized proof previously accepted by the contract. This prevents exact-proof replay across groups and functions. A proof presented only to `verify_membership` SHOULD remain reusable because that call is read-only.
+
+**Note on replay-hash scope.** The replay key is `SHA-256(π_A ‖ π_B ‖ π_C)` — computed over the 192-byte compressed proof only. It does not cover the transaction envelope or the public inputs. Values outside the proof's public-input scope are freely mutable by anyone observing the proof; this is why `update_commitment` MUST use `R_Update` with `c_new` as a public input (§3.7). Without that binding, replay protection alone is insufficient to fix the v0.0.5 gap.
 
 ---
 
@@ -757,11 +814,16 @@ Groth16 is zero-knowledge: the proof reveals nothing about the witness beyond th
 
 #### 9.5 Epoch monotonicity
 
-The contract enforces `new_epoch == stored_epoch + 1`. This prevents replay attacks (resubmitting an old proof for a past epoch) and fork attacks (two conflicting epoch-N commitments).
+`update_commitment` persists the new epoch as `epoch_old + 1`, with `epoch_old` taken from the public-input scope of the proof and cross-checked against the on-chain stored epoch. The `+ 1` increment is performed inside `R_Update` (§3.7), not accepted from the caller. This prevents replay attacks (resubmitting an old proof for a past epoch) and fork attacks (two conflicting epoch-N commitments).
 
-#### 9.6 Proof binds to current state
+#### 9.6 Proof binds old and new state
 
-The ZK proof in `update_commitment` is verified against the **current** stored commitment, not the new one. This means the updater must prove membership in the group as it existed before the transition — they cannot unilaterally forge a new membership set without holding a valid current member key.
+The ZK proof in `update_commitment` is verified under `R_Update` with the three public inputs `(c_old, epoch_old, c_new)`. The contract additionally cross-checks `(c_old, epoch_old)` against on-chain stored state. Consequently:
+
+- The updater must prove membership in the group as it existed before the transition — they cannot forge a new roster without holding a valid current member key.
+- The new commitment is a public input of the proof. Substituting `c_new` in the transaction envelope invalidates the pairing equation. A legitimate proof cannot be re-purposed to commit a different `c_new`.
+
+This is a stricter binding than v0.0.5, where the new commitment was an envelope-level parameter checked only against the current state.
 
 #### 9.7 Fee payer correlation
 

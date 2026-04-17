@@ -246,6 +246,8 @@ Two commitments $C_1 = H_P(H_P(\text{root}_1, e_1), s_1)$ and $C_2 = H_P(H_P(\te
 
 ## 6. Theorem 3: ZK Membership Soundness
 
+**Scope.** This theorem covers the *membership* circuit $R_\text{Membership}$ used by `create_group`, `verify_membership`, and `deactivate_group`. Operation-level soundness for `update_commitment` — which requires binding a *new* commitment to the proof — is the subject of Theorem 3b (§6b) and the update circuit $R_\text{Update}$.
+
 ### Statement
 
 If the Groth16 verification equation (Appendix B) accepts proof $\pi$ for public inputs $(C, e)$, then the prover knows a witness $(sk, \text{root}, s, \text{path}, \text{idx})$ satisfying all three circuit constraints, except with probability negligible in $\lambda$. Formally:
@@ -298,6 +300,58 @@ Groth16 provides **knowledge soundness** (also called **argument of knowledge**)
 
 ---
 
+## 6b. Theorem 3b: Update-Circuit Operation-Level Soundness
+
+### Motivation
+
+Theorem 3 establishes soundness for the *statement* $(C, e)$: an adversary who produces an accepting proof knows a valid membership witness at that committed state. But `update_commitment` is an *operation*, not merely a statement: it must bind the prover's authorisation to the *new* state they are permitted to write. A theorem over only $(C, e)$ is correct but insufficient — it leaves the new commitment outside the proof's public-input scope, where an adversary who observes any accepting proof can substitute a different `new_commitment` in the transaction envelope. The prior v0.0.5 contract had exactly this gap ([vuln-unbound-new-commitment.md](vuln-unbound-new-commitment.md)).
+
+The $R_\text{Update}$ circuit closes the gap by adding $C_\text{new}$ as a third public input. The theorem below proves the resulting operation-level soundness.
+
+### Statement
+
+Let $R_\text{Update}$ be the relation with public inputs $\text{pi} = (C_\text{old}, e_\text{old}, C_\text{new}) \in \mathbb{F}_r^3$ and witness $w = (sk, \text{root}_\text{old}, s_\text{old}, \text{path}, \text{idx}, \text{root}_\text{new}, s_\text{new})$ satisfying:
+
+1. $H_P(sk) = \textsf{MerkleOpen}(\text{idx}, \text{path}, \text{root}_\text{old})$
+2. $H_P(H_P(\text{root}_\text{old}, e_\text{old}), s_\text{old}) = C_\text{old}$
+3. $H_P(H_P(\text{root}_\text{new}, e_\text{old} + 1), s_\text{new}) = C_\text{new}$
+
+For every PPT adversary $\mathcal{A}$ that produces a tuple $(\pi, \text{pi})$ accepted by the Soroban verifier for `update_commitment`, there exists a PPT extractor $\mathcal{E}$ producing a witness $w$ satisfying (1)–(3) over that exact $\text{pi}$, except with probability negligible in $\lambda$:
+
+$$\Pr\left[\textsf{Verify}(\text{pvk}_\text{update}, \pi, \text{pi}) = 1 \;\wedge\; \nexists\, w : R_\text{Update}(\text{pi}, w) = 1\right] \leq \text{negl}(\lambda)$$
+
+Furthermore, the contract's state-binding checks
+
+$$\text{pi}.C_\text{old} = \text{stored}.C \quad\text{and}\quad \text{pi}.e_\text{old} = \text{stored}.e$$
+
+ensure that the extracted witness is a witness against the *current on-chain state*, not an arbitrary historical one.
+
+### Proof
+
+**Step 1: Verifier acceptance.** By assumption, the Groth16 verifier accepts $\pi$ under the tier's update verification key $\text{pvk}_\text{update}$ on public inputs $(C_\text{old}, e_\text{old}, C_\text{new})$. The verification key has four $\text{IC}$ points (one constant + one per public input) as required by §3.7 of the SEP.
+
+**Step 2: Knowledge extraction.** By Assumption 3.3 (Groth16 knowledge soundness) applied to $R_\text{Update}$, there exists a PPT extractor $\mathcal{E}$ that produces a witness $w$ satisfying $R_\text{Update}(\text{pi}, w) = 1$ with overwhelming probability. Equivalently, $w$ satisfies (1), (2), and (3) over the same $\text{pi}$ that the verifier accepted.
+
+**Step 3: New-commitment binding.** Constraint (3) fixes $C_\text{new}$ as a function of the witness $(\text{root}_\text{new}, s_\text{new})$ and the publicly committed $e_\text{old} + 1$. Any adversary who substitutes $C_\text{new} \to C'_\text{new} \neq C_\text{new}$ in the transaction envelope presents a different $\text{pi}$ to the verifier. By Step 2, an accepting proof for the modified $\text{pi}$ implies knowledge of a witness binding that specific $C'_\text{new}$ — which the attacker, by assumption, does not have. The verifier therefore rejects the tampered envelope, except with probability $\text{negl}(\lambda)$.
+
+**Step 4: Epoch increment binding.** Constraint (3) computes $e_\text{old} + 1$ as a field-element increment inside the circuit. No attacker-controlled `new_epoch` parameter exists at the envelope level; the contract writes $(C_\text{new}, e_\text{old} + 1)$ as the new stored state. Combined with Step 3, the attacker cannot substitute either coordinate of the new state.
+
+**Step 5: Canonical encoding.** The contract rejects any $\text{pi}$ where $C_\text{old}$ or $C_\text{new}$ is not a canonical $\mathbb{F}_r$ element (byte value $\geq r$). This forecloses a class of substitution attacks where the attacker picks $C'_\text{new}$ from the non-canonical aliases of some legitimate $C_\text{new}$ that the verifier would otherwise treat as equal after reduction modulo $r$.
+
+**Step 6: State freshness.** The contract cross-checks $\text{pi}.C_\text{old}$ and $\text{pi}.e_\text{old}$ against on-chain storage before calling the verifier. Any $\text{pi}$ drawn from a stale or different state fails this check before any pairing is computed — closing a second replay surface.
+
+Combining Steps 2–6, the only $(\pi, \text{pi})$ accepted by `update_commitment` are those for which the attacker knows a witness binding the exact on-chain $C_\text{old}$, the exact stored epoch, *and* the `c_new` they submitted. $\square$
+
+### Remark 6b.1: Relationship to Theorem 3
+
+Theorem 3 and Theorem 3b are independent instantiations of Assumption 3.3 applied to two different relations with two different verification keys. Theorem 3 is *not* superseded for the operations it covers (`create_group`, `verify_membership`, `deactivate_group`) — for those operations the stored commitment *is* the value the proof verifies against, and no additional new-state binding is needed. Theorem 3 *is*, however, insufficient as the sole soundness statement for `update_commitment`; that operation requires Theorem 3b.
+
+### Remark 6b.2: Why `new_epoch` is not a public input
+
+A four-input variant $(C_\text{old}, e_\text{old}, C_\text{new}, e_\text{new})$ was considered. It is cryptographically sound but strictly weaker by Occam's razor: one more public input means one more `IC` point in the VK, one more MSM term in verification, one more field to serialise in `UpdatePublicInputs`, and one more place an implementation can introduce a bug. Constraint (3) computes $e_\text{old} + 1$ inside the circuit, which gives the same binding with no observable loss. See [update-circuit-binding-design.md §5](update-circuit-binding-design.md) for the full design comparison.
+
+---
+
 ## 7. Theorem 4: Zero-Knowledge Property
 
 ### Statement
@@ -347,7 +401,7 @@ Given two proofs $\pi_1, \pi_2$ for the same commitment $C$, a verifier cannot d
 
 ### Statement
 
-Under the contract's epoch enforcement (`new_epoch == stored_epoch + 1`), no PPT adversary can:
+Under the contract's epoch enforcement — `update_commitment` cross-checks `public_inputs.epoch_old == stored.epoch` and writes `stored.epoch := epoch_old + 1`, with the `+ 1` also constrained inside $R_\text{Update}$ (Theorem 3b) — no PPT adversary can:
 
 (a) Revert to a previous epoch.
 (b) Skip an epoch.
@@ -370,29 +424,25 @@ stored in persistent storage under key `DataKey::Group(group_id)`.
 
 **Proof of (a): No epoch reversion.**
 
-The `update_commitment` function enforces (contract line 479–481):
+`update_commitment` enforces:
 
 ```
-expected_epoch = current.epoch + 1
-require(new_epoch == expected_epoch)
+require(public_inputs.epoch_old == current.epoch)
+stored.epoch := current.epoch + 1   // checked_add, u64 overflow-safe
 ```
 
-Since `new_epoch` must strictly equal `current.epoch + 1`, any attempt to set `new_epoch < current.epoch` or `new_epoch == current.epoch` is rejected. The `checked_add` prevents overflow of the u64 epoch counter.
+Combined with Constraint (3) of $R_\text{Update}$ (which computes `C_new` against `epoch_old + 1` as a field element), any transition writes exactly one successor epoch. An adversary attempting to transition to any $e' \leq \text{current.epoch}$ presents a `public_inputs.epoch_old` that does not match the stored epoch, is rejected before verification. `checked_add` prevents u64 overflow.
 
 **Proof of (b): No epoch skipping.**
 
-The same strict equality check `new_epoch == current.epoch + 1` prevents skipping. If the current epoch is $e$, the only accepted next epoch is $e + 1$, not $e + 2$ or any larger value.
+There is no attacker-controlled `new_epoch` parameter. The stored epoch advances by exactly one on each accepted `update_commitment`. An adversary who wishes to jump from $e$ to $e + 2$ would need to forge a valid $R_\text{Update}$ proof with `epoch_old = e + 1` against the current stored epoch $e$, which the state-binding check rejects.
 
 **Proof of (c): No state forking.**
 
 Suppose two conflicting updates attempt to transition from epoch $e$ to epoch $e + 1$ with different commitments $C'_1 \neq C'_2$. Both updates require:
 
-1. A valid proof against the *current* commitment $(C_e, e)$ (contract line 483–486):
-   ```
-   require(public_inputs.commitment == current.commitment)
-   require(public_inputs.epoch == current.epoch)
-   ```
-2. The proof must pass Groth16 verification.
+1. A valid proof under $R_\text{Update}$ binding `public_inputs.c_old == current.commitment` and `public_inputs.epoch_old == current.epoch`, per Theorem 3b.
+2. The proof must pass Groth16 verification under `vk_update`.
 3. The proof must not be replayed (Theorem 6).
 
 Since the contract stores exactly one `CommitmentEntry` per `group_id`, and Stellar's transaction ordering is deterministic within a ledger, exactly one of the two competing transactions will execute first — updating the stored entry to $(C'_1, e+1)$. The second transaction then fails because `current.epoch` is now $e + 1$, not $e$.
@@ -460,10 +510,10 @@ None of these fields contain the prover's identity.
 **Contract authorization model.** The `update_commitment` function accepts parameters:
 
 ```
-(group_id, new_commitment, new_epoch, proof, public_inputs)
+(group_id, proof, public_inputs)     // public_inputs = (c_old, epoch_old, c_new)
 ```
 
-Notably absent: any `caller: Address` or `source: Address` parameter. The contract does not inspect `env.invoker()` or any caller identity. Authorization is **proof-only**: the zero-knowledge proof serves as the sole authorization mechanism.
+Notably absent: any `caller: Address`, `source: Address`, `new_commitment`, or `new_epoch` parameter. The new commitment and the epoch increment are bound as public inputs of the $R_\text{Update}$ proof (see Theorem 3b). The contract does not inspect `env.invoker()` or any caller identity. Authorization is **proof-only**: the zero-knowledge proof serves as the sole authorization mechanism.
 
 **Proof zero-knowledge.** By Theorem 4, the proof $\pi$ reveals nothing about the prover's identity. The verifier (contract) learns only that *some* member of the committed group produced the proof — not *which* member.
 
@@ -765,23 +815,26 @@ function create_group(group_id, commitment, tier, proof, public_inputs):
 ### update_commitment
 
 ```
-function update_commitment(group_id, new_commitment, new_epoch, proof, public_inputs):
+function update_commitment(group_id, proof, public_inputs):
+    // public_inputs = (c_old, epoch_old, c_new) — 73-byte wire, version 0x02
     current = storage.get(Group(group_id))
     require(current.active)
-    require(new_epoch == current.epoch + 1)
-    require(public_inputs.commitment == current.commitment)
-    require(public_inputs.epoch == current.epoch)
-    
+    require(public_inputs.c_old == current.commitment)        // state binding
+    require(public_inputs.epoch_old == current.epoch)
+    require(is_canonical_fr(public_inputs.c_new))             // no non-canonical aliases
+
     check_proof_replay(proof)
-    
+
     tier = storage.get(GroupTier(group_id))
-    vk = load_vk(tier)
-    require(verify_groth16_proof(vk, proof, current.commitment, current.epoch))
-    
+    vk_update = load_update_vk(tier)
+    // Three public inputs in fixed order: (c_old, epoch_old, c_new).
+    require(verify_groth16_proof(vk_update, proof, public_inputs.c_old, public_inputs.epoch_old, public_inputs.c_new))
+
     record_proof(proof)
-    
-    current.commitment = new_commitment
-    current.epoch = new_epoch
+
+    // The +1 is also constrained inside R_Update; checked_add prevents u64 overflow.
+    current.commitment = public_inputs.c_new
+    current.epoch = current.epoch.checked_add(1)
     current.timestamp = now()
     storage.set(Group(group_id), current)
 ```

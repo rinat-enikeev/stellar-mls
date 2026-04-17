@@ -2,6 +2,8 @@
 
 All 9 Critical findings from the [full audit](audit-report.md) have been fixed. This document describes what each vulnerability was, how it was exploitable, and what was changed.
 
+> **Post-audit addendum — 2026-04:** A separate critical binding defect in `update_commitment` was identified during follow-up review — the stored `new_commitment` was not a Groth16 public input of the proof, so an observer of any valid proof could substitute a different `new_commitment` in the transaction envelope. The full analysis, the `R_Update` circuit fix, and the 13-phase rollout are documented in [`docs/vuln-unbound-new-commitment.md`](vuln-unbound-new-commitment.md), [`docs/postmortem-unbound-new-commitment.md`](postmortem-unbound-new-commitment.md), and [`docs/update-circuit-binding-design.md`](update-circuit-binding-design.md). This defect was not caught by the C-1..C-9 audit because the audit scope covered each function's soundness statement in isolation (does the accepted proof imply a valid witness for the stated public inputs?) rather than the operation-level question (does the accepted proof bind *every byte the contract then persists*?). A structural catalogue of `{persisted bytes} \ {public inputs}` per verifier call site is the recommended remediation posture for future ZK-gated contracts.
+
 ---
 
 ## C-1: No Authorization on `create_group`
@@ -254,7 +256,7 @@ All components build successfully after the fixes:
 **Status:** Already addressed. `bump_group()` already calls `env.storage().instance().extend_ttl(LEDGER_THRESHOLD, LEDGER_BUMP)` (line 560-563). Instance storage is bumped on every group operation.
 
 ### H-2: No Epoch Freshness Check in Contract
-**Status:** Already addressed. `update_commitment` requires `new_epoch == current.epoch + 1` (line 346), which prevents both rollback and epoch skipping.
+**Status:** Already addressed. `update_commitment` cross-checks `public_inputs.epoch_old == stored.epoch` and writes `stored.epoch := epoch_old + 1`, with the `+ 1` constrained inside `R_Update` (see §3.7 of the SEP and the post-audit addendum above). This prevents both rollback and epoch skipping. Prior to the post-audit `R_Update` fix, the same invariant was enforced via an envelope-level `new_epoch == current.epoch + 1` check; the current design eliminates the attacker-controlled `new_epoch` parameter entirely.
 
 ### H-3: Swift SHA-256 Commitment Reimplemented Locally
 **Fix:** Replaced the pure-Swift SHA-256 reimplementation in `SEPCommitmentBuilder.computeSHA256Commitment()` with delegation to `RustBridge.computeSHA256Commitment()`, routing all commitment computation through the Rust core to eliminate divergence risk.

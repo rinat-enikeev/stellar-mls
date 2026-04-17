@@ -34,8 +34,9 @@ represents and how we intend to stop repeating it.
 The fix, tracked in
 [update-circuit-binding-design.md](update-circuit-binding-design.md) and
 [implementation-plan-update-circuit-binding.md](implementation-plan-update-circuit-binding.md),
-introduces a dedicated `UpdateCircuit` with `C_new` and `epoch_new` as
-constrained public inputs. The existing `MembershipCircuit` is untouched for
+introduces a dedicated `UpdateCircuit` with three public inputs
+`(C_old, epoch_old, C_new)`, binding `C_new` via an in-circuit equality
+constraint to `Poseidon(Poseidon(root_new, epoch_old + 1), salt_new)`. The existing `MembershipCircuit` is untouched for
 the three read-style paths (`create_group`, `verify_membership`,
 `deactivate_group`) whose statements really are single-epoch assertions.
 
@@ -58,7 +59,8 @@ All dates in 2026 unless noted. Times America/New_York.
 | 2026-04-16 | User raises the question during a code review: *"What in the math forces the prover's authorization to pertain to this specific `new_commitment`, not any other 32-byte string an attacker might substitute?"* Initial attempt to point at replay protection, canonical-bytes check, and epoch monotonicity as the answer. Each mitigation is examined; none of them cover the gap. |
 | 2026-04-16, ~30 min later | Side-by-side reading of `src/circuit/mod.rs:48-74` (public inputs) and `contracts/sep-xxxx/src/lib.rs:459-523` (contract ABI) confirms: `new_commitment` is a contract parameter, not a public input. The gap is real. |
 | 2026-04-16 | First fix plan proposed: add `new_commitment` as a public input to `MembershipCircuit`. Internal critique points out (a) the public input must be *constrained* — an unconstrained allocation contributes `IC_i = 0` and binds nothing, (b) three other call sites share the circuit and would be semantically polluted, (c) `Fr::from_bytes` silently reduces mod-r so a canonical check is required on `new_commitment` too. |
-| 2026-04-17 | Refined fix: separate `UpdateCircuit` with `(C_old, epoch_old, C_new, epoch_new)` as constrained public inputs; `MembershipCircuit` unchanged for read paths; canonical-bytes check extended to `new_commitment`. |
+| 2026-04-17 | Initial refined fix proposal: separate `UpdateCircuit` with `(C_old, epoch_old, C_new, epoch_new)` as four public inputs. |
+| 2026-04-17 | Further review normalises the design to three public inputs `(C_old, epoch_old, C_new)`, deriving `epoch_new = epoch_old + 1` inside the circuit. This is the form the implementation targets. `MembershipCircuit` unchanged for read paths; canonical-bytes check extended to `new_commitment`. |
 | 2026-04-17 | Four documents drafted: vulnerability report, design doc, implementation plan, this postmortem. |
 | Next 1–2 weeks (planned) | Phases 0–3 implemented (Rust core). |
 | Next 2–3 weeks (planned) | Phase 4 (contract), Phase 5 (relayer), Phases 6–7 (SDKs). |
@@ -245,17 +247,26 @@ What is wrong is the choice of object.
 The soundness property that the `update_commitment` *operation* requires
 is:
 
-> For all PPT adversaries producing a tuple `(proof, public_inputs,
-> new_commitment)` accepted by the contract, there exists an extractor
-> producing a witness showing that the *operating party* is a qualifying
-> current member **and** that `new_commitment` is the unique value the
-> operating party intended.
+> For all PPT adversaries producing a tuple $(\pi, \text{pi})$ accepted
+> by the `update_commitment` verifier, where
+> $\text{pi} = (C_{old}, e_{old}, C_{new})$, there exists an extractor
+> producing a witness $(\text{sk}, \text{root}_{old}, \text{salt}_{old},
+> \text{auth\_path}, \text{root}_{new}, \text{salt}_{new})$ satisfying
+> constraints (1)–(3) of $R_{\text{Update}}$ over that exact $\text{pi}$,
+> except with negligible probability.
 
-That's a theorem about a four-tuple. Proving a theorem about a different
-object (the two-input relation) and calling the job done is a classic
-logical error: asserting the existence of a proof of $A$ implies the
-existence of a proof of $A \land B$, which is only true if $B$ is already
-implied by $A$ — which here it is not.
+A ZK proof cannot bind subjective intent; it can only bind a concrete
+public statement. The right formal claim is that a proof accepted for
+one public tuple does not carry over to a different public tuple
+without a fresh witness. That is the cryptographic guarantee; the
+operational guarantee ("the right party authorized this specific
+`C_new`") follows from the fact that `C_new` is now in the public
+statement and the prover must have known the witness at proving time.
+
+Proving knowledge soundness for the two-input relation and calling the
+job done is a classic logical error: asserting the existence of a proof
+of $A$ implies the existence of a proof of $A \land B$, which is only
+true if $B$ is already implied by $A$ — which here it is not.
 
 The soundness doc's own structural guarantee lulled reviewers. "The math
 is correct" was, in a trivial sense, true — it's just that the math
@@ -561,16 +572,20 @@ top-level field; it lives inside `public_inputs`:
     "version":   2,
     "c_old":     "<C_old, hex>",
     "epoch_old": 5,
-    "c_new":     "<C_new, hex>",
-    "epoch_new": 6
+    "c_new":     "<C_new, hex>"
   }
 }
 ```
 
-If Mallory substitutes `c_new`, the modified `public_inputs` produces a
-different `vk_x` in the pairing equation's linear combination:
+`epoch_new` is not transmitted — the contract derives it as
+`current.epoch + 1`, and the circuit binds `C_new` to
+`Poseidon(Poseidon(root_new, epoch_old + 1), salt_new)` internally.
 
-$$\text{vk\_x} = IC_0 + C_{\text{old}} \cdot IC_1 + e_{\text{old}} \cdot IC_2 + C_{\text{new,Mallory}} \cdot IC_3 + e_{\text{new}} \cdot IC_4$$
+If Mallory substitutes `c_new`, the modified `public_inputs` produces a
+different `vk_x` in the pairing equation's linear combination (three
+public inputs, four IC points):
+
+$$\text{vk\_x} = IC_0 + C_{\text{old}} \cdot IC_1 + e_{\text{old}} \cdot IC_2 + C_{\text{new,Mallory}} \cdot IC_3$$
 
 The pairing check fails. The contract rejects with `InvalidProof`.
 Attack neutralized at the cryptographic layer, independent of any

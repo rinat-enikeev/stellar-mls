@@ -3,8 +3,8 @@
 **Date:** 2026-04-17
 **Based on:** [update-circuit-binding-design.md](update-circuit-binding-design.md)
 **Motivated by:** [vuln-unbound-new-commitment.md](vuln-unbound-new-commitment.md)
-**Status:** Draft
-**Version:** 1.0
+**Status:** Draft (v2 — normalised to the 3-public-input design)
+**Version:** 1.1
 **Target release:** keyset-v2 / contract v2
 
 ---
@@ -26,12 +26,24 @@ transition") to the specific `new_commitment` value that gets persisted. A
 malicious relayer, a Stellar mempool front-runner, or any actor between the
 prover and the ledger can swap `new_commitment` and the proof will still verify.
 
-The fix introduces a **separate `UpdateCircuit`** with four public inputs
-`(C_old, epoch_old, C_new, epoch_new)` bound by an in-circuit equality
-constraint `C_new = Poseidon(Poseidon(root_new, epoch_new), salt_new)`. Read
-paths (`create_group`, `verify_membership`, `deactivate_group`) continue to use
-the existing `MembershipCircuit` unchanged, because their statements really are
+The fix introduces a **separate `UpdateCircuit`** with three public inputs
+`(C_old, epoch_old, C_new)` bound by three R1CS constraints, the last of which
+enforces `C_new = Poseidon(Poseidon(root_new, epoch_old + 1), salt_new)`. The
+circuit derives `epoch_new` internally as `epoch_old + 1`; `epoch_new` is
+therefore **not a public input** — one fewer IC point, one fewer scalar in the
+contract MSM, one fewer 8-byte slot in the wire format. Read paths
+(`create_group`, `verify_membership`, `deactivate_group`) continue to use the
+existing `MembershipCircuit` unchanged, because their statements really are
 "prove membership in the current tree" — no transition.
+
+> **Design choice: 3 public inputs, not 4.** An earlier draft of this plan used
+> four public inputs `(C_old, epoch_old, C_new, epoch_new)`. Both designs can
+> be made sound, but the 3-input form matches the design doc
+> ([update-circuit-binding-design.md](update-circuit-binding-design.md) §5.1,
+> §5.4), is simpler at every layer (circuit, VK, contract MSM, FFI wire
+> format, SDK structs, test vectors), and has one fewer failure mode. This
+> revision of the plan is normalised to the 3-input form throughout — do not
+> mix with the 4-input form or the VK length will not match the verifier.
 
 This plan covers thirteen phases (Phase 0 through Phase 12) across the Rust
 core, Soroban contract, relayer, Swift SDK, Kotlin SDK, trusted-setup
@@ -60,6 +72,32 @@ implementation targets in this plan:
 - Re-randomization hardening (Groth16 malleability at the pairing level).
 - Unified circuit collapsing create / update / verify / deactivate.
 
+### Normative invariants
+
+These must hold at every implementation layer. Any departure is a bug, not a
+choice.
+
+- **Public inputs:** exactly three scalars per update proof, in the fixed
+  allocation order `(C_old, epoch_old, C_new)`.
+- **IC length:** `UpdateVK::ic.len() == 4` (one IC constant + three public
+  inputs). `MembershipVK::ic.len() == 3` is unchanged.
+- **Wire format length:** 73 bytes (1 version + 32 C_old + 8 epoch_old +
+  32 C_new). Big-endian for the 8-byte `u64`.
+- **Version byte:** `0x02` leads every serialised `UpdatePublicInputs`.
+- **Epoch derivation:** the contract computes the new stored epoch as
+  `current.epoch + 1`. The circuit enforces
+  `C_new = Poseidon(Poseidon(root_new, epoch_old + 1), salt_new)` using the
+  `epoch_old` public input. `epoch_new` is derived, never transmitted.
+- **Proof bytes:** the FFI prover returns a 192-byte compressed Groth16 proof
+  (existing convention — `src/ffi.rs`). The contract receives uncompressed
+  G1/G2 points via its existing `Groth16Proof` type conversion; this plan
+  does not change that boundary.
+- **Replay protection:** `check_proof_replay` runs **before** the pairing
+  check; `record_proof` runs **after** successful verification and before
+  state writes. This mirrors the existing `create_group` /
+  `update_commitment` pattern in the monolithic contract
+  (`contracts/sep-xxxx/src/lib.rs`).
+
 ---
 
 ## Dependency DAG
@@ -70,7 +108,7 @@ they exist. Status indicators: ☐ not started, 🔧 in progress, ✅ done.
 ```
 Phase 0 (scaffolding)
     │
-Phase 1 (circuit constraints 1–4)
+Phase 1 (circuit constraints 1–3)
     │
 Phase 2 (prover API)
     │
@@ -111,7 +149,7 @@ parallel with Phases 6 and 7.
 
 ## Phase 0 — Setup & scaffolding
 
-**Goal:** Introduce the new module skeleton and type stubs so that subsequent
+**Goal:** Introduce the new circuit module and type stubs so that subsequent
 phases add constraints rather than rewiring modules. This phase must leave the
 build green but produce no behavioural change.
 
@@ -123,45 +161,79 @@ build green but produce no behavioural change.
 |------|--------|
 | `src/circuit/mod.rs` | Add `pub mod update;` declaration |
 | `src/circuit/update.rs` | **NEW** — empty module skeleton |
-| `src/circuit/update/tests.rs` | **NEW** — test scaffolding |
 | `Cargo.toml` | No change (arkworks deps already present) |
 
 ### Changes
 
-1. Create `src/circuit/update.rs` with the bare scaffolding:
+1. Create `src/circuit/update.rs` with the bare scaffolding, mirroring the
+   field layout of the existing `MembershipCircuit`
+   (`src/circuit/mod.rs:47-74`):
 
 ```rust
 //! UpdateCircuit — Groth16 circuit that binds a membership proof at the old
-//! epoch to the specific C_new / epoch_new being authorized on-chain.
+//! epoch to the specific C_new being authorized on-chain.
 //!
 //! See docs/update-circuit-binding-design.md §5 for the formal relation.
 
-use ark_bls12_381::Fr;
-use ark_r1cs_std::alloc::AllocationMode;
-use ark_r1cs_std::fields::fp::FpVar;
+use ark_crypto_primitives::sponge::Absorb;
+use ark_crypto_primitives::sponge::poseidon::PoseidonConfig;
+use ark_ff::PrimeField;
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
-use crate::circuit::MerkleAuthPath;
 
-pub struct UpdateCircuit {
-    // Public inputs (allocated in fixed order — see §5.6 of the design doc).
-    pub c_old: Option<Fr>,
-    pub epoch_old: Option<Fr>,
-    pub c_new: Option<Fr>,
-    pub epoch_new: Option<Fr>,
+use crate::poseidon::poseidon_config;
 
-    // Witnesses.
-    pub sk: Option<Fr>,
-    pub salt_old: Option<Fr>,
-    pub root_new: Option<Fr>,
-    pub salt_new: Option<Fr>,
-    pub auth_path: Option<MerkleAuthPath>,
-    pub tree_depth: usize,
+/// The SEP-XXXX update circuit.
+///
+/// Proves: "I know a secret key that is a leaf in the old tree of commitment
+/// C_old at epoch e_old, and I know (root_new, salt_new) such that
+/// C_new = Poseidon(Poseidon(root_new, e_old + 1), salt_new)."
+#[derive(Clone)]
+pub struct UpdateCircuit<F: PrimeField + Absorb> {
+    // === Public inputs (allocated in fixed order: c_old, epoch_old, c_new) ===
+    pub c_old: Option<F>,
+    pub epoch_old: Option<u64>,
+    pub c_new: Option<F>,
+
+    // === Witnesses ===
+    pub secret_key: Option<F>,
+    pub poseidon_root_old: Option<F>,
+    pub salt_old: Option<[u8; 32]>,
+    pub merkle_path_old: Option<Vec<F>>,
+    pub leaf_index_old: Option<usize>,
+    pub poseidon_root_new: Option<F>,
+    pub salt_new: Option<[u8; 32]>,
+
+    /// Tree depth (determines circuit tier).
+    pub depth: usize,
+
+    /// Poseidon config (not a witness, but needed for constraint generation).
+    pub poseidon_config: PoseidonConfig<F>,
 }
 
-impl ConstraintSynthesizer<Fr> for UpdateCircuit {
+impl<F: PrimeField + Absorb> UpdateCircuit<F> {
+    /// Create an empty circuit (for setup/keygen — no witness values).
+    pub fn empty(depth: usize) -> Self {
+        Self {
+            c_old: None,
+            epoch_old: None,
+            c_new: None,
+            secret_key: None,
+            poseidon_root_old: None,
+            salt_old: None,
+            merkle_path_old: None,
+            leaf_index_old: None,
+            poseidon_root_new: None,
+            salt_new: None,
+            depth,
+            poseidon_config: poseidon_config::<F>(),
+        }
+    }
+}
+
+impl ConstraintSynthesizer<ark_bls12_381::Fr> for UpdateCircuit<ark_bls12_381::Fr> {
     fn generate_constraints(
         self,
-        _cs: ConstraintSystemRef<Fr>,
+        _cs: ConstraintSystemRef<ark_bls12_381::Fr>,
     ) -> Result<(), SynthesisError> {
         // Populated in Phase 1.
         Ok(())
@@ -175,29 +247,24 @@ impl ConstraintSynthesizer<Fr> for UpdateCircuit {
 pub mod update;
 ```
 
-3. Seed the test file with a compile-only smoke test:
+3. Add a compile-only smoke test inside `src/circuit/update.rs` (same-file
+   `#[cfg(test)] mod tests` pattern, matching how `src/circuit/mod.rs` hosts
+   its tests):
 
 ```rust
-#[test]
-fn update_circuit_compiles_with_no_constraints() {
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ark_bls12_381::Fr;
     use ark_relations::r1cs::ConstraintSystem;
-    let cs = ConstraintSystem::<ark_bls12_381::Fr>::new_ref();
-    let circuit = super::UpdateCircuit {
-        c_old: None, epoch_old: None, c_new: None, epoch_new: None,
-        sk: None, salt_old: None, root_new: None, salt_new: None,
-        auth_path: None, tree_depth: 5,
-    };
-    <super::UpdateCircuit as ark_relations::r1cs::ConstraintSynthesizer<_>>::generate_constraints(circuit, cs.clone()).unwrap();
-    assert_eq!(cs.num_constraints(), 0);
-}
-```
 
-4. Stub a module-level `prove_update` that returns `Err("not implemented")` to
-   reserve the symbol that Phase 2 will fill in:
-
-```rust
-pub fn prove_update(_: ()) -> Result<Vec<u8>, &'static str> {
-    Err("prove_update: not implemented (Phase 2)")
+    #[test]
+    fn update_circuit_compiles_with_no_constraints() {
+        let cs = ConstraintSystem::<Fr>::new_ref();
+        let circuit = UpdateCircuit::<Fr>::empty(5);
+        circuit.generate_constraints(cs.clone()).unwrap();
+        assert_eq!(cs.num_constraints(), 0);
+    }
 }
 ```
 
@@ -205,8 +272,7 @@ pub fn prove_update(_: ()) -> Result<Vec<u8>, &'static str> {
 
 - `cargo build --lib` succeeds.
 - `cargo test --lib circuit::update::tests::update_circuit_compiles_with_no_constraints` passes.
-- `cargo test --lib` returns same pre-existing count plus 1.
-- `git grep -n "UpdateCircuit"` matches only `src/circuit/update.rs` and its test module.
+- `git grep -n "UpdateCircuit"` matches only `src/circuit/update.rs`.
 
 ### Dependencies
 
@@ -214,11 +280,11 @@ None — Phase 0 is the root of the DAG.
 
 ---
 
-## Phase 1 — Circuit constraints (1)–(4)
+## Phase 1 — Circuit constraints (1)–(3)
 
-**Goal:** Implement the four R1CS constraints that define `R_Update`. This
-phase makes the circuit semantically correct. No prover API yet; tests exercise
-the circuit via the raw `ConstraintSynthesizer` interface.
+**Goal:** Implement the three R1CS constraints that define `R_Update`. This
+phase makes the circuit semantically correct. No prover API yet; tests
+exercise the circuit via the raw `ConstraintSynthesizer` interface.
 
 **Status:** ☐
 
@@ -227,59 +293,55 @@ the circuit via the raw `ConstraintSynthesizer` interface.
 | File | Action |
 |------|--------|
 | `src/circuit/update.rs` | Populate `generate_constraints` |
-| `src/circuit/update/tests.rs` | Add positive / negative / order tests |
-| `src/circuit/mod.rs` | Re-export `poseidon_hash_two_gadget` (if not already `pub(crate)`) |
+| `src/circuit/mod.rs` | Expose the Poseidon and Merkle gadgets to the sibling module (widen visibility from private to `pub(crate)` if needed) |
+
+### Constraints
+
+The circuit, per the design doc §5.2:
+
+```
+Public:  c_old, epoch_old, c_new
+Witness: sk, root_old, salt_old, path_old, idx_old, root_new, salt_new
+
+(1) Poseidon(sk) opens along path_old at idx_old to root_old
+(2) c_old = Poseidon(Poseidon(root_old, epoch_old), salt_old)
+(3) c_new = Poseidon(Poseidon(root_new, epoch_old + 1), salt_new)
+```
+
+`epoch_new` is derived in-circuit as `epoch_old_var + 1` via an `FpVar`
+linear combination; no dedicated variable and no constraint beyond the
+addition gadget already used by Poseidon is required.
 
 ### Changes
 
 1. **Public input allocation (pinned order).** Inside `generate_constraints`,
-   allocate public inputs in the exact order `(c_old, epoch_old, c_new,
-   epoch_new)`. Allocation order IS the serialisation order — no sorting later
-   will fix a mistake here, because the Groth16 IC vector indexes by allocation
-   order:
+   allocate public inputs in the exact order `(c_old, epoch_old, c_new)`.
+   Allocation order IS the serialisation order — no sorting later will fix a
+   mistake here, because the Groth16 IC vector indexes by allocation order.
+   The result is `UpdateVK::ic.len() == 4` (one IC constant + three public
+   inputs).
 
-```rust
-let c_old_var      = FpVar::<Fr>::new_input(cs.clone(), || {
-    self.c_old.ok_or(SynthesisError::AssignmentMissing)
-})?;
-let epoch_old_var  = FpVar::<Fr>::new_input(cs.clone(), || {
-    self.epoch_old.ok_or(SynthesisError::AssignmentMissing)
-})?;
-let c_new_var      = FpVar::<Fr>::new_input(cs.clone(), || {
-    self.c_new.ok_or(SynthesisError::AssignmentMissing)
-})?;
-let epoch_new_var  = FpVar::<Fr>::new_input(cs.clone(), || {
-    self.epoch_new.ok_or(SynthesisError::AssignmentMissing)
-})?;
-```
+2. **Constraint (1): Membership leaf.** Allocate `sk`, `poseidon_root_old`,
+   `salt_old`, `merkle_path_old`, `leaf_index_old` as witnesses; compute
+   `leaf = Poseidon(sk)`, fold along the authentication path to `root_old`.
+   This is the same construction used by `MembershipCircuit`
+   (`src/circuit/mod.rs:117-245`); reuse the existing gadgets verbatim.
 
-2. **Constraint (1): Membership leaf.** Allocate `sk` as witness, compute
-   `leaf = Poseidon(sk)`, fold the Merkle auth path to obtain `root_old_var`.
-   Port verbatim from `MembershipCircuit` — no structural changes.
-
-3. **Constraint (2): Old commitment.** Allocate `salt_old` as witness, compute
+3. **Constraint (2): Old commitment.** Compute
    `c_old_derived = Poseidon(Poseidon(root_old_var, epoch_old_var), salt_old)`,
    enforce `c_old_derived.enforce_equal(&c_old_var)`. This binds the proof to
    the specific old epoch state.
 
-4. **Constraint (3): Epoch monotonicity.** Enforce `epoch_new_var = epoch_old_var + 1`
-   using `FpVar`-level arithmetic. This prevents the relayer from jumping
-   epochs forward or rewinding history, which in turn prevents history-forking
-   attacks described in `vuln-unbound-new-commitment.md` §6.4.
-
-5. **Constraint (4): New commitment binding — the core fix.** Allocate
-   `root_new` and `salt_new` as witnesses, compute
-   `c_new_derived = Poseidon(Poseidon(root_new_var, epoch_new_var), salt_new_var)`,
+4. **Constraint (3): New commitment — the core fix.** Allocate
+   `poseidon_root_new` and `salt_new` as witnesses; compute
+   `epoch_new_var = epoch_old_var + FpVar::Constant(F::one())`;
+   `c_new_derived = Poseidon(Poseidon(root_new_var, epoch_new_var), salt_new_var)`;
    enforce `c_new_derived.enforce_equal(&c_new_var)`. This is the constraint
    whose absence produced the vulnerability.
 
-6. **Cross-reference the design doc in a comment** at the top of each
-   constraint block: `// See update-circuit-binding-design.md §5.2, constraint (N).`
-   Keep comments minimal — the WHY is in the design doc, not inline.
-
 ### Tests
 
-Add to `src/circuit/update/tests.rs`:
+Add to the same-file `tests` module:
 
 ```rust
 #[test]
@@ -289,20 +351,20 @@ fn update_circuit_accepts_valid_transition() { /* ... */ }
 fn update_circuit_rejects_wrong_c_new() { /* swap salt_new but not c_new */ }
 
 #[test]
-fn update_circuit_rejects_non_monotonic_epoch() { /* epoch_new = epoch_old + 2 */ }
-
-#[test]
-fn update_circuit_rejects_rewound_epoch() { /* epoch_new = epoch_old */ }
+fn update_circuit_rejects_non_monotonic_epoch() {
+    // Build public inputs where c_new commits to epoch_old + 2.
+    // The in-circuit derivation uses epoch_old + 1, so constraint (3) fails.
+}
 
 #[test]
 fn update_circuit_rejects_wrong_auth_path() { /* leaf not in root_old */ }
 
 #[test]
 fn update_circuit_public_input_order_pinned() {
-    // Build the circuit, run `ConstraintSystem::num_instance_variables`,
-    // assert it equals 1 (constant) + 4 (our public inputs).
+    // Build the circuit, run ConstraintSystem::num_instance_variables,
+    // assert it equals 1 (constant) + 3 (our public inputs) = 4.
     // Then extract allocated values in instance-index order and assert
-    // they equal (c_old, epoch_old, c_new, epoch_new).
+    // they equal (c_old, epoch_old, c_new).
 }
 ```
 
@@ -310,8 +372,8 @@ fn update_circuit_public_input_order_pinned() {
 
 - `cargo test --lib circuit::update` — all tests pass.
 - `cargo test --lib circuit` — existing `MembershipCircuit` tests unaffected.
-- Constraint count landed within design doc estimates per tier (Appendix A:
-  depth-5 ~9,000; depth-8 ~14,400; depth-11 ~19,800).
+- Constraint count landed within design doc Appendix A estimates per tier.
+- `ConstraintSystem::num_instance_variables == 4` after `generate_constraints`.
 
 ### Dependencies
 
@@ -323,8 +385,9 @@ Phase 0.
 
 **Goal:** Expose a Rust-level API that takes high-level inputs (secret key,
 member list, old epoch, new member list, salts) and returns a serialised
-Groth16 proof plus the four public-input scalars. This phase makes the circuit
-usable from application code without reaching into arkworks primitives.
+Groth16 proof plus the three public-input scalars. This phase makes the
+circuit usable from application code without reaching into arkworks
+primitives.
 
 **Status:** ☐
 
@@ -332,10 +395,13 @@ usable from application code without reaching into arkworks primitives.
 
 | File | Action |
 |------|--------|
-| `src/prover/mod.rs` | Add `pub mod update;` |
-| `src/prover/update.rs` | **NEW** — high-level API |
-| `src/prover/update/tests.rs` | **NEW** — round-trip tests |
-| `src/public_inputs.rs` | Add `UpdatePublicInputs` struct |
+| `src/prover.rs` | Add `prove_update` and `UpdateProverInput` (currently monolithic — extend in place) |
+| `src/public_inputs.rs` | Add `UpdatePublicInputs` (or colocate with existing `PublicInputs` if that's where the current type lives) |
+
+> **Note on file layout.** The current repo has `src/prover.rs` as a single
+> file. This phase extends it additively — no module split. If the resulting
+> file exceeds ~1000 lines, the split is handled as a separate refactor, not
+> as part of this plan.
 
 ### Changes
 
@@ -343,20 +409,29 @@ usable from application code without reaching into arkworks primitives.
 
 ```rust
 pub struct UpdatePublicInputs {
-    pub c_old: [u8; 32],      // big-endian canonical Fr
+    pub c_old: [u8; 32],       // big-endian canonical Fr
     pub epoch_old: u64,
-    pub c_new: [u8; 32],      // big-endian canonical Fr
-    pub epoch_new: u64,
+    pub c_new: [u8; 32],       // big-endian canonical Fr
 }
 
 impl UpdatePublicInputs {
     pub const VERSION: u8 = 2;
-    pub fn serialize(&self) -> Vec<u8> {
+    pub const SERIALIZED_LEN: usize = 1 + 32 + 8 + 32;  // 73 bytes
+
+    pub fn serialize(&self) -> [u8; Self::SERIALIZED_LEN] {
         // 1 byte version || 32 bytes c_old || 8 bytes epoch_old (BE)
-        // || 32 bytes c_new || 8 bytes epoch_new (BE)
+        // || 32 bytes c_new
     }
-    pub fn deserialize(bytes: &[u8]) -> Result<Self, DeserializeError> { ... }
-    pub fn to_scalars(&self) -> [Fr; 4] { ... }  // in allocation order
+
+    pub fn deserialize(bytes: &[u8]) -> Result<Self, DeserializeError> {
+        // reject if bytes.len() != SERIALIZED_LEN
+        // reject if bytes[0] != VERSION
+    }
+
+    pub fn to_scalars(&self) -> [Fr; 3] {
+        // in allocation order: (c_old, epoch_old, c_new)
+        // epoch_old is cast u64 -> Fr
+    }
 }
 ```
 
@@ -379,18 +454,20 @@ pub struct UpdateProverInput<'a> {
 
 ```rust
 pub fn prove_update(input: UpdateProverInput<'_>) -> Result<(Vec<u8>, UpdatePublicInputs), ProveError> {
-    // 1. Canonicalize member_old -> Poseidon leaves -> tree -> root_old.
+    // 1. Canonicalize members_old -> Poseidon leaves -> tree -> root_old.
     // 2. Locate sk's leaf index; build auth path.
-    // 3. Canonicalize member_new -> tree -> root_new.
+    // 3. Canonicalize members_new -> tree -> root_new.
     // 4. Derive c_old = Poseidon(Poseidon(root_old, epoch_old), salt_old).
-    // 5. epoch_new = epoch_old + 1; derive c_new.
+    // 5. Derive c_new = Poseidon(Poseidon(root_new, epoch_old + 1), salt_new).
     // 6. Instantiate UpdateCircuit; Groth16::prove.
-    // 7. Serialise proof (G1 || G2 || G1 compressed) and inputs.
+    // 7. Serialise proof (compressed, 192 bytes — existing convention)
+    //    and UpdatePublicInputs (73 bytes).
 }
 ```
 
 4. Add a convenience wrapper `prove_update_from_members` that wraps the
-   canonical-ordering + Poseidon hashing steps so callers don't reimplement them.
+   canonical-ordering + Poseidon hashing steps so callers don't reimplement
+   them.
 
 ### Tests
 
@@ -399,11 +476,6 @@ pub fn prove_update(input: UpdateProverInput<'_>) -> Result<(Vec<u8>, UpdatePubl
 fn prove_update_round_trip() {
     // Generate a small tier with 3 members, prove, verify locally with
     // Groth16::verify against the same VK. Must succeed.
-}
-
-#[test]
-fn prove_update_rejects_stale_epoch() {
-    // Build members_old at epoch 5; call prove_update; assert epoch_new == 6.
 }
 
 #[test]
@@ -419,15 +491,17 @@ fn prove_update_wrong_sk_fails() {
 
 #[test]
 fn update_public_inputs_serde_round_trip() {
-    // serialize -> deserialize -> same bytes; leading version byte == 2.
+    // serialize -> deserialize -> same bytes; leading version byte == 2;
+    // SERIALIZED_LEN == 73.
 }
 ```
 
 ### Verification
 
-- `cargo test --lib prover::update` — all pass.
-- `cargo test --lib public_inputs` — `UpdatePublicInputs` serde tests pass.
-- `UpdatePublicInputs::serialize` output length is exactly `1 + 32 + 8 + 32 + 8 = 81` bytes.
+- `cargo test --lib prover::update_round_trip` and related tests pass.
+- `UpdatePublicInputs::serialize` output length is exactly 73 bytes.
+- Serialised proof length matches the existing membership proof (192 bytes,
+  compressed).
 
 ### Dependencies
 
@@ -447,12 +521,14 @@ version skew loudly instead of misparsing a legacy payload.
 
 | File | Action |
 |------|--------|
-| `src/ffi/mod.rs` | Add `pub mod update;` |
-| `src/ffi/update.rs` | **NEW** — `sep_prove_update` C entry point |
-| `src/jni/mod.rs` | Add `pub mod update;` |
-| `src/jni/update.rs` | **NEW** — `Java_com_stellarmls_native_ProverJNI_sepProveUpdate` |
-| `src/ffi/error.rs` | Add `ErrorCode::UpdateProof*` variants |
-| `include/stellar_mls.h` | Add `sep_prove_update` prototype, bump header version |
+| `src/ffi.rs` | Extend with `sep_prove_update` entry point (existing monolithic FFI file) |
+| `src/jni_ffi.rs` | Extend with `Java_com_stellarmls_native_ProverJNI_sepProveUpdate` (existing monolithic JNI file) |
+| `include/stellar_mls.h` | Add `sep_prove_update` prototype, add `STELLAR_MLS_PUBLIC_INPUTS_VERSION` macro |
+
+> **Note on file layout.** The current repo has `src/ffi.rs` and
+> `src/jni_ffi.rs` as single files — there is no `src/ffi/` or `src/jni/`
+> directory. This phase extends those files additively and does not split
+> them.
 
 ### Changes
 
@@ -471,10 +547,10 @@ int32_t sep_prove_update(
     const uint8_t* salt_new,         // 32 bytes
     const uint8_t* proving_key_bytes,
     size_t proving_key_len,
-    uint8_t* out_proof,              // caller-allocated, size from sep_proof_size()
+    uint8_t* out_proof,              // caller-allocated, 192 bytes
     size_t out_proof_cap,
     size_t* out_proof_len,
-    uint8_t* out_public_inputs,      // caller-allocated, size 81
+    uint8_t* out_public_inputs,      // caller-allocated, 73 bytes
     size_t out_public_inputs_cap,
     size_t* out_public_inputs_len
 );
@@ -489,26 +565,33 @@ int32_t sep_prove_update(
    epoch`) payload from being silently parsed as the leading half of a v2
    payload — a confused-deputy risk at the FFI boundary.
 
-4. Update `include/stellar_mls.h` header with:
+4. **Buffer sizes.** `out_proof_cap` must be ≥ 192; `out_public_inputs_cap`
+   must be ≥ 73. Any smaller buffer returns `UpdateProofBufferTooSmall`.
+
+5. Update `include/stellar_mls.h` with:
 
 ```c
 #define STELLAR_MLS_PUBLIC_INPUTS_VERSION 2
+#define STELLAR_MLS_UPDATE_PUBLIC_INPUTS_LEN 73
 ```
 
 ### Tests
 
-- `tests/ffi/update_round_trip.rs` — C-level round-trip via `libloading`.
-- `tests/jni/update_round_trip.rs` — JNI round-trip via `j4rs`.
-- `tests/ffi/update_version_mismatch.rs` — pass a v1-shaped buffer; assert
-  error code `UpdateProofVersionMismatch`.
-- `tests/ffi/update_buffer_too_small.rs` — pass `out_public_inputs_cap = 80`;
-  assert error code `UpdateProofBufferTooSmall`.
+- Unit test in `src/ffi.rs` exercising `sep_prove_update` round-trip via the
+  raw C calling convention within a single process.
+- Unit test in `src/jni_ffi.rs` for the JNI variant using the existing
+  `#[cfg(test)]` pattern in that file.
+- Version-mismatch test: feed a v1-shaped 40-byte buffer to any consumer; the
+  `UpdatePublicInputs::deserialize` path must return
+  `UpdateProofVersionMismatch`.
+- Buffer-too-small test: pass `out_public_inputs_cap = 72`; assert error code
+  `UpdateProofBufferTooSmall`.
 
 ### Verification
 
 - `cargo test --lib ffi::update` passes.
-- `cargo test --lib jni::update` passes.
-- Header file diffs confined to additive changes (no symbol rename).
+- `cargo test --lib jni_ffi::update` passes.
+- Header file diffs are purely additive (no symbol rename).
 
 ### Dependencies
 
@@ -519,8 +602,9 @@ Phase 2.
 ## Phase 4 — Contract
 
 **Goal:** Extend the Soroban contract to store an `UpdateVK` per tier, verify
-the 4-input update proof on `update_commitment`, enforce canonical bytes on
-`new_commitment`, and reject the prior 2-input ABI shape.
+the 3-input update proof on `update_commitment`, enforce canonical bytes on
+the stored `new_commitment`, and reject the prior ABI shape that accepted a
+standalone `new_commitment` parameter.
 
 **Status:** ☐
 
@@ -528,95 +612,119 @@ the 4-input update proof on `update_commitment`, enforce canonical bytes on
 
 | File | Action |
 |------|--------|
-| `contracts/sep-xxxx/src/lib.rs` | Major — add types, storage keys, entry points, verification |
-| `contracts/sep-xxxx/src/errors.rs` | Add `InvalidCommitmentEncoding`, `UnknownVkKind` |
-| `contracts/sep-xxxx/src/test.rs` | Add attack-simulation test |
-| `contracts/sep-xxxx/src/testutils.rs` | Add `UpdatePublicInputs` constructor helpers |
+| `contracts/sep-xxxx/src/lib.rs` | Monolithic — add types, storage keys, entry points, verification helper, tests (all in this single file) |
+
+> **Note on file layout.** The current repo keeps the contract entirely in
+> `contracts/sep-xxxx/src/lib.rs`. There is no `errors.rs` or `test.rs` —
+> both concerns live in `lib.rs` alongside the contract. This phase edits
+> that single file.
 
 ### Changes
 
-1. **New types** (§6 of the design doc):
+1. **New error variants.** Append to the existing `Error` enum at
+   `contracts/sep-xxxx/src/lib.rs:54-83`. The current enum ends at
+   `AdminOnly = 14`; the next free discriminants are `15` and `16`:
+
+```rust
+/// The stored `new_commitment` bytes are not a canonical Fr encoding
+/// (would silently reduce mod r and produce a bricked group).
+InvalidCommitmentEncoding = 15,
+/// `update_vk` received a `VkKind` that is not recognised.
+UnknownVkKind = 16,
+```
+
+2. **New types** (design doc §6):
 
 ```rust
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UpdatePublicInputs {
     pub c_old: BytesN<32>,
     pub epoch_old: u64,
     pub c_new: BytesN<32>,
-    pub epoch_new: u64,
 }
 
 #[contracttype]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum VkKind {
     Membership,
     Update,
 }
 ```
 
-2. **New storage keys**:
+3. **New storage key.** Add a new variant to the existing `DataKey` enum:
 
 ```rust
-#[contracttype]
-pub enum DataKey {
-    // ... existing variants ...
-    UpdateVK(Tier),
-}
+UpdateVK(u32),   // tier
 ```
 
-3. **Extended `initialize`.** The contract is alpha; `initialize` is safe to
+4. **Extended `initialize`.** The contract is alpha; `initialize` is safe to
    widen. It now takes six VKs (three tiers × two kinds):
 
 ```rust
 pub fn initialize(
     env: Env,
     admin: Address,
-    membership_vk_small: BytesN<VK_LEN>,
-    membership_vk_medium: BytesN<VK_LEN>,
-    membership_vk_large: BytesN<VK_LEN>,
-    update_vk_small: BytesN<VK_LEN>,
-    update_vk_medium: BytesN<VK_LEN>,
-    update_vk_large: BytesN<VK_LEN>,
+    membership_vk_small: Bytes,
+    membership_vk_medium: Bytes,
+    membership_vk_large: Bytes,
+    update_vk_small: Bytes,
+    update_vk_medium: Bytes,
+    update_vk_large: Bytes,
 );
 ```
 
-4. **`update_vk(kind, tier, vk)`** — replaces the hardcoded rotation path:
+5. **`update_vk(kind, tier, vk)`** — replaces the existing membership-only
+   rotation path with a kind-aware version:
 
 ```rust
-pub fn update_vk(env: Env, kind: VkKind, tier: Tier, new_vk: BytesN<VK_LEN>) {
+pub fn update_vk(env: Env, kind: VkKind, tier: u32, new_vk: Bytes) -> Result<(), Error> {
     Self::require_admin(&env);
     let key = match kind {
         VkKind::Membership => DataKey::MembershipVK(tier),
         VkKind::Update     => DataKey::UpdateVK(tier),
     };
     env.storage().persistent().set(&key, &new_vk);
+    Ok(())
 }
 ```
 
-5. **`verify_groth16_proof_update`** — mirrors
-   `verify_groth16_proof` (`contracts/sep-xxxx/src/lib.rs:780-823`) but MSM
-   over 4 IC points rather than 3:
+6. **`verify_groth16_proof_update`** — mirrors the existing
+   `verify_groth16_proof` helper but performs an MSM over three scalars and
+   expects `ic.len() == 4`:
 
 ```rust
 fn verify_groth16_proof_update(
     env: &Env,
-    tier: Tier,
+    tier: u32,
     proof: &Groth16Proof,
     pi: &UpdatePublicInputs,
 ) -> Result<bool, Error> {
-    // 1. Canonical-bytes check on c_old and c_new
-    if !is_canonical_fr_bytes(&pi.c_old)  { return Err(Error::InvalidCommitmentEncoding); }
-    if !is_canonical_fr_bytes(&pi.c_new)  { return Err(Error::InvalidCommitmentEncoding); }
-    // 2. Load UpdateVK(tier)
-    // 3. Build scalars = [c_old_fr, epoch_old_fr, c_new_fr, epoch_new_fr]
-    // 4. vk_x = IC[0] + MSM([IC[1..=4]], scalars)
+    // 1. Canonical-bytes check on c_old and c_new.
+    //    Fr::from_bytes_mod_order silently reduces; we need to reject
+    //    non-canonical encodings explicitly.
+    if !is_canonical_fr_bytes(&pi.c_old) { return Err(Error::InvalidCommitmentEncoding); }
+    if !is_canonical_fr_bytes(&pi.c_new) { return Err(Error::InvalidCommitmentEncoding); }
+
+    // 2. Load UpdateVK(tier); parse; assert ic.len() == 4.
+    //    (One IC constant + three public inputs.)
+
+    // 3. Scalars = [c_old_fr, epoch_old_fr, c_new_fr] — three scalars.
+
+    // 4. vk_x = ic[0] + MSM(ic[1..=3], scalars)
+    //    Three-scalar MSM via the existing BLS12-381 host functions.
+
     // 5. Pairing: e(A, B) == e(alpha, beta) * e(vk_x, gamma) * e(C, delta)
-    ...
+    //    Uses the existing BLS12-381 multi-pairing host call.
 }
 ```
 
-6. **Rewrite `update_commitment`**:
+7. **Rewrite `update_commitment`.** The new shape drops the standalone
+   `new_commitment` and `new_epoch` parameters; `public_inputs` is now the
+   authoritative carrier. The replay check runs **before** the pairing check
+   and the consumption marker runs **after** successful verification, matching
+   the existing pattern (`contracts/sep-xxxx/src/lib.rs:459-523` — see the
+   `create_group` flow for the canonical ordering):
 
 ```rust
 pub fn update_commitment(
@@ -625,55 +733,72 @@ pub fn update_commitment(
     proof: Groth16Proof,
     public_inputs: UpdatePublicInputs,
 ) -> Result<(), Error> {
-    let state = Self::require_active_group(&env, &group_id)?;
+    // Load current state; ensure group is active.
+    let current = Self::load_active(&env, &group_id)?;
 
-    // Canonical-bytes guard on the stored value.
+    // Bind public inputs to stored state (old side).
+    if current.commitment != public_inputs.c_old {
+        return Err(Error::PublicInputsMismatch);
+    }
+    if current.epoch != public_inputs.epoch_old {
+        return Err(Error::PublicInputsMismatch);
+    }
+
+    // Canonical-bytes guard on the new value (also checked inside
+    // verify_groth16_proof_update — kept here as defense-in-depth at the
+    // entry-point boundary).
     if !is_canonical_fr_bytes(&public_inputs.c_new) {
         return Err(Error::InvalidCommitmentEncoding);
     }
 
-    // Bind to stored state.
-    if state.commitment != public_inputs.c_old { return Err(Error::CommitmentMismatch); }
-    if state.epoch != public_inputs.epoch_old  { return Err(Error::EpochMismatch); }
+    // Replay protection — BEFORE spending pairing work.
+    Self::check_proof_replay(&env, &proof)?;
 
-    // Monotonicity (also enforced in-circuit — defense in depth at the boundary).
-    if public_inputs.epoch_new != public_inputs.epoch_old + 1 {
-        return Err(Error::EpochNotMonotonic);
-    }
-
-    // Proof verification.
-    if !Self::verify_groth16_proof_update(&env, state.tier, &proof, &public_inputs)? {
+    // Pairing check.
+    if !Self::verify_groth16_proof_update(&env, current.tier, &proof, &public_inputs)? {
         return Err(Error::InvalidProof);
     }
 
-    // Replay protection (unchanged from prior impl).
-    Self::mark_proof_consumed(&env, &proof);
+    // Record — AFTER successful verification, BEFORE state write.
+    Self::record_proof(&env, &proof);
 
-    // Write new state.
-    let new_state = GroupState {
+    // Write new state. Epoch is derived as current.epoch + 1; the circuit's
+    // constraint (3) binds c_new to exactly epoch_old + 1, so this is safe.
+    let new_entry = CommitmentEntry {
         commitment: public_inputs.c_new.clone(),
-        epoch: public_inputs.epoch_new,
-        ..state
+        epoch: current.epoch + 1,
+        timestamp: env.ledger().timestamp(),
+        tier: current.tier,
+        active: true,
     };
-    env.storage().persistent().set(&DataKey::Group(group_id), &new_state);
+    env.storage().persistent().set(&DataKey::Group(group_id.clone()), &new_entry);
+
+    env.events().publish((), CommitmentUpdated {
+        group_id,
+        commitment: new_entry.commitment,
+        epoch: new_entry.epoch,
+        timestamp: new_entry.timestamp,
+    });
     Ok(())
 }
 ```
 
-7. **Delete the old signature.** The prior parameters `new_commitment:
+8. **Delete the old signature.** The prior parameters `new_commitment:
    BytesN<32>` and `new_epoch: u64` are removed. `public_inputs` is now the
-   authoritative carrier for both.
+   authoritative carrier.
 
-8. **Errors.** Add variants:
-
-```rust
-InvalidCommitmentEncoding = 17,
-UnknownVkKind             = 18,
-```
+9. **Refresh the N-14 comment block.** Update the comment at
+   `contracts/sep-xxxx/src/lib.rs:453-458` to reflect the new binding: caller
+   identity remains intentionally unbound; `new_commitment` is **now**
+   cryptographically bound via the `UpdateCircuit` proof. This closes the
+   ambiguity the prior comment created (see
+   [postmortem-unbound-new-commitment.md](postmortem-unbound-new-commitment.md)
+   §5).
 
 ### Tests
 
-Add to `contracts/sep-xxxx/src/test.rs`:
+Add to the existing `#[cfg(test)] mod tests` in
+`contracts/sep-xxxx/src/lib.rs`:
 
 ```rust
 #[test]
@@ -684,6 +809,8 @@ fn test_update_commitment_rejects_rebinding() {
     // 1. Prover generates valid (proof, public_inputs) for c_new = X.
     // 2. Attacker swaps public_inputs.c_new -> Y, keeps proof.
     // 3. Contract::update_commitment must return Err(InvalidProof).
+    // (If the canonical check happens to reject Y first, pick a Y that is
+    // canonical — e.g., a different honestly-derived commitment.)
 }
 
 #[test]
@@ -694,25 +821,27 @@ fn test_update_commitment_rejects_non_canonical_new_commitment() {
 }
 
 #[test]
-fn test_update_commitment_rejects_epoch_jump() {
-    // epoch_old = 5, epoch_new = 7. Must fail monotonicity.
+fn test_update_commitment_rejects_rewound_epoch() {
+    // Construct public_inputs with epoch_old mismatched against storage.
+    // Must return Err(PublicInputsMismatch).
 }
 
 #[test]
-fn test_update_commitment_rejects_rewound_epoch() {
-    // epoch_new == epoch_old. Must fail monotonicity.
+fn test_update_commitment_rejects_replayed_proof() {
+    // Submit the same (proof, public_inputs) twice; second submission must
+    // return Err(ProofReplay) via check_proof_replay.
 }
 
 #[test]
 fn test_vk_length_mismatch_update() {
-    // initialize with a truncated update_vk_small; any update_commitment call
-    // must return Err(InvalidVkLength).
+    // initialize with an update_vk_small whose ic.len() != 4.
+    // Any update_commitment call must return Err(InvalidVkLength).
 }
 
 #[test]
 fn test_update_vk_routing() {
-    // update_vk(Membership, Small, VK_A)  then  update_vk(Update, Small, VK_B)
-    // must store in two distinct slots; neither overwrites the other.
+    // update_vk(Membership, 0, VK_A); update_vk(Update, 0, VK_B).
+    // Must store in two distinct slots; neither overwrites the other.
 }
 
 #[test]
@@ -730,13 +859,15 @@ fn test_deactivate_group_still_uses_membership_vk() {
 
 - `stellar contract build --manifest-path contracts/sep-xxxx/Cargo.toml` succeeds.
 - `cargo test --manifest-path contracts/sep-xxxx/Cargo.toml` — all pass.
-- Contract wasm size delta < +10% vs. pre-change (MSM over 4 scalars vs. 3
+- Contract wasm size delta < +10% vs. pre-change (MSM over 3 scalars vs. 2
   adds a few hundred bytes).
+- `git grep -n 'new_epoch: u64' contracts/` returns nothing (the parameter is
+  fully retired).
 
 ### Dependencies
 
-Phase 3 (needs final `UpdatePublicInputs` serialisation shape to pin
-`UpdatePublicInputs` contract type to match).
+Phase 3 (needs final `UpdatePublicInputs` serialisation shape to pin the
+contract type and keep the wire format aligned).
 
 ---
 
@@ -752,8 +883,11 @@ Phase 3 (needs final `UpdatePublicInputs` serialisation shape to pin
 | File | Action |
 |------|--------|
 | `relayer/src/handler.rs` | Update the `update_commitment` branch |
-| `relayer/src/types.rs` | New `UpdatePublicInputs` request/response types |
-| `relayer/src/tests.rs` | Branch-level tests with stub contract |
+| `relayer/src/types.rs` (or wherever request structs live in the current code) | Add `UpdatePublicInputs` request shape |
+| `relayer/src/tests.rs` (if present; otherwise the in-file `#[cfg(test)]` module) | Branch-level tests with stubbed contract transport |
+
+> **Note on file layout.** The existing relayer uses Axum. Adjust path names
+> to match the actual structure — this plan does not assume a specific split.
 
 ### Changes
 
@@ -782,23 +916,25 @@ fn add_public_inputs_arg_update(
    explicit at the type level.
 
 3. **Branch update.** The `update_commitment` branch now reads a single
-   `UpdatePublicInputs` blob from the request body, no longer merges a separate
-   `new_commitment` into the Soroban argument vector, and uses
+   `UpdatePublicInputs` blob from the request body, no longer merges a
+   separate `new_commitment` into the Soroban argument vector, and uses
    `add_public_inputs_arg_update`.
 
 4. **Version gate.** If the incoming `public_inputs` buffer has a leading byte
-   other than `0x02`, the relayer rejects with HTTP 400 `wrong_public_inputs_version`.
+   other than `0x02`, the relayer rejects with HTTP 400
+   `wrong_public_inputs_version`. If the length is not 73 bytes, reject with
+   `400 wrong_public_inputs_length`.
 
 ### Tests
 
-- `tests/update_commitment_happy_path.rs` — end-to-end with a stubbed contract
-  transport.
-- `tests/update_commitment_rejects_v1_payload.rs` — request body shaped as
-  legacy v1 (containing `newCommitment` top-level) returns 400.
-- `tests/update_commitment_rejects_wrong_version_byte.rs` — leading byte `0x01`
-  returns 400.
-- `tests/update_commitment_forwards_canonical_payload.rs` — asserts the exact
-  ScVal vector sent to Soroban matches the contract's expected argument shape.
+- Happy-path test with a stubbed contract transport.
+- Test rejecting a legacy v1 request body (containing a top-level
+  `newCommitment`) with HTTP 400.
+- Test rejecting a body whose `public_inputs` leading byte is `0x01` with
+  HTTP 400.
+- Test asserting the exact `ScVal` vector sent to Soroban matches the
+  contract's expected argument shape (group_id, proof, UpdatePublicInputs) —
+  three arguments, not four.
 
 ### Verification
 
@@ -824,13 +960,13 @@ version byte end-to-end.
 
 | File | Action |
 |------|--------|
-| `swift-mls/Sources/SwiftMLS/PublicInputs.swift` | Add `UpdatePublicInputs` |
+| `swift-mls/Sources/SwiftMLS/PublicInputs.swift` (or existing equivalent) | Add `UpdatePublicInputs` |
 | `swift-mls/Sources/SwiftMLS/UpdateCommitment.swift` | **NEW** — high-level API |
-| `swift-mls/Sources/SwiftMLS/SEPUpdateCommitmentRequest.swift` | Drop `newCommitment`; add `publicInputs` + `publicInputsVersion: UInt8` |
-| `swift-mls/Sources/SwiftMLS/Prover.swift` | Add `proveUpdate(...) -> UpdateProofBundle` |
+| `swift-mls/Sources/SwiftMLS/SEPUpdateCommitmentRequest.swift` | Drop `newCommitment`; body carries only `publicInputs: Data` |
+| `swift-mls/Sources/SwiftMLS/Prover.swift` | Add `proveUpdate(...) -> (proof: Data, publicInputs: UpdatePublicInputs)` |
 | `swift-mls/Tests/SwiftMLSTests/UpdateCircuitTests.swift` | **NEW** |
 | `clients/ios/StellarChat/StellarChatTests/CrossPlatformVectorTests.swift` | Update vector consumers |
-| `clients/ios/StellarChat/StellarChat/GroupMutation.swift` | Call `proveUpdate` instead of `proveMembership` on the update path |
+| `clients/ios/StellarChat/StellarChat/GroupMutation.swift` (or the call site) | Call `proveUpdate` instead of `proveMembership` on the update path |
 
 ### Changes
 
@@ -839,25 +975,26 @@ version byte end-to-end.
 ```swift
 public struct UpdatePublicInputs: Codable, Equatable, Sendable {
     public static let version: UInt8 = 2
+    public static let serializedLen: Int = 73
+
     public let cOld: Data           // 32 bytes
     public let epochOld: UInt64
     public let cNew: Data           // 32 bytes
-    public let epochNew: UInt64
 
     public func serialize() -> Data {
-        var out = Data()
+        var out = Data(capacity: Self.serializedLen)
         out.append(Self.version)
         out.append(cOld)
-        var eo = epochOld.bigEndian;  withUnsafeBytes(of: &eo)  { out.append(contentsOf: $0) }
+        var eo = epochOld.bigEndian
+        withUnsafeBytes(of: &eo) { out.append(contentsOf: $0) }
         out.append(cNew)
-        var en = epochNew.bigEndian;  withUnsafeBytes(of: &en)  { out.append(contentsOf: $0) }
         return out
     }
 }
 ```
 
-2. **Drop `newCommitment` from `SEPUpdateCommitmentRequest`.** Callers now pass
-   the full `publicInputs` blob; `cNew` lives inside it.
+2. **Drop `newCommitment` from `SEPUpdateCommitmentRequest`.** Callers now
+   pass the full `publicInputs` blob; `cNew` lives inside it.
 
 3. **High-level `proveUpdate`:**
 
@@ -873,15 +1010,16 @@ public static func proveUpdate(
 ) throws -> (proof: Data, publicInputs: UpdatePublicInputs)
 ```
 
-4. **FFI call site.** Invokes `sep_prove_update` (Phase 3 symbol).
+4. **FFI call site.** Invokes `sep_prove_update` (Phase 3 symbol). Proof
+   output is 192 bytes; public-inputs output is 73 bytes.
 
 ### Tests
 
 - `UpdateCircuitTests.testRoundTrip` — prove + locally-verify round trip.
 - `UpdateCircuitTests.testPublicInputsVersionByte` — serialised buffer starts
-  with `0x02`.
-- `UpdateCircuitTests.testRejectLegacyV1Buffer` — attempt to deserialise a 40-byte
-  v1 buffer; assert it throws.
+  with `0x02`; length is exactly 73.
+- `UpdateCircuitTests.testRejectLegacyV1Buffer` — attempt to deserialise a
+  40-byte v1 buffer; assert it throws.
 - `CrossPlatformVectorTests.testUpdateVectors` — consume the new fixtures
   produced in Phase 9.
 
@@ -909,9 +1047,9 @@ independent review and to reflect different JNI integration surface.
 
 | File | Action |
 |------|--------|
-| `kotlin-mls/src/main/kotlin/com/stellarmls/mls/PublicInputs.kt` | Add `UpdatePublicInputs` |
+| `kotlin-mls/src/main/kotlin/com/stellarmls/mls/PublicInputs.kt` (or existing equivalent) | Add `UpdatePublicInputs` |
 | `kotlin-mls/src/main/kotlin/com/stellarmls/mls/UpdateCommitment.kt` | **NEW** |
-| `kotlin-mls/src/main/kotlin/com/stellarmls/mls/SEPUpdateCommitmentRequest.kt` | Drop `newCommitment`; add `publicInputs: ByteArray` |
+| `kotlin-mls/src/main/kotlin/com/stellarmls/mls/SEPUpdateCommitmentRequest.kt` | Drop `newCommitment`; body carries `publicInputs: ByteArray` |
 | `kotlin-mls/src/main/kotlin/com/stellarmls/mls/Prover.kt` | Add `proveUpdate` |
 | `kotlin-mls/src/test/kotlin/com/stellarmls/mls/UpdateCircuitTest.kt` | **NEW** |
 | `clients/android/.../CrossPlatformVectorTest.kt` | Update vector consumers |
@@ -926,19 +1064,18 @@ data class UpdatePublicInputs(
     val cOld: ByteArray,     // 32 bytes
     val epochOld: Long,      // u64 — callers must treat as unsigned
     val cNew: ByteArray,     // 32 bytes
-    val epochNew: Long,
 ) {
     companion object {
         const val VERSION: Byte = 0x02
+        const val SERIALIZED_LEN: Int = 73
     }
 
     fun serialize(): ByteArray {
-        val buf = ByteBuffer.allocate(1 + 32 + 8 + 32 + 8).order(ByteOrder.BIG_ENDIAN)
+        val buf = ByteBuffer.allocate(SERIALIZED_LEN).order(ByteOrder.BIG_ENDIAN)
         buf.put(VERSION)
         buf.put(cOld)
         buf.putLong(epochOld)
         buf.put(cNew)
-        buf.putLong(epochNew)
         return buf.array()
     }
 }
@@ -951,9 +1088,10 @@ data class UpdatePublicInputs(
 
 ### Tests
 
-- Equivalent set to the Swift tests (`testRoundTrip`, `testPublicInputsVersionByte`,
-  `testRejectLegacyV1Buffer`, `testUpdateVectors`).
-- Uses `j4rs` or direct JNI loading for local native tests.
+- Equivalent set to the Swift tests (`testRoundTrip`,
+  `testPublicInputsVersionByte`, `testRejectLegacyV1Buffer`,
+  `testUpdateVectors`).
+- Uses JNI directly for local native tests.
 
 ### Verification
 
@@ -986,15 +1124,10 @@ not shortcut.
 | `scripts/generate-keyset.sh` | Parameterise over circuit kind |
 | `scripts/generate-keyset-v2.sh` | **NEW** — orchestrates Phase 2 ceremony for both circuits |
 | `scripts/generate-mainnet-vks.sh` | Update to publish six VKs (was three) |
-| `src/ceremony/phase2.rs` | Support running Phase 2 over `UpdateCircuit` |
-| `src/ceremony/mpc.rs` | No structural change — arithmetic already generic |
+| `src/ceremony/phase2.rs` (or current location of Phase-2 logic) | Support running Phase 2 over `UpdateCircuit` |
 | `keyset-v2/metadata.json` | **NEW** |
-| `keyset-v2/membership-small/{pk,vk}.bin` | **NEW** |
-| `keyset-v2/membership-medium/{pk,vk}.bin` | **NEW** |
-| `keyset-v2/membership-large/{pk,vk}.bin` | **NEW** |
-| `keyset-v2/update-small/{pk,vk}.bin` | **NEW** |
-| `keyset-v2/update-medium/{pk,vk}.bin` | **NEW** |
-| `keyset-v2/update-large/{pk,vk}.bin` | **NEW** |
+| `keyset-v2/membership-{small,medium,large}/{pk,vk}.bin` | **NEW** |
+| `keyset-v2/update-{small,medium,large}/{pk,vk}.bin` | **NEW** |
 | `docs/trusted-setup-ceremony-phase2-participant-playbook.md` | Add update-circuit instructions |
 
 ### Changes
@@ -1012,14 +1145,14 @@ not shortcut.
   "contractVersion": "2.0.0",
   "circuits": {
     "membership": {
-      "small":  { "pkHash": "...", "vkHash": "...", "constraints": 5000 },
-      "medium": { "pkHash": "...", "vkHash": "...", "constraints": 8000 },
-      "large":  { "pkHash": "...", "vkHash": "...", "constraints": 11000 }
+      "small":  { "pkHash": "...", "vkHash": "...", "icLen": 3 },
+      "medium": { "pkHash": "...", "vkHash": "...", "icLen": 3 },
+      "large":  { "pkHash": "...", "vkHash": "...", "icLen": 3 }
     },
     "update": {
-      "small":  { "pkHash": "...", "vkHash": "...", "constraints": 9000 },
-      "medium": { "pkHash": "...", "vkHash": "...", "constraints": 14400 },
-      "large":  { "pkHash": "...", "vkHash": "...", "constraints": 19800 }
+      "small":  { "pkHash": "...", "vkHash": "...", "icLen": 4 },
+      "medium": { "pkHash": "...", "vkHash": "...", "icLen": 4 },
+      "large":  { "pkHash": "...", "vkHash": "...", "icLen": 4 }
     }
   },
   "phase1Source": "keyset-v1/phase1/",
@@ -1032,18 +1165,19 @@ not shortcut.
 }
 ```
 
-3. **Pinned public-input order unit test.** Add
-   `src/ceremony/tests.rs::test_update_vk_public_input_order_pinned` — fails
-   loudly if the VK's IC vector length is not exactly 5 (constant + 4 inputs).
-   This catches a class of silent ordering footgun where a developer swaps the
-   order of `FpVar::new_input` calls and everything still compiles.
+3. **Pinned public-input order unit test.** Add a ceremony-scoped test that
+   asserts `update_vk.ic.len() == 4` for every tier. If the length is
+   anything else, the ceremony script must fail loudly — this catches a class
+   of silent ordering footgun where a developer swaps the order of
+   `FpVar::new_input` calls and everything still compiles but binds the
+   wrong values.
 
 ### Verification
 
 - All six `pk.bin` / `vk.bin` pairs round-trip prove/verify for test vectors.
 - `shasum -a 256 keyset-v2/**/*.bin` matches the hashes in `metadata.json`.
+- `membership` VKs have `ic.len() == 3`; `update` VKs have `ic.len() == 4`.
 - Constraint counts per tier match design doc Appendix A within ±5%.
-- `test_update_vk_public_input_order_pinned` passes.
 - Transcript hash can be independently recomputed from the MPC logs.
 
 ### Dependencies
@@ -1066,7 +1200,6 @@ tests all agree on the exact byte-level encoding of `UpdatePublicInputs`.
 |------|--------|
 | `docs/cross-platform-test-vectors.json` | Bump `schemaVersion` to 2; add `update` vectors |
 | `scripts/generate-test-vectors.sh` | Emit both membership and update fixtures |
-| `src/testvectors/generate.rs` | Add update-circuit vector generator |
 
 ### Changes
 
@@ -1086,13 +1219,13 @@ tests all agree on the exact byte-level encoding of `UpdatePublicInputs`.
       "saltOld": "hex",
       "membersNew": ["hex", ...],
       "saltNew": "hex",
-      "publicInputs": "81-byte hex",     // version || cOld || epochOld || cNew || epochNew
-      "proof": "192-byte hex",
+      "publicInputs": "73-byte hex",     // version || cOld || epochOld || cNew
+      "proof": "192-byte hex (compressed)",
       "expectedResult": "valid"
     },
     { "name": "rebinding_attack_1", "expectedResult": "InvalidProof", ... },
     { "name": "non_canonical_c_new", "expectedResult": "InvalidCommitmentEncoding", ... },
-    { "name": "epoch_jump", "expectedResult": "EpochNotMonotonic", ... }
+    { "name": "epoch_mismatch", "expectedResult": "PublicInputsMismatch", ... }
   ]
 }
 ```
@@ -1103,11 +1236,12 @@ tests all agree on the exact byte-level encoding of `UpdatePublicInputs`.
 ### Verification
 
 - Each vector round-trips through:
-  - Rust `verify_update_proof` — expected result matches.
+  - Rust verifier — expected result matches.
   - Swift `UpdatePublicInputs` + Prover — expected result matches.
   - Kotlin `UpdatePublicInputs` + Prover — expected result matches.
   - Soroban contract `update_commitment` — expected result matches.
 - All four consumers agree on every vector.
+- Every `publicInputs` field in the JSON is exactly 146 hex chars (73 bytes).
 
 ### Dependencies
 
@@ -1127,10 +1261,10 @@ strictly a blocker for rollout but must precede public announcement.
 
 | File | Section to update |
 |------|-------------------|
-| `docs/sep.md` | Add `UpdateCircuit` relation; update `update_commitment` ABI section; bump SEP-XXXX version |
-| `docs/proof-of-soundness.md` | New section proving knowledge soundness for the **operation-level** statement `(C_old, e_old, C_new, e_new)`; retire the prior §257-259 theorem that proved soundness for the wrong statement |
+| `docs/sep.md` | Add `UpdateCircuit` relation (3 public inputs); update `update_commitment` ABI section; bump SEP-XXXX version |
+| `docs/proof-of-soundness.md` | New section proving knowledge soundness for the **operation-level** statement `(C_old, e_old, C_new)`; retire the prior §257-259 theorem that proved soundness for the wrong statement |
 | `docs/design-doc.md` | Refresh architecture diagram to show two VKs per tier |
-| `docs/relay-design-doc.md` | Document `publicInputs` wire format v2; drop top-level `newCommitment` from the request schema diagram |
+| `docs/relay-design-doc.md` | Document `publicInputs` wire format v2 (73 bytes); drop top-level `newCommitment` from the request schema diagram |
 | `docs/real-world-gap-analysis.md` | Tick off the newly-closed gap; add the lesson about "statement ≠ operation" |
 | `docs/audit-critical.md` | Add cross-reference to the new vuln report |
 | `README.md` | No change required if kept tier-level |
@@ -1138,21 +1272,23 @@ strictly a blocker for rollout but must precede public announcement.
 ### Changes
 
 1. **`docs/sep.md`.** Add a new subsection under the ZK-circuits chapter
-   describing `R_Update`, its public inputs (fixed order), and the constraint
-   graph. Update the ABI section to show the new `update_commitment` signature.
+   describing `R_Update`, its public inputs (fixed order:
+   `(C_old, epoch_old, C_new)`), and the three R1CS constraints. Update the
+   ABI section to show the new `update_commitment` signature.
 
 2. **`docs/proof-of-soundness.md`.** The existing theorem at lines 257-259
-   proves knowledge soundness for `(C_old, e_old)`, which is insufficient. Add
-   Theorem 4 (or whatever the next ordinal is) stating:
+   proves knowledge soundness for `(C_old, e_old)`, which is insufficient.
+   Add a new theorem stating:
 
-   > **Theorem (Operation-level soundness for update).** For all PPT adversaries
-   > $\mathcal{A}$ producing a tuple $(\pi, \text{pi})$ accepted by the
-   > Soroban verifier for `update_commitment`, there exists an extractor
-   > $\mathcal{E}$ producing a witness $(\text{sk}, \text{salt}_{old},
+   > **Theorem (Operation-level soundness for update).** For all PPT
+   > adversaries $\mathcal{A}$ producing a tuple $(\pi, \text{pi})$ accepted
+   > by the Soroban verifier for `update_commitment`, where $\text{pi} =
+   > (C_{old}, e_{old}, C_{new})$, there exists an extractor $\mathcal{E}$
+   > producing a witness $(\text{sk}, \text{root}_{old}, \text{salt}_{old},
    > \text{auth\_path}, \text{root}_{new}, \text{salt}_{new})$ satisfying
-   > constraints (1)–(4) of `R_Update` over the public inputs
-   > $(C_{old}, e_{old}, C_{new}, e_{new})$ *as bound to storage by the
-   > `update_commitment` entry point*.
+   > constraints (1)–(3) of $R_{\text{Update}}$ over that exact $\text{pi}$,
+   > as bound to storage by the `update_commitment` entry point, except with
+   > negligible probability.
 
    Mark the prior theorem as "correct statement about the wrong relation;
    superseded" rather than deleting it, since the audit trail matters.
@@ -1160,8 +1296,10 @@ strictly a blocker for rollout but must precede public announcement.
 ### Verification
 
 - `markdown-link-check docs/**/*.md` — no broken cross-links.
-- Manual review: every mention of "`new_commitment`" as a top-level argument is
-  either removed or explicitly annotated as legacy-v1.
+- Manual review: every mention of "`new_commitment`" as a top-level argument
+  is either removed or explicitly annotated as legacy-v1.
+- Manual review: every "4 public inputs" or "81 bytes" reference is corrected
+  or removed.
 
 ### Dependencies
 
@@ -1206,13 +1344,17 @@ report (§6.1) is now impossible. Steps:
 3. The relayer forwards to Soroban.
 4. Assertion: the on-chain transaction fails with `InvalidProof` (not
    `InvalidCommitmentEncoding` — we want the *proof-level* rejection on
-   record, proving the cryptographic binding is doing the work).
+   record, proving the cryptographic binding is doing the work). Choose `Y`
+   to be a canonical Fr encoding so the canonical check does not short-circuit.
 5. A second attack attempt substitutes `c_new = 0xff..ff` (non-canonical).
 6. Assertion: the relayer OR contract rejects with `InvalidCommitmentEncoding`.
 7. A third attack attempt replays the proof against a different `group_id`.
-8. Assertion: fails with `CommitmentMismatch` (state binding at the contract level).
+8. Assertion: fails with `PublicInputsMismatch` (state binding at the
+   contract level) — storage-side `c_old` differs.
+9. A fourth attack attempt replays the same `(proof, publicInputs)` twice.
+10. Assertion: second submission fails with `ProofReplay`.
 
-All three failure modes must be reproducible from the test.
+All four failure modes must be reproducible from the test.
 
 ### Verification
 
@@ -1287,26 +1429,20 @@ scoping PRs.
 |------|------|--------|
 | Rust core | `src/circuit/mod.rs` | 0, 1 |
 | Rust core | `src/circuit/update.rs` | 0, 1 |
-| Rust core | `src/prover/update.rs` | 2 |
-| Rust core | `src/public_inputs.rs` | 2 |
-| Rust core | `src/ffi/update.rs` | 3 |
-| Rust core | `src/jni/update.rs` | 3 |
+| Rust core | `src/prover.rs` | 2 |
+| Rust core | `src/public_inputs.rs` (or current location) | 2 |
+| Rust core | `src/ffi.rs` | 3 |
+| Rust core | `src/jni_ffi.rs` | 3 |
 | Rust core | `include/stellar_mls.h` | 3 |
-| Contract | `contracts/sep-xxxx/src/lib.rs` | 4 |
-| Contract | `contracts/sep-xxxx/src/errors.rs` | 4 |
-| Contract | `contracts/sep-xxxx/src/test.rs` | 4, 11 |
+| Contract | `contracts/sep-xxxx/src/lib.rs` | 4, 11 |
 | Relayer | `relayer/src/handler.rs` | 5 |
-| Relayer | `relayer/src/types.rs` | 5 |
-| Swift | `swift-mls/Sources/SwiftMLS/PublicInputs.swift` | 6 |
-| Swift | `swift-mls/Sources/SwiftMLS/UpdateCommitment.swift` | 6 |
-| Swift | `swift-mls/Sources/SwiftMLS/SEPUpdateCommitmentRequest.swift` | 6 |
-| Swift | `clients/ios/StellarChat/StellarChatTests/CrossPlatformVectorTests.swift` | 6, 9 |
-| Kotlin | `kotlin-mls/src/main/kotlin/com/stellarmls/mls/PublicInputs.kt` | 7 |
-| Kotlin | `kotlin-mls/src/main/kotlin/com/stellarmls/mls/UpdateCommitment.kt` | 7 |
-| Kotlin | `kotlin-mls/src/main/kotlin/com/stellarmls/mls/SEPUpdateCommitmentRequest.kt` | 7 |
+| Relayer | `relayer/src/types.rs` (or current) | 5 |
+| Swift | `swift-mls/Sources/SwiftMLS/*.swift` | 6 |
+| Swift | `clients/ios/StellarChat/...Tests/CrossPlatformVectorTests.swift` | 6, 9 |
+| Kotlin | `kotlin-mls/src/main/kotlin/com/stellarmls/mls/*.kt` | 7 |
 | Kotlin | `clients/android/.../CrossPlatformVectorTest.kt` | 7, 9 |
 | Ceremony | `scripts/generate-keyset-v2.sh` | 8 |
-| Ceremony | `src/ceremony/phase2.rs` | 8 |
+| Ceremony | `src/ceremony/phase2.rs` (or current) | 8 |
 | Ceremony | `keyset-v2/**` | 8 |
 | Vectors | `docs/cross-platform-test-vectors.json` | 9 |
 | Docs | `docs/sep.md` | 10 |
@@ -1355,9 +1491,11 @@ all of the following are true:
    accepted.
 7. `docs/proof-of-soundness.md` contains the new operation-level theorem.
 8. Keyset-v2 `metadata.json` signed by at least two release maintainers.
-9. Post-mortem document
-   ([postmortem-unbound-new-commitment.md](postmortem-unbound-new-commitment.md))
-   published and cross-linked.
+9. `update` VKs verified to have `ic.len() == 4`; `membership` VKs unchanged
+   with `ic.len() == 3`.
+10. Post-mortem document
+    ([postmortem-unbound-new-commitment.md](postmortem-unbound-new-commitment.md))
+    published and cross-linked.
 
 ---
 
@@ -1371,10 +1509,10 @@ they aren't forgotten:
    higher given it's the security-critical fix?
 2. **SDK major-version bump.** iOS 2.0.0 and Android 2.0.0 on publication?
    The wire format is breaking, so semver says yes.
-3. **Gas cost delta.** MSM over 4 scalars vs. 3 will raise per-update gas.
+3. **Gas cost delta.** MSM over 3 scalars vs. 2 will raise per-update gas.
    Measure on testnet; if the delta is large (> 20%), consider squeezing the
    canonical-bytes check path.
-4. **Should `verify_membership` also transition to a 4-input form for
+4. **Should `verify_membership` also transition to a 3-input form for
    consistency?** Current answer: no — its statement truly is single-epoch and
    the extra work is pointless. But this is a call worth confirming during
    Phase 10 doc review.

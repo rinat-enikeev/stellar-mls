@@ -484,9 +484,11 @@ fn verify_groth16_proof_update(
 ```rust
 enum Error {
     …
-    InvalidCommitmentEncoding = 13,
+    InvalidCommitmentEncoding = 15,
 }
 ```
+
+The existing `Error` discriminants occupy `1..=14` (`contracts/sep-xxxx/src/lib.rs:56-82`); `13` is already `TierGroupLimitReached` and `14` is `AdminOnly`. The next free value is `15`.
 
 **Comment update at `:453-458`:** Replace the N-14 comment to reflect the new binding:
 

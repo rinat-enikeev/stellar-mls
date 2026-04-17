@@ -759,6 +759,64 @@ struct CrossPlatformTests {
         #expect(decoded.members[0].leafHash == members[0].leafHash)
     }
 
+    @Test("UpdatePublicInputs wire format round-trips canonical vectors")
+    func updatePublicInputsWireFormat() throws {
+        struct V {
+            let cOldHex: String
+            let epochOld: UInt64
+            let cNewHex: String
+            let wireHex: String
+        }
+        let vectors: [V] = [
+            V(
+                cOldHex: "255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e",
+                epochOld: 0,
+                cNewHex: "0ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5",
+                wireHex: "02255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e00000000000000000ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5"
+            ),
+            V(
+                cOldHex: "0ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5",
+                epochOld: 42,
+                cNewHex: "255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e",
+                wireHex: "020ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5000000000000002a255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e"
+            ),
+            V(
+                cOldHex: "0000000000000000000000000000000000000000000000000000000000000000",
+                epochOld: UInt64.max,
+                cNewHex: "0000000000000000000000000000000000000000000000000000000000000000",
+                wireHex: "020000000000000000000000000000000000000000000000000000000000000000ffffffffffffffff0000000000000000000000000000000000000000000000000000000000000000"
+            ),
+        ]
+        for v in vectors {
+            let wire = hexToData(v.wireHex)!
+            #expect(wire.count == 73)
+            let parsed = try SEPProofGenerator.parseUpdatePublicInputs(wireFormat: wire)
+            #expect(parsed.cOld == hexToData(v.cOldHex)!)
+            #expect(parsed.epochOld == v.epochOld)
+            #expect(parsed.cNew == hexToData(v.cNewHex)!)
+        }
+    }
+
+    @Test("UpdatePublicInputs rejects malformed wire buffers")
+    func updatePublicInputsRejectsInvalid() {
+        let invalid: [String] = [
+            // wrong version byte (0x01)
+            "01255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e00000000000000000ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5",
+            // wrong length (72 bytes — last c_new byte truncated)
+            "02255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e00000000000000000ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56a",
+            // non-canonical c_old (all 0xFF > Fr modulus)
+            "02ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5",
+            // non-canonical c_new (all 0xFF > Fr modulus)
+            "02255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e0000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        ]
+        for hex in invalid {
+            let wire = hexToData(hex)!
+            #expect(throws: (any Error).self) {
+                _ = try SEPProofGenerator.parseUpdatePublicInputs(wireFormat: wire)
+            }
+        }
+    }
+
     private func hexToData(_ hex: String) -> Data? {
         let bytes = stride(from: 0, to: hex.count, by: 2).compactMap { i -> UInt8? in
             let start = hex.index(hex.startIndex, offsetBy: i)

@@ -1,6 +1,6 @@
 {
   "description": "Canonical test vectors for cross-platform (Rust/iOS/Android) interoperability. All platforms MUST produce identical outputs for the given inputs. Generated from the Rust reference implementation.",
-  "version": 2,
+  "version": 3,
 
   "topic_derivation": {
     "description": "SHA-256('sep-topic-v1' || groupSecret)[0..8] as hex string",
@@ -129,6 +129,53 @@
         "epoch": 5,
         "salt_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "expected_commitment_hex": "58a1d00ea6f30a925ea91e791f934b08e815f4c345b445af5a9d072926df67a0"
+      }
+    ]
+  },
+
+  "update_public_inputs_wire_format": {
+    "description": "UpdatePublicInputs is serialised as exactly 73 bytes: 1 version byte (0x02) || 32B c_old (big-endian Fr) || 8B epoch_old (big-endian u64) || 32B c_new (big-endian Fr). Parsers MUST reject wrong length, wrong version byte, and non-canonical c_old / c_new (any value >= BLS12-381 Fr modulus r). c_old and c_new must already be canonical field elements, such as the Poseidon commitments in poseidon_commitment above.",
+    "version_byte_hex": "02",
+    "serialized_length_bytes": 73,
+    "valid_vectors": [
+      {
+        "description": "epoch_old = 0; c_old and c_new taken from poseidon_commitment vectors above",
+        "c_old_hex": "255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e",
+        "epoch_old": 0,
+        "c_new_hex": "0ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5",
+        "expected_wire_hex": "02255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e00000000000000000ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5"
+      },
+      {
+        "description": "epoch_old = 42; c_old and c_new swapped from vector above",
+        "c_old_hex": "0ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5",
+        "epoch_old": 42,
+        "c_new_hex": "255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e",
+        "expected_wire_hex": "020ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5000000000000002a255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e"
+      },
+      {
+        "description": "epoch_old = u64 max (2^64 - 1); c_old = c_new = Fr::zero()",
+        "c_old_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+        "epoch_old": 18446744073709551615,
+        "c_new_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+        "expected_wire_hex": "020000000000000000000000000000000000000000000000000000000000000000ffffffffffffffff0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ],
+    "invalid_vectors": [
+      {
+        "reason": "wrong version byte (0x01 instead of 0x02)",
+        "wire_hex": "01255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e00000000000000000ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5"
+      },
+      {
+        "reason": "wrong length (72 bytes instead of 73 — last c_new byte truncated)",
+        "wire_hex": "02255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e00000000000000000ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56a"
+      },
+      {
+        "reason": "non-canonical c_old (all 0xFF is > Fr modulus r)",
+        "wire_hex": "02ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5"
+      },
+      {
+        "reason": "non-canonical c_new (all 0xFF is > Fr modulus r)",
+        "wire_hex": "02255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e0000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
       }
     ]
   },

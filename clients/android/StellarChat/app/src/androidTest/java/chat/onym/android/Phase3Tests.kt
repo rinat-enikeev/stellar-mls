@@ -624,6 +624,62 @@ class Phase3Tests {
     }
 
     @Test
+    fun crossPlatform_updatePublicInputsWireFormat() {
+        data class V(val cOldHex: String, val epochOld: Long, val cNewHex: String, val wireHex: String)
+        val vectors = listOf(
+            V(
+                "255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e",
+                0L,
+                "0ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5",
+                "02255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e00000000000000000ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5"
+            ),
+            V(
+                "0ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5",
+                42L,
+                "255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e",
+                "020ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5000000000000002a255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e"
+            ),
+            V(
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                -1L, // u64 max as signed Long (bit pattern 0xFFFFFFFFFFFFFFFF)
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "020000000000000000000000000000000000000000000000000000000000000000ffffffffffffffff0000000000000000000000000000000000000000000000000000000000000000"
+            ),
+        )
+        for (v in vectors) {
+            val wire = v.wireHex.hexToBytes()
+            assertEquals(73, wire.size)
+            val parsed = SEPProofGenerator.parseUpdatePublicInputs(wire)
+            assertArrayEquals(v.cOldHex.hexToBytes(), parsed.cOld)
+            assertEquals(v.epochOld, parsed.epochOld)
+            assertArrayEquals(v.cNewHex.hexToBytes(), parsed.cNew)
+        }
+    }
+
+    @Test
+    fun crossPlatform_updatePublicInputsRejectsInvalid() {
+        val invalid = listOf(
+            // wrong version byte (0x01)
+            "01255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e00000000000000000ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5",
+            // wrong length (72 bytes — last c_new byte truncated)
+            "02255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e00000000000000000ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56a",
+            // non-canonical c_old (all 0xFF > Fr modulus)
+            "02ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5",
+            // non-canonical c_new (all 0xFF > Fr modulus)
+            "02255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e0000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        )
+        for (hex in invalid) {
+            val wire = hex.hexToBytes()
+            try {
+                SEPProofGenerator.parseUpdatePublicInputs(wire)
+                fail("Expected parseUpdatePublicInputs to throw for malformed input: $hex")
+            } catch (_: Exception) {
+                // expected
+            }
+        }
+    }
+
+    @Test
     fun crossPlatform_inviteCodeRoundtrip() {
         val members = listOf(
             SEPGroupMemberLeaf(

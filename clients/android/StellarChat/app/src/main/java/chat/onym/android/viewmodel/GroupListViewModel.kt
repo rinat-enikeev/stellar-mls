@@ -2009,7 +2009,6 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     oldEpoch = oldGroup.epoch,
                     oldSalt = oldGroup.salt.copyOf(),
                     newMembers = newGroup.members,
-                    newEpoch = newGroup.epoch,
                     newSalt = newGroup.salt,
                     blsSecretKey = keyManager.blsSecretKey,
                     tier = oldGroup.tier

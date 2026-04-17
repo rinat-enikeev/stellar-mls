@@ -69,22 +69,27 @@ fun buildCreateGroupPayload(
     put("tier", tier)
 }
 
-/** JSON builder for update_commitment request payload. */
+/**
+ * JSON builder for update_commitment request payload (#59 UpdateCircuit fix).
+ *
+ * The contract binds `cNew` cryptographically inside the proof, so the relayer
+ * no longer accepts a client-supplied `newCommitment`/`newEpoch`. Only the
+ * UpdateCircuit public inputs are sent; the contract derives the new epoch
+ * as `epoch_old + 1` in circuit.
+ */
 fun buildUpdateCommitmentPayload(
     groupID: ByteArray,
-    newCommitment: ByteArray,
-    newEpoch: Long,
     proof: ByteArray,
-    oldCommitment: ByteArray,
-    oldEpoch: Long
+    cOld: ByteArray,
+    epochOld: Long,
+    cNew: ByteArray
 ): JSONObject = JSONObject().apply {
     put("groupID", groupID.toBase64())
-    put("newCommitment", newCommitment.toBase64())
-    put("newEpoch", newEpoch)
     put("proof", proof.toBase64())
     put("publicInputs", JSONObject().apply {
-        put("commitment", oldCommitment.toBase64())
-        put("epoch", oldEpoch)
+        put("c_old", cOld.toBase64())
+        put("epoch_old", epochOld)
+        put("c_new", cNew.toBase64())
     })
 }
 

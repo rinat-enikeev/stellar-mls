@@ -55,4 +55,33 @@ internal object RustBridge {
      * Use [SEPProofGenerator.unpackContractComponents] to split.
      */
     external fun proofToContractFormat(compressedProof: ByteArray): ByteArray
+
+    /** Generate a testing proving key for the UpdateCircuit (#59 fix). Returns serialized key. */
+    external fun generateTestingUpdateProvingKey(depth: Int, seed: Long): ByteArray
+
+    /**
+     * Generate an update-transition proof. Returns packed:
+     * `[4B proof_len][proof][4B public_inputs_len][public_inputs]`, where
+     * `public_inputs` is the 73-byte UpdatePublicInputs wire format.
+     * Use [SEPProofGenerator.unpackUpdateProofBundle] to split.
+     */
+    external fun generateUpdateProof(
+        provingKey: ByteArray,
+        oldMemberPublicKeys: ByteArray,
+        oldLeafHashes: ByteArray,
+        newMemberPublicKeys: ByteArray,
+        newLeafHashes: ByteArray,
+        secretKey: ByteArray,
+        epochOld: Long,
+        saltOld: ByteArray,
+        saltNew: ByteArray,
+        depth: Int
+    ): ByteArray
+
+    /**
+     * Parse the 73-byte UpdatePublicInputs wire format. Returns packed:
+     * `[4B c_old_len][c_old][4B epoch_old_len][epoch_old_be][4B c_new_len][c_new]`.
+     * Use [SEPProofGenerator.unpackUpdatePublicInputs] to split.
+     */
+    external fun parseUpdatePublicInputs(publicInputs: ByteArray): ByteArray
 }

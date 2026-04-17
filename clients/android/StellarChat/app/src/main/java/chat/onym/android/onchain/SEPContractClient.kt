@@ -67,15 +67,12 @@ class SEPContractClient(
 
     fun updateCommitment(
         groupID: ByteArray,
-        newCommitment: ByteArray,
-        newEpoch: Long,
         proof: ByteArray,
-        oldCommitment: ByteArray,
-        oldEpoch: Long
+        cOld: ByteArray,
+        epochOld: Long,
+        cNew: ByteArray
     ): SEPSubmissionResponse {
-        val payload = buildUpdateCommitmentPayload(
-            groupID, newCommitment, newEpoch, proof, oldCommitment, oldEpoch
-        )
+        val payload = buildUpdateCommitmentPayload(groupID, proof, cOld, epochOld, cNew)
         val json = transport.invoke(contractID, "update_commitment", payload)
         return SEPSubmissionResponse.fromJson(json)
     }

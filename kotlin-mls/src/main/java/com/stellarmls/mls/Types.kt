@@ -38,3 +38,20 @@ data class SEPContractProofComponents(
     val proofB: ByteArray,  // 192 bytes (G2 uncompressed)
     val proofC: ByteArray   // 96 bytes (G1 uncompressed)
 )
+
+/**
+ * Public inputs for the UpdateCircuit (#59 fix). The contract binds `cNew`
+ * cryptographically via the proof, so the relayer no longer accepts a
+ * client-supplied `new_commitment`.
+ */
+data class SEPUpdatePublicInputs(
+    val cOld: ByteArray,   // 32 bytes
+    val epochOld: Long,
+    val cNew: ByteArray    // 32 bytes
+)
+
+/** UpdateCircuit proof bundle: compressed proof + update public inputs. */
+data class SEPUpdateProofBundle(
+    val proof: ByteArray,
+    val publicInputs: SEPUpdatePublicInputs
+)

@@ -40,6 +40,13 @@ class OnChainService(private val context: Context, contractID: String, transport
     /** Cached proving keys per tier (loaded from assets on first use). */
     private val provingKeys = mutableMapOf<SEPTier, ByteArray>()
 
+    /**
+     * Cached UpdateCircuit proving keys per tier. #59 fix: distinct circuit
+     * from the membership circuit, bundled in keyset-v2 after the ceremony.
+     * Until keyset-v2 lands (Phase 8), dev builds fall back to a testing key.
+     */
+    private val updateProvingKeys = mutableMapOf<SEPTier, ByteArray>()
+
     /** Execute a block with exponential backoff retry on IOException. */
     private fun <T> withRetry(block: () -> T): T {
         var lastException: Exception? = null
@@ -88,6 +95,17 @@ class OnChainService(private val context: Context, contractID: String, transport
     fun ensureProvingKey(tier: SEPTier): ByteArray {
         return provingKeys.getOrPut(tier) {
             loadProvingKeyFromAssets(tier)
+        }
+    }
+
+    /**
+     * Load or return a cached UpdateCircuit proving key for the given tier.
+     * TODO(Phase 8): load from `keyset-v2/update-<tier>.bin` with hash check.
+     * Dev fallback generates a deterministic testing key.
+     */
+    fun ensureUpdateProvingKey(tier: SEPTier): ByteArray {
+        return updateProvingKeys.getOrPut(tier) {
+            SEPProofGenerator.generateTestingUpdateProvingKey(tier)
         }
     }
 
@@ -191,10 +209,9 @@ class OnChainService(private val context: Context, contractID: String, transport
     /**
      * Publish a commitment update after a membership change.
      *
-     * 1. Generates a membership proof at the OLD state (proving current membership).
-     * 2. Decompresses the proof to uncompressed format (384 bytes).
-     * 3. Computes the new Poseidon commitment from the new state.
-     * 4. Submits update_commitment to the Soroban contract.
+     * #59: binds the new commitment inside the UpdateCircuit proof so the
+     * contract can cryptographically accept `c_new` as the persisted value.
+     * The new epoch is derived in-circuit as `epoch_old + 1`.
      */
     fun publishCommitmentUpdate(
         groupIDData: ByteArray,
@@ -202,29 +219,30 @@ class OnChainService(private val context: Context, contractID: String, transport
         oldEpoch: Long,
         oldSalt: ByteArray,
         newMembers: List<SEPGroupMemberLeaf>,
-        newEpoch: Long,
         newSalt: ByteArray,
         blsSecretKey: ByteArray,
         tier: SEPTier
     ): SEPSubmissionResponse {
-        // Proof against OLD (current on-chain) state
-        val oldProofBundle = generateProof(oldMembers, blsSecretKey, oldEpoch, oldSalt, tier)
-        val uncompressedProof = proofForContract(oldProofBundle.proof)
-
-        // Compute new Poseidon commitment
-        val newRoot = SEPCommitmentBuilder.computeMerkleRoot(newMembers, tier)
-        val newPoseidonCommitment = SEPCommitmentBuilder.computePoseidonCommitment(
-            newRoot, newEpoch, newSalt
+        val updatePK = ensureUpdateProvingKey(tier)
+        val bundle = SEPProofGenerator.generateUpdateProof(
+            provingKey = updatePK,
+            oldMembers = oldMembers,
+            newMembers = newMembers,
+            secretKey = blsSecretKey,
+            epochOld = oldEpoch,
+            saltOld = oldSalt,
+            saltNew = newSalt,
+            tier = tier
         )
+        val uncompressedProof = proofForContract(bundle.proof)
 
         return withRetry {
             contractClient.updateCommitment(
                 groupID = groupIDData,
-                newCommitment = newPoseidonCommitment,
-                newEpoch = newEpoch,
                 proof = uncompressedProof,
-                oldCommitment = oldProofBundle.publicInputs.commitment,
-                oldEpoch = oldEpoch
+                cOld = bundle.publicInputs.cOld,
+                epochOld = bundle.publicInputs.epochOld,
+                cNew = bundle.publicInputs.cNew
             )
         }
     }

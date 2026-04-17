@@ -224,24 +224,26 @@ async fn invoke_contract(config: &Config, request: &RelayerRequest) -> Result<St
             add_hex_arg(&mut cmd, "--commitment", payload, "commitment")?;
             add_int_arg(&mut cmd, "--tier", payload, "tier")?;
             add_proof_arg(&mut cmd, payload)?;
-            add_public_inputs_arg(&mut cmd, payload)?;
+            add_membership_public_inputs_arg(&mut cmd, payload)?;
         }
         "update_commitment" => {
+            // #59: UpdateCircuit binds c_new cryptographically. The relayer no
+            // longer forwards client-supplied `new_commitment` or `new_epoch`;
+            // c_new comes from the UpdatePublicInputs payload and the contract
+            // derives new_epoch on-chain as stored_epoch + 1.
             add_hex_arg(&mut cmd, "--group-id", payload, "groupID")?;
-            add_hex_arg(&mut cmd, "--new-commitment", payload, "newCommitment")?;
-            add_int_arg(&mut cmd, "--new-epoch", payload, "newEpoch")?;
             add_proof_arg(&mut cmd, payload)?;
-            add_public_inputs_arg(&mut cmd, payload)?;
+            add_update_public_inputs_arg(&mut cmd, payload)?;
         }
         "verify_membership" => {
             add_hex_arg(&mut cmd, "--group-id", payload, "groupID")?;
             add_proof_arg(&mut cmd, payload)?;
-            add_public_inputs_arg(&mut cmd, payload)?;
+            add_membership_public_inputs_arg(&mut cmd, payload)?;
         }
         "deactivate_group" => {
             add_hex_arg(&mut cmd, "--group-id", payload, "groupID")?;
             add_proof_arg(&mut cmd, payload)?;
-            add_public_inputs_arg(&mut cmd, payload)?;
+            add_membership_public_inputs_arg(&mut cmd, payload)?;
         }
         "get_state" => {
             add_hex_arg(&mut cmd, "--group-id", payload, "groupID")?;
@@ -342,8 +344,10 @@ fn add_proof_arg(cmd: &mut Command, payload: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// Decode public inputs and add as a JSON file-path argument.
-fn add_public_inputs_arg(cmd: &mut Command, payload: &Value) -> Result<(), String> {
+/// Decode membership-circuit public inputs and add as a JSON file-path argument.
+/// Used by create_group, verify_membership, and deactivate_group.
+/// Expects `payload.publicInputs = { commitment: base64, epoch: u64 }`.
+fn add_membership_public_inputs_arg(cmd: &mut Command, payload: &Value) -> Result<(), String> {
     let pi = payload
         .get("publicInputs")
         .ok_or("missing publicInputs field")?;
@@ -369,6 +373,51 @@ fn add_public_inputs_arg(cmd: &mut Command, payload: &Value) -> Result<(), Strin
     let tmp = std::env::temp_dir().join(format!("sep-pi-{}.json", std::process::id()));
     std::fs::write(&tmp, &pi_json)
         .map_err(|e| format!("failed to write temp public inputs file: {e}"))?;
+    cmd.arg("--public-inputs-file-path")
+        .arg(tmp.to_str().unwrap());
+    Ok(())
+}
+
+/// Decode update-circuit public inputs and add as a JSON file-path argument.
+/// Used by update_commitment. Expects:
+/// `payload.publicInputs = { c_old: base64, epoch_old: u64, c_new: base64 }`.
+/// The contract's `UpdatePublicInputs` binds all three values through the proof;
+/// the relayer no longer propagates a client-supplied `new_commitment` / `new_epoch`
+/// pair (#59 fix).
+fn add_update_public_inputs_arg(cmd: &mut Command, payload: &Value) -> Result<(), String> {
+    let pi = payload
+        .get("publicInputs")
+        .ok_or("missing publicInputs field")?;
+    let c_old_b64 = pi
+        .get("c_old")
+        .and_then(|v| v.as_str())
+        .ok_or("missing publicInputs.c_old")?;
+    let epoch_old = pi
+        .get("epoch_old")
+        .and_then(|v| v.as_u64())
+        .ok_or("missing publicInputs.epoch_old")?;
+    let c_new_b64 = pi
+        .get("c_new")
+        .and_then(|v| v.as_str())
+        .ok_or("missing publicInputs.c_new")?;
+
+    let c_old_bytes = base64::engine::general_purpose::STANDARD
+        .decode(c_old_b64)
+        .map_err(|e| format!("invalid c_old base64: {e}"))?;
+    let c_new_bytes = base64::engine::general_purpose::STANDARD
+        .decode(c_new_b64)
+        .map_err(|e| format!("invalid c_new base64: {e}"))?;
+
+    let pi_json = format!(
+        "{{\"c_old\":\"{}\",\"epoch_old\":{},\"c_new\":\"{}\"}}",
+        hex_encode(&c_old_bytes),
+        epoch_old,
+        hex_encode(&c_new_bytes)
+    );
+
+    let tmp = std::env::temp_dir().join(format!("sep-upi-{}.json", std::process::id()));
+    std::fs::write(&tmp, &pi_json)
+        .map_err(|e| format!("failed to write temp update public inputs file: {e}"))?;
     cmd.arg("--public-inputs-file-path")
         .arg(tmp.to_str().unwrap());
     Ok(())

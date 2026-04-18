@@ -148,22 +148,35 @@ function downloads() {
         this.assets = r.assets || [];
         this.minisignPub = r.minisign_pubkey;
       } catch (_) {}
-      this.recommended = this.detect();
+      this.recommended = await this.detect();
     },
-    detect() {
+    async detect() {
       const ua = navigator.userAgent;
       const uad = navigator.userAgentData;
       const platform = uad?.platform || '';
       const mobile = uad?.mobile ?? false;
+      // Apple hides the real arch in navigator.userAgent for anti-
+      // fingerprinting — "Intel Mac OS X" appears on every Mac including
+      // Apple Silicon. High-entropy UA-Client-Hints (Chromium) expose it;
+      // Safari/Firefox don't, so default to aarch64 on macOS (Intel Macs
+      // have been EOL since 2022).
+      let arch = null;
+      if (uad?.getHighEntropyValues) {
+        try {
+          const hints = await uad.getHighEntropyValues(['architecture']);
+          arch = hints.architecture || null;
+        } catch (_) {}
+      }
       let target = null, label = 'Unknown';
       if (mobile) { label = 'Mobile'; return { label, asset: null }; }
       if (/Mac/.test(ua) || platform === 'macOS') {
-        // Apple Silicon vs. Intel detection is imperfect; show both.
-        target = /arm64|Apple Silicon|aarch64/.test(ua) ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin';
-        label = target === 'aarch64-apple-darwin' ? 'macOS (Apple Silicon)' : 'macOS (Intel)';
+        const isArm = arch === 'x86' ? false : true;
+        target = isArm ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin';
+        label = isArm ? 'macOS (Apple Silicon)' : 'macOS (Intel)';
       } else if (/Linux/.test(ua)) {
-        target = /aarch64|arm64/.test(ua) ? 'aarch64-unknown-linux-musl' : 'x86_64-unknown-linux-musl';
-        label = target === 'aarch64-unknown-linux-musl' ? 'Linux (ARM64)' : 'Linux (x86_64)';
+        const isArm = arch === 'arm' || /aarch64|arm64/.test(ua);
+        target = isArm ? 'aarch64-unknown-linux-musl' : 'x86_64-unknown-linux-musl';
+        label = isArm ? 'Linux (ARM64)' : 'Linux (x86_64)';
       } else if (/Win/.test(ua)) {
         target = 'x86_64-pc-windows-msvc';
         label = 'Windows (x86_64)';

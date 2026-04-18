@@ -167,6 +167,10 @@ final class AppState {
     var chatMessages: [String: [ChatMessage]] = [:]
     /// Dedup set for chat message event IDs, keyed by group ID.
     private var seenMessageIDs: [String: Set<String>] = [:]
+    /// Message IDs currently being retried. Prevents two rapid taps on the same
+    /// failed message from launching concurrent retries (mirrors Android's
+    /// `retryingMessageIDs`). Access is serialised on the @MainActor class.
+    private var retryingMessageIDs: Set<String> = []
     /// Unread message count per group. Reset when the user opens the chat.
     var unreadCounts: [String: Int] = [:]
     /// The group ID currently being viewed, used to suppress unread increments.
@@ -2348,6 +2352,10 @@ final class AppState {
               chatMessages[groupID]?[idx].status == .failed
         else { return }
 
+        // Double-tap guard: drop the call if a retry is already in flight for
+        // this message ID. Android uses the same pattern in retryingMessageIDs.
+        guard retryingMessageIDs.insert(messageID).inserted else { return }
+
         let text = chatMessages[groupID]![idx].text
         let replyToID = chatMessages[groupID]![idx].replyToID
         chatMessages[groupID]?[idx].status = .sending
@@ -2356,6 +2364,7 @@ final class AppState {
         Task {
             do {
                 let blsPubkey = try keyManager.blsPublicKey
+                let blsPubkeyHex = blsPubkey.map { String(format: "%02x", $0) }.joined()
                 let ts = Int64(Date().timeIntervalSince1970)
                 var wrapper: [String: Any] = [
                     "v": 2, "type": "chat", "text": text,
@@ -2383,8 +2392,12 @@ final class AppState {
 
                 try await chatTransport.publishToRelays(event)
                 await MainActor.run {
+                    // Use the BLS pubkey hex for sender attribution — matches
+                    // sendMessage and setupChatHandler. Using keyManager.publicKeyHex
+                    // here would store the Nostr ed25519 key instead, breaking
+                    // sender identity on retried messages.
                     let newMsg = ChatMessage(
-                        id: event.id, groupID: groupID, senderPubkey: self.keyManager.publicKeyHex,
+                        id: event.id, groupID: groupID, senderPubkey: blsPubkeyHex,
                         text: text, timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
                         isMine: true, status: .sent,
                         epoch: sendEpoch, replyToID: replyToID
@@ -2399,6 +2412,7 @@ final class AppState {
                         self.chatMessages[groupID]?[i] = newMsg
                         self.store.replaceMessageAsync(oldID: messageID, with: newMsg)
                     }
+                    self.retryingMessageIDs.remove(messageID)
                 }
             } catch {
                 await MainActor.run {
@@ -2406,6 +2420,7 @@ final class AppState {
                         self.chatMessages[groupID]?[i].status = .failed
                         self.store.updateMessageStatusAsync(id: messageID, status: .failed)
                     }
+                    self.retryingMessageIDs.remove(messageID)
                 }
             }
         }

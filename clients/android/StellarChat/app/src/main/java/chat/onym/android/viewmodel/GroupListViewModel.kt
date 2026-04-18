@@ -2488,15 +2488,22 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 }.add(event.id)
 
                 val newMsg = failedMsg.copy(id = event.id, status = MessageStatus.SENDING)
-                withContext(Dispatchers.IO) {
-                    store.replaceMessage(messageID, newMsg)
-                }
 
+                // Update the in-memory list BEFORE the IO write. setupOKHandler
+                // looks up chatMessages by event.id when the relay acks, and the
+                // ack can arrive while this coroutine is suspended inside the
+                // replaceMessage IO call. If we updated in-memory after the IO
+                // write, the OK handler would miss the message (still keyed by
+                // the old ID) and leave it stuck in SENDING until next restart.
                 val current = chatMessages[groupID]?.toMutableList() ?: return@launch
                 val i = current.indexOfFirst { it.id == messageID }
                 if (i >= 0) {
                     current[i] = newMsg
                     chatMessages[groupID] = current
+                }
+
+                withContext(Dispatchers.IO) {
+                    store.replaceMessage(messageID, newMsg)
                 }
             } catch (e: Exception) {
                 Log.e("GroupListVM", "retryMessage failed", e)

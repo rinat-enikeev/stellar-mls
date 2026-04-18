@@ -87,6 +87,12 @@ pub enum Error {
     /// An unsupported `VkKind` value was passed to `update_vk`.
     /// Introduced with the UpdateCircuit binding fix (#59).
     UnknownVkKind = 16,
+    // Codes 17 are reserved for Phase 1 (OneOnOneImmutable).
+    /// `group_type` is not a known value (0 = Anarchy, 1 = 1v1, 2 = Democracy,
+    /// 3 = Oligarchy) or is not yet enabled in this contract version.
+    /// Introduced with the group-governance-types design.
+    UnknownGroupType = 18,
+    // Codes 19–25 reserved for future governance-type phases.
 }
 
 // ================================================================
@@ -128,6 +134,11 @@ pub struct GroupDeactivated {
 // ================================================================
 
 /// On-chain state of a group at a particular epoch.
+///
+/// This is the legacy (pre-governance-types) record format. The contract
+/// continues to read this format for groups created before the V2 migration,
+/// but every state-changing write produces a `CommitmentEntryV2`. See
+/// `load_group_v2` for the read-path fallback semantics.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitmentEntry {
@@ -141,6 +152,33 @@ pub struct CommitmentEntry {
     pub tier: u32,
     /// Whether the group accepts further updates.
     pub active: bool,
+}
+
+/// On-chain state of a group, extended with governance-type metadata.
+///
+/// Introduced by the group-governance-types design. Every write produced by
+/// Phase-0 (and later) code paths is a `CommitmentEntryV2`. Legacy
+/// `CommitmentEntry` records are treated as `group_type = 0` (Anarchy) with
+/// `member_count = 0` (unknown) when read via `load_group_v2`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitmentEntryV2 {
+    /// Poseidon commitment (BLS12-381 field element, 32 bytes big-endian).
+    pub commitment: BytesN<32>,
+    /// Epoch counter (starts at 0, increments by 1).
+    pub epoch: u64,
+    /// Ledger timestamp when this state was recorded.
+    pub timestamp: u64,
+    /// Circuit tier: 0 = Small, 1 = Medium, 2 = Large.
+    pub tier: u32,
+    /// Whether the group accepts further updates.
+    pub active: bool,
+    /// Governance type: 0 = Anarchy, 1 = 1v1, 2 = Democracy, 3 = Oligarchy.
+    pub group_type: u32,
+    /// Current member count. Populated for Democracy groups so the quorum
+    /// check is bound to authoritative state instead of client-supplied input.
+    /// For other types this is informational; `0` means "not tracked".
+    pub member_count: u32,
 }
 
 /// Public inputs for Groth16 proof verification.
@@ -245,9 +283,18 @@ pub enum DataKey {
     /// so the two key families can rotate independently.
     UpdateVK(u32),
     /// Current group state (persistent storage).
+    ///
+    /// Legacy key. Reads fall back to this when `GroupV2` is absent; writes
+    /// always target `GroupV2` and delete this key during lazy migration.
     Group(BytesN<32>),
     /// Group history — rolling window of past entries (persistent storage).
+    /// Legacy key; superseded by `HistoryV2` via the same migration rules.
     History(BytesN<32>),
+    /// Current group state in V2 format (persistent storage).
+    /// Produced by all post-migration writes.
+    GroupV2(BytesN<32>),
+    /// Group history in V2 format (persistent storage).
+    HistoryV2(BytesN<32>),
     /// Used proof hash — prevents cross-function and cross-group proof replay.
     UsedProof(BytesN<32>),
     /// Active group count per tier (instance storage, for M-4 limit enforcement).
@@ -398,11 +445,7 @@ impl SepXxxxContract {
         env: Env,
         group_id: BytesN<32>,
     ) -> Result<(), Error> {
-        if !env
-            .storage()
-            .persistent()
-            .has(&DataKey::Group(group_id.clone()))
-        {
+        if !Self::group_exists(&env, &group_id) {
             return Err(Error::GroupNotFound);
         }
         Self::bump_group(&env, &group_id);
@@ -411,19 +454,58 @@ impl SepXxxxContract {
 
     // ---- Group Operations ----
 
-    /// Create a new private membership group.
+    /// Create a new private membership group (Anarchy governance).
     ///
-    /// The `caller` must authorize the invocation (prevents spam).
-    /// The proof must verify against `(commitment, epoch=0)` using the
-    /// verification key for `tier`. The caller-supplied `public_inputs`
-    /// must match: `public_inputs.commitment == commitment` and
-    /// `public_inputs.epoch == 0`.
+    /// Kept for backward compatibility with pre-governance-types clients.
+    /// Internally this delegates to `create_group_v2` with `group_type = 0`
+    /// (Anarchy) and `member_count = 0` (untracked). The stored record
+    /// uses the V2 format — the legacy `Group` key is no longer produced
+    /// by post-migration contract builds.
     pub fn create_group(
         env: Env,
         caller: Address,
         group_id: BytesN<32>,
         commitment: BytesN<32>,
         tier: u32,
+        proof: Groth16Proof,
+        public_inputs: PublicInputs,
+    ) -> Result<(), Error> {
+        Self::create_group_v2(
+            env,
+            caller,
+            group_id,
+            commitment,
+            tier,
+            0, // group_type: Anarchy
+            0, // member_count: untracked
+            proof,
+            public_inputs,
+        )
+    }
+
+    /// Create a new private membership group with an explicit governance type.
+    ///
+    /// `group_type` selects the on-chain policy for who may modify the group:
+    /// * `0` — Anarchy: any current member (proof-only authorisation)
+    /// * `1` — 1v1: fixed two-member group (reserved for Phase 1)
+    /// * `2` — Democracy: ≥50% quorum on kick/invite (reserved for Phase 3)
+    /// * `3` — Oligarchy: admin set gates membership changes (reserved for Phase 2)
+    ///
+    /// In this contract build only `group_type = 0` is accepted; any other
+    /// value is rejected with `UnknownGroupType`. Later phases enable the
+    /// remaining types without altering this function's ABI.
+    ///
+    /// `member_count` is persisted as informational state for Anarchy (not
+    /// enforced) and will be used as an authoritative quorum basis by the
+    /// Democracy circuit when Phase 3 lands.
+    pub fn create_group_v2(
+        env: Env,
+        caller: Address,
+        group_id: BytesN<32>,
+        commitment: BytesN<32>,
+        tier: u32,
+        group_type: u32,
+        member_count: u32,
         proof: Groth16Proof,
         public_inputs: PublicInputs,
     ) -> Result<(), Error> {
@@ -450,14 +532,15 @@ impl SepXxxxContract {
         if tier > 2 {
             return Err(Error::InvalidTier);
         }
+        if group_type != 0 {
+            // Phases 1–3 will enable types 1/2/3. Reject unknown values here
+            // so future clients fail loudly on old contract builds.
+            return Err(Error::UnknownGroupType);
+        }
         if public_inputs.commitment != commitment || public_inputs.epoch != 0 {
             return Err(Error::PublicInputsMismatch);
         }
-        if env
-            .storage()
-            .persistent()
-            .has(&DataKey::Group(group_id.clone()))
-        {
+        if Self::group_exists(&env, &group_id) {
             return Err(Error::GroupAlreadyExists);
         }
 
@@ -481,19 +564,21 @@ impl SepXxxxContract {
         Self::record_proof(&env, &proof);
 
         let timestamp = env.ledger().timestamp();
-        let entry = CommitmentEntry {
+        let entry = CommitmentEntryV2 {
             commitment: commitment.clone(),
             epoch: 0,
             timestamp,
             tier,
             active: true,
+            group_type,
+            member_count,
         };
 
         env.storage()
             .persistent()
-            .set(&DataKey::Group(group_id.clone()), &entry);
+            .set(&DataKey::GroupV2(group_id.clone()), &entry);
         env.storage().persistent().set(
-            &DataKey::History(group_id.clone()),
+            &DataKey::HistoryV2(group_id.clone()),
             &Vec::<CommitmentEntry>::new(&env),
         );
         env.storage()
@@ -537,15 +622,18 @@ impl SepXxxxContract {
     ) -> Result<(), Error> {
         Self::require_initialized(&env)?;
 
-        let current: CommitmentEntry = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Group(group_id.clone()))
-            .ok_or(Error::GroupNotFound)?;
+        let current = Self::load_group_v2(&env, &group_id)?;
 
         if !current.active {
             return Err(Error::GroupInactive);
         }
+        // Only Anarchy is routable through this function. Future phases
+        // will dispatch on `group_type` to the appropriate update circuit
+        // (1v1 is frozen; Democracy/Oligarchy use their own update VKs).
+        if current.group_type != 0 {
+            return Err(Error::UnknownGroupType);
+        }
+
         // N-22: Use checked_add to guard against u64 overflow (theoretical).
         let new_epoch = current.epoch.checked_add(1).ok_or(Error::InvalidEpoch)?;
 
@@ -585,16 +673,16 @@ impl SepXxxxContract {
 
         Self::archive_entry(&env, &group_id, &current);
 
-        let new_entry = CommitmentEntry {
+        let new_entry = CommitmentEntryV2 {
             commitment: public_inputs.c_new.clone(),
             epoch: new_epoch,
             timestamp,
             tier: current.tier,
             active: true,
+            group_type: current.group_type,
+            member_count: current.member_count,
         };
-        env.storage()
-            .persistent()
-            .set(&DataKey::Group(group_id.clone()), &new_entry);
+        Self::write_group_v2(&env, &group_id, &new_entry);
         Self::bump_group(&env, &group_id);
 
         CommitmentUpdated {
@@ -659,11 +747,7 @@ impl SepXxxxContract {
     ) -> Result<(), Error> {
         Self::require_initialized(&env)?;
 
-        let current: CommitmentEntry = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Group(group_id.clone()))
-            .ok_or(Error::GroupNotFound)?;
+        let current = Self::load_group_v2(&env, &group_id)?;
 
         if !current.active {
             return Err(Error::GroupInactive);
@@ -684,14 +768,12 @@ impl SepXxxxContract {
         Self::record_proof(&env, &proof);
 
         let timestamp = env.ledger().timestamp();
-        let deactivated = CommitmentEntry {
+        let deactivated = CommitmentEntryV2 {
             active: false,
             timestamp,
             ..current.clone()
         };
-        env.storage()
-            .persistent()
-            .set(&DataKey::Group(group_id.clone()), &deactivated);
+        Self::write_group_v2(&env, &group_id, &deactivated);
         Self::bump_group(&env, &group_id);
 
         // N-23: Decrement per-tier group count so deactivated groups
@@ -719,12 +801,27 @@ impl SepXxxxContract {
 
     // ---- Queries ----
 
-    /// Get the current state of a group.
+    /// Get the current state of a group in legacy (V1) shape.
+    ///
+    /// Returns a `CommitmentEntry` projection of the V2 record. Clients that
+    /// need the governance type or member count MUST call `get_state_v2`.
     pub fn get_state(env: Env, group_id: BytesN<32>) -> Result<CommitmentEntry, Error> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Group(group_id))
-            .ok_or(Error::GroupNotFound)
+        let v2 = Self::load_group_v2(&env, &group_id)?;
+        Ok(CommitmentEntry {
+            commitment: v2.commitment,
+            epoch: v2.epoch,
+            timestamp: v2.timestamp,
+            tier: v2.tier,
+            active: v2.active,
+        })
+    }
+
+    /// Get the current V2 state of a group, including governance metadata.
+    pub fn get_state_v2(
+        env: Env,
+        group_id: BytesN<32>,
+    ) -> Result<CommitmentEntryV2, Error> {
+        Self::load_group_v2(&env, &group_id)
     }
 
     /// Get the history of a group (most recent entries, up to `max_entries`
@@ -736,17 +833,14 @@ impl SepXxxxContract {
         group_id: BytesN<32>,
         max_entries: u32,
     ) -> Result<Vec<CommitmentEntry>, Error> {
-        if !env
-            .storage()
-            .persistent()
-            .has(&DataKey::Group(group_id.clone()))
-        {
+        if !Self::group_exists(&env, &group_id) {
             return Err(Error::GroupNotFound);
         }
         let history: Vec<CommitmentEntry> = env
             .storage()
             .persistent()
-            .get(&DataKey::History(group_id))
+            .get(&DataKey::HistoryV2(group_id.clone()))
+            .or_else(|| env.storage().persistent().get(&DataKey::History(group_id)))
             .unwrap_or(Vec::new(&env));
 
         let cap = if max_entries < history.len() {
@@ -774,6 +868,99 @@ impl SepXxxxContract {
         Ok(())
     }
 
+    /// Load the V2 record for a group, synthesising one from the legacy
+    /// `Group` key if only the pre-migration format is present.
+    ///
+    /// The legacy entry is treated as Anarchy (`group_type = 0`) with
+    /// `member_count = 0`. This lets old groups continue to operate without
+    /// a forced migration step; the first state-changing write produced
+    /// by any governance-aware code path will persist a `GroupV2` record.
+    fn load_group_v2(
+        env: &Env,
+        group_id: &BytesN<32>,
+    ) -> Result<CommitmentEntryV2, Error> {
+        if let Some(v2) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, CommitmentEntryV2>(&DataKey::GroupV2(group_id.clone()))
+        {
+            return Ok(v2);
+        }
+        let legacy: CommitmentEntry = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Group(group_id.clone()))
+            .ok_or(Error::GroupNotFound)?;
+        Ok(CommitmentEntryV2 {
+            commitment: legacy.commitment,
+            epoch: legacy.epoch,
+            timestamp: legacy.timestamp,
+            tier: legacy.tier,
+            active: legacy.active,
+            group_type: 0,
+            member_count: 0,
+        })
+    }
+
+    /// Whether a group exists (under either the V2 or legacy key).
+    fn group_exists(env: &Env, group_id: &BytesN<32>) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::GroupV2(group_id.clone()))
+            || env
+                .storage()
+                .persistent()
+                .has(&DataKey::Group(group_id.clone()))
+    }
+
+    /// Persist a V2 group record and lazily drop the legacy entry if present.
+    /// History is migrated on first write: the legacy `History` list is
+    /// copied into `HistoryV2` (same `CommitmentEntry` shape) and the legacy
+    /// key is deleted.
+    fn write_group_v2(
+        env: &Env,
+        group_id: &BytesN<32>,
+        entry: &CommitmentEntryV2,
+    ) {
+        env.storage()
+            .persistent()
+            .set(&DataKey::GroupV2(group_id.clone()), entry);
+
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Group(group_id.clone()))
+        {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::Group(group_id.clone()));
+        }
+
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::HistoryV2(group_id.clone()))
+        {
+            let legacy_history: Vec<CommitmentEntry> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::History(group_id.clone()))
+                .unwrap_or(Vec::new(env));
+            env.storage()
+                .persistent()
+                .set(&DataKey::HistoryV2(group_id.clone()), &legacy_history);
+            if env
+                .storage()
+                .persistent()
+                .has(&DataKey::History(group_id.clone()))
+            {
+                env.storage()
+                    .persistent()
+                    .remove(&DataKey::History(group_id.clone()));
+            }
+        }
+    }
+
     fn load_vk(env: &Env, tier: u32) -> Result<VerificationKeyData, Error> {
         env.storage()
             .persistent()
@@ -789,16 +976,53 @@ impl SepXxxxContract {
     }
 
     fn bump_group(env: &Env, group_id: &BytesN<32>) {
-        env.storage().persistent().extend_ttl(
-            &DataKey::Group(group_id.clone()),
-            LEDGER_THRESHOLD,
-            LEDGER_BUMP,
-        );
-        env.storage().persistent().extend_ttl(
-            &DataKey::History(group_id.clone()),
-            LEDGER_THRESHOLD,
-            LEDGER_BUMP,
-        );
+        // Bump whichever key variant is present. After the first V2 write
+        // the legacy keys are removed, so post-migration calls no-op on
+        // the legacy branches.
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::GroupV2(group_id.clone()))
+        {
+            env.storage().persistent().extend_ttl(
+                &DataKey::GroupV2(group_id.clone()),
+                LEDGER_THRESHOLD,
+                LEDGER_BUMP,
+            );
+        }
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::HistoryV2(group_id.clone()))
+        {
+            env.storage().persistent().extend_ttl(
+                &DataKey::HistoryV2(group_id.clone()),
+                LEDGER_THRESHOLD,
+                LEDGER_BUMP,
+            );
+        }
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Group(group_id.clone()))
+        {
+            env.storage().persistent().extend_ttl(
+                &DataKey::Group(group_id.clone()),
+                LEDGER_THRESHOLD,
+                LEDGER_BUMP,
+            );
+        }
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::History(group_id.clone()))
+        {
+            env.storage().persistent().extend_ttl(
+                &DataKey::History(group_id.clone()),
+                LEDGER_THRESHOLD,
+                LEDGER_BUMP,
+            );
+        }
         // Bump instance storage TTL to prevent admin key loss.
         env.storage()
             .instance()
@@ -841,14 +1065,29 @@ impl SepXxxxContract {
         );
     }
 
-    fn archive_entry(env: &Env, group_id: &BytesN<32>, entry: &CommitmentEntry) {
+    fn archive_entry(env: &Env, group_id: &BytesN<32>, entry: &CommitmentEntryV2) {
         let mut history: Vec<CommitmentEntry> = env
             .storage()
             .persistent()
-            .get(&DataKey::History(group_id.clone()))
+            .get(&DataKey::HistoryV2(group_id.clone()))
+            .or_else(|| {
+                env.storage()
+                    .persistent()
+                    .get(&DataKey::History(group_id.clone()))
+            })
             .unwrap_or(Vec::new(env));
 
-        history.push_back(entry.clone());
+        // History is persisted in the V1 shape — group_type/member_count
+        // are either invariant (group_type) or recoverable from the current
+        // record, and history entries never need to round-trip through a V2
+        // governance check.
+        history.push_back(CommitmentEntry {
+            commitment: entry.commitment.clone(),
+            epoch: entry.epoch,
+            timestamp: entry.timestamp,
+            tier: entry.tier,
+            active: entry.active,
+        });
 
         if history.len() > HISTORY_WINDOW {
             let mut pruned = Vec::new(env);
@@ -861,7 +1100,17 @@ impl SepXxxxContract {
 
         env.storage()
             .persistent()
-            .set(&DataKey::History(group_id.clone()), &history);
+            .set(&DataKey::HistoryV2(group_id.clone()), &history);
+        // Drop legacy history — any future read will see the V2 copy.
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::History(group_id.clone()))
+        {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::History(group_id.clone()));
+        }
     }
 }
 
@@ -2089,5 +2338,292 @@ mod test {
 
         let result = client.get_history(&group_id, &(HISTORY_WINDOW + 10));
         assert_eq!(result.len(), HISTORY_WINDOW);
+    }
+
+    // ================================================================
+    // V2 Schema & Lazy Migration Tests (governance-types Phase 0)
+    // ================================================================
+
+    /// Inject a V2 group record directly (bypassing create_group_v2 which
+    /// needs a real Groth16 proof).
+    fn inject_group_v2(
+        env: &Env,
+        contract_id: &Address,
+        group_id: &BytesN<32>,
+        commitment: &BytesN<32>,
+        epoch: u64,
+        tier: u32,
+        group_type: u32,
+        member_count: u32,
+    ) {
+        env.as_contract(contract_id, || {
+            let entry = CommitmentEntryV2 {
+                commitment: commitment.clone(),
+                epoch,
+                timestamp: env.ledger().timestamp(),
+                tier,
+                active: true,
+                group_type,
+                member_count,
+            };
+            env.storage()
+                .persistent()
+                .set(&DataKey::GroupV2(group_id.clone()), &entry);
+            env.storage().persistent().set(
+                &DataKey::HistoryV2(group_id.clone()),
+                &Vec::<CommitmentEntry>::new(env),
+            );
+            let count: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::GroupCount(tier))
+                .unwrap_or(0);
+            env.storage()
+                .instance()
+                .set(&DataKey::GroupCount(tier), &(count + 1));
+        });
+    }
+
+    #[test]
+    fn test_legacy_group_read_via_get_state_v2_defaults_to_anarchy() {
+        // A pre-migration `Group` record is synthesised into a V2 view
+        // with group_type = 0 and member_count = 0.
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        let commitment = BytesN::from_array(&env, &[2u8; 32]);
+        inject_group(&env, &contract_id, &group_id, &commitment, 7, 1);
+
+        let state = client.get_state_v2(&group_id);
+        assert_eq!(state.commitment, commitment);
+        assert_eq!(state.epoch, 7);
+        assert_eq!(state.tier, 1);
+        assert!(state.active);
+        assert_eq!(state.group_type, 0);
+        assert_eq!(state.member_count, 0);
+    }
+
+    #[test]
+    fn test_get_state_projects_v2_to_v1_shape() {
+        // `get_state` must still return the legacy shape for a V2-native
+        // record so pre-governance clients keep working.
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[3u8; 32]);
+        let commitment = BytesN::from_array(&env, &[4u8; 32]);
+        inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 2, 0, 42);
+
+        let state_v1 = client.get_state(&group_id);
+        assert_eq!(state_v1.commitment, commitment);
+        assert_eq!(state_v1.epoch, 0);
+        assert_eq!(state_v1.tier, 2);
+        assert!(state_v1.active);
+
+        let state_v2 = client.get_state_v2(&group_id);
+        assert_eq!(state_v2.group_type, 0);
+        assert_eq!(state_v2.member_count, 42);
+    }
+
+    #[test]
+    fn test_v2_takes_precedence_when_both_entries_present() {
+        // Concurrent keys should not leak a read: V2 wins unconditionally.
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[5u8; 32]);
+        let c_legacy = BytesN::from_array(&env, &[6u8; 32]);
+        let c_v2 = BytesN::from_array(&env, &[7u8; 32]);
+
+        // Inject a stale legacy entry first, then a fresh V2 entry for the
+        // same group_id — simulates a mid-migration state.
+        inject_group(&env, &contract_id, &group_id, &c_legacy, 3, 0);
+        env.as_contract(&contract_id, || {
+            let entry = CommitmentEntryV2 {
+                commitment: c_v2.clone(),
+                epoch: 9,
+                timestamp: env.ledger().timestamp(),
+                tier: 0,
+                active: true,
+                group_type: 0,
+                member_count: 5,
+            };
+            env.storage()
+                .persistent()
+                .set(&DataKey::GroupV2(group_id.clone()), &entry);
+        });
+
+        let state = client.get_state_v2(&group_id);
+        assert_eq!(state.commitment, c_v2);
+        assert_eq!(state.epoch, 9);
+        assert_eq!(state.member_count, 5);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #18)")]
+    fn test_create_group_v2_rejects_unknown_group_type() {
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[8u8; 32]);
+        let commitment = BytesN::from_array(&env, &[9u8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        // group_type = 1 (1v1) not yet enabled — must fail with
+        // UnknownGroupType before any proof check runs.
+        client.create_group_v2(
+            &caller,
+            &group_id,
+            &commitment,
+            &0u32,
+            &1u32,
+            &0u32,
+            &mock_proof(&env),
+            &pi,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #18)")]
+    fn test_create_group_v2_rejects_democracy_type() {
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[10u8; 32]);
+        let commitment = BytesN::from_array(&env, &[11u8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        client.create_group_v2(
+            &caller,
+            &group_id,
+            &commitment,
+            &0u32,
+            &2u32, // Democracy
+            &10u32,
+            &mock_proof(&env),
+            &pi,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #18)")]
+    fn test_create_group_v2_rejects_oligarchy_type() {
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[12u8; 32]);
+        let commitment = BytesN::from_array(&env, &[13u8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        client.create_group_v2(
+            &caller,
+            &group_id,
+            &commitment,
+            &0u32,
+            &3u32, // Oligarchy
+            &0u32,
+            &mock_proof(&env),
+            &pi,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #4)")]
+    fn test_create_group_v2_rejects_duplicate_via_legacy() {
+        // A group_id already occupied by a legacy V1 record must also
+        // collide when create_group_v2 is invoked.
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[14u8; 32]);
+        let commitment = BytesN::from_array(&env, &[15u8; 32]);
+        inject_group(&env, &contract_id, &group_id, &commitment, 0, 0);
+
+        let caller = Address::generate(&env);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        client.create_group_v2(
+            &caller,
+            &group_id,
+            &commitment,
+            &0u32,
+            &0u32,
+            &0u32,
+            &mock_proof(&env),
+            &pi,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #4)")]
+    fn test_create_group_v2_rejects_duplicate_via_v2() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[16u8; 32]);
+        let commitment = BytesN::from_array(&env, &[17u8; 32]);
+        inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 0, 0, 0);
+
+        let caller = Address::generate(&env);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        client.create_group_v2(
+            &caller,
+            &group_id,
+            &commitment,
+            &0u32,
+            &0u32,
+            &0u32,
+            &mock_proof(&env),
+            &pi,
+        );
+    }
+
+    #[test]
+    fn test_get_history_for_legacy_only_group_uses_legacy_key() {
+        // History must come through even when only the legacy keys exist.
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[18u8; 32]);
+        let commitment = BytesN::from_array(&env, &[19u8; 32]);
+
+        let mut history = Vec::new(&env);
+        history.push_back(CommitmentEntry {
+            commitment: commitment.clone(),
+            epoch: 0,
+            timestamp: 1000,
+            tier: 0,
+            active: true,
+        });
+        inject_group_with_history(
+            &env,
+            &contract_id,
+            &group_id,
+            &commitment,
+            1,
+            0,
+            history,
+        );
+
+        let result = client.get_history(&group_id, &10);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_bump_group_ttl_works_on_legacy_group() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[20u8; 32]);
+        let commitment = BytesN::from_array(&env, &[21u8; 32]);
+        inject_group(&env, &contract_id, &group_id, &commitment, 0, 0);
+
+        // Must not error even though only the legacy key is present.
+        client.bump_group_ttl(&group_id);
+    }
+
+    #[test]
+    fn test_bump_group_ttl_works_on_v2_group() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[22u8; 32]);
+        let commitment = BytesN::from_array(&env, &[23u8; 32]);
+        inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 0, 0, 0);
+
+        client.bump_group_ttl(&group_id);
     }
 }

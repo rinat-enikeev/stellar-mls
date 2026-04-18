@@ -96,7 +96,15 @@ pub enum Error {
     /// 3 = Oligarchy) or is not yet enabled in this contract version.
     /// Introduced with the group-governance-types design.
     UnknownGroupType = 18,
-    // Codes 19–22 reserved for Phase 2 (Oligarchy).
+    /// Oligarchy operation requested on a group that has no admin set
+    /// stored (either the group isn't Oligarchy, or the admin seed is
+    /// missing — should never happen for a well-formed Oligarchy group).
+    MissingAdminRoot = 19,
+    /// The supplied `admin_root` public input does not match the current
+    /// stored admin-tree root for the group.
+    AdminRootMismatch = 20,
+    // Codes 21–22 reserved for Phase 3 (DemocracyInputMissing) and
+    // Phase 2 (NotAdmin — the dedicated circuit-driven check).
     /// 1v1 groups MUST use tier 0 (Small). Any other tier is rejected.
     Invalid1v1Tier = 23,
     // Codes 24–25 reserved for Phase 3 (Democracy).
@@ -302,6 +310,10 @@ pub enum DataKey {
     GroupV2(BytesN<32>),
     /// Group history in V2 format (persistent storage).
     HistoryV2(BytesN<32>),
+    /// Oligarchy admin-set Poseidon root (persistent storage).
+    /// Set at create time and rotated by `update_admin_set` (ceremony-gated
+    /// — not available in this contract build).
+    AdminSet(BytesN<32>),
     /// Used proof hash — prevents cross-function and cross-group proof replay.
     UsedProof(BytesN<32>),
     /// Active group count per tier (instance storage, for M-4 limit enforcement).
@@ -620,6 +632,142 @@ impl SepXxxxContract {
         .publish(&env);
 
         Ok(())
+    }
+
+    /// Create a new Oligarchy group (`group_type = 3`).
+    ///
+    /// Seeds the admin set (Poseidon root of a separate admin tree) at
+    /// creation time alongside the standard membership commitment. The
+    /// creator proves membership via the usual small/medium/large
+    /// membership VK; the admin-set contents are not verified by the
+    /// contract — they are the creator's attestation, pinned by the
+    /// `AdminSet` storage slot so later admin-only operations (ceremony-
+    /// gated in this build) can check them.
+    ///
+    /// Any current admin can promote or demote other admins via
+    /// `update_admin_set` (reserved for a follow-up PR once the
+    /// `AdminUpdateCircuit` VK lands). The creator's only unique role is
+    /// seeding the initial admin set: after creation the creator holds
+    /// no special privilege beyond that of any other admin.
+    pub fn create_oligarchy_group(
+        env: Env,
+        caller: Address,
+        group_id: BytesN<32>,
+        commitment: BytesN<32>,
+        tier: u32,
+        member_count: u32,
+        admin_root: BytesN<32>,
+        proof: Groth16Proof,
+        public_inputs: PublicInputs,
+    ) -> Result<(), Error> {
+        Self::require_initialized(&env)?;
+        caller.require_auth();
+
+        let restricted: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::RestrictedMode)
+            .unwrap_or(false);
+        if restricted {
+            let admin: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::Admin)
+                .ok_or(Error::NotInitialized)?;
+            if caller != admin {
+                return Err(Error::AdminOnly);
+            }
+        }
+
+        if tier > 2 {
+            return Err(Error::InvalidTier);
+        }
+        if public_inputs.commitment != commitment || public_inputs.epoch != 0 {
+            return Err(Error::PublicInputsMismatch);
+        }
+        if Self::group_exists(&env, &group_id) {
+            return Err(Error::GroupAlreadyExists);
+        }
+
+        // `admin_root` is a Poseidon-hashed commitment to the admin tree.
+        // We validate canonical Fr encoding so a malformed seed cannot be
+        // accepted into storage.
+        let admin_root_fr = Fr::from_bytes(admin_root.clone());
+        let admin_root_canonical: BytesN<32> = admin_root_fr.to_bytes();
+        if admin_root_canonical != admin_root {
+            return Err(Error::InvalidCommitmentEncoding);
+        }
+
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::GroupCount(tier))
+            .unwrap_or(0);
+        if count >= MAX_GROUPS_PER_TIER {
+            return Err(Error::TierGroupLimitReached);
+        }
+
+        Self::check_proof_replay(&env, &proof)?;
+
+        let vk = Self::load_vk(&env, tier)?;
+        if !verify_groth16_proof(&env, &vk, &proof, &commitment, 0) {
+            return Err(Error::InvalidProof);
+        }
+
+        Self::record_proof(&env, &proof);
+
+        let timestamp = env.ledger().timestamp();
+        let entry = CommitmentEntryV2 {
+            commitment: commitment.clone(),
+            epoch: 0,
+            timestamp,
+            tier,
+            active: true,
+            group_type: 3,
+            member_count,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::GroupV2(group_id.clone()), &entry);
+        env.storage().persistent().set(
+            &DataKey::HistoryV2(group_id.clone()),
+            &Vec::<CommitmentEntry>::new(&env),
+        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::AdminSet(group_id.clone()), &admin_root);
+        env.storage().persistent().extend_ttl(
+            &DataKey::AdminSet(group_id.clone()),
+            LEDGER_THRESHOLD,
+            LEDGER_BUMP,
+        );
+        env.storage()
+            .instance()
+            .set(&DataKey::GroupCount(tier), &(count + 1));
+        Self::bump_group(&env, &group_id);
+
+        GroupCreated {
+            group_id,
+            commitment,
+            epoch: 0,
+            tier,
+            timestamp,
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    /// Read the Poseidon admin-tree root for an Oligarchy group.
+    ///
+    /// Returns `MissingAdminRoot` if the group is not Oligarchy-typed
+    /// (no `AdminSet` slot was ever written for it).
+    pub fn get_admin_root(env: Env, group_id: BytesN<32>) -> Result<BytesN<32>, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::AdminSet(group_id))
+            .ok_or(Error::MissingAdminRoot)
     }
 
     /// Update a group's commitment (epoch transition).
@@ -2759,5 +2907,218 @@ mod test {
         assert_eq!(state.member_count, 2);
         assert_eq!(state.tier, 0);
         assert!(state.active);
+    }
+
+    // ================================================================
+    // Oligarchy Group Type Tests (governance-types Phase 2)
+    // ================================================================
+
+    /// Inject an Oligarchy V2 group plus its admin-tree root directly
+    /// (bypasses the Groth16 check required by create_oligarchy_group).
+    fn inject_oligarchy_group(
+        env: &Env,
+        contract_id: &Address,
+        group_id: &BytesN<32>,
+        commitment: &BytesN<32>,
+        admin_root: &BytesN<32>,
+        epoch: u64,
+        tier: u32,
+        member_count: u32,
+    ) {
+        inject_group_v2(
+            env,
+            contract_id,
+            group_id,
+            commitment,
+            epoch,
+            tier,
+            3, // Oligarchy
+            member_count,
+        );
+        env.as_contract(contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::AdminSet(group_id.clone()), admin_root);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #8)")]
+    fn test_create_oligarchy_rejects_invalid_tier() {
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[34u8; 32]);
+        let commitment = BytesN::from_array(&env, &[35u8; 32]);
+        let admin_root = BytesN::from_array(&env, &[0u8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        client.create_oligarchy_group(
+            &caller,
+            &group_id,
+            &commitment,
+            &3u32, // invalid tier
+            &5u32,
+            &admin_root,
+            &mock_proof(&env),
+            &pi,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #15)")]
+    fn test_create_oligarchy_rejects_non_canonical_admin_root() {
+        // All-ones (0xff * 32) is >= BLS12-381 Fr modulus, so it must
+        // be rejected with InvalidCommitmentEncoding before proof check.
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[36u8; 32]);
+        let commitment = BytesN::from_array(&env, &[37u8; 32]);
+        let bad_admin_root = BytesN::from_array(&env, &[0xffu8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        client.create_oligarchy_group(
+            &caller,
+            &group_id,
+            &commitment,
+            &0u32,
+            &5u32,
+            &bad_admin_root,
+            &mock_proof(&env),
+            &pi,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #4)")]
+    fn test_create_oligarchy_rejects_duplicate_group_id() {
+        // A group_id already present as a V2 record must collide.
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[38u8; 32]);
+        let commitment = BytesN::from_array(&env, &[39u8; 32]);
+        inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 0, 0, 0);
+
+        let caller = Address::generate(&env);
+        let admin_root = BytesN::from_array(&env, &[0u8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        client.create_oligarchy_group(
+            &caller,
+            &group_id,
+            &commitment,
+            &0u32,
+            &5u32,
+            &admin_root,
+            &mock_proof(&env),
+            &pi,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #19)")]
+    fn test_get_admin_root_for_non_oligarchy_group_missing() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[40u8; 32]);
+        let commitment = BytesN::from_array(&env, &[41u8; 32]);
+        inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 0, 0, 0);
+
+        client.get_admin_root(&group_id);
+    }
+
+    #[test]
+    fn test_get_admin_root_returns_stored_value() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[42u8; 32]);
+        let commitment = BytesN::from_array(&env, &[43u8; 32]);
+        let admin_root = BytesN::from_array(&env, &[44u8; 32]);
+        inject_oligarchy_group(
+            &env,
+            &contract_id,
+            &group_id,
+            &commitment,
+            &admin_root,
+            0,
+            1,
+            10,
+        );
+
+        let stored = client.get_admin_root(&group_id);
+        assert_eq!(stored, admin_root);
+
+        // And the V2 record reports group_type = 3.
+        let state = client.get_state_v2(&group_id);
+        assert_eq!(state.group_type, 3);
+        assert_eq!(state.member_count, 10);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #18)")]
+    fn test_update_commitment_rejects_oligarchy_pending_ceremony() {
+        // Oligarchy update routing needs the AdminUpdate / OligarchyUpdate
+        // VKs, which ship with the trusted setup ceremony. Until then,
+        // update_commitment must reject group_type = 3 with UnknownGroupType.
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[45u8; 32]);
+        let commitment = BytesN::from_array(&env, &[46u8; 32]);
+        let admin_root = BytesN::from_array(&env, &[47u8; 32]);
+        inject_oligarchy_group(
+            &env,
+            &contract_id,
+            &group_id,
+            &commitment,
+            &admin_root,
+            0,
+            0,
+            4,
+        );
+
+        let upi = UpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: 0,
+            c_new: BytesN::from_array(&env, &[0u8; 32]),
+        };
+        client.update_commitment(&group_id, &mock_proof(&env), &upi);
+    }
+
+    #[test]
+    fn test_deactivate_group_dispatches_past_oligarchy_check() {
+        // Deactivate is the safety valve — works for every governance
+        // type including Oligarchy (a member proof is sufficient).
+        // Proves this by checking that the call gets *past* the
+        // group-type dispatch: the mock proof fails in the Groth16
+        // verifier (which host-panics on zero curve points in our test
+        // harness). The fact we reach the verifier at all means the
+        // governance check let Oligarchy through.
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[48u8; 32]);
+        let commitment = BytesN::from_array(&env, &[49u8; 32]);
+        let admin_root = BytesN::from_array(&env, &[50u8; 32]);
+        inject_oligarchy_group(
+            &env,
+            &contract_id,
+            &group_id,
+            &commitment,
+            &admin_root,
+            0,
+            0,
+            3,
+        );
+
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        let result = client.try_deactivate_group(&group_id, &mock_proof(&env), &pi);
+        // We expect *some* failure from the verifier (Abort) rather than
+        // a governance-level rejection (which would be Ok-wrapped).
+        match result {
+            Err(Err(_)) => { /* reached Groth16 verifier — governance dispatch OK */ }
+            other => panic!("expected verifier abort, got {:?}", other),
+        }
     }
 }

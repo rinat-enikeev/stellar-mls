@@ -506,8 +506,8 @@ fun OnboardingSheet(onDismiss: () -> Unit, isRevisit: Boolean = false, onRestore
                 Spacer(modifier = Modifier.height(8.dp))
                 androidx.compose.material3.TextButton(
                     onClick = {
-                        onDismiss()
                         onRestore()
+                        onDismiss()
                     },
                     modifier = Modifier.padding(horizontal = 32.dp)
                 ) {

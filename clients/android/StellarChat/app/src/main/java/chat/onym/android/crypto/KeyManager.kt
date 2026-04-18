@@ -55,13 +55,20 @@ class KeyManager private constructor(private val prefs: android.content.SharedPr
                 .putBoolean(IDENTITY_INITIALIZED, true)
                 .commit()
 
+            if (!saved) {
+                // Zeroize before throwing
+                Arrays.fill(seed, 0)
+                Arrays.fill(nostrKey, 0)
+                Arrays.fill(blsKey, 0)
+                Arrays.fill(entropy, 0)
+                throw KeyManagerException("Failed to persist restored identity keys")
+            }
+
             // Zeroize sensitive intermediates
             Arrays.fill(seed, 0)
             Arrays.fill(nostrKey, 0)
             Arrays.fill(blsKey, 0)
             Arrays.fill(entropy, 0)
-
-            if (!saved) throw KeyManagerException("Failed to persist restored identity keys")
 
             return KeyManager(prefs)
         }

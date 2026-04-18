@@ -26,6 +26,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,6 +48,7 @@ fun RestoreIdentityScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isRestoring by remember { mutableStateOf(false) }
     var restored by remember { mutableStateOf(false) }
+    var showConfirmDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -138,28 +141,47 @@ fun RestoreIdentityScreen(
                 }
             } else {
                 Button(
-                    onClick = {
-                        errorMessage = null
-                        isRestoring = true
-                        val mnemonic = phraseInput.trim().lowercase()
-                            .split("\\s+".toRegex())
-                            .joinToString(" ")
-                        onRestore(mnemonic) { success ->
-                            if (success) {
-                                restored = true
-                                isRestoring = false
-                                Toast.makeText(context, "Identity restored", Toast.LENGTH_SHORT).show()
-                            } else {
-                                errorMessage = "Invalid recovery phrase. Check your words and try again."
-                                isRestoring = false
-                            }
-                        }
-                    },
+                    onClick = { showConfirmDialog = true },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = phraseInput.trim().isNotEmpty() && !isRestoring && !restored
                 ) {
                     Text(if (isRestoring) "Restoring..." else "Restore Identity", fontWeight = FontWeight.SemiBold)
                 }
+            }
+
+            if (showConfirmDialog) {
+                AlertDialog(
+                    onDismissRequest = { showConfirmDialog = false },
+                    title = { Text("Replace Current Identity?") },
+                    text = { Text("This will replace your current identity keys. If your current identity is not backed up, it will be permanently lost.") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showConfirmDialog = false
+                            errorMessage = null
+                            isRestoring = true
+                            val mnemonic = phraseInput.trim().lowercase()
+                                .split("\\s+".toRegex())
+                                .joinToString(" ")
+                            onRestore(mnemonic) { success ->
+                                if (success) {
+                                    restored = true
+                                    isRestoring = false
+                                    Toast.makeText(context, "Identity restored", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    errorMessage = "Invalid recovery phrase. Check your words and try again."
+                                    isRestoring = false
+                                }
+                            }
+                        }) {
+                            Text("Replace", fontWeight = FontWeight.Bold)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showConfirmDialog = false }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))

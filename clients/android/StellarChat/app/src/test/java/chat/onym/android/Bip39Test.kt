@@ -193,6 +193,98 @@ class Bip39Test {
     }
 
     // -----------------------------------------------------------------------
+    // 24-Word Mnemonic (256-bit entropy)
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun mnemonicFromEntropy_24words() {
+        val entropy = ByteArray(32) // 256-bit all-zero entropy → 24 words
+        val mnemonic = Bip39.mnemonicFromEntropy(entropy)
+        val words = mnemonic.split(" ")
+        assertEquals(24, words.size)
+        assertTrue(Bip39.isValidMnemonic(mnemonic))
+        // Round-trip
+        val recovered = Bip39.entropyFromMnemonic(mnemonic)
+        assertNotNull(recovered)
+        assertArrayEquals(entropy, recovered)
+    }
+
+    @Test
+    fun keyDerivation_24wordMnemonic() {
+        val entropy = ByteArray(32) // all-zero 256-bit
+        val mnemonic = Bip39.mnemonicFromEntropy(entropy)
+        val seed = Bip39.seedFromMnemonic(mnemonic)
+        val nostrKey = Bip39.deriveNostrKey(seed)
+        val blsKey = Bip39.deriveBlsKey(seed)
+
+        assertEquals(32, nostrKey.size)
+        assertEquals(32, blsKey.size)
+        // Verify determinism: deriving again produces the same keys
+        val seed2 = Bip39.seedFromMnemonic(mnemonic)
+        assertArrayEquals(Bip39.deriveNostrKey(seed2), nostrKey)
+        assertArrayEquals(Bip39.deriveBlsKey(seed2), blsKey)
+    }
+
+    // -----------------------------------------------------------------------
+    // Passphrase Test (BIP39 reference vector)
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun seedWithPassphrase_matchesBip39Vector() {
+        // BIP39 reference vector: all-zero entropy mnemonic with passphrase "TREZOR"
+        val mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+        val seed = Bip39.seedFromMnemonic(mnemonic, passphrase = "TREZOR")
+        assertEquals(64, seed.size)
+        val seedHex = seed.toHex()
+        // Known BIP39 reference vector for this mnemonic + "TREZOR" passphrase
+        assertEquals(
+            "c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e7e24052f25f89aa2" +
+                "1542af40e8a46a291678e2f1ef17e2af5a3be3712d464bfb0d35d4e012cb3b99",
+            seedHex
+        )
+        // Also verify it differs from the no-passphrase seed
+        val seedNoPassphrase = Bip39.seedFromMnemonic(mnemonic)
+        assertFalse(
+            "Passphrase must change the derived seed",
+            seed.contentEquals(seedNoPassphrase)
+        )
+    }
+
+    // -----------------------------------------------------------------------
+    // Restore Over Existing Identity
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun restoreOverExisting_producesNewKeys() {
+        // Simulate: generate identity A, then restore with identity B's mnemonic.
+        // Verify the restored keys match B, not A.
+        val mnemonicA = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+        val mnemonicB = Bip39.mnemonicFromEntropy(ByteArray(16) { 0x42 })
+
+        val seedA = Bip39.seedFromMnemonic(mnemonicA)
+        val nostrA = Bip39.deriveNostrKey(seedA)
+
+        val seedB = Bip39.seedFromMnemonic(mnemonicB)
+        val nostrB = Bip39.deriveNostrKey(seedB)
+        val blsB = Bip39.deriveBlsKey(seedB)
+
+        // Keys must differ
+        assertFalse("Different mnemonics must produce different keys", nostrA.contentEquals(nostrB))
+
+        // Simulate restore: re-derive from B's mnemonic
+        val entropyB = Bip39.entropyFromMnemonic(mnemonicB)
+        assertNotNull(entropyB)
+        val restoredMnemonic = Bip39.mnemonicFromEntropy(entropyB!!)
+        assertEquals(mnemonicB, restoredMnemonic)
+        val restoredSeed = Bip39.seedFromMnemonic(restoredMnemonic)
+        val restoredNostr = Bip39.deriveNostrKey(restoredSeed)
+        val restoredBls = Bip39.deriveBlsKey(restoredSeed)
+
+        assertArrayEquals("Restored Nostr key must match original B", nostrB, restoredNostr)
+        assertArrayEquals("Restored BLS key must match original B", blsB, restoredBls)
+    }
+
+    // -----------------------------------------------------------------------
     // Restore Round-Trip
     // -----------------------------------------------------------------------
 

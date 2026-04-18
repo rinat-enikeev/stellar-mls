@@ -67,6 +67,35 @@ fun RecoveryPhraseScreen(
     var authenticated by remember { mutableStateOf(false) }
     var authError by remember { mutableStateOf<String?>(null) }
 
+    val biometricCallback = remember {
+        object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                authenticated = true
+                authError = null
+            }
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                authError = errString.toString()
+            }
+            override fun onAuthenticationFailed() {
+                authError = "Authentication failed"
+            }
+        }
+    }
+
+    fun launchBiometricPrompt(activity: FragmentActivity) {
+        val executor = ContextCompat.getMainExecutor(context)
+        val prompt = BiometricPrompt(activity, executor, biometricCallback)
+        val promptInfo = BiometricPrompt.PromptInfo.Builder()
+            .setTitle("View Recovery Phrase")
+            .setSubtitle("Authenticate to view your recovery phrase")
+            .setAllowedAuthenticators(
+                BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                    BiometricManager.Authenticators.DEVICE_CREDENTIAL
+            )
+            .build()
+        prompt.authenticate(promptInfo)
+    }
+
     // Set FLAG_SECURE while this screen is visible
     DisposableEffect(Unit) {
         val activity = context as? android.app.Activity
@@ -80,8 +109,8 @@ fun RecoveryPhraseScreen(
     DisposableEffect(Unit) {
         val activity = context as? FragmentActivity
         if (activity == null) {
-            // Fallback: allow access if we can't get FragmentActivity
-            authenticated = true
+            // Deny access if we can't get FragmentActivity for biometric prompt
+            authError = "Unable to verify identity. Please try again."
             onDispose {}
         } else {
             val biometricManager = BiometricManager.from(context)
@@ -93,29 +122,7 @@ fun RecoveryPhraseScreen(
                 // No biometric/passcode set — allow access (like iOS)
                 authenticated = true
             } else {
-                val executor = ContextCompat.getMainExecutor(context)
-                val callback = object : BiometricPrompt.AuthenticationCallback() {
-                    override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                        authenticated = true
-                        authError = null
-                    }
-                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                        authError = errString.toString()
-                    }
-                    override fun onAuthenticationFailed() {
-                        authError = "Authentication failed"
-                    }
-                }
-                val prompt = BiometricPrompt(activity, executor, callback)
-                val promptInfo = BiometricPrompt.PromptInfo.Builder()
-                    .setTitle("View Recovery Phrase")
-                    .setSubtitle("Authenticate to view your recovery phrase")
-                    .setAllowedAuthenticators(
-                        BiometricManager.Authenticators.BIOMETRIC_STRONG or
-                            BiometricManager.Authenticators.DEVICE_CREDENTIAL
-                    )
-                    .build()
-                prompt.authenticate(promptInfo)
+                launchBiometricPrompt(activity)
             }
             onDispose {}
         }
@@ -160,29 +167,7 @@ fun RecoveryPhraseScreen(
                     Button(onClick = {
                         authError = null
                         val activity = context as? FragmentActivity ?: return@Button
-                        val executor = ContextCompat.getMainExecutor(context)
-                        val callback = object : BiometricPrompt.AuthenticationCallback() {
-                            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                                authenticated = true
-                                authError = null
-                            }
-                            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                                authError = errString.toString()
-                            }
-                            override fun onAuthenticationFailed() {
-                                authError = "Authentication failed"
-                            }
-                        }
-                        val prompt = BiometricPrompt(activity, executor, callback)
-                        val promptInfo = BiometricPrompt.PromptInfo.Builder()
-                            .setTitle("View Recovery Phrase")
-                            .setSubtitle("Authenticate to view your recovery phrase")
-                            .setAllowedAuthenticators(
-                                BiometricManager.Authenticators.BIOMETRIC_STRONG or
-                                    BiometricManager.Authenticators.DEVICE_CREDENTIAL
-                            )
-                            .build()
-                        prompt.authenticate(promptInfo)
+                        launchBiometricPrompt(activity)
                     }) {
                         Text("Try Again")
                     }
@@ -281,7 +266,9 @@ fun RecoveryPhraseScreen(
                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                     clipboard.setPrimaryClip(ClipData.newPlainText("Recovery Phrase", recoveryPhrase))
                     Toast.makeText(context, "Copied. Will clear in 60 seconds.", Toast.LENGTH_LONG).show()
-                    // Clear clipboard after 60 seconds
+                    // Clear clipboard after 60 seconds.
+                    // NOTE: Best-effort — if the process is killed before the timer fires,
+                    // the mnemonic remains on the clipboard until overwritten by the user.
                     Handler(Looper.getMainLooper()).postDelayed({
                         val current = clipboard.primaryClip
                         if (current != null && current.itemCount > 0 &&

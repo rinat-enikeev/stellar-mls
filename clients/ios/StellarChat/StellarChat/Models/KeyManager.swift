@@ -122,10 +122,18 @@ final class KeyManager: Codable {
         var nostrKey = Bip39.deriveNostrKey(from: seed)
         var blsKey = Bip39.deriveBlsKey(from: seed)
 
-        // Persist all keys
-        try saveToKeychain(entropy, key: mnemonicKeychainKey)
-        try saveToKeychain(nostrKey, key: nostrKeychainKey)
-        try saveToKeychain(blsKey, key: blsKeychainKey)
+        // Persist all keys atomically — clean up on partial failure
+        do {
+            try saveToKeychain(entropy, key: mnemonicKeychainKey)
+            try saveToKeychain(nostrKey, key: nostrKeychainKey)
+            try saveToKeychain(blsKey, key: blsKeychainKey)
+        } catch {
+            // Attempt to remove any partially-written keys
+            try? deleteKeychainItem(key: mnemonicKeychainKey)
+            try? deleteKeychainItem(key: nostrKeychainKey)
+            try? deleteKeychainItem(key: blsKeychainKey)
+            throw error
+        }
 
         // Zeroize sensitive intermediates
         seed.resetBytes(in: seed.startIndex..<seed.endIndex)
@@ -433,6 +441,15 @@ final class KeyManager: Codable {
         if addStatus != errSecSuccess {
             throw KeyManagerError.keychainWriteFailed(key: key, status: addStatus)
         }
+    }
+
+    private static func deleteKeychainItem(key: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: key,
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 
     private static func deleteLegacyKeychainItem(key: String) {

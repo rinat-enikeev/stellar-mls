@@ -101,7 +101,9 @@ struct RecoveryPhraseView: View {
                 Button {
                     UIPasteboard.general.string = phrase
                     showCopyConfirm = true
-                    // Clear clipboard after 60 seconds
+                    // Clear clipboard after 60 seconds.
+                    // NOTE: Best-effort — if the process is killed before the timer fires,
+                    // the mnemonic remains on the clipboard until overwritten by the user.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
                         if UIPasteboard.general.string == phrase {
                             UIPasteboard.general.string = ""

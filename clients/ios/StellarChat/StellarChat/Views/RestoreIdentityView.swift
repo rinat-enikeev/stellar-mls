@@ -8,6 +8,7 @@ struct RestoreIdentityView: View {
     @State private var errorMessage: String?
     @State private var isRestoring = false
     @State private var restored = false
+    @State private var showConfirmDialog = false
     var onRestoreComplete: (() -> Void)?
 
     var body: some View {
@@ -50,7 +51,7 @@ struct RestoreIdentityView: View {
 
                 Section {
                     Button {
-                        restore()
+                        showConfirmDialog = true
                     } label: {
                         if isRestoring {
                             ProgressView()
@@ -62,6 +63,12 @@ struct RestoreIdentityView: View {
                         }
                     }
                     .disabled(phraseInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isRestoring || restored)
+                    .alert("Replace Current Identity?", isPresented: $showConfirmDialog) {
+                        Button("Cancel", role: .cancel) {}
+                        Button("Replace", role: .destructive) { restore() }
+                    } message: {
+                        Text("This will replace your current identity keys. If your current identity is not backed up, it will be permanently lost.")
+                    }
                 }
             }
             .navigationTitle("Restore Identity")

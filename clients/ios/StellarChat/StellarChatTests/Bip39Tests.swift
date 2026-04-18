@@ -193,6 +193,90 @@ struct Bip39KeyDerivationTests {
     }
 }
 
+// MARK: - 24-Word Mnemonic (256-bit entropy)
+
+@Suite("BIP39: 24-Word Mnemonic")
+struct Bip39TwentyFourWordTests {
+
+    @Test("24-word mnemonic from 256-bit entropy round-trips correctly")
+    func mnemonicFromEntropy24Words() {
+        let entropy = Data(repeating: 0x00, count: 32)
+        let mnemonic = Bip39.mnemonicFromEntropy(entropy)
+        let words = mnemonic.split(separator: " ")
+        #expect(words.count == 24)
+        #expect(Bip39.isValidMnemonic(mnemonic))
+        let recovered = Bip39.entropyFromMnemonic(mnemonic)
+        #expect(recovered == entropy)
+    }
+
+    @Test("Key derivation from 24-word mnemonic is deterministic")
+    func keyDerivation24Words() {
+        let entropy = Data(repeating: 0x00, count: 32)
+        let mnemonic = Bip39.mnemonicFromEntropy(entropy)
+        let seed = Bip39.seedFromMnemonic(mnemonic)
+        let nostrKey = Bip39.deriveNostrKey(from: seed)
+        let blsKey = Bip39.deriveBlsKey(from: seed)
+
+        #expect(nostrKey.count == 32)
+        #expect(blsKey.count == 32)
+
+        let seed2 = Bip39.seedFromMnemonic(mnemonic)
+        #expect(Bip39.deriveNostrKey(from: seed2) == nostrKey)
+        #expect(Bip39.deriveBlsKey(from: seed2) == blsKey)
+    }
+}
+
+// MARK: - Passphrase Test
+
+@Suite("BIP39: Passphrase")
+struct Bip39PassphraseTests {
+
+    @Test("Seed with TREZOR passphrase matches BIP39 reference vector")
+    func seedWithPassphrase() {
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+        let seed = Bip39.seedFromMnemonic(mnemonic, passphrase: "TREZOR")
+        #expect(seed.count == 64)
+        let seedHex = seed.map { String(format: "%02x", $0) }.joined()
+        #expect(seedHex == "c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e7e24052f25f89aa21542af40e8a46a291678e2f1ef17e2af5a3be3712d464bfb0d35d4e012cb3b99")
+        // Also verify it differs from the no-passphrase seed
+        let seedNoPassphrase = Bip39.seedFromMnemonic(mnemonic)
+        #expect(seed != seedNoPassphrase, "Passphrase must change the derived seed")
+    }
+}
+
+// MARK: - Restore Over Existing Identity
+
+@Suite("BIP39: Restore Over Existing Identity")
+struct Bip39RestoreOverExistingTests {
+
+    @Test("Restoring with a different mnemonic produces different keys")
+    func restoreOverExisting() {
+        let mnemonicA = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+        let mnemonicB = Bip39.mnemonicFromEntropy(Data(repeating: 0x42, count: 16))
+
+        let seedA = Bip39.seedFromMnemonic(mnemonicA)
+        let nostrA = Bip39.deriveNostrKey(from: seedA)
+
+        let seedB = Bip39.seedFromMnemonic(mnemonicB)
+        let nostrB = Bip39.deriveNostrKey(from: seedB)
+        let blsB = Bip39.deriveBlsKey(from: seedB)
+
+        #expect(nostrA != nostrB, "Different mnemonics must produce different keys")
+
+        // Simulate restore: re-derive from B's mnemonic
+        let entropyB = Bip39.entropyFromMnemonic(mnemonicB)
+        #expect(entropyB != nil)
+        let restoredMnemonic = Bip39.mnemonicFromEntropy(entropyB!)
+        #expect(restoredMnemonic == mnemonicB)
+        let restoredSeed = Bip39.seedFromMnemonic(restoredMnemonic)
+        let restoredNostr = Bip39.deriveNostrKey(from: restoredSeed)
+        let restoredBls = Bip39.deriveBlsKey(from: restoredSeed)
+
+        #expect(restoredNostr == nostrB, "Restored Nostr key must match original B")
+        #expect(restoredBls == blsB, "Restored BLS key must match original B")
+    }
+}
+
 // MARK: - Restore Round-Trip
 
 @Suite("BIP39: Restore Round-Trip")

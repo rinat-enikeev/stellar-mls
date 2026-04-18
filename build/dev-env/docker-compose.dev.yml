@@ -85,16 +85,7 @@ services:
     image: n8nio/n8n:latest
     platform: linux/arm64
     container_name: stellar-n8n
-    # network_mode: host — n8n reaches the agents at 127.0.0.1:2201
-    # (qa-agent) / 127.0.0.1:2202 (release-agent), the same loopback
-    # ports docker-compose publishes on the Mac host. On Docker Desktop
-    # for Mac this requires enabling "Host networking" under Settings →
-    # Resources → Network (Features in development on older builds);
-    # on Linux Docker Engine it works out of the box.
-    # Consequence: `ports:` + `networks:` are ignored under host mode,
-    # so the n8n UI is reached at http://127.0.0.1:5678 directly (no
-    # bridge). The `orchestration` network is no longer used.
-    network_mode: host
+    hostname: n8n
     env_file:
       - path: ./n8n.env
         required: false
@@ -103,9 +94,13 @@ services:
       N8N_PORT: "5678"
       N8N_PROTOCOL: http
       N8N_SECURE_COOKIE: "false"
+    ports:
+      - "0.0.0.0:5678:5678"
     volumes:
       - n8n-data:/home/node/.n8n
       - ./n8n/workflows:/workflows:ro
+    networks:
+      - orchestration
     restart: unless-stopped
 
 volumes:

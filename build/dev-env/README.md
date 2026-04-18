@@ -324,15 +324,9 @@ six workflows, and prints each webhook URL.
 
 You still need to create the owner account at
 http://127.0.0.1:5678 (UI, one-time) and point a cloudflared tunnel at
-`http://127.0.0.1:5678` — set the resulting public URL as
+`http://stellar-n8n:5678` — set the resulting public URL as
 `WEBHOOK_URL` in `n8n.env` before running the deploy script so the
 printed webhook URLs are correct. Full playbook: `n8n/README.md`.
-
-> n8n runs with `network_mode: host`, so it reaches the agents at
-> `127.0.0.1:2201` / `127.0.0.1:2202` directly (same loopback ports
-> that published `docker-compose.dev.yml` sshd). The `stellar-n8n`
-> docker DNS name is therefore no longer addressable — route cloudflared
-> / the tunnel to `127.0.0.1:5678` on the Mac host instead.
 
 ---
 

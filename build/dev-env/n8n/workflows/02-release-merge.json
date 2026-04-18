@@ -75,7 +75,7 @@
       "typeVersion": 1,
       "position": [900, 220],
       "credentials": {
-        "sshPassword": {
+        "sshPrivateKey": {
           "id": "REPLACE_ME",
           "name": "release-agent SSH"
         }

@@ -18,7 +18,7 @@ chown -R agent:agent /home/agent /cache 2>/dev/null || true
 
 # Per-container first-run (idempotent — safe to re-invoke on every boot).
 sudo -u agent \
-    --preserve-env=ROLE,GITHUB_TOKEN,GITHUB_REPO,ANTHROPIC_API_KEY,IPHONE_SSH_PUBKEY,MAC_HOST,MAC_HOST_USER,MAC_HOST_PORT \
+    --preserve-env=ROLE,GITHUB_TOKEN,GITHUB_REPO,ANTHROPIC_API_KEY,IPHONE_SSH_PUBKEY,N8N_SSH_PUBKEY,MAC_HOST,MAC_HOST_USER,MAC_HOST_PORT \
     /usr/local/bin/first-run
 
 exec /usr/sbin/sshd -D -e

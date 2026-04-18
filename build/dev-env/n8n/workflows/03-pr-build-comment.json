@@ -102,7 +102,7 @@
       "typeVersion": 1,
       "position": [1120, 220],
       "credentials": {
-        "sshPassword": {
+        "sshPrivateKey": {
           "id": "REPLACE_ME",
           "name": "qa-agent SSH"
         }

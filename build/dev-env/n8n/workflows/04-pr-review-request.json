@@ -199,7 +199,7 @@
       "typeVersion": 1,
       "position": [1240, 140],
       "credentials": {
-        "sshPassword": {
+        "sshPrivateKey": {
           "id": "REPLACE_ME",
           "name": "qa-agent SSH"
         }
@@ -216,7 +216,7 @@
       "typeVersion": 1,
       "position": [1240, 300],
       "credentials": {
-        "sshPassword": {
+        "sshPrivateKey": {
           "id": "REPLACE_ME",
           "name": "release-agent SSH"
         }

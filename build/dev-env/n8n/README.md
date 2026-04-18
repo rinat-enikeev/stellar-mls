@@ -102,7 +102,7 @@ unavailable in the image, etc.). It reproduces what the script does:
 1. Open http://127.0.0.1:5678 via ProxyJump and create the owner
    account (CLI deploy can run before this; UI access is independent).
 2. **SSH credentials**: create `qa-agent SSH` and `release-agent SSH`
-   (`sshPassword` type) with host `qa-agent` / `release-agent`, port
+   (`sshPrivateKey` type) with host `qa-agent` / `release-agent`, port
    22, user `agent`. Use the same OpenSSH private key for both; paste
    the matching public half into both agents' `.env` files as
    `N8N_SSH_PUBKEY` and restart the agents.

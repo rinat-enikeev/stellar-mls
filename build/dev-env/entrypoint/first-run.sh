@@ -14,14 +14,19 @@ if [ ! -f .ssh/id_ed25519 ]; then
         -C "${ROLE:-unknown}-agent@$(hostname)"
 fi
 
-# Authorise the iPhone's public key for inbound SSH (via ProxyJump).
+# Authorise inbound SSH keys. The iPhone key is for interactive use via
+# ProxyJump; the n8n key is what the orchestration stack presents when it
+# drives headless builds. sshd is key-only (see ssh/sshd_config), so any
+# key the container should accept must land here.
 touch .ssh/authorized_keys
 chmod 600 .ssh/authorized_keys
-if [ -n "${IPHONE_SSH_PUBKEY:-}" ]; then
-    if ! grep -qxF "$IPHONE_SSH_PUBKEY" .ssh/authorized_keys; then
-        echo "$IPHONE_SSH_PUBKEY" >> .ssh/authorized_keys
+for _var in IPHONE_SSH_PUBKEY N8N_SSH_PUBKEY; do
+    _val="${!_var:-}"
+    if [ -n "$_val" ] && ! grep -qxF "$_val" .ssh/authorized_keys; then
+        echo "$_val" >> .ssh/authorized_keys
     fi
-fi
+done
+unset _var _val
 
 # Clone the workspace repo if empty, and keep the token embedded in the
 # remote URL so non-interactive git pushes (from n8n SSH sessions that

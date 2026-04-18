@@ -603,7 +603,8 @@ footer a:hover { color: var(--accent-glow); }
 .artifact-row {
   display: grid;
   grid-template-columns: 36px 1fr auto;
-  gap: 14px;
+  column-gap: 14px;
+  row-gap: 10px;
   align-items: center;
   padding: 12px 14px;
   border: 1px solid var(--border);
@@ -615,8 +616,33 @@ footer a:hover { color: var(--accent-glow); }
 .artifact-row .filename { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; color: var(--text-dim); display: block; margin-top: 2px; word-break: break-all; }
 .artifact-row .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .artifact-row .actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
-.artifact-row details summary { cursor: pointer; color: var(--text-dim); font-size: 0.78rem; margin-top: 8px; }
-.artifact-row .hash { font-size: 0.72rem; }
+.artifact-row .sha256-line {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: thin;
+}
+.artifact-row .sha256-line .label {
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 0.66rem;
+  flex-shrink: 0;
+}
+.artifact-row .sha256-line code {
+  color: var(--text);
+  user-select: all;
+}
 .badge-gui   { background: rgba(108,92,231,0.15); color: var(--accent-glow); border: 1px solid rgba(162,155,254,0.35); }
 @media (max-width: 600px) {
   .artifact-row { grid-template-columns: 36px 1fr; }

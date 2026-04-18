@@ -62,17 +62,24 @@
         </div>
 
         <template x-if="recommended.asset">
-          <div class="flex flex-gap flex-wrap mt-2">
-            <a class="btn btn-primary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset">Download</a>
-            <template x-if="recommended.kind === 'gui'">
-              <a class="btn btn-secondary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset + '.sha256'">SHA-256</a>
-            </template>
-            <template x-if="recommended.kind !== 'gui'">
-              <a class="btn btn-secondary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset + '.minisig'">Signature</a>
-            </template>
-            <template x-if="recommended.kind !== 'gui'">
-              <a class="btn btn-secondary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset + '.sha256'">SHA-256</a>
-            </template>
+          <div>
+            <div class="flex flex-gap flex-wrap mt-2">
+              <a class="btn btn-primary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset">Download</a>
+              <template x-if="recommended.kind === 'gui'">
+                <a class="btn btn-secondary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset + '.sha256'">SHA-256</a>
+              </template>
+              <template x-if="recommended.kind !== 'gui'">
+                <a class="btn btn-secondary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset + '.minisig'">Signature</a>
+              </template>
+              <template x-if="recommended.kind !== 'gui'">
+                <a class="btn btn-secondary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset + '.sha256'">SHA-256</a>
+              </template>
+              <a class="btn btn-ghost" :href="sourceUrl(recommended)" target="_blank" rel="noopener">Source</a>
+            </div>
+            <div class="sha256-line mt-2" x-show="recommendedSha256" title="SHA-256 of the downloaded artifact">
+              <span class="label">sha256</span>
+              <code x-text="recommendedSha256"></code>
+            </div>
           </div>
         </template>
 
@@ -95,6 +102,11 @@
               <a class="btn btn-secondary btn-small" :href="cliFallback.url">Binary</a>
               <a class="btn btn-secondary btn-small" :href="cliFallback.url + '.minisig'">minisign</a>
               <a class="btn btn-secondary btn-small" :href="cliFallback.url + '.sha256'">sha256</a>
+              <a class="btn btn-ghost btn-small"     :href="sourceUrl(cliFallback)" target="_blank" rel="noopener">Source</a>
+            </div>
+            <div class="sha256-line" title="SHA-256 of the downloaded artifact">
+              <span class="label">sha256</span>
+              <code x-text="cliFallback.sha256"></code>
             </div>
           </div>
         </template>
@@ -152,16 +164,17 @@
                 <span class="badge badge-dim"   x-show="a.minisign">minisign</span>
                 <span class="badge badge-dim"   x-show="a.cosign">cosign</span>
               </div>
-              <details>
-                <summary>sha256</summary>
-                <code class="hash" x-text="a.sha256"></code>
-              </details>
             </div>
             <div class="actions">
               <a class="btn btn-primary btn-small"   :href="a.url">Download</a>
               <a class="btn btn-secondary btn-small" :href="a.url + '.minisig'" x-show="a.minisign">minisig</a>
               <a class="btn btn-secondary btn-small" :href="a.url + '.sig'"     x-show="a.cosign">cosign</a>
               <a class="btn btn-secondary btn-small" :href="a.url + '.sha256'">sha256</a>
+              <a class="btn btn-ghost btn-small"     :href="sourceUrl(a)" target="_blank" rel="noopener">Source</a>
+            </div>
+            <div class="sha256-line" title="SHA-256 of the downloaded artifact">
+              <span class="label">sha256</span>
+              <code x-text="a.sha256"></code>
             </div>
           </div>
         </template>
@@ -206,9 +219,19 @@ function downloads() {
     tag: null,
     assets: [],
     recommended: null,
+    recommendedSha256: null,
     cliFallback: null,
     useCli: false,
     minisignPub: null,
+    // Deep-link to the exact source each artifact was built from, at the
+    // release tag. All CLI targets build from the same Rust entry point;
+    // the macOS GUI builds from the Swift sources in clients/mac-ceremony.
+    sourceUrl(a) {
+      const tag = this.tag || 'main';
+      const base = 'https://github.com/rinat-enikeev/stellar-mls';
+      if (a.kind === 'gui') return base + '/tree/' + tag + '/clients/mac-ceremony';
+      return base + '/blob/' + tag + '/src/bin/ceremony_tool.rs';
+    },
     iconId(a) {
       if (a.kind === 'gui') return 'i-gui';
       const t = a.target || '';
@@ -243,6 +266,12 @@ function downloads() {
         this.minisignPub = r.minisign_pubkey;
       } catch (_) {}
       this.recommended = await this.detect();
+      // Look the detected asset back up in the manifest to recover its
+      // sha256 (the recommended object only carries display fields).
+      if (this.recommended && this.recommended.asset) {
+        const match = this.assets.find((a) => a.filename === this.recommended.asset);
+        this.recommendedSha256 = match ? match.sha256 : null;
+      }
     },
     async detect() {
       const ua = navigator.userAgent;

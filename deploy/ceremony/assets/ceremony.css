@@ -283,6 +283,39 @@ body.mode-math .for-math { display: block; }
   font-weight: 600;
 }
 
+.zip-drop {
+  border: 2px dashed var(--border, rgba(255,255,255,0.18));
+  border-radius: 12px;
+  padding: 28px 20px;
+  text-align: center;
+  background: rgba(255,255,255,0.02);
+  transition: border-color .15s, background .15s;
+  cursor: pointer;
+}
+.zip-drop.active {
+  border-color: var(--accent);
+  background: rgba(108, 92, 231, 0.08);
+}
+.zip-drop .big {
+  font-size: 1.05rem;
+  margin-bottom: 6px;
+}
+.zip-drop-empty {
+  color: var(--text-dim);
+}
+.zip-drop-filled {
+  text-align: left;
+}
+.zip-drop-filled ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.zip-drop-filled ul li {
+  padding: 2px 0;
+  color: var(--text-dim);
+}
+
 /* Step cards */
 .step-card {
   background: var(--surface);

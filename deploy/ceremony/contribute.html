@@ -281,21 +281,34 @@
         </li>
       </template>
       <li class="mt-2">
-        <span x-show="toolAsset && toolAsset.kind === 'gui'">Unzip <code>contribution-…zip</code> and upload the three files inside:</span>
-        <span x-show="!(toolAsset && toolAsset.kind === 'gui')">Upload the three files from <code>./mine</code>:</span>
-        <div class="form-field mt-2">
-          <label>state.srs</label>
-          <input type="file" @change="files.state_srs = $event.target.files[0]" />
+        <span x-show="toolAsset && toolAsset.kind === 'gui'">Drop the <code>contribution-…zip</code> the app produced:</span>
+        <span x-show="!(toolAsset && toolAsset.kind === 'gui')">Zip the <code>./mine</code> folder and drop it here (or use the button):</span>
+        <div class="zip-drop mt-2"
+             :class="zipDragActive ? 'active' : ''"
+             @dragover.prevent="zipDragActive = true"
+             @dragleave.prevent="zipDragActive = false"
+             @drop.prevent="zipDragActive = false; handleZipFile($event.dataTransfer.files[0])">
+          <input type="file" accept=".zip,application/zip" id="zip-picker"
+                 style="display:none" @change="handleZipFile($event.target.files[0])" />
+          <template x-if="!zipReady">
+            <div class="zip-drop-empty">
+              <div class="big">Drop contribution zip here</div>
+              <div class="text-dim" style="font-size:0.88rem;">or <a href="#" @click.prevent="document.getElementById('zip-picker').click()">choose a file</a></div>
+            </div>
+          </template>
+          <template x-if="zipReady">
+            <div class="zip-drop-filled">
+              <div><strong x-text="zipName"></strong></div>
+              <ul class="mt-2" style="font-size:0.88rem;">
+                <li>state.srs &middot; <span x-text="fmtBytes(files.state_srs && files.state_srs.length)"></span></li>
+                <li>state.txt &middot; <span x-text="fmtBytes(files.state_txt && files.state_txt.length)"></span></li>
+                <li>receipt.txt &middot; <span x-text="fmtBytes(files.receipt && files.receipt.length)"></span></li>
+              </ul>
+              <p class="mt-2"><a href="#" @click.prevent="clearZip()">Choose a different zip</a></p>
+            </div>
+          </template>
         </div>
-        <div class="form-field">
-          <label>state.txt</label>
-          <input type="file" @change="files.state_txt = $event.target.files[0]" />
-        </div>
-        <div class="form-field">
-          <label>receipt.txt</label>
-          <input type="file" @change="files.receipt = $event.target.files[0]" />
-        </div>
-        <button class="btn btn-primary" @click="upload()" :disabled="busy || !files.state_srs || !files.state_txt || !files.receipt">
+        <button class="btn btn-primary mt-2" @click="upload()" :disabled="busy || !zipReady">
           <span x-text="busy ? 'Uploading and verifying…' : 'Submit contribution'"></span>
         </button>
         <p class="text-red mt-2" x-show="error" x-text="error"></p>
@@ -344,6 +357,9 @@ function contribute() {
     committedRound: null,
     deadlineCountdown: '',
     files: { state_srs: null, state_txt: null, receipt: null },
+    zipName: '',
+    zipReady: false,
+    zipDragActive: false,
     busy: false,
     error: '',
     toolAsset: null,
@@ -464,7 +480,7 @@ function contribute() {
       this.slotDeadline = null;
       this.committedRound = null;
       this.prevBlobs = {};
-      this.error = '';
+      this.clearZip();
       if (this.pubkey) this.refresh();
     },
 
@@ -488,24 +504,53 @@ function contribute() {
       finally { this.busy = false; }
     },
 
+    fmtBytes(n) {
+      if (!n && n !== 0) return '';
+      if (n < 1024) return n + ' B';
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KiB';
+      return (n / (1024 * 1024)).toFixed(1) + ' MiB';
+    },
+
+    clearZip() {
+      this.files = { state_srs: null, state_txt: null, receipt: null };
+      this.zipName = '';
+      this.zipReady = false;
+      this.error = '';
+    },
+
+    async handleZipFile(file) {
+      if (!file) return;
+      this.clearZip();
+      this.zipName = file.name;
+      this.busy = true;
+      try {
+        const buf = new Uint8Array(await file.arrayBuffer());
+        const entries = await readContributionZip(buf);
+        const srs = entries['state.srs'];
+        const txt = entries['state.txt'];
+        const rec = entries['receipt.txt'];
+        if (!srs || !txt || !rec) {
+          const missing = ['state.srs', 'state.txt', 'receipt.txt']
+            .filter(n => !entries[n]).join(', ');
+          throw new Error(`zip is missing: ${missing}. Did the native tool finish successfully?`);
+        }
+        this.files = { state_srs: srs, state_txt: txt, receipt: rec };
+        this.zipReady = true;
+      } catch (e) {
+        this.error = e.message;
+        this.zipName = '';
+      } finally {
+        this.busy = false;
+      }
+    },
+
     async upload() {
       this.busy = true; this.error = '';
       try {
-        const readAll = (f) => new Promise((res, rej) => {
-          const r = new FileReader();
-          r.onload = () => res(new Uint8Array(r.result));
-          r.onerror = () => rej(r.error);
-          r.readAsArrayBuffer(f);
-        });
-        const [srs, txt, rec] = await Promise.all([
-          readAll(this.files.state_srs),
-          readAll(this.files.state_txt),
-          readAll(this.files.receipt),
-        ]);
         const r = await Ceremony.api.uploadContribution(this.tier, {
-          state_srs: srs,
-          state_txt: new TextDecoder().decode(txt),
-          receipt: new TextDecoder().decode(rec),
+          state_srs: this.files.state_srs,
+          state_txt: new TextDecoder().decode(this.files.state_txt),
+          receipt: new TextDecoder().decode(this.files.receipt),
         });
         this.myStatus = 'committed';
         this.committedRound = r.round;
@@ -513,6 +558,91 @@ function contribute() {
       finally { this.busy = false; }
     },
   };
+}
+
+// Minimal in-browser zip reader. Supports the two methods produced by
+// `ditto -c -k` and `zip` (stored + deflate); uses the browser-native
+// DecompressionStream('deflate-raw') so we don't ship a JS inflate. Returns
+// a map keyed by each entry's basename ({ "state.srs": Uint8Array, ... }).
+async function readContributionZip(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+
+  // Walk back from the end looking for the EOCD magic 0x06054b50.
+  const EOCD_SIG = 0x06054b50;
+  let eocd = -1;
+  const maxScan = Math.min(buf.length, 0xffff + 22);
+  for (let i = buf.length - 22; i >= buf.length - maxScan; i--) {
+    if (dv.getUint32(i, true) === EOCD_SIG) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('not a zip file (no EOCD record)');
+
+  const cdCount  = dv.getUint16(eocd + 10, true);
+  const cdSize   = dv.getUint32(eocd + 12, true);
+  const cdOffset = dv.getUint32(eocd + 16, true);
+  if (cdOffset === 0xffffffff || cdSize === 0xffffffff) {
+    throw new Error('zip64 not supported (contribution zips should be <4 GiB)');
+  }
+
+  const WANTED = new Set(['state.srs', 'state.txt', 'receipt.txt']);
+  const out = {};
+  const CEN_SIG = 0x02014b50;
+  const LOC_SIG = 0x04034b50;
+  let p = cdOffset;
+  const cdEnd = cdOffset + cdSize;
+
+  for (let i = 0; i < cdCount && p < cdEnd; i++) {
+    if (dv.getUint32(p, true) !== CEN_SIG) {
+      throw new Error('malformed zip central directory');
+    }
+    const method      = dv.getUint16(p + 10, true);
+    const compSize    = dv.getUint32(p + 20, true);
+    const uncompSize  = dv.getUint32(p + 24, true);
+    const nameLen     = dv.getUint16(p + 28, true);
+    const extraLen    = dv.getUint16(p + 30, true);
+    const commentLen  = dv.getUint16(p + 32, true);
+    const localOffset = dv.getUint32(p + 42, true);
+    const name = new TextDecoder().decode(buf.subarray(p + 46, p + 46 + nameLen));
+
+    p += 46 + nameLen + extraLen + commentLen;
+
+    // Match by basename — the zip's entry path may include a wrapping folder
+    // (e.g. "mine/state.srs") depending on the tool.
+    const base = name.split('/').pop();
+    if (!WANTED.has(base)) continue;
+    if (name.endsWith('/')) continue;
+
+    if (localOffset === 0xffffffff || compSize === 0xffffffff) {
+      throw new Error('zip64 entry not supported');
+    }
+    if (dv.getUint32(localOffset, true) !== LOC_SIG) {
+      throw new Error(`malformed local header for ${name}`);
+    }
+    const locNameLen  = dv.getUint16(localOffset + 26, true);
+    const locExtraLen = dv.getUint16(localOffset + 28, true);
+    const dataStart = localOffset + 30 + locNameLen + locExtraLen;
+    const compressed = buf.subarray(dataStart, dataStart + compSize);
+
+    let bytes;
+    if (method === 0) {           // stored — raw bytes, no compression
+      bytes = compressed.slice();
+    } else if (method === 8) {    // deflate
+      if (typeof DecompressionStream === 'undefined') {
+        throw new Error('this browser lacks DecompressionStream; use a recent Chrome/Firefox/Safari');
+      }
+      const stream = new Blob([compressed]).stream()
+        .pipeThrough(new DecompressionStream('deflate-raw'));
+      const resp = new Response(stream);
+      bytes = new Uint8Array(await resp.arrayBuffer());
+    } else {
+      throw new Error(`${name}: unsupported compression method ${method}`);
+    }
+    if (bytes.length !== uncompSize) {
+      throw new Error(`${name}: decoded size mismatch`);
+    }
+    out[base] = bytes;
+  }
+
+  return out;
 }
 </script>
 

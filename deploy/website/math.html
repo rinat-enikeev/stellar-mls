@@ -370,10 +370,11 @@
 
 <div class="content">
     <h1>Proof of Soundness</h1>
-    <p class="subtitle">Formal mathematical proofs for the SEP-XXXX zero-knowledge group membership protocol. Version 1.0 &mdash; April 6, 2026.</p>
+    <p class="subtitle">Formal mathematical proofs for the SEP-XXXX zero-knowledge group membership protocol. Version 1.1 &mdash; April 18, 2026.</p>
 
     <div class="highlight-box">
-        <p>This document proves that Onym's cryptographic protocol is sound: only real members can prove membership, proofs reveal nothing about the prover, and on-chain state cannot be forked or replayed. Eight theorems compose into a complete security argument.</p>
+        <p>This document proves that Onym's cryptographic protocol is sound: only real members can prove membership, the <code>update_commitment</code> operation cryptographically binds the specific next state being authorised, proofs reveal nothing about the prover, and on-chain state cannot be forked or replayed. Nine theorems compose into a complete security argument.</p>
+        <p style="margin-top: 12px;"><strong>v1.1 update.</strong> Theorem 3b (Update-Circuit Operation-Level Soundness) is new. It addresses a critical gap in the v1.0 soundness argument that treated <code>update_commitment</code> as if membership soundness alone sufficed &mdash; it does not, because the operation writes a new commitment that the v1 circuit's public inputs did not cover. The gap was discovered and closed pre-mainnet; see the <a href="https://github.com/rinat-enikeev/stellar-mls/blob/main/docs/vuln-unbound-new-commitment.md">vulnerability report</a> and <a href="https://github.com/rinat-enikeev/stellar-mls/blob/main/docs/postmortem-unbound-new-commitment.md">post-mortem</a>.</p>
     </div>
 
     <div class="toc">
@@ -385,6 +386,7 @@
             <li><a href="#thm1">Theorem 1: Merkle Tree Collision Resistance</a></li>
             <li><a href="#thm2">Theorem 2: Commitment Hiding</a></li>
             <li><a href="#thm3">Theorem 3: ZK Membership Soundness</a></li>
+            <li><a href="#thm3b">Theorem 3b: Update-Circuit Operation-Level Soundness</a></li>
             <li><a href="#thm4">Theorem 4: Zero-Knowledge Property</a></li>
             <li><a href="#thm5">Theorem 5: Epoch Monotonicity</a></li>
             <li><a href="#thm6">Theorem 6: Proof Non-Replayability</a></li>
@@ -569,6 +571,8 @@
     <hr class="section-divider">
     <h2 id="thm3">6. Theorem 3: ZK Membership Soundness</h2>
 
+    <p><strong>Scope.</strong> This theorem covers the <em>membership</em> circuit <span class="math">R<sub>Membership</sub></span> used by <code>create_group</code>, <code>verify_membership</code>, and <code>deactivate_group</code>. Each of those operations is a single-epoch assertion: the stored commitment <em>is</em> the value the proof verifies against, so membership soundness over <span class="math">(C, e)</span> is exactly the operation's security property. Operation-level soundness for <code>update_commitment</code> &mdash; which writes a <em>new</em> commitment and therefore requires binding a second commitment value &mdash; is the subject of Theorem 3b (&sect;6b) and the separate update circuit <span class="math">R<sub>Update</sub></span>.</p>
+
     <div class="theorem">
         <div class="label">Theorem 3</div>
         <p>If the Groth16 verification equation accepts proof <span class="math">&pi;</span> for public inputs <span class="math">(C, e)</span>, then the prover knows a witness <span class="math">(sk, root, s, path, idx)</span> satisfying all three circuit constraints, except with probability negligible in <span class="math">&lambda;</span>.</p>
@@ -590,6 +594,71 @@ current_d = root</pre>
     </div>
 
     <p><strong>Remark 6.1.</strong> Groth16 provides <em>knowledge soundness</em> (argument of knowledge), which is stronger than plain soundness. A valid proof guarantees the prover <em>knows</em> a secret key &mdash; not merely that one exists.</p>
+
+    <p><strong>Remark 6.2 &mdash; Why Theorem 3 is insufficient for <code>update_commitment</code>.</strong> Theorem 3 establishes a statement about the <em>membership circuit</em>: an accepting proof implies knowledge of a valid witness at the committed state <span class="math">(C, e)</span>. But <code>update_commitment</code> is an <em>operation</em>, not merely a statement: it must authorise a <em>specific</em> successor state <span class="math">(C', e+1)</span>. A theorem that covers only <span class="math">(C, e)</span> does not bind <span class="math">C'</span>. An adversary observing any accepting proof could therefore substitute <span class="math">C'</span> in the transaction envelope and the verifier would still accept &mdash; there is no linear-combination term in the pairing equation referencing <span class="math">C'</span> to perturb. That shape is exactly the gap present in SEP-XXXX v0.0.5 (see the <a href="https://github.com/rinat-enikeev/stellar-mls/blob/main/docs/vuln-unbound-new-commitment.md">vulnerability report</a>). Theorem 3b below closes it by binding <span class="math">C<sub>new</sub></span> into a separate circuit whose public inputs include it.</p>
+
+    <!-- ============================================ -->
+    <hr class="section-divider">
+    <h2 id="thm3b">6b. Theorem 3b: Update-Circuit Operation-Level Soundness</h2>
+
+    <p><strong>Motivation.</strong> The <code>update_commitment</code> entry point writes a commitment <span class="math">C<sub>new</sub></span> that must be authorised by the caller. A ZK proof cannot bind &ldquo;intent&rdquo; &mdash; it can only bind a concrete public statement. Therefore <span class="math">C<sub>new</sub></span> <em>must</em> appear in the proof's public inputs. Theorem 3b formalises the resulting relation and proves the operation's security property against any PPT adversary who observes accepting proofs and attempts to rebind them to a commitment the adversary chose.</p>
+
+    <div class="definition">
+        <div class="label">Definition 6b.1 &mdash; The Update Relation R<sub>Update</sub></div>
+        <p>Public inputs <span class="math">pi = (C<sub>old</sub>, e<sub>old</sub>, C<sub>new</sub>) &isin; F_r<sup>3</sup></span>, witness <span class="math">w = (sk, root<sub>old</sub>, s<sub>old</sub>, path, idx, root<sub>new</sub>, s<sub>new</sub>)</span>, and three R1CS constraints:</p>
+        <ol>
+            <li><span class="math">MerkleOpen(idx, path, root<sub>old</sub>) = H_P(sk)</span> &mdash; the prover is a leaf in the old tree.</li>
+            <li><span class="math">H_P(H_P(root<sub>old</sub>, e<sub>old</sub>), s<sub>old</sub>) = C<sub>old</sub></span> &mdash; old-state binding.</li>
+            <li><span class="math">H_P(H_P(root<sub>new</sub>, e<sub>old</sub> + 1), s<sub>new</sub>) = C<sub>new</sub></span> &mdash; new-state binding.</li>
+        </ol>
+        <p>Constraint (3) uses <span class="math">e<sub>old</sub> + 1</span> computed <em>inside</em> the circuit as an <span class="math">FpVar</span> linear combination; <span class="math">e<sub>new</sub></span> is therefore a derived quantity, not a public input. The verification key has four <span class="math">IC</span> points (one constant + one per public input). The wire format is 73 bytes: <span class="math">version (1) || C<sub>old</sub> (32) || e<sub>old</sub> (8 BE) || C<sub>new</sub> (32)</span>, with the leading byte pinned to <span class="math">0x02</span>.</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Theorem 3b</div>
+        <p>For every PPT adversary <span class="math">A</span> that produces a tuple <span class="math">(&pi;, pi)</span> accepted by the Soroban verifier for <code>update_commitment</code>, there exists a PPT extractor <span class="math">E</span> producing a witness <span class="math">w</span> satisfying constraints (1)&ndash;(3) of <span class="math">R<sub>Update</sub></span> over the exact <span class="math">pi = (C<sub>old</sub>, e<sub>old</sub>, C<sub>new</sub>)</span> the adversary submitted, except with probability negligible in <span class="math">&lambda;</span>:</p>
+        <pre>Pr[ Verify(pvk_update, &pi;, pi) = 1  &and;  &not;&exist; w : R_Update(pi, w) = 1 ]  &le;  negl(&lambda;)</pre>
+        <p>Furthermore, the contract's state-binding checks <span class="math">pi.C<sub>old</sub> = stored.C</span> and <span class="math">pi.e<sub>old</sub> = stored.e</span> ensure the extracted witness is a witness against the <em>current</em> on-chain state, not any stale historical one.</p>
+    </div>
+
+    <div class="proof">
+        <div class="proof-label">Proof</div>
+        <p><strong>Step 1 &mdash; Verifier acceptance.</strong> By assumption, the Groth16 verifier accepts <span class="math">&pi;</span> under the tier's update verification key <span class="math">pvk<sub>update</sub></span> on public inputs <span class="math">pi = (C<sub>old</sub>, e<sub>old</sub>, C<sub>new</sub>)</span>. The pairing equation the verifier evaluates is:</p>
+        <pre>e(-&pi;_A, &pi;_B) &middot; e(&alpha;, &beta;) &middot; e(vk_x, &gamma;) &middot; e(&pi;_C, &delta;) = 1
+
+where vk_x = IC[0] + C_old &middot; IC[1] + e_old &middot; IC[2] + C_new &middot; IC[3]</pre>
+        <p>Acceptance means this equation holds in <span class="math">G_T</span>. Every term that defines the accepted statement appears explicitly in <span class="math">vk_x</span>; nothing outside <span class="math">vk_x</span> can be rebound without perturbing the pairing product.</p>
+
+        <p><strong>Step 2 &mdash; Knowledge extraction.</strong> Apply Assumption 3.3 (Groth16 knowledge soundness) to <span class="math">R<sub>Update</sub></span>. There exists a PPT extractor <span class="math">E</span> that, given oracle access to the adversary, outputs a witness <span class="math">w = (sk, root<sub>old</sub>, s<sub>old</sub>, path, idx, root<sub>new</sub>, s<sub>new</sub>)</span> satisfying <span class="math">R<sub>Update</sub>(pi, w) = 1</span> with overwhelming probability. Equivalently, <span class="math">w</span> satisfies constraints (1), (2), and (3) over the same <span class="math">pi</span> that the verifier accepted. This is the step that fails under the old 2-public-input membership circuit: no extractor could produce <span class="math">(root<sub>new</sub>, s<sub>new</sub>)</span> because no constraint forced their existence.</p>
+
+        <p><strong>Step 3 &mdash; New-commitment binding.</strong> Suppose for contradiction that an adversary produces an accepting proof for some target <span class="math">C<sub>new</sub></span> and then resubmits the exact same <span class="math">&pi;</span> in an envelope whose <span class="math">pi'.C<sub>new</sub> = C'<sub>new</sub> &ne; C<sub>new</sub></span>. The verifier re-evaluates <span class="math">vk<sub>x</sub></span> using the new scalar, producing</p>
+        <pre>vk_x' = IC[0] + C_old &middot; IC[1] + e_old &middot; IC[2] + C'_new &middot; IC[3]
+      = vk_x + (C'_new - C_new) &middot; IC[3]</pre>
+        <p>Because <span class="math">IC[3]</span> is a non-identity element of <span class="math">G_1</span> (fixed by the trusted setup) and <span class="math">C'<sub>new</sub> - C<sub>new</sub> &ne; 0</span> in <span class="math">F_r</span>, <span class="math">vk<sub>x</sub>' &ne; vk<sub>x</sub></span>. The pairing product therefore differs between the two envelopes. An adversary who accepts on both would by Step 2 yield two witnesses, one binding <span class="math">C<sub>new</sub></span> and one binding <span class="math">C'<sub>new</sub></span>, to the <em>same</em> <span class="math">&pi;</span>. That contradicts the statistical knowledge-soundness extractor's uniqueness up to negligible probability. Hence the verifier rejects the rebound envelope except with probability <span class="math">negl(&lambda;)</span>.</p>
+
+        <p><strong>Step 4 &mdash; Epoch-increment binding.</strong> Constraint (3) computes <span class="math">e<sub>old</sub> + 1</span> as a field-element increment inside the circuit. There is no attacker-controllable <code>new_epoch</code> parameter at the envelope or ABI level &mdash; the contract signature <em>does not accept one</em>. After a successful verification, the contract writes <span class="math">(C<sub>new</sub>, e<sub>old</sub> + 1)</span> as the new stored state. Because both coordinates of the successor state are fixed &mdash; <span class="math">C<sub>new</sub></span> by Step 3, and the epoch by the unconditional <code>current.epoch + 1</code> write &mdash; the adversary cannot substitute either.</p>
+
+        <p><strong>Step 5 &mdash; Canonical-bytes foreclosure.</strong> The contract rejects any <span class="math">pi</span> whose <span class="math">C<sub>old</sub></span> or <span class="math">C<sub>new</sub></span> bytes do not decode to a canonical <span class="math">F_r</span> element (integer value <span class="math">&lt; r</span>). Without this check, a hostile <span class="math">C'<sub>new</sub> = C<sub>new</sub> + r</span> would reduce modulo <span class="math">r</span> to the same field element at the pairing layer &mdash; Step 3's perturbation argument would hold in <span class="math">F_r</span> but not at the byte level, allowing an attacker to write one of many distinct byte encodings and brick future verifications that expect a canonical <span class="math">C<sub>old</sub></span>. Canonical-bytes enforcement forecloses this aliasing class before the MSM.</p>
+
+        <p><strong>Step 6 &mdash; State-freshness cross-check.</strong> The contract compares <span class="math">pi.C<sub>old</sub></span> and <span class="math">pi.e<sub>old</sub></span> against the on-chain <code>CommitmentEntry</code> <em>before</em> calling the verifier. Any <span class="math">pi</span> drawn from a stale or different group fails <code>PublicInputsMismatch</code> with no pairing work performed. Combined with <code>check_proof_replay</code> over the 192-byte compressed <span class="math">&pi;</span>, this closes the residual replay surfaces (cross-epoch, cross-group, and exact resubmission).</p>
+
+        <p><strong>Composition.</strong> The only <span class="math">(&pi;, pi)</span> accepted by <code>update_commitment</code> are those for which the adversary knows a witness binding the exact on-chain <span class="math">C<sub>old</sub></span> (Step 6), the exact stored epoch (Steps 4 and 6), <em>and</em> the specific <span class="math">C<sub>new</sub></span> they submitted (Steps 2 and 3), all under canonical byte encodings (Step 5). The rebinding primitive from the vulnerability report is therefore infeasible except with probability <span class="math">negl(&lambda;)</span>.</p>
+        <p class="qed">&#9632;</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Corollary 6b.1 &mdash; Non-Transferability of Update Proofs</div>
+        <p>A proof accepted for public inputs <span class="math">(C<sub>old</sub>, e<sub>old</sub>, C<sub>new</sub>)</span> is cryptographically non-transferable to any <span class="math">pi' = (C<sub>old</sub>, e<sub>old</sub>, C'<sub>new</sub>)</span> with <span class="math">C'<sub>new</sub> &ne; C<sub>new</sub></span>. No relayer, mempool front-runner, or TLS-terminating intermediary can substitute <span class="math">C<sub>new</sub></span> without producing a fresh proof against the modified <span class="math">pi'</span>, which by Theorem 3b requires a witness for <span class="math">(root'<sub>new</sub>, s'<sub>new</sub>)</span> they do not possess.</p>
+    </div>
+
+    <div class="theorem">
+        <div class="label">Corollary 6b.2 &mdash; Independence of Theorems 3 and 3b</div>
+        <p>Theorems 3 and 3b are independent instantiations of Assumption 3.3 over two different relations with two different verification keys (<span class="math">MembershipVK</span> with <span class="math">ic.len() = 3</span> and <span class="math">UpdateVK</span> with <span class="math">ic.len() = 4</span>, published separately per tier in keyset-v2). Theorem 3 remains the canonical statement for <code>create_group</code>, <code>verify_membership</code>, and <code>deactivate_group</code>, where the stored commitment <em>is</em> the value the proof verifies against. Theorem 3b is the canonical statement for <code>update_commitment</code>. A soundness argument that invoked only Theorem 3 would be correct about the membership relation but silent on the operation-level security property &mdash; precisely the error the v1.0 document made.</p>
+    </div>
+
+    <p><strong>Remark 6b.3 &mdash; Why <span class="math">e<sub>new</sub></span> is not a public input.</strong> A four-input variant <span class="math">(C<sub>old</sub>, e<sub>old</sub>, C<sub>new</sub>, e<sub>new</sub>)</span> was considered. Both forms are sound; the three-input form is strictly simpler at every layer: one fewer <span class="math">IC</span> point in each tier's VK, one fewer MSM term, one fewer field in <code>UpdatePublicInputs</code>, and one fewer place an implementation can introduce a binding bug. Constraint (3) computes <span class="math">e<sub>old</sub> + 1</span> inside the circuit, which gives an equivalent binding with no observable loss.</p>
+
+    <p><strong>Remark 6b.4 &mdash; Groth16 re-randomisation does not help the adversary.</strong> Groth16 proofs are re-randomisable: <span class="math">(&pi;_A, &pi;_B, &pi;_C) &rarr; (&pi;'_A, &pi;'_B, &pi;'_C)</span> that verifies the same statement. An adversary could re-randomise the victim's proof to evade the <code>check_proof_replay</code> hash, but the re-randomised proof still verifies the <em>same</em> <span class="math">pi</span>. Under Theorem 3b, a re-randomised proof for an attacker-chosen <span class="math">C'<sub>new</sub> &ne; C<sub>new</sub></span> is rejected at the pairing layer exactly as in Step 3. Replay prevention and cryptographic binding cover disjoint concerns.</p>
 
     <!-- ============================================ -->
     <hr class="section-divider">
@@ -719,11 +788,14 @@ current_d = root</pre>
     <h2 id="corollary">12. Overall System Soundness</h2>
 
     <div class="highlight-box">
-        <p>Composing Theorems 1&ndash;8, the SEP-XXXX protocol provides: <strong>membership soundness</strong> (Thm 3 + 1), <strong>membership privacy</strong> (Thm 4), <strong>state integrity</strong> (Thm 5 + 6), <strong>commitment confidentiality</strong> (Thm 2), and <strong>fee-payer unlinkability</strong> (Thm 7).</p>
+        <p>Composing Theorems 1&ndash;8 (with 3b), the SEP-XXXX protocol provides: <strong>membership soundness</strong> for read paths (Thm 3 + 1), <strong>operation-level soundness</strong> for <code>update_commitment</code> (Thm 3b + 1), <strong>membership privacy</strong> (Thm 4), <strong>state integrity</strong> (Thm 5 + 6), <strong>commitment confidentiality</strong> (Thm 2), and <strong>fee-payer unlinkability</strong> (Thm 7).</p>
     </div>
 
-    <h3>12.1 Membership Soundness</h3>
-    <p><em>Only holders of a secret key in the committed set can produce an accepting proof.</em> By Theorem 3, an accepting proof implies knowledge of a valid witness. By Theorem 1, the root uniquely determines the member set.</p>
+    <h3>12.1 Membership Soundness (read paths)</h3>
+    <p><em>Only holders of a secret key in the committed set can produce an accepting proof against <code>create_group</code>, <code>verify_membership</code>, or <code>deactivate_group</code>.</em> By Theorem 3, an accepting proof implies knowledge of a valid witness. By Theorem 1, the root uniquely determines the member set.</p>
+
+    <h3>12.1b Operation-Level Soundness (update path)</h3>
+    <p><em>Only a current member can authorise a specific successor state via <code>update_commitment</code>; no intermediary can rebind the proof to a commitment of their choosing.</em> By Theorem 3b, an accepting proof on <span class="math">(C<sub>old</sub>, e<sub>old</sub>, C<sub>new</sub>)</span> extracts a witness covering all three public inputs; any substitution of <span class="math">C<sub>new</sub></span> perturbs <span class="math">vk_x</span> in the pairing equation and is rejected at the cryptographic layer. Combined with the contract's state-freshness cross-check and canonical-bytes enforcement, the silent-hijack and group-bricking primitives from the v0.0.5 vulnerability are infeasible.</p>
 
     <h3>12.2 Membership Privacy</h3>
     <p><em>A verifier learns nothing about the prover's identity.</em> By Theorem 4 (perfect ZK), Corollary 7.1 (constant proof size), and Corollary 7.2 (multi-proof unlinkability).</p>
@@ -791,24 +863,40 @@ M = | 5^-1  6^-1  7^-1 |
     <hr class="section-divider">
     <h2 id="appendix-b">Appendix B: Groth16 Verification Equation</h2>
 
-    <h3>Pairing Equation</h3>
+    <h3>Membership-Circuit Pairing Equation</h3>
+    <p>Used by <code>create_group</code>, <code>verify_membership</code>, and <code>deactivate_group</code> (Theorem 3):</p>
     <pre>e(-&pi;_A, &pi;_B) &middot; e(&alpha;, &beta;) &middot; e(vk_x, &gamma;) &middot; e(&pi;_C, &delta;) = 1_G_T
 
 where vk_x = IC[0] + C &middot; IC[1] + e &middot; IC[2]</pre>
-    <p>with <span class="math">C &isin; F_r</span> (commitment, public input 1), <span class="math">e &isin; F_r</span> (epoch, public input 2), and <span class="math">IC[0..2] &isin; G_1</span> (verification key input commitment points).</p>
+    <p>with <span class="math">C &isin; F_r</span> (commitment, public input 1), <span class="math">e &isin; F_r</span> (epoch, public input 2), and <span class="math">IC[0..2] &isin; G_1</span> (verification key input commitment points; <span class="math">MembershipVK.ic.len() = 3</span>).</p>
+
+    <h3>Update-Circuit Pairing Equation</h3>
+    <p>Used by <code>update_commitment</code> (Theorem 3b):</p>
+    <pre>e(-&pi;_A, &pi;_B) &middot; e(&alpha;, &beta;) &middot; e(vk_x, &gamma;) &middot; e(&pi;_C, &delta;) = 1_G_T
+
+where vk_x = IC[0] + C_old &middot; IC[1] + e_old &middot; IC[2] + C_new &middot; IC[3]</pre>
+    <p>with three public inputs in fixed allocation order <span class="math">(C<sub>old</sub>, e<sub>old</sub>, C<sub>new</sub>) &isin; F_r<sup>3</sup></span> and <span class="math">IC[0..3] &isin; G_1</span> (<span class="math">UpdateVK.ic.len() = 4</span>). Per-tier <span class="math">MembershipVK</span> and <span class="math">UpdateVK</span> are published as separate blobs in keyset-v2 (six VKs total; three tiers &times; two circuits).</p>
 
     <h3>Verification Key Structure</h3>
     <table class="notation-table">
-        <tr><th>Component</th><th>Group</th><th>Size (uncompressed)</th></tr>
-        <tr><td>&alpha;</td><td>G_1</td><td>96 bytes</td></tr>
-        <tr><td>&beta;</td><td>G_2</td><td>192 bytes</td></tr>
-        <tr><td>&gamma;</td><td>G_2</td><td>192 bytes</td></tr>
-        <tr><td>&delta;</td><td>G_2</td><td>192 bytes</td></tr>
-        <tr><td>IC[0..2]</td><td>G_1<sup>3</sup></td><td>3 &times; 96 bytes</td></tr>
+        <tr><th>Component</th><th>Group</th><th>Membership VK</th><th>Update VK</th></tr>
+        <tr><td>&alpha;</td><td>G_1</td><td>96 bytes</td><td>96 bytes</td></tr>
+        <tr><td>&beta;</td><td>G_2</td><td>192 bytes</td><td>192 bytes</td></tr>
+        <tr><td>&gamma;</td><td>G_2</td><td>192 bytes</td><td>192 bytes</td></tr>
+        <tr><td>&delta;</td><td>G_2</td><td>192 bytes</td><td>192 bytes</td></tr>
+        <tr><td>IC[&hellip;]</td><td>G_1<sup>k</sup></td><td>3 &times; 96 bytes</td><td>4 &times; 96 bytes</td></tr>
     </table>
 
     <h3>Canonical Input Validation</h3>
-    <p>The contract validates that commitment bytes represent a canonical field element (integer value &lt; <span class="math">r</span>), preventing malleability from non-canonical encodings. Epoch (u64) is padded to 256-bit big-endian, which is always canonical since all u64 values are &lt; <span class="math">r</span>.</p>
+    <p>The contract validates that every commitment-valued public input (<span class="math">C</span> for the membership path; <span class="math">C<sub>old</sub></span> and <span class="math">C<sub>new</sub></span> for the update path) decodes to a canonical field element (integer value &lt; <span class="math">r</span>), preventing malleability from non-canonical encodings. Non-canonical bytes are rejected with <code>InvalidCommitmentEncoding</code> before the MSM runs. Epoch (u64) is padded to 256-bit big-endian, which is always canonical since all u64 values are &lt; <span class="math">r</span>.</p>
+
+    <h3>UpdatePublicInputs Wire Format</h3>
+    <p>The 73-byte <code>UpdatePublicInputs</code> blob carried on the wire is:</p>
+    <pre>bytes[0]     = 0x02                         // version byte (pinned)
+bytes[1..33] = C_old                        // 32 bytes, canonical F_r
+bytes[33..41]= e_old                        // u64 big-endian
+bytes[41..73]= C_new                        // 32 bytes, canonical F_r</pre>
+    <p>Mobile SDKs and the relayer reject any buffer whose leading byte is not <span class="math">0x02</span> or whose length is not exactly 73 bytes. This closes a version-skew confused-deputy risk where a legacy 40-byte <span class="math">(C || e)</span> payload could otherwise be silently parsed as the leading half of a v2 buffer.</p>
 
     <!-- ============================================ -->
     <hr class="section-divider">
@@ -829,21 +917,23 @@ where vk_x = IC[0] + C &middot; IC[1] + e &middot; IC[2]</pre>
     store CommitmentEntry { commitment, epoch: 0, active: true }
     require(tier_count &lt; 10,000)</pre>
 
-    <h3>update_commitment</h3>
-    <pre>function update_commitment(group_id, new_commitment, new_epoch, proof, public_inputs):
+    <h3>update_commitment (v1.3.0, post-fix)</h3>
+    <p>The entry point has been rewritten to carry <span class="math">C<sub>new</sub></span> inside <code>public_inputs</code>, removing the stand-alone <code>new_commitment</code> and <code>new_epoch</code> parameters that were the attack surface in the v0.0.5 rebinding vulnerability:</p>
+    <pre>function update_commitment(group_id, proof, public_inputs):   // public_inputs = (C_old, e_old, C_new)
     current = storage.get(Group(group_id))
     require(current.active)
-    require(new_epoch == current.epoch + 1)            // strict monotonicity
-    require(public_inputs.commitment == current.commitment)  // bind to CURRENT state
-    require(public_inputs.epoch == current.epoch)
+    require(public_inputs.c_old   == current.commitment)         // bind old state
+    require(public_inputs.epoch_old == current.epoch)
+    require(is_canonical_fr(public_inputs.c_new))                // foreclose aliasing
 
     check_proof_replay(proof)
-    vk = load_vk(tier)
-    require(verify_groth16_proof(vk, proof, current.commitment, current.epoch))
+    vk = load_vk(Update, current.tier)                           // UpdateVK, ic.len() == 4
+    require(verify_groth16_proof_update(vk, proof, public_inputs))
     record_proof(proof)
 
-    current.commitment = new_commitment
-    current.epoch = new_epoch</pre>
+    current.commitment = public_inputs.c_new                     // bound by Theorem 3b
+    current.epoch      = current.epoch + 1                       // derived, not transmitted</pre>
+    <p>The new_epoch is computed <em>inside</em> the contract as <code>current.epoch + 1</code>, matching the <span class="math">e<sub>old</sub> + 1</span> term that constraint (3) of <span class="math">R<sub>Update</sub></span> enforces inside the circuit. The adversary has no envelope-level lever over either coordinate of the successor state.</p>
 
     <h3>deactivate_group</h3>
     <pre>function deactivate_group(group_id, proof, public_inputs):

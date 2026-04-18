@@ -4,8 +4,8 @@
 **Severity:** CRITICAL
 **Duration of vulnerability:** From the initial circuit design (first commit introducing `MembershipCircuit`) through discovery on 2026-04-17 — approximately the full design lifetime of the project.
 **Platforms affected:** All platforms and layers — iOS SDK, Android SDK, HTTP relayer, Soroban contract. The gap is in the protocol, not in any single implementation.
-**Status:** Fix in progress. No exploitation observed.
-**Incident status:** Pre-mainnet-traffic discovery. The contract has been deployed only to testnet with synthetic groups. No user-owned data was ever at risk under mainnet.
+**Status:** Fix implemented and deployed to Stellar testnet (2026-04-18, release v1.3.0, contract `CBKKEZU3CEAXZNJ4RSLDSVCXNJFQK4WMAOGF26SUBT2QUKHWQE2PRFSO`). Phases 0–10 of [implementation-plan-update-circuit-binding.md](implementation-plan-update-circuit-binding.md) are landed on `main`. Mainnet rollout gated on Phase 11 (scripted attack-simulation soak) and external audit sign-off. No exploitation observed.
+**Incident status:** Pre-mainnet-traffic discovery. The contract had been deployed only to testnet with synthetic groups at the time the gap was found; no user-owned data was ever at risk under mainnet.
 
 ---
 
@@ -40,6 +40,14 @@ constraint to `Poseidon(Poseidon(root_new, epoch_old + 1), salt_new)`. The exist
 the three read-style paths (`create_group`, `verify_membership`,
 `deactivate_group`) whose statements really are single-epoch assertions.
 
+The fix shipped on 2026-04-17 as twelve commits on `main` (`2fbde01` … `c58c074`)
+and was cut as release v1.3.0 (`d2837d2`) on 2026-04-18. The operation-level
+soundness argument — Theorem 3b in
+[proof-of-soundness.md](proof-of-soundness.md#6b-theorem-3b-update-circuit-operation-level-soundness)
+— is now the canonical security statement for `update_commitment`; the prior
+Theorem 3 (membership-only) is retained but explicitly scoped to the three
+read-style paths where it is sufficient.
+
 ---
 
 ## Timeline
@@ -62,11 +70,19 @@ All dates in 2026 unless noted. Times America/New_York.
 | 2026-04-17 | Initial refined fix proposal: separate `UpdateCircuit` with `(C_old, epoch_old, C_new, epoch_new)` as four public inputs. |
 | 2026-04-17 | Further review normalises the design to three public inputs `(C_old, epoch_old, C_new)`, deriving `epoch_new = epoch_old + 1` inside the circuit. This is the form the implementation targets. `MembershipCircuit` unchanged for read paths; canonical-bytes check extended to `new_commitment`. |
 | 2026-04-17 | Four documents drafted: vulnerability report, design doc, implementation plan, this postmortem. |
-| Next 1–2 weeks (planned) | Phases 0–3 implemented (Rust core). |
-| Next 2–3 weeks (planned) | Phase 4 (contract), Phase 5 (relayer), Phases 6–7 (SDKs). |
-| Next 4–6 weeks (planned) | Phase 8 (keyset-v2 Phase-2 ceremony for six `(circuit, tier)` pairs). |
-| Next 6–8 weeks (planned) | Phases 9–11 (vectors, docs, testnet rollout + scripted attack simulation). |
-| Next 8–10 weeks (planned) | Phase 12 (mainnet rollout) and public post-mortem announcement. |
+| 2026-04-17 | Phases 0–3 landed on `main` (commits `2fbde01`, `d8b4fe7`, `fe96ea9`, `b5be306`): `UpdateCircuit` module scaffolding, R1CS constraints (1)–(3), Rust prover API (`prove_update`, `UpdatePublicInputs`), and C FFI + JNI surface with the 73-byte wire format and `0x02` version byte. |
+| 2026-04-17 | Phase 4 contract rewrite (commit `cd81c09`): `update_commitment` retired the standalone `new_commitment: BytesN<32>` and `new_epoch: u64` parameters; the entry point now takes `(group_id, proof, UpdatePublicInputs)` and verifies against a new per-tier `UpdateVK` via a 4-IC-point / 3-scalar MSM. Canonical-bytes enforcement extended to `c_new`. `initialize` widened from three to six VKs; N-14 comment block rewritten to reflect the new binding. |
+| 2026-04-17 | Phase 5 relayer update (commit `f421a12`): top-level `newCommitment` JSON field dropped; `add_public_inputs_arg` split into `_membership` and `_update` variants; version-byte and length gates enforce the v2 wire format on ingress. |
+| 2026-04-17 | Phases 6–7 SDK work (commits `5786d02`, `0f49e37`): Swift and Kotlin SDKs mirror `UpdatePublicInputs`, expose `proveUpdate`, and drop `newCommitment` from `SEPUpdateCommitmentRequest`. |
+| 2026-04-17 | Phase 8 keyset-v2 artifacts (commit `5c4afa1`): six PK/VK pairs published under `keyset-v2/` (three tiers × two circuits). `MembershipVK.ic.len() == 3`, `UpdateVK.ic.len() == 4`. `keyset-v2/metadata.json` records hashes; keyset-v1 retained and flagged deprecated for forensic access. **This keyset is test-only (single-party local setup); a Phase-2 MPC ceremony over the six `(circuit, tier)` pairs remains required before mainnet.** |
+| 2026-04-17 | Phase 9 cross-platform vectors (commit `0c729c6`): `docs/cross-platform-test-vectors.json` bumped to `schemaVersion: 2` with update vectors (positive + rebinding/epoch-mismatch/canonical-bytes negatives) consumed by Rust, Swift, Kotlin, and contract tests. |
+| 2026-04-17 | Phase 10 normative docs (commit `c58c074`): `docs/proof-of-soundness.md` gained Theorem 3b (update-circuit operation-level soundness) alongside the original Theorem 3 (membership-only, now explicitly scoped to read paths); `docs/sep.md`, `docs/design-doc.md`, and `docs/relay-design-doc.md` updated to the 3-public-input `R_Update` relation and the new `update_commitment` ABI. |
+| 2026-04-18 | Release v1.3.0 cut and deployed to Stellar testnet as contract `CBKKEZU3CEAXZNJ4RSLDSVCXNJFQK4WMAOGF26SUBT2QUKHWQE2PRFSO` (commit `d2837d2`). iOS and Android clients ship keyset-v2 proving keys bundled; `generate_mainnet_vks` and `deploy_sep_xxxx_testnet.sh` pass all six VKs to `initialize`. `clients/vendor/bundle/…` and `keyset-v1/` mobile copies removed in `111bd13` to unblock the release build; follow-up patch `edd4687` released as v1.3.1. |
+| 2026-04-18 | Workspace test matrix green on the new wire format: `cargo test --workspace`, `stellar contract build`, `swift test` (`swift-mls/`, `clients/ios/StellarChat/`), `./gradlew test` (`kotlin-mls/`, `clients/android/StellarChat/`). Cross-platform vectors round-trip through all four consumers. |
+| Pending | Phase 11 — scripted attack simulation on testnet (substitute `c_new`; expect `InvalidProof`; substitute non-canonical bytes; expect `InvalidCommitmentEncoding`; replay proof against different `group_id`; expect `PublicInputsMismatch`; double-submit; expect `ProofReplay`). Must run green for ≥1 week without regression before mainnet. |
+| Pending | Phase 2 MPC ceremony for the six `(circuit, tier)` pairs (Phase 1 powers-of-tau reused from keyset-v1). Current testnet keyset is single-party test-only and must be rotated before any mainnet traffic. |
+| Pending | External audit pass scoped specifically to the `UpdateCircuit` relation, the rewritten `update_commitment` entry point, and the operation-level soundness theorem. |
+| Pending | Phase 12 — mainnet rollout; public post-mortem announcement cross-linking this document and the vulnerability report. |
 
 ---
 
@@ -437,20 +453,157 @@ attack in this area".
 
 ---
 
+## Work completed
+
+Concrete deliverables landed on `main` between 2026-04-17 and 2026-04-18.
+Line-level references are as of release v1.3.0 (`d2837d2`); later commits
+may have shifted offsets.
+
+### Circuit and prover (Phases 0–3)
+
+- **New module** `src/circuit/update.rs` defines `UpdateCircuit<F>` with the
+  three public inputs `(c_old, epoch_old, c_new)` pinned to allocation order
+  and the three R1CS constraints from [update-circuit-binding-design.md §5.2](update-circuit-binding-design.md).
+  Constraint (3) is the specific gadget whose absence produced the
+  vulnerability:
+  `c_new == Poseidon(Poseidon(root_new, epoch_old + 1), salt_new)`,
+  with `epoch_old + 1` computed inside the circuit via an `FpVar` linear
+  combination so `epoch_new` does not appear in the wire format.
+- `MembershipCircuit` is untouched. Its `ic.len() == 3` and its statement
+  semantics are unchanged for `create_group`, `verify_membership`, and
+  `deactivate_group`.
+- **Prover API** `src/prover.rs::prove_update` takes high-level inputs
+  (secret key, old/new canonically-ordered member lists, old epoch, both
+  salts, tier) and returns a 192-byte compressed Groth16 proof plus a
+  73-byte `UpdatePublicInputs` blob. `UpdatePublicInputs` carries
+  `VERSION = 0x02` as its leading byte; `SERIALIZED_LEN == 73`
+  (1 + 32 + 8 + 32).
+- **C FFI / JNI** `src/ffi.rs::sep_prove_update` and
+  `src/jni_ffi.rs::Java_…_sepProveUpdate` expose the new path with
+  explicit buffer-size validation (`UpdateProofBufferTooSmall`) and
+  version-byte rejection (`UpdateProofVersionMismatch`).
+  `include/stellar_mls.h` declares
+  `STELLAR_MLS_PUBLIC_INPUTS_VERSION == 2` and
+  `STELLAR_MLS_UPDATE_PUBLIC_INPUTS_LEN == 73`.
+
+### Contract (Phase 4)
+
+- `contracts/sep-xxxx/src/lib.rs` retires the vulnerable signature. The new
+  entry point is `update_commitment(env, group_id, proof, public_inputs:
+  UpdatePublicInputs)` — three arguments, not five. The stand-alone
+  `new_commitment: BytesN<32>` and `new_epoch: u64` parameters no longer
+  exist at the ABI; `git grep -n 'new_epoch: u64' contracts/` returns
+  nothing.
+- A new `VkKind` enum (`Membership | Update`) and a new `DataKey::UpdateVK(u32)`
+  storage slot separate the two verification keys per tier. `initialize`
+  widened from three to six VKs; `update_vk(kind, tier, new_vk)` performs
+  kind-aware rotation.
+- Helper `verify_groth16_proof_update` performs canonical-bytes enforcement
+  on `c_old` and `c_new` before MSM, loads `UpdateVK(tier)`, asserts
+  `ic.len() == 4`, and computes
+  `vk_x = ic[0] + c_old · ic[1] + epoch_old · ic[2] + c_new · ic[3]`.
+  Substituting `c_new` in the envelope perturbs `vk_x` and the pairing
+  equation fails — closing the gap at the cryptographic layer.
+- New error discriminants `InvalidCommitmentEncoding = 15` and
+  `UnknownVkKind = 16` cover the canonical-bytes rejection and the
+  kind-aware VK routing respectively.
+- Replay check ordering preserved: `check_proof_replay` runs before the
+  pairing computation, `record_proof` runs after a successful verification
+  and before state writes.
+- The N-14 comment block was rewritten to make the scope of the
+  intentional caller-unbinding explicit and to flag that `new_commitment`
+  is **now** cryptographically bound.
+
+### Relayer and SDKs (Phases 5–7)
+
+- `relayer/src/handler.rs` dropped the top-level `newCommitment` request
+  field. `add_public_inputs_arg` split into `_membership` and `_update`
+  variants so each call site's expectation is explicit at the type level.
+  Incoming bodies are rejected with HTTP 400 if the leading byte is not
+  `0x02` or if the length is not exactly 73 bytes.
+- Swift SDK (`swift-mls/`) and the iOS client (`clients/ios/StellarChat/`)
+  gained `UpdatePublicInputs`, a high-level `Prover.proveUpdate(…)`, and
+  a version-skew-safe deserialiser. `SEPUpdateCommitmentRequest` no longer
+  carries `newCommitment`.
+- Kotlin SDK (`kotlin-mls/`) and the Android client
+  (`clients/android/StellarChat/`) mirror the Swift surface via JNI.
+
+### Trusted setup, vectors, and docs (Phases 8–10)
+
+- `keyset-v2/` ships six (circuit, tier) PK/VK pairs plus
+  `metadata.json` recording hashes and `icLen` per pair
+  (`membership: 3`, `update: 4`). Mobile clients bundle the test-only keys
+  in `clients/android/StellarChat/app/src/main/assets/keyset-v2/` and the
+  corresponding iOS bundle. Keyset-v1 retained for forensic access and
+  marked deprecated.
+- `docs/cross-platform-test-vectors.json` bumped to `schemaVersion: 2`
+  with update-path vectors (positive + `rebinding_attack`,
+  `non_canonical_c_new`, `epoch_mismatch` negatives) consumed by the
+  Rust verifier, Swift `Prover`, Kotlin `Prover`, and the Soroban
+  contract. Every `publicInputs` string is exactly 146 hex chars.
+- `docs/proof-of-soundness.md` now contains **Theorem 3b
+  (Update-Circuit Operation-Level Soundness)**, formally restating the
+  soundness property over `(C_old, e_old, C_new)` and proving it by a
+  six-step argument: Groth16 acceptance → witness extraction →
+  new-commitment binding via constraint (3) → epoch-increment binding
+  via the in-circuit `+1` → canonical-bytes foreclosure → contract-side
+  state-freshness cross-check. The prior Theorem 3 is retained and
+  explicitly scoped to the three read-style paths where the
+  single-epoch statement is sufficient.
+- `docs/sep.md`, `docs/design-doc.md`, `docs/relay-design-doc.md`, and
+  `docs/real-world-gap-analysis.md` updated to the 3-public-input
+  `R_Update` relation and the v2 wire format.
+
+### Testnet rollout (partial Phase 11)
+
+- Release v1.3.0 (`d2837d2`, 2026-04-18) deployed as contract
+  `CBKKEZU3CEAXZNJ4RSLDSVCXNJFQK4WMAOGF26SUBT2QUKHWQE2PRFSO` on Stellar
+  testnet. `scripts/deploy_sep_xxxx_testnet.sh` and
+  `src/bin/generate_contract_testnet_fixtures.rs` were extended to emit
+  six VKs and drive the new ABI; the smoke script performs
+  `create_group → verify_membership → update_commitment → get_state →
+  verify_membership → deactivate_group → get_history` end-to-end against
+  the live deployment.
+
+### What is not yet done
+
+- **Phase 11 attack simulation** (`tests/e2e/attack_simulation.rs`) is not
+  yet wired in. The four assertions — `InvalidProof` under `c_new`
+  substitution, `InvalidCommitmentEncoding` under non-canonical bytes,
+  `PublicInputsMismatch` under cross-group replay, `ProofReplay` under
+  double-submission — need to be expressed as a reproducible test and
+  soaked for ≥1 week against testnet.
+- **Phase-2 MPC ceremony.** The current keyset-v2 is a deterministic
+  single-party local setup suitable for testnet integration only. The
+  six `(circuit, tier)` pairs must be re-contributed through a
+  multi-party ceremony before any mainnet traffic.
+- **External audit.** The rewritten `update_commitment`, the
+  `UpdateCircuit` constraints, and Theorem 3b need an independent
+  sign-off before mainnet.
+- **Mainnet deployment (Phase 12)** and the public announcement cross-linked
+  to this post-mortem are gated on all three of the above.
+
+---
+
 ## Prevention
 
-### Immediate (landing now, weeks)
+### Immediate (landed)
 
-- Land the fix as described in
+- ✅ Fix landed per
   [update-circuit-binding-design.md](update-circuit-binding-design.md)
   and
   [implementation-plan-update-circuit-binding.md](implementation-plan-update-circuit-binding.md).
-- Publish the vulnerability report
+  Phases 0–10 shipped on 2026-04-17; release v1.3.0 on 2026-04-18 deployed
+  to testnet (`CBKKEZU3CEAXZNJ4RSLDSVCXNJFQK4WMAOGF26SUBT2QUKHWQE2PRFSO`).
+- ✅ Vulnerability report published
   ([vuln-unbound-new-commitment.md](vuln-unbound-new-commitment.md)).
-- Complete the Phase-2 trusted-setup ceremony for the new
-  `UpdateCircuit` across all three tiers.
-- Testnet-deploy and run the scripted attack simulation end-to-end
-  (Phase 11).
+- ✅ Operation-level soundness theorem added
+  ([proof-of-soundness.md §6b](proof-of-soundness.md#6b-theorem-3b-update-circuit-operation-level-soundness)).
+
+### Immediate (outstanding)
+
+- Phase-2 MPC ceremony for the six `(circuit, tier)` pairs.
+- Testnet-deploy and run the scripted attack simulation end-to-end (Phase 11 in `tests/e2e/attack_simulation.rs`).
 
 ### Short-term (weeks to months)
 

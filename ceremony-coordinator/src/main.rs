@@ -6,6 +6,7 @@ mod handlers;
 mod model;
 mod nostr;
 mod queue;
+mod seed;
 mod sse;
 mod store;
 
@@ -46,6 +47,17 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| "ceremony_coordinator=info,tower_http=info".into()),
         )
         .init();
+
+    let mut args = std::env::args().skip(1);
+    if let Some(sub) = args.next() {
+        if sub == "seed" {
+            let tier = args.next().ok_or_else(|| {
+                anyhow::anyhow!("usage: ceremony-coordinator seed <small|medium|large>")
+            })?;
+            return seed::run(&tier).await;
+        }
+        anyhow::bail!("unknown subcommand: {sub}");
+    }
 
     let config = Config::from_env()?;
     info!(bind = %config.bind, db = %config.db_path.display(), "starting coordinator");

@@ -48,7 +48,7 @@
   async function ensureNostr() {
     if (!window.nostr) {
       throw new Error(
-        'No Nostr extension detected. Install Alby, nos2x, or another NIP-07 provider.'
+        'No Nostr signer detected in this browser. Install one of the signers listed above, reload the page, then click Connect Nostr again.'
       );
     }
     return window.nostr;
@@ -115,6 +115,17 @@
     return r.json();
   }
 
+  async function apiPostAuthedEmpty(path) {
+    const url = window.location.origin + API_BASE + path;
+    const auth = await nip98Header('POST', url, null);
+    const r = await fetch(API_BASE + path, {
+      method: 'POST',
+      headers: { Authorization: auth },
+    });
+    if (!r.ok) throw new Error(`${path}: ${r.status} ${await r.text()}`);
+    return r.json();
+  }
+
   async function apiUploadContribution(tier, files) {
     const path = `/tiers/${tier}/contribute`;
     const url = window.location.origin + API_BASE + path;
@@ -173,7 +184,12 @@
   }
 
   window.Ceremony = {
-    api: { get: apiGet, postAuthed: apiPostAuthed, uploadContribution: apiUploadContribution },
+    api: {
+      get: apiGet,
+      postAuthed: apiPostAuthed,
+      postAuthedEmpty: apiPostAuthedEmpty,
+      uploadContribution: apiUploadContribution,
+    },
     nostr: { ensure: ensureNostr, getPubkey, nip98Header },
     status: { subscribe: subscribeStatus },
     fmt: { hash: fmtHash, unix: fmtUnix, countdown: fmtCountdown },

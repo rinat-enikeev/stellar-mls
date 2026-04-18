@@ -105,3 +105,4 @@ crates/ceremony-wasm/pkg/
 /deploy/ceremony/wasm/*.wasm
 /deploy/ceremony/wasm/*.js
 /deploy/ceremony/wasm/*.d.ts
+.minisign/*.key

@@ -217,6 +217,7 @@ fun StellarChatNavHost(
                     chatMessages = groupListViewModel.chatMessages,
                     unreadCounts = groupListViewModel.unreadCounts,
                     isRelayConnected = groupListViewModel.isRelayConnected,
+                    contactAliasStore = groupListViewModel.contactAliasStore,
                     onGroupClick = { group ->
                         navController.navigate("chat/${group.id}")
                     },

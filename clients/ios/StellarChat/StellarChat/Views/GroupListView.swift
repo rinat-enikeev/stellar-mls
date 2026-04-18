@@ -76,7 +76,8 @@ struct GroupListView: View {
                             group: group,
                             lastMessage: appState.chatMessages[group.id]?.last,
                             unreadCount: appState.unreadCounts[group.id] ?? 0,
-                            isContractConfigured: appState.isContractConfigured
+                            isContractConfigured: appState.isContractConfigured,
+                            contactAliasStore: appState.contactAliasStore
                         )
                     }
                     .swipeActions(edge: .trailing) {
@@ -205,6 +206,7 @@ struct GroupRow: View {
     let lastMessage: ChatMessage?
     let unreadCount: Int
     let isContractConfigured: Bool
+    let contactAliasStore: ContactAliasStore?
 
     var body: some View {
         HStack {
@@ -220,9 +222,12 @@ struct GroupRow: View {
                     }
                 }
                 HStack {
-                    Text("\(group.members.count) members")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if !group.members.isEmpty {
+                        Text(memberSubtitle(for: group, aliases: contactAliasStore))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
 
                     if let lastMsg = lastMessage {
                         Text("· \(lastMsg.text)")
@@ -273,6 +278,15 @@ struct GroupRow: View {
         formatter.dateFormat = "MMM d"
         return formatter.string(from: date)
     }
+}
+
+// MARK: - Member Subtitle
+
+private func memberSubtitle(for group: ChatGroup, aliases: ContactAliasStore?) -> String {
+    group.members.map { member in
+        let hex = member.publicKeyCompressed.map { String(format: "%02x", $0) }.joined()
+        return aliases?.displayName(for: hex) ?? String(hex.prefix(8))
+    }.joined(separator: ", ")
 }
 
 // MARK: - Chat View Container

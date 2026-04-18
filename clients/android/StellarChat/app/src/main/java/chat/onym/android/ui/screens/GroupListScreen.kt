@@ -60,6 +60,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import chat.onym.android.model.ChatGroup
 import chat.onym.android.model.ChatMessage
+import chat.onym.android.model.toHex
+import chat.onym.android.persistence.ContactAliasStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Calendar
@@ -73,6 +75,7 @@ fun GroupListScreen(
     chatMessages: Map<String, List<ChatMessage>> = emptyMap(),
     unreadCounts: Map<String, Int> = emptyMap(),
     isRelayConnected: Boolean = true,
+    contactAliasStore: ContactAliasStore? = null,
     onGroupClick: (ChatGroup) -> Unit,
     onInviteMember: (ChatGroup) -> Unit = {},
     onCreateGroup: () -> Unit,
@@ -285,11 +288,16 @@ fun GroupListScreen(
                                         }
                                         Spacer(modifier = Modifier.height(2.dp))
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(
-                                                "${group.members.size} members",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
+                                            val subtitle = memberSubtitle(group, contactAliasStore)
+                                            if (subtitle.isNotEmpty()) {
+                                                Text(
+                                                    subtitle,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
                                             if (lastMessage != null) {
                                                 Text(
                                                     text = " · ${lastMessage.text}",
@@ -516,6 +524,14 @@ private fun DiffRow(icon: String, iconColor: Color, text: String, detail: String
             Text(text, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
             Text(detail, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+}
+
+private fun memberSubtitle(group: ChatGroup, aliases: ContactAliasStore?): String {
+    if (group.members.isEmpty()) return ""
+    return group.members.joinToString(", ") { member ->
+        val hex = member.publicKeyCompressed.toHex()
+        aliases?.displayName(hex) ?: hex.take(8)
     }
 }
 

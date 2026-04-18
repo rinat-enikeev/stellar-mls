@@ -58,14 +58,27 @@ if [ -n "${APPLE_CERT_P12_BASE64:-}" ]; then
   KEYCHAIN_TMP="$(mktemp -t ceremony-keychain).keychain"
   KEYCHAIN_PWD="$(openssl rand -hex 16)"
   P12_PATH="$(mktemp -t ceremony-cert).p12"
-  # Tolerate whitespace — the base64 command wraps at 76 cols by default,
-  # so a secret pasted without `| tr -d '\n'` has embedded newlines that
-  # macOS `base64 -d` mis-decodes silently and produces a truncated file.
-  printf '%s' "$APPLE_CERT_P12_BASE64" | tr -d ' \t\r\n' | base64 -d > "$P12_PATH"
+  # Diagnose: character count of what the runner actually received. GitHub
+  # masks the *value* with ***, but an integer length is not secret.
+  RAW_LEN=${#APPLE_CERT_P12_BASE64}
+  STRIPPED=$(printf '%s' "$APPLE_CERT_P12_BASE64" | tr -d ' \t\r\n"'"'"'')
+  STRIPPED_LEN=${#STRIPPED}
+  echo "==> APPLE_CERT_P12_BASE64 length: raw=${RAW_LEN}, stripped=${STRIPPED_LEN}"
+  if [ "$STRIPPED_LEN" -lt 100 ]; then
+    echo "APPLE_CERT_P12_BASE64 is effectively empty after whitespace strip." >&2
+    echo "the secret in GitHub is not what you think it is — re-set with:" >&2
+    echo "  REPO=\$(gh repo view --json nameWithOwner -q .nameWithOwner)" >&2
+    echo "  base64 -i cert.p12 | tr -d '\\n' | gh secret set APPLE_CERT_P12_BASE64 --repo \"\$REPO\" --body -" >&2
+    echo "  gh secret list --repo \"\$REPO\" | grep APPLE_CERT_P12_BASE64" >&2
+    exit 1
+  fi
+  # Tolerate whitespace and stray quotes — the base64 command wraps at
+  # 76 cols by default, and the gh web UI sometimes adds quotes.
+  printf '%s' "$STRIPPED" | base64 -d > "$P12_PATH"
   P12_SIZE=$(wc -c < "$P12_PATH" | tr -d ' ')
   echo "==> decoded .p12: ${P12_SIZE} bytes"
   if [ "$P12_SIZE" -lt 100 ]; then
-    echo "decoded .p12 is too small (${P12_SIZE} bytes) — APPLE_CERT_P12_BASE64 is malformed." >&2
+    echo "decoded .p12 is too small (${P12_SIZE} bytes) — APPLE_CERT_P12_BASE64 is malformed base64." >&2
     echo "regenerate with:  base64 -i cert.p12 | tr -d '\\n' | pbcopy" >&2
     exit 1
   fi

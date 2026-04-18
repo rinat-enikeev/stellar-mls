@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Onym Trusted Setup Ceremony</title>
+<meta name="description" content="Public, auditable trusted setup for Onym's Groth16 keyset. Anyone can contribute. Anyone can verify." />
+<link rel="stylesheet" href="/assets/ceremony.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" integrity="sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+" crossorigin="anonymous" />
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" integrity="sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" integrity="sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk" crossorigin="anonymous" onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+<script defer src="/assets/ceremony.js"></script>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="container">
+    <a href="/" class="logo">onym<span>/ceremony</span></a>
+    <div class="nav-links">
+      <a href="/" class="active">Overview</a>
+      <a href="/contribute.html">Contribute</a>
+      <a href="/verify.html">Verify</a>
+      <a href="/phase2.html">Phase&nbsp;2</a>
+      <a href="/download.html">Download</a>
+      <a href="https://github.com/rinat-enikeev/stellar-mls">GitHub&nbsp;↗</a>
+    </div>
+  </div>
+</nav>
+
+<div class="mode-bar">
+  <div class="mode-pill">
+    <button data-mode="humans">For humans</button>
+    <button data-mode="math">For mathematicians</button>
+  </div>
+</div>
+
+<section class="hero">
+  <div class="container-narrow">
+    <span class="hero-badge">Trusted Setup Ceremony — Phase 1 live</span>
+    <h1>Help Onym become <em>trustworthy</em>.</h1>
+    <p class="lede for-humans">
+      Zero-knowledge proofs need a shared public parameter set. That set was born from one
+      person rolling a huge die in secret. For it to be safe on mainnet, <em>many</em>
+      strangers each have to roll their own, and then <em>erase</em> the number. Onym's
+      mainnet keyset will be the product of this ceremony. You are invited.
+    </p>
+    <p class="lede for-math">
+      We generate SRS $\sigma = (\{\tau^i G\}_{i=0}^{2^d-1}, \{\alpha\tau^i G\}, \{\beta\tau^i G\}, \alpha H, \beta H)$
+      via an $N$-party MPC over BLS12-381. Each round $i$ re-randomizes $(\tau, \alpha, \beta)$ by
+      independent scalars $(\tau_i, \alpha_i, \beta_i)$; security relies on 1-of-$N$ honest
+      erasure and consistency checks via the bilinear pairing $e: \mathbb{G}_1 \times \mathbb{G}_2 \to \mathbb{G}_T$.
+    </p>
+    <div class="hero-buttons">
+      <a class="btn btn-primary" href="/contribute.html">Take a turn →</a>
+      <a class="btn btn-secondary" href="/verify.html">Verify a round</a>
+      <a class="btn btn-secondary" href="#explainer">How it works</a>
+    </div>
+  </div>
+</section>
+
+<!-- Live status -->
+<section class="container-narrow">
+  <div id="status-root" x-data>
+    <div class="tier-grid" id="tier-cards">
+      <!-- populated by JS -->
+    </div>
+  </div>
+</section>
+
+<!-- Explainer -->
+<section class="container-narrow" id="explainer">
+  <h2 class="mt-8 mb-4" style="font-size:1.8rem;letter-spacing:-0.5px;">The twelve steps</h2>
+  <p class="text-dim mb-4">
+    Each step below is written twice: a plain-language version for humans, and a formal
+    version for mathematicians. Use the toggle at the top to switch everyone's default;
+    individual cards have a per-card override.
+  </p>
+
+  <!-- Step 0 -->
+  <article class="step-card">
+    <h2><span class="step-num">00</span>What is a trusted setup?</h2>
+    <div class="for-humans">
+      <p>
+        Zero-knowledge proofs let you prove you belong to a group — without revealing
+        <em>which</em> member you are. To do that, the group needs a shared "public
+        parameter set" — call it a lockbox that everyone uses.
+      </p>
+      <p>
+        The problem: building the lockbox requires a secret key. If the person who builds
+        it keeps that key, they can forge any membership proof. If the key is <em>destroyed</em>,
+        nobody can ever forge again. A <strong>trusted setup ceremony</strong> is a
+        choreographed way for a crowd to build the lockbox together, where anyone who
+        destroys their personal part of the key locks it forever.
+      </p>
+    </div>
+    <div class="for-math">
+      <p>
+        For Groth16 over a pairing-friendly curve (BLS12-381 here), soundness requires a
+        structured reference string (SRS) of the form
+      </p>
+      <p>
+        $$
+        \sigma = \Big( \{ \tau^i G \}_{i=0}^{n-1}, \{ \alpha \tau^i G \}_{i=0}^{n-1},
+                       \{ \beta \tau^i G \}_{i=0}^{n-1},\ \alpha H,\ \beta H \Big)
+        $$
+      </p>
+      <p>
+        with $G \in \mathbb{G}_1$, $H \in \mathbb{G}_2$, and toxic scalars
+        $\tau, \alpha, \beta \in \mathbb{F}_r^*$ that must be erased after generation.
+        If $(\tau, \alpha, \beta)$ survive, the SRS is broken: anyone holding them can
+        construct accepting proofs for false statements [<a href="https://eprint.iacr.org/2016/260">Groth16</a>].
+      </p>
+    </div>
+  </article>
+
+  <!-- Step 1 -->
+  <article class="step-card">
+    <h2><span class="step-num">01</span>What is toxic waste?</h2>
+    <div class="for-humans">
+      <p>
+        "Toxic waste" is a playful name for the secret numbers used to build the lockbox.
+        Anyone who holds them can forge. Any copy, anywhere — on a hard drive, in a
+        swap file, in RAM that a cold-boot attack can read — is a catastrophe.
+      </p>
+      <p>
+        Good ceremony practice: generate on an air-gapped or ephemeral machine, never
+        write the scalar to disk, overwrite memory, throw away the VM, and ideally smash
+        the hardware.
+      </p>
+    </div>
+    <div class="for-math">
+      <p>
+        Toxic waste $= (\tau_i, \alpha_i, \beta_i) \in (\mathbb{F}_r^*)^3$ sampled by
+        participant $i$. The MPC output after round $i$ is
+        $(\tau^{(i)}, \alpha^{(i)}, \beta^{(i)}) = (\tau^{(i-1)} \tau_i,\ \alpha^{(i-1)} \alpha_i,\ \beta^{(i-1)} \beta_i)$.
+        Soundness after $N$ rounds requires
+      </p>
+      <p>$$\exists\, i^\star \in [N]\ :\ \tau_{i^\star},\ \alpha_{i^\star},\ \beta_{i^\star}\ \text{erased}.$$</p>
+      <p>
+        The ceremony is sound iff at least one honest erasure occurred; this is the
+        1-of-$N$ assumption.
+      </p>
+    </div>
+  </article>
+
+  <!-- Step 2 -->
+  <article class="step-card">
+    <h2><span class="step-num">02</span>Why 1-of-N honest works</h2>
+    <div class="for-humans">
+      <p>
+        Each contributor takes the previous lockbox and multiplies in their own secret.
+        Forging requires the <em>product</em> of <em>every</em> contributor's secret. If
+        even one person erased theirs and vanished, nobody can ever recover the product.
+      </p>
+      <p>
+        This is why more contributors, from more walks of life, is strictly better. We
+        don't need to trust anyone in particular — we just need <em>one</em> of them to
+        have been honest, and we don't need to know which.
+      </p>
+    </div>
+    <div class="for-math">
+      <p>
+        Let $\tau^{(N)} = \tau^{(0)} \prod_{i=1}^N \tau_i$. An adversary controlling any
+        subset $S \subsetneq [N]$ learns $\prod_{i \in S} \tau_i$ but, given $\tau_{i^\star}$
+        is erased for $i^\star \notin S$, recovering $\tau^{(N)}$ requires solving DLOG
+        over $\mathbb{G}_1$ — i.e., the scheme reduces to the $q$-SDH assumption under
+        the generic group model [<a href="https://eprint.iacr.org/2017/1050">BGM17</a>].
+      </p>
+    </div>
+  </article>
+
+  <!-- Step 3 -->
+  <article class="step-card">
+    <h2><span class="step-num">03</span>What if everyone colludes?</h2>
+    <div class="for-humans">
+      <p>
+        If <em>every</em> contributor kept their secret and shared it, they could
+        collectively forge. That is the whole risk. It's why we want dozens of
+        contributors who don't know each other and who publicly announce their
+        contribution — collusion becomes progressively harder as the crowd grows.
+      </p>
+      <p>
+        It's also why we <em>encourage</em> people who suspect foul play to contribute:
+        your participation tightens the bound.
+      </p>
+    </div>
+    <div class="for-math">
+      <p>
+        The 1-of-$N$ bound is tight: if all $N$ participants are corrupted,
+        $\tau^{(N)} = \tau^{(0)} \prod \tau_i$ is fully known and Groth16 soundness
+        collapses. No cryptographic assumption rescues this case. The ceremony therefore
+        aims for <em>diverse, non-colluding</em> $N$ — geographic, institutional, and
+        ideological diversity are all load-bearing.
+      </p>
+    </div>
+  </article>
+
+  <!-- Step 4 -->
+  <article class="step-card">
+    <h2><span class="step-num">04</span>Your turn, step by step</h2>
+    <div class="for-humans">
+      <ol>
+        <li>Get in line — sign up with a Nostr key (browser extension).</li>
+        <li>When you reach the head of the queue, <strong>download the current state</strong>
+            (the lockbox-so-far).</li>
+        <li>Run the signed <strong>native binary</strong> we provide — ideally on an
+            air-gapped or ephemeral machine.</li>
+        <li>The binary generates your secret, multiplies it into the state, writes a
+            receipt, and <em>erases</em> the secret from memory.</li>
+        <li>Upload the three output files back here. We verify them; if they pass, they
+            become part of the public transcript.</li>
+      </ol>
+      <p>You have 2 hours from claiming your slot. If you miss it, we re-queue.</p>
+    </div>
+    <div class="for-math">
+      <p>At round $i$, participant $i$:</p>
+      <ol>
+        <li>Samples $(\tau_i, \alpha_i, \beta_i) \leftarrow (\mathbb{F}_r^*)^3$ via OS CSPRNG.</li>
+        <li>Computes $\sigma^{(i)}$ by scalar multiplication over $\sigma^{(i-1)}$.</li>
+        <li>Computes a Schnorr PoK over $\mathbb{G}_1$ binding the round-id and
+            new commitments: $\pi_i = (\tau_i G, H(\text{transcript}) \cdot \tau_i G, \ldots)$.</li>
+        <li>Emits <code>state.srs</code>, <code>state.txt</code> (metadata + hashes),
+            <code>receipt.txt</code> (PoK + participant pubkey).</li>
+        <li>Zeroizes $(\tau_i, \alpha_i, \beta_i)$; the binary uses <code>zeroize</code>
+            and rejects stdout of scalars.</li>
+      </ol>
+    </div>
+  </article>
+
+  <!-- Step 5 -->
+  <article class="step-card">
+    <h2><span class="step-num">05</span>How to generate good randomness</h2>
+    <div class="for-humans">
+      <p>Four suggestions in descending order of paranoia:</p>
+      <ul>
+        <li><strong>Ephemeral VM.</strong> Spin up a fresh cloud VM, run the binary, destroy the VM.
+            Simple, and enough for most threat models.</li>
+        <li><strong>Air-gapped laptop.</strong> Old ThinkPad that never touches the internet again.
+            Move files via USB; physically destroy the disk after.</li>
+        <li><strong>Hardware source.</strong> Read bytes from a hardware RNG (Intel RDRAND,
+            TPM, YubiHSM) and mix with <code>/dev/urandom</code>.</li>
+        <li><strong>Dice.</strong> Roll 256 bits of entropy on physical dice, hash with SHA-256,
+            pipe into the binary via <code>--seed-hex</code>. Slow but unimpeachable.</li>
+      </ul>
+      <p>Our binary defaults to the OS CSPRNG (<code>OsRng</code>) if no seed is provided.</p>
+    </div>
+    <div class="for-math">
+      <p>
+        The binary samples $(\tau_i, \alpha_i, \beta_i)$ from a uniform distribution over
+        $\mathbb{F}_r^*$ via rejection sampling. The underlying entropy source is
+        <code>OsRng</code> (which on Linux is <code>getrandom(2)</code> ultimately backed
+        by the kernel CSPRNG). Bias is bounded:
+        $\Delta \le 2^{-r} \cdot \log_2 r$ where $r = 255$ for BLS12-381's scalar field.
+        For participants demanding higher assurance, <code>--seed-hex</code> accepts 32
+        externally generated bytes, from which we derive via HKDF-SHA256.
+      </p>
+    </div>
+  </article>
+
+  <!-- Step 6 -->
+  <article class="step-card">
+    <h2><span class="step-num">06</span>How to prove you didn't cheat</h2>
+    <div class="for-humans">
+      <p>
+        You could, in theory, generate a fake contribution. We catch this with public
+        checks anyone can run. Your upload includes a short "receipt" that commits to
+        your input and output, signed with a key derived from the random scalars
+        themselves. Because the signing key is derived from the scalars, a liar can't
+        produce a valid receipt without actually doing the computation.
+      </p>
+      <p>The coordinator runs these checks before your round is accepted.</p>
+    </div>
+    <div class="for-math">
+      <p>
+        Receipt = Schnorr proof-of-knowledge $\pi$ of $\tau_i$ bound to a Fiat–Shamir
+        challenge over the transcript hash. Specifically:
+      </p>
+      <p>
+        $$
+        \pi = (\tau_i G,\ H(\text{transcript}) \cdot \tau_i G),\qquad
+        \text{transcript} = \text{round}\ \|\ \sigma^{(i-1)}\ \|\ \sigma^{(i)}
+        $$
+      </p>
+      <p>
+        Verification: $e(H(\text{tx}) \cdot \tau_i G, H) \stackrel{?}{=} e(\tau_i G, H(\text{tx}) \cdot H)$.
+        Analogously for $\alpha_i, \beta_i$. See $\texttt{src/ceremony/mod.rs}$
+        functions <code>verify_contribution</code> and <code>verify_initial_contribution</code>.
+      </p>
+    </div>
+  </article>
+
+  <!-- Step 7 -->
+  <article class="step-card">
+    <h2><span class="step-num">07</span>What verification means</h2>
+    <div class="for-humans">
+      <p>
+        At the end of the ceremony, <em>anyone</em> can replay the transcript: walk round
+        by round, check every signature, and recompute every pairing. If it all checks
+        out, the final lockbox is sound <em>assuming at least one honest contributor</em> —
+        no need to trust us, no need to trust any single participant.
+      </p>
+      <p>
+        We ship a browser-based verifier (WASM) so you don't even need to install anything
+        to audit. The ceremony is meaningful <em>because</em> verification is cheap.
+      </p>
+    </div>
+    <div class="for-math">
+      <p>
+        Verification of round $i$ checks six pairing equations (three ratio consistency
+        checks, three power-of-$\tau$ consistency checks). For the initial round there are
+        three additional checks against the generator. A full-transcript verify is
+        $O(N)$ in pairings; on commodity hardware this is a few minutes for $N=128$
+        and $n=2^{11}$.
+      </p>
+      <p>
+        Browser verify uses <code>ceremony-wasm</code> compiled with
+        <code>ark-bls12-381</code>; backend verify shells out to the same
+        <code>ceremony_tool</code> binary participants run.
+      </p>
+    </div>
+  </article>
+
+  <!-- Step 8 -->
+  <article class="step-card">
+    <h2><span class="step-num">08</span>The six pairing equations</h2>
+    <div class="for-humans">
+      <p>
+        Every round is checked against six simple identities. Think of them as a
+        double-entry ledger: if the new lockbox was built correctly, six specific
+        "balances" line up; otherwise they don't. Getting the identities to lie
+        requires knowing the secrets — which is exactly what we're ruling out.
+      </p>
+    </div>
+    <div class="for-math">
+      <p>For each round $i$ verifier checks:</p>
+      <p>
+        $$
+        \begin{aligned}
+        e(\tau_i^{(\text{new})} G,\ H) &\stackrel{?}{=} e(G,\ \tau_i H) \cdot e(\tau^{(i-1)} G,\ H) \\
+        e(\alpha_i^{(\text{new})} G,\ H) &\stackrel{?}{=} e(G,\ \alpha_i H) \cdot e(\alpha^{(i-1)} G,\ H) \\
+        e(\beta_i^{(\text{new})} G,\ H) &\stackrel{?}{=} e(G,\ \beta_i H) \cdot e(\beta^{(i-1)} G,\ H)
+        \end{aligned}
+        $$
+      </p>
+      <p>
+        Plus three power-of-$\tau$ chain checks:
+        $e(\tau^{(i),k} G,\ H) \stackrel{?}{=} e(\tau^{(i),k-1} G,\ \tau^{(i)} H)$ for $k \in \{1,\ldots,n-1\}$.
+      </p>
+      <p>Authoritative source: <code>src/ceremony/mod.rs::verify_contribution</code>.</p>
+    </div>
+  </article>
+
+  <!-- Step 9 -->
+  <article class="step-card">
+    <h2><span class="step-num">09</span>Why anyone can verify</h2>
+    <div class="for-humans">
+      <p>
+        Every round artifact is stored twice: content-addressed on our Blossom blob
+        server, and announced as a signed Nostr event on our relay. You can fetch the
+        whole transcript from either — or from mirrors — without ever talking to us.
+      </p>
+      <p>
+        If this coordinator disappears, the ceremony continues. If we try to lie about
+        order or content, every signed event catches us.
+      </p>
+    </div>
+    <div class="for-math">
+      <p>
+        Artifacts are addressed by $\text{SHA-256}(\text{bytes})$; transcript events are
+        Nostr <code>kind 30078</code> (addressable) signed with the coordinator's
+        <code>secp256k1</code> key. Each event carries:
+      </p>
+      <ul>
+        <li><code>d</code>: <code>sepceremony1:&lt;tier&gt;:r&lt;round&gt;</code> (replaceable key)</li>
+        <li><code>e</code>: previous round's event-id (hash-linked chain)</li>
+        <li><code>blob</code>: (name, sha256, url) — one per artifact file</li>
+        <li><code>participant_pubkey</code>: contributor's npub</li>
+      </ul>
+      <p>
+        The chain yields a hash-linked Merkle-ish ledger; tampering with any round
+        invalidates all subsequent <code>e</code> tags. Mirrors can ingest directly from
+        any Nostr relay that accepted the events.
+      </p>
+    </div>
+  </article>
+
+  <!-- Step 10 -->
+  <article class="step-card">
+    <h2><span class="step-num">10</span>Why Phase 2 is circuit-specific</h2>
+    <div class="for-humans">
+      <p>
+        Phase 1 (what you're contributing to now) is generic — it makes a lockbox usable
+        by any small-enough circuit. Phase 2 specializes it to <em>our</em> circuit (Onym's
+        membership proof). It's a second, shorter ceremony that bakes the circuit's
+        specific wiring into the keys.
+      </p>
+      <p>
+        Phase 2 runs after Phase 1 freezes, separately for each tier (small / medium /
+        large), using <code>snarkjs</code> as the MPC driver.
+      </p>
+    </div>
+    <div class="for-math">
+      <p>
+        Phase 2 translates the universal SRS into Groth16-specific proving and verifying
+        keys via the circuit's QAP: given the R1CS $(\mathbf{A}, \mathbf{B}, \mathbf{C})$
+        with $m$ constraints and $n$ variables, and the Phase 1 output
+        $\{\tau^i G\}_{i \le 2^d}$, Phase 2 computes the Lagrange-evaluated polynomials
+        $\ell_i(\tau), r_i(\tau), o_i(\tau)$ and the $\mathbf{h}(\tau) t(\tau) / \delta$ terms.
+        $\delta$ is introduced as a fresh random scalar at Phase 2; this is why Phase 2
+        is per-circuit.
+      </p>
+      <p>
+        We run Phase 2 via <code>snarkjs zkey</code> rounds inside a pinned Docker image;
+        see <code>docs/phase2-mpc-integration.md</code>.
+      </p>
+    </div>
+  </article>
+
+  <!-- Step 11 -->
+  <article class="step-card">
+    <h2><span class="step-num">11</span>The random beacon at the end</h2>
+    <div class="for-humans">
+      <p>
+        To seal the ceremony, we mix in a number that nobody could have predicted: a
+        future Bitcoin block hash. Once the block is mined, we XOR its hash into the final
+        keyset. This closes the last subtle loophole — even if a contributor tried to
+        bias their randomness, they couldn't have pre-computed the beacon.
+      </p>
+      <p>
+        We'll announce the exact block height when Phase 2 freezes. Until then it's
+        literally unpredictable.
+      </p>
+    </div>
+    <div class="for-math">
+      <p>
+        Beacon $B = \text{SHA-256}(\text{blockheader}_h)$ for some pre-announced height
+        $h$. Final SRS is derived as $\sigma^{(\text{final})} = \sigma^{(N)} \cdot B$ via
+        scalar-multiplying each commitment by $\text{HKDF}(B, \text{"onym-ceremony-1"})$.
+      </p>
+      <p>
+        Beacon serves as a "post-commit" common reference, removing the
+        last-contributor-biasing attack: $B$ is not known until after every $\tau_i$ has
+        been committed, so no adversary can adapt $\tau_N$ to yield a useful target.
+      </p>
+    </div>
+  </article>
+
+</section>
+
+<footer>
+  <div class="container">
+    <p>
+      Coordinator code: <a href="https://github.com/rinat-enikeev/stellar-mls/tree/main/ceremony-coordinator">ceremony-coordinator</a> &middot;
+      Binary: <a href="/download.html">ceremony_tool</a> &middot;
+      Transcript: Nostr kind&nbsp;30078 on <code>wss://nostr.onym.chat</code> &middot;
+      Blobs: <code>blossom.onym.chat</code>
+    </p>
+    <p class="mt-2">Onym is free and open-source software. No warranty.</p>
+  </div>
+</footer>
+
+<script>
+// Live status cards (SSE + initial fetch).
+(function () {
+  function render(snapshot) {
+    const host = document.getElementById('tier-cards');
+    if (!host) return;
+    const tiers = snapshot.tiers || [];
+    const order = { small: 0, medium: 1, large: 2 };
+    tiers.sort((a, b) => (order[a.tier] ?? 9) - (order[b.tier] ?? 9));
+    host.innerHTML = tiers.map((t) => {
+      const slot = t.current_slot;
+      const slotRow = slot
+        ? `<div class="row"><span>Current contributor</span><code class="hash" title="${slot.participant_pk}">${Ceremony.fmt.hash(slot.participant_pk, 6)}</code></div>
+           <div class="row"><span>Deadline</span><span>${Ceremony.fmt.countdown(slot.deadline)}</span></div>`
+        : `<div class="row"><span>Current contributor</span><span class="text-dim">— (slot open) —</span></div>`;
+      const headLink = t.head_round >= 0
+        ? `<a class="btn btn-ghost btn-small mt-2" href="/verify.html?tier=${t.tier}&round=${t.head_round}">Verify head in browser →</a>`
+        : '';
+      return `
+        <div class="tier-card">
+          <h3>Tier: ${t.tier}<span class="pill">depth ${depthFor(t.tier)}</span></h3>
+          <div class="big">Round ${t.head_round < 0 ? 0 : t.head_round + 1}</div>
+          <div class="sub">${t.queue_depth} waiting in queue</div>
+          <div class="mt-2">${slotRow}</div>
+          <a class="btn btn-secondary btn-small mt-2" href="/contribute.html?tier=${t.tier}">Take a turn →</a>
+          ${headLink}
+        </div>`;
+    }).join('');
+  }
+  function depthFor(t) {
+    return { small: 5, medium: 8, large: 11 }[t] ?? '?';
+  }
+  function load() {
+    if (!window.Ceremony) return setTimeout(load, 50);
+    Ceremony.api.get('/status').then(render).catch(() => {
+      const host = document.getElementById('tier-cards');
+      if (host) host.innerHTML = '<div class="alert alert-warn">Live status unavailable. Coordinator may be cold-starting.</div>';
+    });
+    try { Ceremony.status.subscribe(render); } catch (_) {}
+  }
+  document.addEventListener('DOMContentLoaded', load);
+})();
+</script>
+
+</body>
+</html>

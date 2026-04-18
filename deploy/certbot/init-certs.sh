@@ -11,7 +11,7 @@ set -euo pipefail
 EMAIL="${1:?Usage: $0 <email> <domain>}"
 DOMAIN="${2:?Usage: $0 <email> <domain>}"
 
-DOMAINS=("$DOMAIN" "relay.$DOMAIN" "nostr.$DOMAIN" "blossom.$DOMAIN" "push.$DOMAIN")
+DOMAINS=("$DOMAIN" "relay.$DOMAIN" "nostr.$DOMAIN" "blossom.$DOMAIN" "push.$DOMAIN" "ceremony.$DOMAIN")
 
 CERTS_VOL="onym_certbot-certs"
 WEBROOT_VOL="onym_certbot-webroot"
@@ -103,6 +103,7 @@ echo "  https://relay.${DOMAIN}"
 echo "  wss://nostr.${DOMAIN}"
 echo "  https://blossom.${DOMAIN}"
 echo "  https://push.${DOMAIN}"
+echo "  https://ceremony.${DOMAIN}"
 echo ""
 echo "  Auto-renewal runs via the certbot container."
 echo "========================================"

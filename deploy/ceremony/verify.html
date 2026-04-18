@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Verify — Onym Ceremony</title>
+<link rel="stylesheet" href="/assets/ceremony.css" />
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.3/dist/cdn.min.js" integrity="sha384-7jEFFZ9J0OpL80ZmLDIl7X2K7U3KhovLj2AM2iDsxP9vSrzq5kc8jVrJsjApu1b9" crossorigin="anonymous"></script>
+<script defer src="/assets/ceremony.js"></script>
+<script type="module" src="/assets/verifier.js"></script>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="container">
+    <a href="/" class="logo">onym<span>/ceremony</span></a>
+    <div class="nav-links">
+      <a href="/">Overview</a>
+      <a href="/contribute.html">Contribute</a>
+      <a href="/verify.html" class="active">Verify</a>
+      <a href="/phase2.html">Phase 2</a>
+      <a href="/download.html">Download</a>
+    </div>
+  </div>
+</nav>
+
+<section class="hero" style="padding: 50px 0 20px;">
+  <div class="container-narrow">
+    <h1 style="font-size: 2.2rem;">Verify a round</h1>
+    <p class="lede">
+      Pick a round. The browser re-runs every pairing check against bytes
+      fetched directly from Blossom. No coordinator trust required — this
+      page ships a ~155 KB WebAssembly build of the same verifier the
+      coordinator uses internally.
+    </p>
+  </div>
+</section>
+
+<section class="container-narrow" x-data="verifier()" x-init="init()">
+
+  <div class="step-card">
+    <h2>Pick a round</h2>
+    <div class="form-field">
+      <label>Tier</label>
+      <select x-model="tier" @change="loadRounds()">
+        <option value="small">small (depth 5)</option>
+        <option value="medium">medium (depth 8)</option>
+        <option value="large">large (depth 11)</option>
+      </select>
+    </div>
+    <div class="form-field">
+      <label>Round</label>
+      <select x-model.number="round">
+        <template x-for="r in rounds" :key="r.round">
+          <option :value="r.round" x-text="'Round #' + r.round + '  ·  ' + (r.participant_pk ? r.participant_pk.slice(0, 10) : '')"></option>
+        </template>
+      </select>
+    </div>
+    <button class="btn btn-primary" @click="verify()" :disabled="busy || round === null">
+      <span x-text="busy ? 'Verifying in-browser…' : 'Verify round #' + (round ?? '—')"></span>
+    </button>
+    <p class="text-dim mt-2" x-show="stage">
+      <span x-text="stage"></span>
+    </p>
+  </div>
+
+  <template x-if="result">
+    <div class="step-card">
+      <h2>Result</h2>
+      <div class="alert" :class="result.ok ? 'alert-ok' : 'alert-error'">
+        <strong x-text="result.ok ? 'VERIFIED ✓' : 'FAILED ✗'"></strong>
+        <span x-text="result.error ? ' — ' + result.error : ''"></span>
+      </div>
+      <template x-if="result.ok">
+        <div>
+          <div class="panel">
+            <h3>Round details</h3>
+            <div class="row"><span>Round</span><span x-text="'#' + result.round"></span></div>
+            <div class="row"><span>Tier</span><span x-text="result.tier"></span></div>
+            <div class="row"><span>Check</span><span x-text="verifyMode === 'contribution' ? 'full six-pairing contribution proof vs. round #' + (round - 1) : 'initial-round state consistency'"></span></div>
+            <div class="row"><span>SRS hash</span><code class="hash" x-text="result.srs_hash"></code></div>
+            <div class="row"><span>Nostr event</span><code class="hash" x-text="Ceremony.fmt.hash(roundMeta?.nostr_event_id) || '—'"></code></div>
+            <div class="row"><span>Previous event</span><code class="hash" x-text="Ceremony.fmt.hash(roundMeta?.prev_nostr_event_id) || 'none'"></code></div>
+            <div class="row"><span>Participant</span><code class="hash" x-text="roundMeta?.participant_pk"></code></div>
+          </div>
+          <p class="mt-2">
+            Every check above ran locally in your browser against bytes fetched
+            directly from Blossom:
+          </p>
+          <ul>
+            <li><a :href="'/api/v1/tiers/' + result.tier + '/rounds/' + result.round + '/artifacts/state.srs'">state.srs</a></li>
+            <li><a :href="'/api/v1/tiers/' + result.tier + '/rounds/' + result.round + '/artifacts/state.txt'">state.txt</a></li>
+            <li><a :href="'/api/v1/tiers/' + result.tier + '/rounds/' + result.round + '/artifacts/receipt.txt'">receipt.txt</a></li>
+          </ul>
+        </div>
+      </template>
+    </div>
+  </template>
+
+  <div class="step-card">
+    <h2>Don't trust this webpage either</h2>
+    <p class="text-dim">
+      If you'd rather not trust the browser or the JS running on this page, run
+      the same verifier from the command line. It's the exact binary the
+      coordinator shells out to on upload:
+    </p>
+    <pre><code x-text="'# Download artifacts, then:\nceremony_tool verify-state \\\n  --in-dir ./round-' + (round ?? 'N')"></code></pre>
+    <p class="text-dim">
+      The WASM verifier on this page is built from the same Rust crate
+      (<code>crates/ceremony-wasm</code>) as the CLI — same pairing engine,
+      same consistency sweep, same receipt-SRS binding check.
+    </p>
+  </div>
+
+</section>
+
+<footer>
+  <div class="container">
+    <p>Every round, every check, in your browser. <a href="/">Back to overview</a>.</p>
+  </div>
+</footer>
+
+<script>
+function verifier() {
+  return {
+    tier: new URLSearchParams(location.search).get('tier') || 'small',
+    round: Number(new URLSearchParams(location.search).get('round')) || null,
+    rounds: [],
+    roundMeta: null,
+    result: null,
+    verifyMode: null,
+    stage: '',
+    busy: false,
+
+    async init() {
+      await this.loadRounds();
+      // Kick off the WASM fetch in the background so the first click is fast.
+      if (window.CeremonyVerifier) {
+        window.CeremonyVerifier.load().catch(() => {});
+      }
+    },
+
+    async loadRounds() {
+      try {
+        this.rounds = await Ceremony.api.get(`/tiers/${this.tier}/rounds`);
+        if ((this.round === null || !this.rounds.some(r => r.round === this.round)) && this.rounds.length) {
+          this.round = this.rounds[this.rounds.length - 1].round;
+        }
+      } catch (_) {
+        this.rounds = [];
+      }
+    },
+
+    async verify() {
+      if (!window.CeremonyVerifier) {
+        this.result = { ok: false, error: 'WASM verifier failed to load. Hard-refresh?' };
+        return;
+      }
+      this.busy = true;
+      this.result = null;
+      this.roundMeta = null;
+      this.verifyMode = null;
+      this.stage = 'loading WebAssembly…';
+      try {
+        await window.CeremonyVerifier.load();
+        this.stage = 'fetching round metadata…';
+        this.roundMeta = await Ceremony.api.get(`/tiers/${this.tier}/rounds/${this.round}`);
+        this.stage = this.round > 1
+          ? 'running six-pairing contribution check against round #' + (this.round - 1) + '…'
+          : 'running state consistency check…';
+        const { mode, result } = await window.CeremonyVerifier.verifyRound(this.tier, this.round);
+        this.verifyMode = mode;
+        this.result = result;
+        this.stage = '';
+      } catch (e) {
+        this.result = { ok: false, error: e.message || String(e) };
+        this.stage = '';
+      } finally {
+        this.busy = false;
+      }
+    },
+  };
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,3 @@
+# Build output of deploy/ceremony/tools/build-wasm.sh lands here.
+# The .wasm and .js artifacts are regenerated from crates/ceremony-wasm
+# on every deploy; do not edit them by hand.

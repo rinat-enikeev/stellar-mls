@@ -280,11 +280,21 @@ cf_ensure_record "relay" "$DROPLET_IP"
 cf_ensure_record "nostr" "$DROPLET_IP"
 cf_ensure_record "blossom" "$DROPLET_IP"
 cf_ensure_record "push" "$DROPLET_IP"
+cf_ensure_record "ceremony" "$DROPLET_IP"
 
 # ─── Deploy Application ───────────────────────────────────────────────
 
 info "Syncing repository on droplet..."
 $SSH_CMD "if [ -d /opt/onym-chat/.git ]; then cd /opt/onym-chat && git fetch origin && git reset --hard origin/main; else git clone $GIT_REPO /opt/onym-chat; fi"
+
+# Build the browser WASM verifier locally before uploading deploy/
+# (the droplet doesn't need a rust toolchain for this).
+info "Building browser WASM verifier..."
+if bash "$REPO_ROOT/deploy/ceremony/tools/build-wasm.sh" >/dev/null 2>&1; then
+    ok "WASM verifier built -> deploy/ceremony/wasm/"
+else
+    warn "WASM build failed — /verify page will 404 on wasm fetches. Install wasm-pack (https://rustwasm.github.io/wasm-pack/installer/) and retry."
+fi
 
 # Overlay local deploy/ and docker-compose.yml on top of the clone
 # so uncommitted/unpushed changes are always applied
@@ -309,6 +319,20 @@ fi
 $SCP_CMD "$REPO_ROOT/pn-relay/Cargo.toml" "root@$DROPLET_IP:/opt/onym-chat/pn-relay/Cargo.toml" 2>/dev/null
 $SCP_CMD "$REPO_ROOT/pn-relay/Dockerfile" "root@$DROPLET_IP:/opt/onym-chat/pn-relay/Dockerfile" 2>/dev/null
 $SCP_CMD -r "$REPO_ROOT/pn-relay/src" "root@$DROPLET_IP:/opt/onym-chat/pn-relay/src" 2>/dev/null
+
+info "Uploading ceremony-coordinator config..."
+$SSH_CMD "mkdir -p /opt/onym-chat/ceremony-coordinator"
+if [ -f "$REPO_ROOT/ceremony-coordinator/.env" ]; then
+    $SCP_CMD "$REPO_ROOT/ceremony-coordinator/.env" "root@$DROPLET_IP:/opt/onym-chat/ceremony-coordinator/.env" 2>/dev/null
+else
+    warn "ceremony-coordinator/.env not found — creating empty stub. Set CEREMONY_ADMIN_PUBKEYS and CEREMONY_COORDINATOR_NSEC before running Phase 2."
+    $SSH_CMD "touch /opt/onym-chat/ceremony-coordinator/.env"
+fi
+$SCP_CMD "$REPO_ROOT/ceremony-coordinator/Cargo.toml" "root@$DROPLET_IP:/opt/onym-chat/ceremony-coordinator/Cargo.toml" 2>/dev/null
+$SCP_CMD "$REPO_ROOT/ceremony-coordinator/Dockerfile" "root@$DROPLET_IP:/opt/onym-chat/ceremony-coordinator/Dockerfile" 2>/dev/null
+$SCP_CMD -r "$REPO_ROOT/ceremony-coordinator/src" "root@$DROPLET_IP:/opt/onym-chat/ceremony-coordinator/src" 2>/dev/null
+$SCP_CMD -r "$REPO_ROOT/ceremony-coordinator/migrations" "root@$DROPLET_IP:/opt/onym-chat/ceremony-coordinator/migrations" 2>/dev/null
+$SCP_CMD "$REPO_ROOT/rust-toolchain.toml" "root@$DROPLET_IP:/opt/onym-chat/rust-toolchain.toml" 2>/dev/null
 
 # Upload FCM service account JSON if present (for Android push notifications)
 FCM_SA_FILE="$REPO_ROOT/clients/android/StellarChat/fcm-service-account.json"
@@ -336,8 +360,8 @@ else
 
 # ─── Wait for DNS Propagation ─────────────────────────────────────────
 
-info "Waiting for DNS propagation (all 4 subdomains)..."
-ALL_DOMAINS=("$DOMAIN" "relay.$DOMAIN" "nostr.$DOMAIN" "blossom.$DOMAIN" "push.$DOMAIN")
+info "Waiting for DNS propagation (all subdomains)..."
+ALL_DOMAINS=("$DOMAIN" "relay.$DOMAIN" "nostr.$DOMAIN" "blossom.$DOMAIN" "push.$DOMAIN" "ceremony.$DOMAIN")
 MAX_WAIT=60  # 60 x 10s = 10 minutes
 
 for d in "${ALL_DOMAINS[@]}"; do

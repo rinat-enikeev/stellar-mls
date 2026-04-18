@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Phase 2 — Onym Ceremony</title>
+<link rel="stylesheet" href="/assets/ceremony.css" />
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.3/dist/cdn.min.js" integrity="sha384-7jEFFZ9J0OpL80ZmLDIl7X2K7U3KhovLj2AM2iDsxP9vSrzq5kc8jVrJsjApu1b9" crossorigin="anonymous"></script>
+<script defer src="/assets/ceremony.js"></script>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="container">
+    <a href="/" class="logo">onym<span>/ceremony</span></a>
+    <div class="nav-links">
+      <a href="/">Overview</a>
+      <a href="/contribute.html">Contribute</a>
+      <a href="/verify.html">Verify</a>
+      <a href="/phase2.html" class="active">Phase 2</a>
+      <a href="/download.html">Download</a>
+    </div>
+  </div>
+</nav>
+
+<section class="hero" style="padding: 50px 0 20px;">
+  <div class="container-narrow">
+    <h1 style="font-size: 2.2rem;">Phase 2</h1>
+    <p class="lede">
+      Circuit-specific keys. Starts after Phase 1 freezes and uses the frozen output as
+      input. Snarkjs handles the MPC; this dashboard indexes the rounds.
+    </p>
+  </div>
+</section>
+
+<section class="container-narrow" x-data="phase2()" x-init="init()">
+
+  <div class="panel">
+    <h3>Phase 1 freeze status</h3>
+    <div class="row">
+      <span>Overall</span>
+      <span class="badge" :class="summary?.state?.phase1_frozen ? 'badge-green' : 'badge-amber'"
+            x-text="summary?.state?.phase1_frozen ? 'Frozen' : 'Running (Phase 1 live)'"></span>
+    </div>
+    <div class="row" x-show="summary?.state?.phase1_frozen_at">
+      <span>Frozen at</span>
+      <span x-text="Ceremony.fmt.unix(summary?.state?.phase1_frozen_at)"></span>
+    </div>
+    <div class="row" x-show="summary?.state?.phase1_frozen_by_pk">
+      <span>Frozen by</span>
+      <code class="hash" x-text="Ceremony.fmt.hash(summary?.state?.phase1_frozen_by_pk)"></code>
+    </div>
+    <template x-for="t in summary?.tiers || []" :key="t.tier">
+      <div>
+        <div class="row">
+          <span x-text="'Tier ' + t.tier"></span>
+          <span>
+            <span x-text="'Phase 1 head: ' + (t.phase1_head_round < 0 ? '—' : '#' + t.phase1_head_round)"></span>
+            <span class="text-dim" x-text="' · Phase 2 head: ' + (t.phase2_head_round == null ? '—' : '#' + t.phase2_head_round)"></span>
+          </span>
+        </div>
+        <div class="row" x-show="t.phase1_srs_hash">
+          <span x-text="'Tier ' + t.tier + ' SRS hash'"></span>
+          <code class="hash" x-text="Ceremony.fmt.hash(t.phase1_srs_hash)"></code>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <div class="panel">
+    <h3>Beacon</h3>
+    <p class="text-dim">
+      Phase 2 ends with a public random beacon — a Bitcoin block hash. We pre-announce
+      the block <em>height</em> when Phase 1 freezes; mining proceeds independently; then
+      we derive a final transform from <code>SHA-256(block_header)</code> and apply it to
+      each tier's final zkey.
+    </p>
+    <div class="row">
+      <span>Target block height</span>
+      <strong x-text="summary?.state?.beacon_block_height != null ? summary.state.beacon_block_height : '— (announced at Phase 1 freeze)'"></strong>
+    </div>
+    <div class="row" x-show="summary?.state?.beacon_block_hash">
+      <span>Applied block hash</span>
+      <code class="hash" x-text="Ceremony.fmt.hash(summary?.state?.beacon_block_hash, 12)"></code>
+    </div>
+    <div class="row" x-show="summary?.state?.beacon_applied_at">
+      <span>Applied at</span>
+      <span x-text="Ceremony.fmt.unix(summary?.state?.beacon_applied_at)"></span>
+    </div>
+  </div>
+
+  <div class="step-card">
+    <h2>How Phase 2 runs</h2>
+    <div class="for-humans">
+      <p>Phase 2 is mechanically similar to Phase 1 but shorter: it specializes the universal SRS to Onym's specific circuit layout. We use the standard snarkjs tooling (because its transcript format is widely audited), wrap it in a pinned Docker image, and ingest each round back into this coordinator so the whole thing shows up in one place.</p>
+      <p>Participation is open, but slots are scheduled rather than FIFO — each round takes 20-40 minutes of compute per tier.</p>
+    </div>
+    <div class="for-math">
+      <p>Starting from the Phase 1 SRS $\sigma = \{\tau^i G\}_{i \le 2^d}$ and the circuit's R1CS $(\mathbf{A}, \mathbf{B}, \mathbf{C})$, snarkjs computes:</p>
+      <ul>
+        <li>$\alpha, \beta, \gamma, \delta$ contributions over $\mathbb{G}_1, \mathbb{G}_2$;</li>
+        <li>$\{L_i(\tau)/\gamma\}_{i=0}^{\ell}$ (public inputs);</li>
+        <li>$\{K_i(\tau)/\delta\}_{i=\ell+1}^{n-1}$ (witness);</li>
+        <li>$\{h_j(\tau) \cdot t(\tau)/\delta\}_{j=0}^{n-2}$ (H-polynomial terms).</li>
+      </ul>
+      <p>Each round $j$ re-randomizes $\delta^{(j)} = \delta^{(j-1)} \cdot \delta_j$ and contributes to the $\delta$-suffixed terms.</p>
+    </div>
+  </div>
+
+  <div class="step-card">
+    <h2>Phase 2 helper Docker image</h2>
+    <p class="text-dim">
+      The snarkjs handoff runs inside a pinned-digest Docker image so every
+      contributor gets the same binary, with no accidental dependency drift
+      between rounds. Source is at <code>docker/phase2-helper/</code>.
+    </p>
+    <pre><code>docker pull ghcr.io/rinat-enikeev/ceremony-phase2-helper:latest
+docker run --rm \
+  -v "$(pwd):/work" \
+  ghcr.io/rinat-enikeev/ceremony-phase2-helper:latest \
+  contribute \
+    --input  /work/input.zkey \
+    --output /work/output.zkey \
+    --tier   small \
+    --name   "my handle"</code></pre>
+    <p class="text-dim">
+      The image ships a stripped <code>ceremony_tool</code> (for Phase 1 SRS
+      export), <code>snarkjs</code> pinned to a specific version, and a thin
+      shell wrapper that writes an attestation receipt alongside the zkey.
+    </p>
+  </div>
+
+  <div class="step-card">
+    <h2>Published rounds</h2>
+    <template x-if="!rounds.length">
+      <p class="text-dim">No Phase 2 rounds have been indexed yet. Check back after Phase 1 freezes.</p>
+    </template>
+    <template x-for="r in rounds" :key="r.tier + ':' + r.round">
+      <div class="panel">
+        <div class="row">
+          <span x-text="'Tier ' + r.tier + ' · round #' + r.round"></span>
+          <code class="hash" x-text="Ceremony.fmt.hash(r.zkey_hash, 10) || '—'"></code>
+        </div>
+        <div class="row"><span>Participant</span><code class="hash" x-text="r.participant_pk || '—'"></code></div>
+        <div class="row" x-show="r.beacon_applied">
+          <span>Beacon applied</span>
+          <span class="badge badge-green">yes</span>
+        </div>
+        <div class="row" x-show="r.zkey_blob_sha256">
+          <a :href="'/api/v1/tiers/' + r.tier + '/phase2/rounds/' + r.round + '/artifacts/zkey'">Download zkey</a>
+          <code class="hash" x-text="Ceremony.fmt.hash(r.zkey_blob_sha256)"></code>
+        </div>
+      </div>
+    </template>
+  </div>
+
+</section>
+
+<footer>
+  <div class="container">
+    <p>Runbook: <a href="https://github.com/rinat-enikeev/stellar-mls/blob/main/docs/phase2-mpc-integration.md">docs/phase2-mpc-integration.md</a>.</p>
+  </div>
+</footer>
+
+<script>
+function phase2() {
+  return {
+    summary: null,
+    rounds: [],
+    async init() {
+      try { this.summary = await Ceremony.api.get('/phase2/summary'); } catch (_) {}
+      try { this.rounds = await Ceremony.api.get('/phase2/rounds'); } catch (_) {}
+    },
+  };
+}
+</script>
+
+</body>
+</html>

@@ -93,3 +93,10 @@ keyset-v*/*/update_proving_key.bin
 
 # AltStore PAL Alternative Distribution Packages (large notarized binaries, scp'd to onym.chat)
 /deploy/website/adp/
+
+# Browser WASM verifier build output — regenerated from crates/ceremony-wasm
+# on every deploy, kept out of the repo (keep .gitkeep).
+crates/ceremony-wasm/pkg/
+/deploy/ceremony/wasm/*.wasm
+/deploy/ceremony/wasm/*.js
+/deploy/ceremony/wasm/*.d.ts

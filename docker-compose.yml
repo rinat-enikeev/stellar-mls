@@ -49,6 +49,31 @@ services:
     networks:
       - internal
 
+  ceremony-coordinator:
+    build:
+      context: .
+      dockerfile: ceremony-coordinator/Dockerfile
+    env_file:
+      - path: ./ceremony-coordinator/.env
+        required: false
+    environment:
+      - CEREMONY_BIND=0.0.0.0:9090
+      - CEREMONY_DB_PATH=/data/ceremony.sqlite
+      - CEREMONY_BLOSSOM_URL=http://blossom:3000
+      - CEREMONY_BLOSSOM_PUBLIC_URL=https://blossom.onym.chat
+      - CEREMONY_NOSTR_RELAY=ws://nostr-relay:7777
+      - CEREMONY_TOOL_BIN=/usr/local/bin/ceremony_tool
+      - CEREMONY_WORK_DIR=/data/work
+      - RUST_LOG=ceremony_coordinator=info,tower_http=info
+    volumes:
+      - ceremony-data:/data
+    restart: unless-stopped
+    networks:
+      - internal
+    depends_on:
+      - blossom
+      - nostr-relay
+
   nginx:
     image: nginx:1.27-alpine
     ports:
@@ -59,6 +84,7 @@ services:
       - ./deploy/nginx/conf.d:/etc/nginx/conf.d:ro
       - ./deploy/nginx/ssl-params.conf:/etc/nginx/ssl-params.conf:ro
       - ./deploy/website:/var/www/website:ro
+      - ./deploy/ceremony:/var/www/ceremony:ro
       - certbot-webroot:/var/www/certbot:ro
       - certbot-certs:/etc/letsencrypt:ro
     restart: unless-stopped
@@ -78,6 +104,7 @@ volumes:
   strfry-data:
   pn-relay-data:
   blossom-data:
+  ceremony-data:
   certbot-webroot:
   certbot-certs:
 

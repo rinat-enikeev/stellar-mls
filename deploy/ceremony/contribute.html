@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Contribute — Onym Ceremony</title>
+<link rel="stylesheet" href="/assets/ceremony.css" />
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.3/dist/cdn.min.js" integrity="sha384-7jEFFZ9J0OpL80ZmLDIl7X2K7U3KhovLj2AM2iDsxP9vSrzq5kc8jVrJsjApu1b9" crossorigin="anonymous"></script>
+<script defer src="/assets/ceremony.js"></script>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="container">
+    <a href="/" class="logo">onym<span>/ceremony</span></a>
+    <div class="nav-links">
+      <a href="/">Overview</a>
+      <a href="/contribute.html" class="active">Contribute</a>
+      <a href="/verify.html">Verify</a>
+      <a href="/phase2.html">Phase 2</a>
+      <a href="/download.html">Download</a>
+    </div>
+  </div>
+</nav>
+
+<section class="hero" style="padding: 50px 0 20px;">
+  <div class="container-narrow">
+    <h1 style="font-size: 2.2rem;">Contribute</h1>
+    <p class="lede">Five steps. Don't skip step 3.</p>
+  </div>
+</section>
+
+<section class="container-narrow" x-data="contribute()" x-init="init()">
+
+  <!-- Step 1: sign in -->
+  <div class="step-card">
+    <h2><span class="step-num">1</span>Sign in with Nostr</h2>
+    <p class="text-dim mb-2">We use your Nostr public key as your participant identity. No email, no password. Install <a href="https://getalby.com/" target="_blank">Alby</a>, <a href="https://github.com/fiatjaf/nos2x" target="_blank">nos2x</a>, or any NIP-07 browser extension first.</p>
+    <template x-if="!pubkey">
+      <button class="btn btn-primary" @click="signIn()" :disabled="busy">Connect Nostr</button>
+    </template>
+    <template x-if="pubkey">
+      <div class="alert alert-ok">
+        <strong>Signed in.</strong> Your npub: <code class="hash" x-text="pubkey"></code>
+      </div>
+    </template>
+    <p class="text-red mt-2" x-show="error && !pubkey" x-text="error"></p>
+  </div>
+
+  <!-- Step 2: pick a tier -->
+  <div class="step-card" x-show="pubkey">
+    <h2><span class="step-num">2</span>Pick a tier</h2>
+    <p class="text-dim">All three tiers run in parallel. Small is fastest (seconds to contribute, smaller download). Large has the most headroom for future circuit growth.</p>
+    <div class="tier-grid">
+      <template x-for="t in tiers" :key="t.tier">
+        <div class="tier-card" :style="tier === t.tier ? 'border-color: var(--accent)' : ''"
+             @click="tier = t.tier" style="cursor: pointer;">
+          <h3 x-text="'Tier: ' + t.tier"><span class="pill" x-text="'depth ' + depthFor(t.tier)"></span></h3>
+          <div class="big" x-text="'Round ' + ((t.head_round < 0 ? 0 : t.head_round + 1))"></div>
+          <div class="sub" x-text="t.queue_depth + ' waiting'"></div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- Step 3: join queue -->
+  <div class="step-card" x-show="pubkey && tier && myStatus !== 'claimed' && myStatus !== 'committed'">
+    <h2><span class="step-num">3</span>Join the queue</h2>
+    <p class="text-dim mb-2">You'll be notified via this page when it's your turn. Keep the tab open or come back periodically.</p>
+    <button class="btn btn-primary" @click="signup()" :disabled="busy">
+      <span x-text="busy ? 'Signing…' : 'Join ' + tier + ' queue'"></span>
+    </button>
+    <p class="text-red mt-2" x-show="error && !myStatus" x-text="error"></p>
+  </div>
+
+  <!-- Status: queued -->
+  <div class="step-card" x-show="myStatus === 'queued'">
+    <h2>You're in line</h2>
+    <p>You're <strong x-text="queuePosition !== null ? '#' + (queuePosition + 1) + ' in the ' + tier + ' queue' : 'queued'"></strong>. Average round takes ~15 minutes; come back then.</p>
+    <p class="text-dim mt-2">When you reach the head of the queue, the coordinator opens a 2-hour slot. You'll see a "Take your turn" button below.</p>
+  </div>
+
+  <!-- Status: claimed -->
+  <div class="step-card" x-show="myStatus === 'claimed'">
+    <h2><span class="step-num">4</span>Take your turn</h2>
+    <div class="alert alert-warn">
+      <strong>Your slot is open.</strong> Deadline: <span x-text="deadlineCountdown"></span>.
+    </div>
+    <p>Run the native binary on an <em>air-gapped or ephemeral</em> machine. Don't paste secrets, don't let the scalar touch persistent storage.</p>
+    <ol class="mt-2">
+      <li>
+        Download previous round artifacts:
+        <ul class="mt-2">
+          <li><a :href="prevBlobs.srs" x-text="'state.srs (' + Ceremony.fmt.hash(prevBlobs.srs_hash) + ')'"></a></li>
+          <li><a :href="prevBlobs.txt" x-text="'state.txt (' + Ceremony.fmt.hash(prevBlobs.txt_hash) + ')'"></a></li>
+          <li><a :href="prevBlobs.receipt" x-text="'receipt.txt (' + Ceremony.fmt.hash(prevBlobs.receipt_hash) + ')'"></a></li>
+        </ul>
+      </li>
+      <li class="mt-2">Run the binary (<a href="/download.html">download</a> if needed):
+        <pre><code x-text="'ceremony_tool contribute \\\n  --tier ' + tier + ' \\\n  --in-dir ./prev \\\n  --out-dir ./mine \\\n  --participant ' + pubkey"></code></pre>
+      </li>
+      <li class="mt-2">Upload the three files from <code>./mine</code>:
+        <div class="form-field mt-2">
+          <label>state.srs</label>
+          <input type="file" @change="files.state_srs = $event.target.files[0]" />
+        </div>
+        <div class="form-field">
+          <label>state.txt</label>
+          <input type="file" @change="files.state_txt = $event.target.files[0]" />
+        </div>
+        <div class="form-field">
+          <label>receipt.txt</label>
+          <input type="file" @change="files.receipt = $event.target.files[0]" />
+        </div>
+        <button class="btn btn-primary" @click="upload()" :disabled="busy || !files.state_srs || !files.state_txt || !files.receipt">
+          <span x-text="busy ? 'Uploading and verifying…' : 'Submit contribution'"></span>
+        </button>
+        <p class="text-red mt-2" x-show="error" x-text="error"></p>
+      </li>
+    </ol>
+  </div>
+
+  <!-- Status: committed -->
+  <div class="step-card" x-show="myStatus === 'committed'">
+    <h2><span class="step-num">5</span>Thank you</h2>
+    <div class="alert alert-ok">
+      Your contribution is round <strong x-text="'#' + (committedRound)"></strong> of tier
+      <strong x-text="tier"></strong>. It's now part of the permanent transcript.
+    </div>
+    <p class="mt-2">Please do the following, in order:</p>
+    <ol>
+      <li><strong>Destroy your working machine.</strong> If you used a VM, shut it down and delete the image. If you used an old laptop, wipe and reinstall from USB.</li>
+      <li>Share your contribution publicly — tell people you contributed, cite this round number. Publicity deters future collusion.</li>
+      <li>Come back tomorrow and <a href="/verify.html">verify a random round</a> — anyone can, and many should.</li>
+    </ol>
+    <p class="mt-4">
+      <a class="btn btn-secondary" :href="'/verify.html?tier=' + tier + '&round=' + committedRound">View your round</a>
+    </p>
+  </div>
+
+</section>
+
+<footer>
+  <div class="container">
+    <p>Questions? <a href="https://github.com/rinat-enikeev/stellar-mls/issues">Open an issue</a>.</p>
+  </div>
+</footer>
+
+<script>
+function contribute() {
+  return {
+    pubkey: null,
+    tier: new URLSearchParams(location.search).get('tier') || '',
+    tiers: [],
+    myStatus: null,
+    queuePosition: null,
+    prevBlobs: {},
+    committedRound: null,
+    deadlineCountdown: '',
+    files: { state_srs: null, state_txt: null, receipt: null },
+    busy: false,
+    error: '',
+
+    depthFor(t) { return { small: 5, medium: 8, large: 11 }[t] ?? '?'; },
+
+    async init() {
+      try {
+        const s = await Ceremony.api.get('/status');
+        this.tiers = s.tiers || [];
+      } catch (e) { /* ignore */ }
+      // Try silent sign-in if extension present and user has approved before.
+      if (window.nostr && window.nostr.getPublicKey) {
+        try { this.pubkey = await window.nostr.getPublicKey(); await this.refresh(); } catch (_) {}
+      }
+      setInterval(() => this.tick(), 1000);
+      Ceremony.status.subscribe(snap => { this.tiers = snap.tiers || []; });
+    },
+
+    tick() {
+      if (this.myStatus === 'claimed' && this.slotDeadline) {
+        this.deadlineCountdown = Ceremony.fmt.countdown(this.slotDeadline);
+      }
+    },
+
+    async signIn() {
+      this.busy = true; this.error = '';
+      try {
+        this.pubkey = await Ceremony.nostr.getPubkey();
+        await this.refresh();
+      } catch (e) { this.error = e.message; }
+      finally { this.busy = false; }
+    },
+
+    async refresh() {
+      if (!this.pubkey) return;
+      try {
+        const r = await Ceremony.api.get(`/participants/${this.pubkey}`);
+        this.myStatus = r.status;
+        this.tier = r.tier || this.tier;
+        this.queuePosition = r.queue_position;
+        this.slotDeadline = r.slot_deadline;
+        this.committedRound = r.committed_round;
+        if (r.prev_blobs) this.prevBlobs = r.prev_blobs;
+      } catch (e) { /* 404 = not signed up yet */ }
+    },
+
+    async signup() {
+      this.busy = true; this.error = '';
+      try {
+        const r = await Ceremony.api.postAuthed('/signup', { tier: this.tier });
+        this.myStatus = r.status || 'queued';
+        this.queuePosition = r.queue_position;
+      } catch (e) { this.error = e.message; }
+      finally { this.busy = false; }
+    },
+
+    async upload() {
+      this.busy = true; this.error = '';
+      try {
+        const readAll = (f) => new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(new Uint8Array(r.result));
+          r.onerror = () => rej(r.error);
+          r.readAsArrayBuffer(f);
+        });
+        const [srs, txt, rec] = await Promise.all([
+          readAll(this.files.state_srs),
+          readAll(this.files.state_txt),
+          readAll(this.files.receipt),
+        ]);
+        const r = await Ceremony.api.uploadContribution(this.tier, {
+          state_srs: srs,
+          state_txt: new TextDecoder().decode(txt),
+          receipt: new TextDecoder().decode(rec),
+        });
+        this.myStatus = 'committed';
+        this.committedRound = r.round;
+      } catch (e) { this.error = e.message; }
+      finally { this.busy = false; }
+    },
+  };
+}
+</script>
+
+</body>
+</html>

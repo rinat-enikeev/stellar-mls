@@ -1,0 +1,48 @@
+[package]
+name = "ceremony-coordinator"
+version = "0.1.0"
+edition = "2021"
+description = "Web coordinator for the Onym trusted-setup ceremony"
+license = "MIT"
+
+[[bin]]
+name = "ceremony-coordinator"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.7", features = ["multipart", "macros"] }
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tower = "0.5"
+tower-http = { version = "0.5", features = ["limit", "trace", "cors"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+rusqlite = { version = "0.31", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.24"
+
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "stream"] }
+futures = "0.3"
+bytes = "1"
+
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+
+# Nostr primitives: Schnorr signatures over secp256k1 (BIP-340).
+k256 = { version = "0.13", features = ["schnorr"] }
+secp256k1 = { version = "0.29", features = ["rand"] }
+
+thiserror = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+uuid = { version = "1", features = ["v4"] }
+time = { version = "0.3", features = ["serde", "macros"] }
+
+async-trait = "0.1"
+async-stream = "0.3"
+async-tungstenite = { version = "0.25", features = ["tokio-runtime", "tokio-rustls-native-certs"] }

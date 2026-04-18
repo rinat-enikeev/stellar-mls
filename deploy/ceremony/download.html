@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Download — Onym Ceremony</title>
+<link rel="stylesheet" href="/assets/ceremony.css" />
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.3/dist/cdn.min.js" integrity="sha384-7jEFFZ9J0OpL80ZmLDIl7X2K7U3KhovLj2AM2iDsxP9vSrzq5kc8jVrJsjApu1b9" crossorigin="anonymous"></script>
+<script defer src="/assets/ceremony.js"></script>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="container">
+    <a href="/" class="logo">onym<span>/ceremony</span></a>
+    <div class="nav-links">
+      <a href="/">Overview</a>
+      <a href="/contribute.html">Contribute</a>
+      <a href="/verify.html">Verify</a>
+      <a href="/phase2.html">Phase 2</a>
+      <a href="/download.html" class="active">Download</a>
+    </div>
+  </div>
+</nav>
+
+<section class="hero" style="padding: 50px 0 20px;">
+  <div class="container-narrow">
+    <h1 style="font-size: 2.2rem;">Download <code>ceremony_tool</code></h1>
+    <p class="lede">
+      Same binary the coordinator runs. Contributions never leave your machine until
+      you upload the output files. Signed releases, reproducible builds.
+    </p>
+  </div>
+</section>
+
+<section class="container-narrow" x-data="downloads()" x-init="init()">
+
+  <div class="step-card">
+    <h2>Recommended for your system</h2>
+    <template x-if="recommended">
+      <div class="panel">
+        <div class="row"><span>OS / arch</span><strong x-text="recommended.label"></strong></div>
+        <div class="row"><span>Filename</span><code x-text="recommended.asset || '— no binary matched —'"></code></div>
+        <template x-if="recommended.asset">
+          <div class="flex flex-gap mt-2">
+            <a class="btn btn-primary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset">Download</a>
+            <a class="btn btn-secondary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset + '.minisig'">Signature</a>
+            <a class="btn btn-secondary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset + '.sha256'">SHA-256</a>
+          </div>
+        </template>
+      </div>
+    </template>
+    <template x-if="!recommended">
+      <p class="text-dim">No release is published yet. Build from source (instructions below).</p>
+    </template>
+  </div>
+
+  <div class="step-card">
+    <h2>Verify the download</h2>
+    <p>Pick one or more of:</p>
+    <ol>
+      <li>
+        <strong>minisign</strong> — our release-signing pubkey is committed to this repo at
+        <code>.minisign/ceremony-tool.pub</code> and also mirrored on Nostr.
+        <pre><code>minisign -Vm ceremony_tool \
+  -P RWS...pubkey... \
+  -x ceremony_tool.minisig</code></pre>
+      </li>
+      <li>
+        <strong>cosign (keyless)</strong> — verified against our GitHub Actions OIDC identity.
+        <pre><code>cosign verify-blob \
+  --certificate-identity-regexp '^https://github\.com/rinat-enikeev/stellar-mls/\.github/workflows/release-ceremony-tool\.yml@refs/tags/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --signature ceremony_tool.sig \
+  --certificate ceremony_tool.pem \
+  ceremony_tool</code></pre>
+      </li>
+      <li>
+        <strong>SHA-256</strong> (weakest; use with one of the above):
+        <pre><code>sha256sum -c ceremony_tool.sha256</code></pre>
+      </li>
+    </ol>
+  </div>
+
+  <div class="step-card">
+    <h2>All artifacts</h2>
+    <template x-if="assets.length">
+      <div>
+        <div class="row text-dim"><span>Target</span><span>Filename</span></div>
+        <template x-for="a in assets" :key="a.target">
+          <div class="panel">
+            <div class="row"><span x-text="a.target"></span><code x-text="a.filename"></code></div>
+            <div class="row"><span>sha256</span><code class="hash" x-text="a.sha256"></code></div>
+            <div class="flex flex-gap mt-2">
+              <a class="btn btn-secondary btn-small" :href="a.url">Binary</a>
+              <a class="btn btn-secondary btn-small" :href="a.url + '.minisig'" x-show="a.minisign">minisign</a>
+              <a class="btn btn-secondary btn-small" :href="a.url + '.sig'" x-show="a.cosign">cosign sig</a>
+              <a class="btn btn-secondary btn-small" :href="a.url + '.sha256'">sha256</a>
+            </div>
+          </div>
+        </template>
+      </div>
+    </template>
+    <template x-if="!assets.length">
+      <p class="text-dim">No release yet. The release workflow publishes to GitHub Releases; this page will auto-update.</p>
+    </template>
+  </div>
+
+  <div class="step-card">
+    <h2>Build from source (reproducibly)</h2>
+    <p>The release build runs inside a pinned Docker image with a fixed rustc. Any machine with Docker can rebuild and byte-identically reproduce the Linux artifacts:</p>
+    <pre><code>git clone https://github.com/rinat-enikeev/stellar-mls
+cd stellar-mls
+./scripts/verify-ceremony-tool.sh vX.Y.Z x86_64-unknown-linux-musl</code></pre>
+    <p class="text-dim">The script prints OK if your local rebuild matches the published unsigned SHA-256 in <code>buildinfo.json</code>. See <a href="https://github.com/rinat-enikeev/stellar-mls/blob/main/docs/ceremony-reproducible-build.md">ceremony-reproducible-build.md</a> for the full methodology.</p>
+  </div>
+
+  <div class="step-card">
+    <h2>Source integrity</h2>
+    <ul>
+      <li>rustc: pinned in <code>rust-toolchain.toml</code></li>
+      <li>Crate deps: <code>Cargo.lock</code> committed; build uses <code>--locked</code></li>
+      <li>Release profile: <code>[profile.release-ceremony]</code> in root <code>Cargo.toml</code></li>
+      <li>Path remap: <code>--remap-path-prefix</code> to strip build host</li>
+      <li>Environment: <code>SOURCE_DATE_EPOCH</code> from commit time; <code>TZ=UTC</code>; <code>LC_ALL=C</code></li>
+    </ul>
+  </div>
+
+</section>
+
+<footer>
+  <div class="container">
+    <p>Publishing key rotation is out-of-band; historical keys stay valid for already-signed artifacts.</p>
+  </div>
+</footer>
+
+<script>
+function downloads() {
+  return {
+    tag: null,
+    assets: [],
+    recommended: null,
+    minisignPub: null,
+    async init() {
+      try {
+        const r = await Ceremony.api.get('/downloads');
+        this.tag = r.tag;
+        this.assets = r.assets || [];
+        this.minisignPub = r.minisign_pubkey;
+      } catch (_) {}
+      this.recommended = this.detect();
+    },
+    detect() {
+      const ua = navigator.userAgent;
+      const uad = navigator.userAgentData;
+      const platform = uad?.platform || '';
+      const mobile = uad?.mobile ?? false;
+      let target = null, label = 'Unknown';
+      if (mobile) { label = 'Mobile'; return { label, asset: null }; }
+      if (/Mac/.test(ua) || platform === 'macOS') {
+        // Apple Silicon vs. Intel detection is imperfect; show both.
+        target = /arm64|Apple Silicon|aarch64/.test(ua) ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin';
+        label = target === 'aarch64-apple-darwin' ? 'macOS (Apple Silicon)' : 'macOS (Intel)';
+      } else if (/Linux/.test(ua)) {
+        target = /aarch64|arm64/.test(ua) ? 'aarch64-unknown-linux-musl' : 'x86_64-unknown-linux-musl';
+        label = target === 'aarch64-unknown-linux-musl' ? 'Linux (ARM64)' : 'Linux (x86_64)';
+      } else if (/Win/.test(ua)) {
+        target = 'x86_64-pc-windows-msvc';
+        label = 'Windows (x86_64)';
+      }
+      const a = this.assets.find((x) => x.target === target);
+      return { target, label, asset: a?.filename, url: a?.url };
+    },
+  };
+}
+</script>
+
+</body>
+</html>

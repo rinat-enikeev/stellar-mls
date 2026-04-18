@@ -50,6 +50,7 @@ use crate::poseidon;
 use crate::Tier;
 
 pub mod phase2;
+pub mod transcript;
 
 // ================================================================
 // Types

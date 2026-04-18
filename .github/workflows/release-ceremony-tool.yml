@@ -1,0 +1,214 @@
+# Release ceremony_tool binaries.
+#
+# Phase A scope: Linux (x86_64, aarch64) + macOS (x86_64, aarch64), unsigned,
+# with SHA-256 checksums and optional minisign signatures when the
+# MINISIGN_SECRET_KEY secret is set. Phase B adds cosign keyless + SLSA.
+# Phase C adds Windows (x86_64, unsigned + minisig) and documents Azure
+# Trusted Signing as the v2 path; macOS notarization still pending.
+#
+# Trigger: manual dispatch (matches project convention that
+# "releases require `gh workflow run Release -f tag=vX.Y.Z`").
+
+name: Release ceremony_tool
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Git tag to release (e.g. v0.1.0). Must already exist.
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            cross: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            cross: true
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            cross: false
+          - os: macos-13
+            target: x86_64-apple-darwin
+            cross: false
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            cross: false
+    runs-on: ${{ matrix.os }}
+    env:
+      # Reproducible build knobs.
+      SOURCE_DATE_EPOCH: "0"
+      TZ: UTC
+      LC_ALL: C
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Compute SOURCE_DATE_EPOCH from commit
+        shell: bash
+        run: |
+          EPOCH=$(git log -1 --pretty=%ct)
+          echo "SOURCE_DATE_EPOCH=$EPOCH" >> "$GITHUB_ENV"
+
+      - name: Install rust-toolchain.toml components
+        uses: dtolnay/rust-toolchain@master
+        with:
+          # The pinned channel is read from rust-toolchain.toml at checkout.
+          # dtolnay/rust-toolchain honors it when set to "stable" here.
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Install musl cross tools (Linux)
+        if: matrix.cross
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y musl-tools
+          case "${{ matrix.target }}" in
+            aarch64-unknown-linux-musl)
+              sudo apt-get install -y gcc-aarch64-linux-gnu
+              mkdir -p ~/.cargo
+              cat >> ~/.cargo/config.toml <<EOF
+          [target.aarch64-unknown-linux-musl]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
+              ;;
+          esac
+
+      - name: Cargo build (release-ceremony profile)
+        shell: bash
+        env:
+          RUSTFLAGS: --remap-path-prefix=${{ github.workspace }}=/build
+        run: |
+          cargo build \
+            --locked \
+            --profile release-ceremony \
+            --target ${{ matrix.target }} \
+            --bin ceremony_tool
+
+      - name: Package artifact
+        id: package
+        shell: bash
+        run: |
+          mkdir -p dist
+          EXT=""
+          case "${{ matrix.target }}" in *windows*) EXT=".exe";; esac
+          SRC=target/${{ matrix.target }}/release-ceremony/ceremony_tool${EXT}
+          test -f "$SRC"
+          NAME=ceremony_tool-${{ inputs.tag }}-${{ matrix.target }}${EXT}
+          cp "$SRC" dist/$NAME
+          # Prefer sha256sum; fall back to shasum for macOS runners.
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd dist && sha256sum $NAME > $NAME.sha256)
+          else
+            (cd dist && shasum -a 256 $NAME > $NAME.sha256)
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "path=dist/$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Write buildinfo.json
+        shell: bash
+        run: |
+          NAME=${{ steps.package.outputs.name }}
+          RUSTC=$(rustc --version)
+          COMMIT=$(git rev-parse HEAD)
+          if command -v sha256sum >/dev/null 2>&1; then
+            SHA=$(sha256sum dist/$NAME | awk '{print $1}')
+          else
+            SHA=$(shasum -a 256 dist/$NAME | awk '{print $1}')
+          fi
+          cat > dist/$NAME.buildinfo.json <<EOF
+          {
+            "name": "$NAME",
+            "tag": "${{ inputs.tag }}",
+            "target": "${{ matrix.target }}",
+            "commit": "$COMMIT",
+            "rustc": "$RUSTC",
+            "source_date_epoch": "$SOURCE_DATE_EPOCH",
+            "sha256": "$SHA"
+          }
+          EOF
+
+      - name: Minisign (optional)
+        if: env.MINISIGN_SECRET_KEY != ''
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        shell: bash
+        run: |
+          # Install minisign per OS. On Windows we use the prebuilt binary
+          # from jedisct1/minisign release tree; choco/scoop are slower and
+          # add non-deterministic state to the runner image.
+          case "$(uname -s)" in
+            Darwin*)
+              brew install minisign
+              ;;
+            Linux*)
+              sudo apt-get update -y && sudo apt-get install -y minisign
+              ;;
+            MINGW*|MSYS*|CYGWIN*)
+              curl -sSLfO https://github.com/jedisct1/minisign/releases/download/0.11/minisign-0.11-win64.zip
+              7z x minisign-0.11-win64.zip -ominisign-dist
+              echo "$(pwd)/minisign-dist/minisign-win64" >> "$GITHUB_PATH"
+              export PATH="$(pwd)/minisign-dist/minisign-win64:$PATH"
+              ;;
+          esac
+          mkdir -p ~/.minisign
+          printf '%s' "$MINISIGN_SECRET_KEY" > ~/.minisign/sk
+          NAME=${{ steps.package.outputs.name }}
+          echo "$MINISIGN_PASSWORD" | minisign -Sm dist/$NAME -s ~/.minisign/sk -c "ceremony_tool ${{ inputs.tag }} / ${{ matrix.target }}"
+          rm -f ~/.minisign/sk
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: dist/${{ steps.package.outputs.name }}*
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Build ceremony-downloads.json
+        shell: bash
+        run: |
+          python3 scripts/update-ceremony-downloads.py \
+            --tag "${{ inputs.tag }}" \
+            --dist-dir dist \
+            --out dist/ceremony-downloads.json
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

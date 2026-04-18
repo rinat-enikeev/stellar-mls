@@ -25,7 +25,9 @@ pub mod circuit;
 pub mod commitment;
 pub mod prover;
 pub mod ceremony;
+#[cfg(feature = "ffi")]
 mod ffi;
+#[cfg(feature = "jni")]
 mod jni_ffi;
 
 /// Circuit tier definitions.

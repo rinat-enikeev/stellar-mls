@@ -39,23 +39,39 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    # Filenames are always "ceremony_tool-<tag>-<target>[.exe]". We parse by
-    # anchoring on the caller-supplied --tag rather than by regex — arches like
-    # "aarch64" collide with regex-based tag-suffix heuristics.
-    prefix = f"ceremony_tool-{args.tag}-"
+    # CLI filenames: "ceremony_tool-<tag>-<target>[.exe]". GUI filename:
+    # "CeremonyTool-<tag>.dmg". We anchor parsing on the caller-supplied
+    # --tag — arches like "aarch64" collide with regex tag heuristics.
+    cli_prefix = f"ceremony_tool-{args.tag}-"
+    gui_filename = f"CeremonyTool-{args.tag}.dmg"
 
     assets = []
     for binary in sorted(args.dist_dir.iterdir()):
         if binary.is_dir():
             continue
-        # Skip non-binary files on this first pass; pick up only primary artifacts.
+        # Skip sidecars; we only enumerate primary artifacts.
         if any(binary.name.endswith(sfx) for sfx in (".sha256", ".minisig", ".sig",
                                                      ".pem", ".buildinfo.json",
                                                      ".json")):
             continue
-        if not binary.name.startswith(prefix):
+        if binary.name == gui_filename:
+            sha256 = sha256_of(binary)
+            url = RELEASE_URL_FMT.format(tag=args.tag, name=binary.name)
+            assets.append({
+                "kind": "gui",
+                "target": "macos-universal-gui",
+                "filename": binary.name,
+                "url": url,
+                "sha256": sha256,
+                "size": binary.stat().st_size,
+                "minisign": False,
+                "cosign": False,
+                "notarized": True,
+            })
             continue
-        remainder = binary.name[len(prefix):]
+        if not binary.name.startswith(cli_prefix):
+            continue
+        remainder = binary.name[len(cli_prefix):]
         if remainder.endswith(".exe"):
             target = remainder[: -len(".exe")]
         else:
@@ -65,6 +81,7 @@ def main() -> int:
         sha256 = sha256_of(binary)
         url = RELEASE_URL_FMT.format(tag=args.tag, name=binary.name)
         assets.append({
+            "kind": "cli",
             "target": target,
             "filename": binary.name,
             "url": url,
@@ -72,6 +89,7 @@ def main() -> int:
             "size": binary.stat().st_size,
             "minisign": (args.dist_dir / (binary.name + ".minisig")).exists(),
             "cosign": (args.dist_dir / (binary.name + ".sig")).exists(),
+            "notarized": "apple-darwin" in target,
         })
 
     minisign_pubkey = args.minisign_pubkey or os.environ.get("MINISIGN_PUBKEY") or None

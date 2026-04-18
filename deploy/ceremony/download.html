@@ -44,8 +44,34 @@
         <template x-if="recommended.asset">
           <div class="flex flex-gap mt-2">
             <a class="btn btn-primary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset">Download</a>
-            <a class="btn btn-secondary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset + '.minisig'">Signature</a>
-            <a class="btn btn-secondary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset + '.sha256'">SHA-256</a>
+            <template x-if="recommended.kind === 'gui'">
+              <a class="btn btn-secondary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset + '.sha256'">SHA-256</a>
+            </template>
+            <template x-if="recommended.kind !== 'gui'">
+              <a class="btn btn-secondary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset + '.minisig'">Signature</a>
+            </template>
+            <template x-if="recommended.kind !== 'gui'">
+              <a class="btn btn-secondary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset + '.sha256'">SHA-256</a>
+            </template>
+          </div>
+        </template>
+        <template x-if="recommended.kind === 'gui'">
+          <p class="text-dim mt-2">
+            Drag-and-drop GUI: signed + notarized + stapled by Apple. No
+            Terminal needed. Drop <code>prev.zip</code> on the app, get
+            <code>contribution.zip</code> back.
+            <a href="#" @click.prevent="useCli = true" x-show="!useCli">Use the CLI instead</a>
+          </p>
+        </template>
+        <template x-if="recommended.kind === 'gui' && useCli && cliFallback">
+          <div class="panel mt-2">
+            <div class="row"><span>CLI binary</span><code x-text="cliFallback.filename"></code></div>
+            <div class="row"><span>sha256</span><code class="hash" x-text="cliFallback.sha256"></code></div>
+            <div class="flex flex-gap mt-2">
+              <a class="btn btn-secondary btn-small" :href="cliFallback.url">Download CLI</a>
+              <a class="btn btn-secondary btn-small" :href="cliFallback.url + '.minisig'">minisign</a>
+              <a class="btn btn-secondary btn-small" :href="cliFallback.url + '.sha256'">sha256</a>
+            </div>
           </div>
         </template>
       </div>
@@ -87,9 +113,16 @@
     <template x-if="assets.length">
       <div>
         <div class="row text-dim"><span>Target</span><span>Filename</span></div>
-        <template x-for="a in assets" :key="a.target">
+        <template x-for="a in assets" :key="a.filename">
           <div class="panel">
-            <div class="row"><span x-text="a.target"></span><code x-text="a.filename"></code></div>
+            <div class="row">
+              <span>
+                <span x-text="a.target"></span>
+                <span class="badge" x-show="a.kind === 'gui'" style="margin-left:8px;">GUI</span>
+                <span class="badge" x-show="a.notarized" style="margin-left:6px;">notarized</span>
+              </span>
+              <code x-text="a.filename"></code>
+            </div>
             <div class="row"><span>sha256</span><code class="hash" x-text="a.sha256"></code></div>
             <div class="flex flex-gap mt-2">
               <a class="btn btn-secondary btn-small" :href="a.url">Binary</a>
@@ -140,6 +173,8 @@ function downloads() {
     tag: null,
     assets: [],
     recommended: null,
+    cliFallback: null,
+    useCli: false,
     minisignPub: null,
     async init() {
       try {
@@ -167,9 +202,24 @@ function downloads() {
           arch = hints.architecture || null;
         } catch (_) {}
       }
-      let target = null, label = 'Unknown';
+      let target = null, label = 'Unknown', kind = 'cli';
       if (mobile) { label = 'Mobile'; return { label, asset: null }; }
       if (/Mac/.test(ua) || platform === 'macOS') {
+        // Prefer the GUI .dmg on Mac UAs when present.
+        const gui = this.assets.find((x) => x.kind === 'gui');
+        if (gui) {
+          const isArm = arch === 'x86' ? false : true;
+          this.cliFallback = this.assets.find(
+            (x) => x.target === (isArm ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin')
+          ) || null;
+          return {
+            kind: 'gui',
+            target: gui.target,
+            label: 'macOS (universal, drag-and-drop app)',
+            asset: gui.filename,
+            url: gui.url,
+          };
+        }
         const isArm = arch === 'x86' ? false : true;
         target = isArm ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin';
         label = isArm ? 'macOS (Apple Silicon)' : 'macOS (Intel)';
@@ -181,8 +231,8 @@ function downloads() {
         target = 'x86_64-pc-windows-msvc';
         label = 'Windows (x86_64)';
       }
-      const a = this.assets.find((x) => x.target === target);
-      return { target, label, asset: a?.filename, url: a?.url };
+      const a = this.assets.find((x) => x.target === target && x.kind !== 'gui');
+      return { kind, target, label, asset: a?.filename, url: a?.url };
     },
   };
 }

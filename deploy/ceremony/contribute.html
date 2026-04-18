@@ -222,16 +222,23 @@
               sha256: <code class="hash" x-text="toolAsset.sha256"></code> &middot;
               <a href="/download.html">all platforms &amp; signatures</a>
             </p>
-            <template x-if="toolAsset.target.includes('apple-darwin')">
+            <template x-if="toolAsset.kind === 'gui'">
+              <p class="mt-2 text-dim" style="font-size:0.88rem;">
+                Signed + notarized + stapled by Apple — first launch will not
+                show a Gatekeeper warning. Open the .dmg, drag
+                <code>CeremonyTool.app</code> to <code>Applications</code>,
+                then launch it.
+              </p>
+            </template>
+            <template x-if="toolAsset.target && toolAsset.target.includes('apple-darwin')">
               <details class="mt-2">
                 <summary>macOS says "could not verify &hellip; is free of malware"</summary>
                 <div class="mt-2">
                   <p>
-                    The binary isn't Apple-notarized yet (coming in Phase B of
-                    the ceremony rollout). Until then, macOS Gatekeeper
-                    quarantines downloaded binaries by default. That's expected
-                    — you're running a signed-but-not-notarized Rust binary
-                    from the ceremony repo, not actually being attacked.
+                    Some users prefer the CLI binary over the GUI app. The CLI
+                    is signed + notarized starting at v1.5.4, so first launch
+                    no longer needs a manual override on a current macOS. If
+                    you hit a Gatekeeper warning anyway:
                   </p>
                   <p class="mt-2"><strong>Clear the quarantine flag after downloading:</strong></p>
                   <pre><code x-text="'chmod +x ~/Downloads/' + toolAsset.filename + '\nxattr -d com.apple.quarantine ~/Downloads/' + toolAsset.filename + '\nmv ~/Downloads/' + toolAsset.filename + ' /usr/local/bin/ceremony_tool'"></code></pre>
@@ -241,10 +248,10 @@
                 </div>
               </details>
             </template>
-            <template x-if="toolAsset.target.includes('linux')">
+            <template x-if="toolAsset.target && toolAsset.target.includes('linux')">
               <p class="mt-2 text-dim" style="font-size:0.88rem;">After download: <code x-text="'chmod +x ' + toolAsset.filename + ' &amp;&amp; sudo mv ' + toolAsset.filename + ' /usr/local/bin/ceremony_tool'"></code></p>
             </template>
-            <template x-if="toolAsset.target.includes('windows')">
+            <template x-if="toolAsset.target && toolAsset.target.includes('windows')">
               <p class="mt-2 text-dim" style="font-size:0.88rem;">Rename to <code>ceremony_tool.exe</code> and run from an elevated PowerShell. SmartScreen may prompt — <em>More info &rarr; Run anyway</em>.</p>
             </template>
           </div>
@@ -253,10 +260,22 @@
           <p class="mt-2 text-dim">Couldn't detect your platform automatically — pick your download from <a href="/download.html">the release page</a>.</p>
         </template>
       </li>
-      <li class="mt-2">Run the tool:
-        <pre><code x-text="'ceremony_tool contribute \\\n  --tier ' + tier + ' \\\n  --in-dir ./prev \\\n  --out-dir ./mine \\\n  --participant ' + pubkey"></code></pre>
-      </li>
-      <li class="mt-2">Upload the three files from <code>./mine</code>:
+      <template x-if="toolAsset && toolAsset.kind === 'gui'">
+        <li class="mt-2">
+          Drop <code>prev.zip</code> on the app window. Pick your tier
+          (<strong x-text="tier"></strong>) and paste your Nostr pubkey
+          (<code x-text="pubkey"></code>). The app will produce
+          <code>~/Downloads/contribution-<span x-text="tier"></span>-<span x-text="(pubkey || '').slice(0,8)"></span>.zip</code>.
+        </li>
+      </template>
+      <template x-if="!toolAsset || toolAsset.kind !== 'gui'">
+        <li class="mt-2">Run the tool:
+          <pre><code x-text="'ceremony_tool contribute \\\n  --tier ' + tier + ' \\\n  --in-dir ./prev \\\n  --out-dir ./mine \\\n  --participant ' + pubkey"></code></pre>
+        </li>
+      </template>
+      <li class="mt-2">
+        <span x-show="toolAsset && toolAsset.kind === 'gui'">Unzip <code>contribution-…zip</code> and upload the three files inside:</span>
+        <span x-show="!(toolAsset && toolAsset.kind === 'gui')">Upload the three files from <code>./mine</code>:</span>
         <div class="form-field mt-2">
           <label>state.srs</label>
           <input type="file" @change="files.state_srs = $event.target.files[0]" />
@@ -343,8 +362,18 @@ function contribute() {
         if (!assets.length) return;
         const target = this.pickTarget();
         this.osLabel = this.labelFor(target);
-        const a = assets.find(x => x.target === target)
-          || assets.find(x => x.target.includes('apple-darwin'))
+        // On macOS prefer the signed+notarized GUI .dmg if the release ships one.
+        if (target.includes('apple-darwin')) {
+          const gui = assets.find(x => x.kind === 'gui');
+          if (gui) {
+            this.osLabel = 'macOS (drag-and-drop app)';
+            this.toolAsset = { ...gui, tag: m.tag };
+            return;
+          }
+        }
+        const a = assets.find(x => x.target === target && x.kind !== 'gui')
+          || assets.find(x => x.target.includes('apple-darwin') && x.kind !== 'gui')
+          || assets.find(x => x.kind !== 'gui')
           || assets[0];
         this.toolAsset = { ...a, tag: m.tag };
       } catch (_) { /* download page handles the error path */ }
@@ -379,6 +408,7 @@ function contribute() {
       return {
         'aarch64-apple-darwin': 'macOS (Apple Silicon)',
         'x86_64-apple-darwin': 'macOS (Intel)',
+        'macos-universal-gui': 'macOS (drag-and-drop app)',
         'x86_64-unknown-linux-musl': 'Linux x86_64',
         'aarch64-unknown-linux-musl': 'Linux arm64',
         'x86_64-pc-windows-msvc': 'Windows x86_64',

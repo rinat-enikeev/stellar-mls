@@ -226,9 +226,71 @@ jobs:
           path: dist/${{ steps.package.outputs.name }}*
           if-no-files-found: error
 
+  build-macos-gui:
+    name: build macOS GUI .dmg
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Download macOS CLI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: cli-dist
+          merge-multiple: true
+          pattern: ceremony_tool-${{ inputs.tag }}-*-apple-darwin
+
+      - name: Sanity-check CLI inputs
+        shell: bash
+        run: |
+          ls -la cli-dist/
+          test -f "cli-dist/ceremony_tool-${{ inputs.tag }}-aarch64-apple-darwin"
+          test -f "cli-dist/ceremony_tool-${{ inputs.tag }}-x86_64-apple-darwin"
+          chmod +x "cli-dist/ceremony_tool-${{ inputs.tag }}-aarch64-apple-darwin" \
+                   "cli-dist/ceremony_tool-${{ inputs.tag }}-x86_64-apple-darwin"
+
+      - name: Build + sign + notarize + staple .dmg
+        env:
+          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
+        shell: bash
+        run: |
+          if [ -z "$APPLE_DEVELOPER_ID" ] || [ -z "$APPLE_CERT_P12_BASE64" ]; then
+            echo "Apple signing secrets not set — cannot build notarized .app." >&2
+            echo "Set APPLE_DEVELOPER_ID + APPLE_CERT_P12_BASE64 in repo secrets." >&2
+            exit 1
+          fi
+          # Strip the leading "v" so VERSION='1.5.5' matches CFBundleShortVersionString rules.
+          VER="${{ inputs.tag }}"; VER="${VER#v}"
+          mkdir -p dist
+          clients/mac-ceremony/build.sh \
+            --version "$VER" \
+            --x86_64  "cli-dist/ceremony_tool-${{ inputs.tag }}-x86_64-apple-darwin" \
+            --arm64   "cli-dist/ceremony_tool-${{ inputs.tag }}-aarch64-apple-darwin" \
+            --out     dist
+          # Rename to the tag-prefixed convention used by the manifest builder.
+          mv "dist/CeremonyTool-${VER}.dmg"        "dist/CeremonyTool-${{ inputs.tag }}.dmg"
+          mv "dist/CeremonyTool-${VER}.dmg.sha256" "dist/CeremonyTool-${{ inputs.tag }}.dmg.sha256"
+          # Rewrite the inner filename in the .sha256 so `shasum -c` still works.
+          sed -i '' "s|CeremonyTool-${VER}.dmg|CeremonyTool-${{ inputs.tag }}.dmg|g" \
+            "dist/CeremonyTool-${{ inputs.tag }}.dmg.sha256"
+
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CeremonyTool-${{ inputs.tag }}.dmg
+          path: dist/CeremonyTool-${{ inputs.tag }}.dmg*
+          if-no-files-found: error
+
   release:
     name: publish release
-    needs: build
+    needs: [build, build-macos-gui]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

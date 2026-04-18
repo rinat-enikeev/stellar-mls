@@ -249,6 +249,36 @@ impl Store {
         Ok(s)
     }
 
+    /// Like `participant_signup`, but scoped to one tier. Used when the
+    /// frontend wants the participant's state for a specific tier — e.g. to
+    /// let a user who already committed to `small` sign up for `medium`.
+    pub fn participant_signup_for_tier(
+        &self,
+        pubkey: &str,
+        tier: Tier,
+    ) -> Result<Option<Signup>> {
+        let conn = self.get()?;
+        let s = conn
+            .query_row(
+                "SELECT id, pubkey, tier, joined_at, status, slot_claimed_at, slot_deadline, retry_count
+                 FROM signups
+                 WHERE pubkey = ?1 AND tier = ?2
+                 ORDER BY
+                   CASE status
+                     WHEN 'claimed'   THEN 0
+                     WHEN 'queued'    THEN 1
+                     WHEN 'committed' THEN 2
+                     ELSE 3
+                   END,
+                   joined_at DESC
+                 LIMIT 1",
+                params![pubkey, tier.as_str()],
+                row_to_signup,
+            )
+            .optional()?;
+        Ok(s)
+    }
+
     /// Position of the participant's active queued signup in their tier (1-indexed)
     /// or None if they're not currently queued.
     pub fn participant_queue_position(&self, pubkey: &str, tier: Tier) -> Result<Option<i64>> {

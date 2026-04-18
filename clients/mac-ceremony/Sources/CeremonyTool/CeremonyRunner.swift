@@ -37,16 +37,13 @@ struct CeremonyRunner {
 
         // Step 2: run ceremony_tool contribute.
         let toolURL = try bundledTool()
-        _ = try? await run(executable: toolURL.path, args: ["--version"], log: log,
-                           registerProcess: registerProcess)
 
-        log("Running ceremony_tool contribute --tier \(tier) --in-dir … --out-dir … --participant …")
+        log("Running ceremony_tool contribute --state-dir … --out-dir … --participant …")
         _ = try await run(
             executable: toolURL.path,
             args: [
                 "contribute",
-                "--tier", tier,
-                "--in-dir", inDir.path,
+                "--state-dir", inDir.path,
                 "--out-dir", outDir.path,
                 "--participant", participantHex,
             ],
@@ -98,8 +95,6 @@ struct CeremonyRunner {
         let beforeDir = try resolveStateDir(beforeRoot, fm: fm)
 
         let toolURL = try bundledTool()
-        _ = try? await run(executable: toolURL.path, args: ["--version"], log: log,
-                           registerProcess: registerProcess)
 
         if let afterURL = afterURL {
             let afterRoot = workspace.appendingPathComponent("after", isDirectory: true)

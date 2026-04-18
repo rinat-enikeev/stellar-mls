@@ -143,7 +143,7 @@
     <div class="tier-grid">
       <template x-for="t in tiers" :key="t.tier">
         <div class="tier-card" :style="tier === t.tier ? 'border-color: var(--accent)' : ''"
-             @click="tier = t.tier" style="cursor: pointer;">
+             @click="selectTier(t.tier)" style="cursor: pointer;">
           <h3 x-text="'Tier: ' + t.tier"><span class="pill" x-text="'depth ' + depthFor(t.tier)"></span></h3>
           <div class="big" x-text="'Round ' + ((t.head_round < 0 ? 0 : t.head_round + 1))"></div>
           <div class="sub" x-text="t.queue_depth + ' waiting'"></div>
@@ -266,11 +266,18 @@
           (<strong x-text="tier"></strong>) and paste your Nostr pubkey
           (<code x-text="pubkey"></code>). The app will produce
           <code>~/Downloads/contribution-<span x-text="tier"></span>-<span x-text="(pubkey || '').slice(0,8)"></span>.zip</code>.
+          <details class="mt-2">
+            <summary>Prefer the CLI?</summary>
+            <div class="mt-2">
+              <p class="text-dim" style="font-size:0.88rem;">Download the <a href="/download.html">CLI binary</a> for your platform, then:</p>
+              <pre><code x-text="'ceremony_tool contribute \\\n  --state-dir ./prev \\\n  --out-dir ./mine \\\n  --participant ' + pubkey"></code></pre>
+            </div>
+          </details>
         </li>
       </template>
       <template x-if="!toolAsset || toolAsset.kind !== 'gui'">
         <li class="mt-2">Run the tool:
-          <pre><code x-text="'ceremony_tool contribute \\\n  --tier ' + tier + ' \\\n  --in-dir ./prev \\\n  --out-dir ./mine \\\n  --participant ' + pubkey"></code></pre>
+          <pre><code x-text="'ceremony_tool contribute \\\n  --state-dir ./prev \\\n  --out-dir ./mine \\\n  --participant ' + pubkey"></code></pre>
         </li>
       </template>
       <li class="mt-2">
@@ -311,6 +318,9 @@
     </ol>
     <p class="mt-4">
       <a class="btn btn-secondary" :href="'/verify.html?tier=' + tier + '&round=' + committedRound">View your round</a>
+    </p>
+    <p class="text-dim mt-4" style="font-size:0.88rem;">
+      Want to contribute to another tier too? Pick a different tier in step 2 above — each tier runs an independent queue, so one contribution per tier is welcome.
     </p>
   </div>
 
@@ -433,7 +443,8 @@ function contribute() {
     async refresh() {
       if (!this.pubkey) return;
       try {
-        const r = await Ceremony.api.get(`/participants/${this.pubkey}`);
+        const q = this.tier ? `?tier=${encodeURIComponent(this.tier)}` : '';
+        const r = await Ceremony.api.get(`/participants/${this.pubkey}${q}`);
         this.myStatus = r.status;
         this.tier = r.tier || this.tier;
         this.queuePosition = r.queue_position;
@@ -441,6 +452,20 @@ function contribute() {
         this.committedRound = r.committed_round;
         if (r.prev_blobs) this.prevBlobs = r.prev_blobs;
       } catch (e) { /* 404 = not signed up yet */ }
+    },
+
+    /// Switch to a different tier. Clears the old tier-bound state so the
+    /// "committed" card for one tier doesn't block signing up for another.
+    selectTier(t) {
+      if (this.tier === t) return;
+      this.tier = t;
+      this.myStatus = null;
+      this.queuePosition = null;
+      this.slotDeadline = null;
+      this.committedRound = null;
+      this.prevBlobs = {};
+      this.error = '';
+      if (this.pubkey) this.refresh();
     },
 
     async signup() {

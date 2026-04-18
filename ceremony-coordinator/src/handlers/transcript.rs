@@ -1,5 +1,5 @@
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Redirect, Response};
@@ -213,14 +213,34 @@ pub struct PrevBlobs {
     pub receipt_hash: String,
 }
 
+#[derive(serde::Deserialize, Default)]
+pub struct ParticipantQuery {
+    /// Optional: scope the lookup to a single tier so a participant who has
+    /// already committed to one tier can still sign up for another.
+    pub tier: Option<String>,
+}
+
 pub async fn participant(
     State(state): State<SharedState>,
     Path(pubkey): Path<String>,
+    Query(q): Query<ParticipantQuery>,
 ) -> Result<Json<ParticipantStatus>, (StatusCode, String)> {
-    let signup = state
-        .store
-        .participant_signup(&pubkey)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let tier_filter: Option<Tier> = match q.tier.as_deref() {
+        Some(t) => Some(
+            Tier::from_str(t).map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?,
+        ),
+        None => None,
+    };
+    let signup = match tier_filter {
+        Some(t) => state
+            .store
+            .participant_signup_for_tier(&pubkey, t)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        None => state
+            .store
+            .participant_signup(&pubkey)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+    };
     let mut out = ParticipantStatus {
         pubkey: pubkey.clone(),
         status: None,

@@ -168,7 +168,7 @@
       "parameters": {
         "authentication": "privateKey",
         "resource": "command",
-        "command": "=set +e\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngit fetch origin main 2>&1\ngit checkout -f main 2>&1 || git checkout -f -B main origin/main 2>&1\ngit reset --hard origin/main 2>&1\nexec bash ./build/dev-env/bin/n8n-agent-issue.sh \"{{ $json.issueNumber }}\" \"{{ $json.promptB64 }}\" \"{{ $json.reviewerLogin }}\"\n"
+        "command": "=set +e\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngit fetch origin main >/dev/null 2>&1\ngit checkout -f -B main origin/main >/dev/null 2>&1\nexec bash ./build/dev-env/bin/n8n-agent-issue.sh \"{{ $json.issueNumber }}\" \"{{ $json.promptB64 }}\" \"{{ $json.reviewerLogin }}\"\n"
       },
       "id": "a1000000-0000-0000-0000-000000000004",
       "name": "Run claude in release-agent",
@@ -186,7 +186,7 @@
       "parameters": {
         "authentication": "privateKey",
         "resource": "command",
-        "command": "=set +e\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngit fetch origin main 2>&1\ngit checkout -f main 2>&1 || git checkout -f -B main origin/main 2>&1\ngit reset --hard origin/main 2>&1\nexec bash ./build/dev-env/bin/n8n-agent-issue.sh \"{{ $json.issueNumber }}\" \"{{ $json.promptB64 }}\" \"{{ $json.reviewerLogin }}\"\n"
+        "command": "=set +e\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngit fetch origin main >/dev/null 2>&1\ngit checkout -f -B main origin/main >/dev/null 2>&1\nexec bash ./build/dev-env/bin/n8n-agent-issue.sh \"{{ $json.issueNumber }}\" \"{{ $json.promptB64 }}\" \"{{ $json.reviewerLogin }}\"\n"
       },
       "id": "a1000000-0000-0000-0000-000000000009",
       "name": "Run claude in qa-agent",

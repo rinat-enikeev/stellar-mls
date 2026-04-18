@@ -17,6 +17,8 @@ import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -165,6 +167,7 @@ fun StellarChatNavHost(
             if (showBottomBar) {
                 NavigationBar {
                     tabs.forEach { tab ->
+                        val invitationCount = if (tab == Tab.Chats) groupListViewModel.pendingInvitations.size else 0
                         NavigationBarItem(
                             selected = currentRoute == tab.route,
                             onClick = {
@@ -176,7 +179,17 @@ fun StellarChatNavHost(
                                     restoreState = true
                                 }
                             },
-                            icon = { Icon(tab.icon, contentDescription = tab.label) },
+                            icon = {
+                                BadgedBox(
+                                    badge = {
+                                        if (invitationCount > 0) {
+                                            Badge { Text("$invitationCount") }
+                                        }
+                                    }
+                                ) {
+                                    Icon(tab.icon, contentDescription = tab.label)
+                                }
+                            },
                             label = { Text(tab.label) }
                         )
                     }

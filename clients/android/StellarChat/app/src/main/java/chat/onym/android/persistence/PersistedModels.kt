@@ -24,7 +24,11 @@ data class PersistedGroup(
     @ColumnInfo(defaultValue = "0")
     val pushNotificationsEnabled: Boolean = false,
     @ColumnInfo(defaultValue = "0")
-    val lastMessageAt: Long = 0
+    val lastMessageAt: Long = 0,
+    /** Governance type id (0 = Anarchy, 1 = 1v1, 2 = Democracy, 3 = Oligarchy).
+     *  Existing groups migrate in as 0 (Anarchy), preserving historical behavior. */
+    @ColumnInfo(defaultValue = "0")
+    val groupTypeRawValue: Int = 0
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

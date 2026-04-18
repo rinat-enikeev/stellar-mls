@@ -4,7 +4,36 @@ package com.stellarmls.mls
 enum class SEPTier(val maxMembers: Int, val depth: Int, val id: Int) {
     SMALL(32, 5, 0),
     MEDIUM(256, 8, 1),
-    LARGE(2048, 11, 2)
+    LARGE(2048, 11, 2);
+
+    companion object {
+        fun fromId(id: Int): SEPTier = when (id) {
+            0 -> SMALL
+            1 -> MEDIUM
+            2 -> LARGE
+            else -> throw IllegalArgumentException("unknown SEPTier id: $id")
+        }
+    }
+}
+
+/** Governance type selected at group creation. Mirrors the `group_type`
+ *  u32 persisted in the contract's `CommitmentEntryV2`. See
+ *  `docs/group-governance-types-design.md`. */
+enum class SEPGroupType(val id: Int) {
+    ANARCHY(0),
+    ONE_ON_ONE(1),
+    DEMOCRACY(2),
+    OLIGARCHY(3);
+
+    companion object {
+        fun fromId(id: Int): SEPGroupType = when (id) {
+            0 -> ANARCHY
+            1 -> ONE_ON_ONE
+            2 -> DEMOCRACY
+            3 -> OLIGARCHY
+            else -> throw IllegalArgumentException("unknown SEPGroupType id: $id")
+        }
+    }
 }
 
 /** A group member's BLS12-381 compressed public key + Poseidon leaf hash. */
@@ -55,3 +84,32 @@ data class SEPUpdateProofBundle(
     val proof: ByteArray,
     val publicInputs: SEPUpdatePublicInputs
 )
+
+/** On-chain state returned by `get_state_v2` — extends the V1 entry with
+ *  governance-type metadata. Legacy groups are projected to `ANARCHY`
+ *  / `memberCount = 0` by the contract. */
+data class SEPCommitmentEntryV2(
+    val commitment: ByteArray,
+    val epoch: Long,
+    val timestamp: Long,
+    val tier: Int,
+    val active: Boolean,
+    val groupType: SEPGroupType,
+    val memberCount: Int
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is SEPCommitmentEntryV2) return false
+        return commitment.contentEquals(other.commitment) && epoch == other.epoch &&
+            timestamp == other.timestamp && tier == other.tier && active == other.active &&
+            groupType == other.groupType && memberCount == other.memberCount
+    }
+    override fun hashCode(): Int {
+        var h = commitment.contentHashCode()
+        h = 31 * h + epoch.hashCode()
+        h = 31 * h + tier
+        h = 31 * h + groupType.hashCode()
+        h = 31 * h + memberCount
+        return h
+    }
+}

@@ -23,6 +23,10 @@ final class PersistedGroup {
     var removedByPubkeyHex: String?
     var pushNotificationsEnabled: Bool
     var lastMessageAt: Date?
+    /// Governance type id. Optional so existing SwiftData stores migrate in
+    /// as `nil`, which we treat as `.anarchy` when projecting back to
+    /// `ChatGroup` (see `PersistenceStore.decryptGroup`).
+    var groupTypeRawValue: Int?
 
     init(
         id: String,
@@ -41,7 +45,8 @@ final class PersistedGroup {
         forkedAtEpoch: Int? = nil,
         removedByPubkeyHex: String? = nil,
         pushNotificationsEnabled: Bool = false,
-        lastMessageAt: Date? = nil
+        lastMessageAt: Date? = nil,
+        groupTypeRawValue: Int? = nil
     ) {
         self.id = id
         self.encryptedName = encryptedName
@@ -60,6 +65,7 @@ final class PersistedGroup {
         self.removedByPubkeyHex = removedByPubkeyHex
         self.pushNotificationsEnabled = pushNotificationsEnabled
         self.lastMessageAt = lastMessageAt
+        self.groupTypeRawValue = groupTypeRawValue
     }
 }
 

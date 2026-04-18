@@ -34,6 +34,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -56,6 +59,7 @@ import chat.onym.android.viewmodel.CreateGroupViewModel
 import chat.onym.android.viewmodel.GroupListViewModel
 import chat.onym.android.viewmodel.InvitationStatus
 import chat.onym.android.viewmodel.OnChainPublishStatus
+import com.stellarmls.mls.SEPGroupType
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -184,6 +188,45 @@ private fun InputContent(
 
     Spacer(modifier = Modifier.height(16.dp))
 
+    // Governance type picker
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "Governance Type",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            val governanceOptions = listOf(
+                SEPGroupType.ANARCHY to "Anarchy",
+                SEPGroupType.ONE_ON_ONE to "1v1",
+                SEPGroupType.DEMOCRACY to "Democracy",
+                SEPGroupType.OLIGARCHY to "Oligarchy"
+            )
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                governanceOptions.forEachIndexed { index, (type, label) ->
+                    SegmentedButton(
+                        selected = viewModel.groupType == type,
+                        onClick = { viewModel.setGroupType(type) },
+                        shape = SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = governanceOptions.size
+                        )
+                    ) {
+                        Text(label, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                governanceHelpText(viewModel.groupType),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+
+    Spacer(modifier = Modifier.height(16.dp))
+
     // Participants section
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -256,9 +299,13 @@ private fun InputContent(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
+                val slotsRemaining = when (viewModel.groupType) {
+                    SEPGroupType.ONE_ON_ONE -> (1 - viewModel.participantKeys.size).coerceAtLeast(0)
+                    else -> Int.MAX_VALUE
+                }
                 Button(
                     onClick = { viewModel.addParticipant(keyManager.keyAgreementPublicKeyHex) },
-                    enabled = viewModel.keyInput.trim().length == 64
+                    enabled = viewModel.keyInput.trim().length == 64 && slotsRemaining > 0
                 ) {
                     Text("Add Participant", style = MaterialTheme.typography.bodySmall)
                 }
@@ -284,7 +331,7 @@ private fun InputContent(
 
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                "Enter each participant's inbox key (found in their Settings \u2192 Advanced). Participants are optional.",
+                participantsHelpText(viewModel.groupType),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -305,6 +352,9 @@ private fun InputContent(
 
     Spacer(modifier = Modifier.height(16.dp))
 
+    val canSubmit = viewModel.groupName.isNotBlank() &&
+        (viewModel.groupType != SEPGroupType.ONE_ON_ONE || viewModel.participantKeys.size == 1)
+
     Button(
         onClick = {
             viewModel.startCreation(
@@ -315,13 +365,31 @@ private fun InputContent(
             )
         },
         modifier = Modifier.fillMaxWidth(),
-        enabled = viewModel.groupName.isNotBlank()
+        enabled = canSubmit
     ) {
         Text(
             if (viewModel.participantKeys.isNotEmpty()) "Create Group & Send Invitations"
             else "Create Group"
         )
     }
+}
+
+private fun governanceHelpText(type: SEPGroupType): String = when (type) {
+    SEPGroupType.ANARCHY ->
+        "Any current member can add or remove anyone. Fastest, lowest friction; no protection against a rogue member."
+    SEPGroupType.ONE_ON_ONE ->
+        "Exactly two participants. Membership is frozen after creation \u2014 no adds or removes. Either party can end the chat."
+    SEPGroupType.DEMOCRACY ->
+        "Adding or removing a member requires at least 50% of current members to vote yes. Ceremony-gated \u2014 updates are blocked until the Democracy VK is published."
+    SEPGroupType.OLIGARCHY ->
+        "You become the first admin. Any admin can promote/demote admins, invite members, or remove members. Ceremony-gated \u2014 updates are blocked until the Oligarchy VK is published."
+}
+
+private fun participantsHelpText(type: SEPGroupType): String = when (type) {
+    SEPGroupType.ONE_ON_ONE ->
+        "1v1 chats pair you with exactly one other participant. Add one inbox key to continue."
+    else ->
+        "Enter each participant's inbox key (found in their Settings \u2192 Advanced). Participants are optional."
 }
 
 @Composable

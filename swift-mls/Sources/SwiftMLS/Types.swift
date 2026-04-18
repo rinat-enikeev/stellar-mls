@@ -1,5 +1,15 @@
 import Foundation
 
+/// Governance type selected at group creation. Mirrors the `group_type`
+/// u32 persisted in the contract's `CommitmentEntryV2`. See
+/// `docs/group-governance-types-design.md`.
+public enum SEPGroupType: UInt32, Codable, CaseIterable, Sendable {
+    case anarchy = 0
+    case oneOnOne = 1
+    case democracy = 2
+    case oligarchy = 3
+}
+
 public enum SEPTier: Int, Codable, CaseIterable, Sendable {
     case small = 0
     case medium = 1
@@ -122,6 +132,47 @@ public struct SEPCommitmentEntry: Codable, Equatable, Sendable {
     }
 }
 
+/// On-chain state returned by `get_state_v2` — extends `SEPCommitmentEntry`
+/// with governance-type metadata. Legacy groups stored under V1 are
+/// projected to `groupType = .anarchy`, `memberCount = 0`.
+public struct SEPCommitmentEntryV2: Codable, Equatable, Sendable {
+    public let commitment: Data
+    public let epoch: UInt64
+    public let timestamp: UInt64
+    public let tier: UInt32
+    public let active: Bool
+    public let groupType: SEPGroupType
+    public let memberCount: UInt32
+
+    public init(
+        commitment: Data,
+        epoch: UInt64,
+        timestamp: UInt64,
+        tier: UInt32,
+        active: Bool,
+        groupType: SEPGroupType,
+        memberCount: UInt32
+    ) {
+        self.commitment = commitment
+        self.epoch = epoch
+        self.timestamp = timestamp
+        self.tier = tier
+        self.active = active
+        self.groupType = groupType
+        self.memberCount = memberCount
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case commitment
+        case epoch
+        case timestamp
+        case tier
+        case active
+        case groupType = "group_type"
+        case memberCount = "member_count"
+    }
+}
+
 public struct SEPCreateGroupRequest: Codable, Equatable, Sendable {
     public let caller: String
     public let groupID: Data
@@ -137,6 +188,98 @@ public struct SEPCreateGroupRequest: Codable, Equatable, Sendable {
         self.proof = proof
         self.publicInputs = publicInputs
         self.tier = tier
+    }
+}
+
+/// Payload for the `create_group_v2` contract entrypoint. Supports
+/// Anarchy (`groupType = .anarchy`), 1v1 (`groupType = .oneOnOne`), and
+/// Democracy (`groupType = .democracy`). Oligarchy creation uses the
+/// dedicated `SEPCreateOligarchyGroupRequest` because it seeds an extra
+/// admin root.
+public struct SEPCreateGroupV2Request: Codable, Equatable, Sendable {
+    public let caller: String
+    public let groupID: Data
+    public let commitment: Data
+    public let tier: UInt32
+    public let groupType: SEPGroupType
+    public let memberCount: UInt32
+    public let proof: Data
+    public let publicInputs: SEPPublicInputs
+
+    public init(
+        caller: String,
+        groupID: Data,
+        commitment: Data,
+        tier: UInt32,
+        groupType: SEPGroupType,
+        memberCount: UInt32,
+        proof: Data,
+        publicInputs: SEPPublicInputs
+    ) {
+        self.caller = caller
+        self.groupID = groupID
+        self.commitment = commitment
+        self.tier = tier
+        self.groupType = groupType
+        self.memberCount = memberCount
+        self.proof = proof
+        self.publicInputs = publicInputs
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case caller
+        case groupID = "group_id"
+        case commitment
+        case tier
+        case groupType = "group_type"
+        case memberCount = "member_count"
+        case proof
+        case publicInputs = "public_inputs"
+    }
+}
+
+/// Payload for the `create_oligarchy_group` contract entrypoint.
+/// `adminRoot` is the Poseidon-hashed commitment to the admin tree and
+/// is pinned at creation; later admin rotations are ceremony-gated.
+public struct SEPCreateOligarchyGroupRequest: Codable, Equatable, Sendable {
+    public let caller: String
+    public let groupID: Data
+    public let commitment: Data
+    public let tier: UInt32
+    public let memberCount: UInt32
+    public let adminRoot: Data
+    public let proof: Data
+    public let publicInputs: SEPPublicInputs
+
+    public init(
+        caller: String,
+        groupID: Data,
+        commitment: Data,
+        tier: UInt32,
+        memberCount: UInt32,
+        adminRoot: Data,
+        proof: Data,
+        publicInputs: SEPPublicInputs
+    ) {
+        self.caller = caller
+        self.groupID = groupID
+        self.commitment = commitment
+        self.tier = tier
+        self.memberCount = memberCount
+        self.adminRoot = adminRoot
+        self.proof = proof
+        self.publicInputs = publicInputs
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case caller
+        case groupID = "group_id"
+        case commitment
+        case tier
+        case memberCount = "member_count"
+        case adminRoot = "admin_root"
+        case proof
+        case publicInputs = "public_inputs"
     }
 }
 

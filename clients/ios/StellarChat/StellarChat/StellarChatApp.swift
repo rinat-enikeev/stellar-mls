@@ -566,7 +566,7 @@ final class AppState {
     }
 
     /// Create a group with the local user as the first member, computing the initial commitment.
-    func createGroup(name: String) throws -> (ChatGroup, String) {
+    func createGroup(name: String, groupType: SEPGroupType = .anarchy) throws -> (ChatGroup, String) {
         var groupIDBytes = [UInt8](repeating: 0, count: 32)
         _ = SecRandomCopyBytes(kSecRandomDefault, 32, &groupIDBytes)
         let groupID = Data(groupIDBytes)
@@ -579,6 +579,10 @@ final class AppState {
 
         let myLeaf = try keyManager.memberLeaf
 
+        // 1v1 groups are pinned to the small tier per contract rules
+        // (`create_group_v2` rejects any other tier with `Invalid1v1Tier`).
+        let tier: SEPTier = groupType == .oneOnOne ? .small : defaultGroupTier
+
         var group = ChatGroup(
             id: groupIDHex,
             name: name,
@@ -588,8 +592,9 @@ final class AppState {
             members: [myLeaf],
             epoch: 0,
             salt: SEPCommitmentBuilder.generateSalt(),
-            tier: defaultGroupTier
+            tier: tier
         )
+        group.groupType = groupType
         try group.recomputeCommitment()
         addGroup(group)
         captureEpochSnapshot(group: group, changeDescription: "Group created")
@@ -604,7 +609,8 @@ final class AppState {
             epoch: group.epoch,
             salt: group.salt,
             commitment: group.commitment,
-            tierRawValue: group.tier.rawValue
+            tierRawValue: group.tier.rawValue,
+            groupTypeRawValue: groupType.rawValue
         )
         return (group, code.encode())
     }

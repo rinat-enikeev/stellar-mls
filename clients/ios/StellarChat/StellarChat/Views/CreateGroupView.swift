@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftMLS
 
 struct CreateGroupView: View {
     @Environment(AppState.self) private var appState
@@ -6,6 +7,7 @@ struct CreateGroupView: View {
 
     // Input state
     @State private var groupName = ""
+    @State private var groupType: SEPGroupType = .anarchy
     @State private var participantKeys: [String] = []
     @State private var keyInput = ""
     @State private var showScanner = false
@@ -71,7 +73,7 @@ struct CreateGroupView: View {
                     switch phase {
                     case .input:
                         Button(participantKeys.isEmpty ? "Create" : "Create & Invite") { startCreation() }
-                            .disabled(groupName.trimmingCharacters(in: .whitespaces).isEmpty)
+                            .disabled(!canSubmit)
                     case .done:
                         Button("Done") {
                             if let groupID = createdGroup?.id {
@@ -104,6 +106,27 @@ struct CreateGroupView: View {
     private var inputSections: some View {
         Section("Group Name") {
             TextField("e.g. Team Alpha", text: $groupName)
+        }
+
+        Section {
+            Picker("Governance", selection: $groupType) {
+                Text("Anarchy").tag(SEPGroupType.anarchy)
+                Text("1v1").tag(SEPGroupType.oneOnOne)
+                Text("Democracy").tag(SEPGroupType.democracy)
+                Text("Oligarchy").tag(SEPGroupType.oligarchy)
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: groupType) { _, newValue in
+                // 1v1 allows exactly one other participant.
+                if newValue == .oneOnOne, participantKeys.count > 1 {
+                    participantKeys = Array(participantKeys.prefix(1))
+                }
+            }
+            Text(governanceHelpText)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("Governance Type")
         }
 
         Section {
@@ -144,7 +167,7 @@ struct CreateGroupView: View {
             }
 
             Button("Add Participant") { addParticipant() }
-                .disabled(!isValidKey(keyInput))
+                .disabled(!isValidKey(keyInput) || participantSlotsRemaining == 0)
 
             if let keyValidationError {
                 Text(keyValidationError)
@@ -152,7 +175,7 @@ struct CreateGroupView: View {
                     .foregroundStyle(.red)
             }
 
-            Text("Enter each participant's inbox key (found in their Settings → Advanced). Participants are optional — you can invite members later.")
+            Text(participantsHelpText)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         } header: {
@@ -345,6 +368,46 @@ struct CreateGroupView: View {
         }
     }
 
+    private var participantsHelpText: String {
+        switch groupType {
+        case .oneOnOne:
+            return "1v1 chats pair you with exactly one other participant. Add one inbox key to continue."
+        default:
+            return "Enter each participant's inbox key (found in their Settings → Advanced). Participants are optional — you can invite members later."
+        }
+    }
+
+    private var governanceHelpText: String {
+        switch groupType {
+        case .anarchy:
+            return "Any current member can add or remove anyone. Fastest, lowest friction; no protection against a rogue member."
+        case .oneOnOne:
+            return "Exactly two participants. Membership is frozen after creation — no adds or removes. Either party can end the chat."
+        case .democracy:
+            return "Adding or removing a member requires at least 50% of current members to vote yes. Ceremony-gated — updates are blocked until the Democracy VK is published."
+        case .oligarchy:
+            return "You become the first admin. Any admin can promote/demote admins, invite members, or remove members. Ceremony-gated — updates are blocked until the Oligarchy VK is published."
+        }
+    }
+
+    /// How many more participants we can accept before hitting the
+    /// governance-type cap. `nil` → unbounded (the tier size is the real
+    /// limit and is enforced elsewhere).
+    private var participantSlotsRemaining: Int {
+        switch groupType {
+        case .oneOnOne:
+            return max(0, 1 - participantKeys.count)
+        default:
+            return Int.max
+        }
+    }
+
+    private var canSubmit: Bool {
+        guard !groupName.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        if groupType == .oneOnOne, participantKeys.count != 1 { return false }
+        return true
+    }
+
     private func isValidKey(_ key: String) -> Bool {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.count == 64 && trimmed.allSatisfy { $0.isHexDigit }
@@ -386,7 +449,7 @@ struct CreateGroupView: View {
 
         Task {
             do {
-                let (group, code) = try appState.createGroup(name: sanitizedName)
+                let (group, code) = try appState.createGroup(name: sanitizedName, groupType: groupType)
                 createdGroup = group
                 inviteCode = code
 

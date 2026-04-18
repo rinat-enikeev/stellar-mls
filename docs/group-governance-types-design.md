@@ -29,7 +29,9 @@ creation — that extends the contract with four configurable governance models:
 
 1. **Anarchy** — the existing permissive policy; any member may Commit any change.
 2. **1v1** — exactly two participants, no subsequent membership changes.
-3. **Democracy** — a Commit requires a proof carrying ≥ ⌈n/2⌉ member co-openings.
+3. **Democracy** — a Commit requires a proof carrying co-openings from at least half
+   of the current members (the exact threshold is `2·K ≥ n`, i.e. ≥50%; see §6.1 for
+   why this is *≥50%* and not *strict majority*).
 4. **Oligarchy** — a Commit requires a proof that the submitter belongs to a per-group
    admin set, disjointly tracked on-chain as a second commitment.
 
@@ -133,8 +135,10 @@ and §8 of this document.
   produces a new commitment.
 - **member tree** — the Poseidon Merkle tree whose root feeds the group commitment.
 - **admin tree** (Oligarchy only) — a second Poseidon Merkle tree of admin BLS public
-  keys, disjoint from the member tree in structure but overlapping in membership. An
-  admin is always also a member.
+  keys, disjoint from the member tree in structure. An admin **SHOULD** also be a
+  member; this is a client-enforced convention (the UI only surfaces "Promote" on
+  current members), not a circuit-enforced invariant. See §6.4.4 and §8 T10 for the
+  rationale and residual risk.
 - **ballot** — in Democracy, the off-chain object collecting co-openings over a
   proposed `c_new`.
 - **coordinator** — in Democracy, any group member who aggregates a ballot and
@@ -154,26 +158,44 @@ Let `n` denote the current member count of a group at the pre-transition epoch.
 old member tree. No other authorisation is required.
 
 **1v1 (`group_type = 1`).** A 1v1 group **MUST** be created with `tier = 0` and with
-exactly 2 leaves in the founding member tree. After creation, `update_commitment`
-**MUST** return a new error `OneOnOneImmutable (17)`. The only state transitions
-permitted are `deactivate_group` (by either member) and `bump_group_ttl` (permissionless).
-Either participant leaving the group is equivalent to `deactivate_group`.
+exactly 2 leaves in the founding member tree. `create_group_v2` **MUST** reject any
+1v1 creation with `tier != 0` and return `Invalid1v1Tier` (see §6.3.1). After
+creation, `update_commitment` **MUST** return `OneOnOneImmutable (17)`. The only state
+transitions permitted are `deactivate_group` (by either member) and `bump_group_ttl`
+(permissionless). Either participant leaving the group is equivalent to
+`deactivate_group`.
 
-**Democracy (`group_type = 2`).** A Commit **MUST** be accompanied by a
-`DemocracyUpdateCircuit` proof that, in addition to the standard binding of
-`(c_old, epoch_old, c_new)`, proves:
+**Democracy (`group_type = 2`).** A Democracy group persists an additional scalar on
+chain: `member_count: u32`, stored as a field of `CommitmentEntryV2` (§6.2.1). This
+value is **authoritative** — the contract validates any caller-supplied
+`member_count_old` against the stored value before invoking the Groth16 verifier, and
+stores an updated `member_count_new` on success.
+
+A Commit **MUST** be accompanied by a `DemocracyUpdateCircuit` proof that binds
+`(c_old, epoch_old, c_new, member_count_old, member_count_new)` and proves:
 
 1. the prover knows `K` distinct secret keys of leaves in the old member tree;
-2. `2·K ≥ n`;
-3. `n` equals the public input `member_count_old`, itself bound to `c_old`.
+2. `K ≥ 1`;
+3. `2·K ≥ member_count_old`;
+4. the new tree differs from the old tree by at most one leaf (i.e.
+   `|member_count_new − member_count_old| ≤ 1`), enforced in-circuit by counting
+   differing Merkle-path siblings.
 
-The value of `n` is not stored on-chain today; it is made available to the circuit as
-a public input and bound to `c_old` by a commitment extension defined in §6.4.3.
+Before verifying the proof the contract **MUST** check:
+
+- `extra.member_count_old == stored.member_count` (else `MemberCountMismatch`);
+- `extra.member_count_new ∈ {m − 1, m, m + 1}` where `m = stored.member_count`
+  (redundant-but-defensive; the circuit also enforces this).
+
+On success the contract stores `member_count = member_count_new` in the new
+`CommitmentEntryV2` record. This construction closes the quorum-bypass gap described
+in §8 T6: a malicious coordinator cannot lie about `n` because the contract overrides
+any caller-supplied value with its authoritative on-chain record.
 
 **Oligarchy (`group_type = 3`).** At `create_group_v2`, the founder **MUST** supply an
-`admin_root: BytesN<32>` — a Poseidon commitment over a tree containing at least the
-founder's BLS pubkey. The contract persists this under `DataKey::AdminSet(group_id)`.
-Two state transitions gate on admin status:
+`admin_root: BytesN<32>` — a salted Poseidon commitment over a tree containing at
+least the founder's BLS pubkey (exact encoding in §6.2.2). The contract persists this
+under `DataKey::AdminSet(group_id)`. Two state transitions gate on admin status:
 
 - **Member ops.** `update_commitment` **MUST** carry an `OligarchyUpdateCircuit` proof
   that binds `(c_old, epoch_old, c_new, admin_root_old)` and proves the prover knows a
@@ -184,10 +206,12 @@ Two state transitions gate on admin status:
   admin. The admin tree has its own monotonic epoch (`admin_epoch`), salt, and history
   window, disjoint from the member tree's.
 
-Non-admin members **MAY NOT** call `update_commitment` or `update_admin_set`. If all
-admins leave (via the admin rotation circuit), the group enters a **frozen** state:
-messaging still works (off-chain), but no further member or admin changes are possible.
-Deactivation remains available to any current admin.
+Non-admin members **MAY NOT** call `update_commitment` or `update_admin_set`.
+`deactivate_group`, by contrast, remains callable by **any current member** (not only
+admins) — this is a deliberate safety valve to guarantee forward progress if the
+admin set becomes empty or captured. See §8 T8. If all admins leave via the admin
+rotation circuit, the group enters a **frozen** state for membership/admin changes;
+messaging still works (off-chain) and deactivation remains available to any member.
 
 ### 6.2 On-chain data model
 
@@ -201,9 +225,16 @@ pub struct CommitmentEntryV2 {
     pub timestamp: u64,
     pub tier: u32,
     pub active: bool,
-    pub group_type: u32, // 0 Anarchy, 1 OneOnOne, 2 Democracy, 3 Oligarchy
+    pub group_type: u32,    // 0 Anarchy, 1 OneOnOne, 2 Democracy, 3 Oligarchy
+    pub member_count: u32,  // authoritative n (used by Democracy; informational otherwise)
 }
 ```
+
+`member_count` is the count of non-zero leaves in the member tree at this epoch. It
+is written by `create_group_v2` and updated by every successful `update_commitment`.
+For Anarchy and Oligarchy the field is informational; for Democracy it is
+load-bearing (see §6.1). For 1v1 it is always `2`. Clients **SHOULD** cross-check it
+against their local view as a sanity guard.
 
 The legacy `CommitmentEntry` stays defined for migration reads; writes always produce
 `CommitmentEntryV2`.
@@ -215,18 +246,45 @@ pub enum DataKey {
     // ... existing variants unchanged ...
     GroupV2(BytesN<32>),                    // -> CommitmentEntryV2
     HistoryV2(BytesN<32>),                  // -> Vec<CommitmentEntryV2>
-    AdminSet(BytesN<32>),                   // -> BytesN<32>   (admin Poseidon root)
+    AdminSet(BytesN<32>),                   // -> BytesN<32>   (salted admin commitment)
     AdminEpoch(BytesN<32>),                 // -> u64
     AdminHistory(BytesN<32>),               // -> Vec<AdminEntry>
     UpdateVKByType(u32 /*tier*/, u32 /*group_type*/), // -> VerificationKeyData
-    AdminUpdateVK(u32 /*tier*/),            // -> VerificationKeyData
-    OneOnOneCreateVK,                        // -> VerificationKeyData (tier 0 only)
+    AdminUpdateVK,                          // -> VerificationKeyData (fixed tier 0)
+    OneOnOneCreateVK,                       // -> VerificationKeyData (fixed tier 0)
 }
 ```
 
-Legacy `Group(id)` and `History(id)` remain. Reads try V2 first, fall back to legacy and
-synthesise `group_type = 0`. The first state-changing operation on a legacy group
-lazily upgrades the record to V2; history entries are **not** rewritten.
+**AdminSet encoding.** The 32-byte value stored under `AdminSet(group_id)` is a
+*salted commitment* that mirrors the member commitment formula, not a bare Merkle
+root:
+
+```
+admin_commitment = Poseidon( Poseidon(admin_root, admin_epoch), admin_salt )
+```
+
+This matches the member commitment shape (`c = Poseidon(Poseidon(root, epoch), salt)`)
+and keeps the `AdminUpdateCircuit` shape-identical to `UpdateCircuit`. `admin_salt`
+is distributed by the creator to admins through the existing per-member X25519 inbox
+(see `docs/secure-member-removal-design.md`); it is never on-chain.
+
+**Admin tree tier.** The admin tree uses a **fixed tier-0 depth (5, capacity 32
+admins)** regardless of the member tier. Admin sets are expected to be much smaller
+than member sets; locking tier 0 avoids wasted constraints and collapses the four
+admin-update ceremonies (per member tier) into one. If larger admin sets are needed
+in future, a follow-up revision can introduce `AdminUpdateVK(tier)` and keyed
+circuits — deliberately deferred.
+
+**Lazy upgrade race.** Reads try `GroupV2(id)` first and fall back to legacy
+`Group(id)`, synthesising `group_type = 0` and `member_count` from the local member
+list. Writes **MUST** check `GroupV2(id)` first and fall back to legacy `Group(id)`
+only if V2 is absent. On successful write the entry **MUST** be stored under
+`GroupV2(id)` and the legacy `Group(id)` entry removed atomically in the same
+transaction. Two concurrent state-changing transactions on the same legacy group
+still cannot race because Soroban serialises contract invocations on a given
+contract/key pair; the second transaction sees the V2 entry written by the first.
+History entries under `History(id)` are **not** rewritten (they are read-only
+archives).
 
 #### 6.2.3 `AdminEntry`
 
@@ -253,6 +311,7 @@ pub fn create_group_v2(
     commitment: BytesN<32>,
     tier: u32,
     group_type: u32,
+    member_count: u32,                    // founding member count
     admin_root: Option<BytesN<32>>,       // Some(_) iff group_type == 3
     proof: Groth16Proof,
     public_inputs: PublicInputs,          // membership proof at epoch 0
@@ -284,13 +343,34 @@ where `GovernancePublicInputs` is:
 ```rust
 #[contracttype]
 pub enum GovernancePublicInputs {
-    Democracy { member_count_old: u32 },
-    Oligarchy { admin_root_old: BytesN<32> }, // MUST equal AdminSet(group_id)
+    Democracy {
+        member_count_old: u32, // MUST equal stored.member_count
+        member_count_new: u32, // stored on success; circuit-bound to c_new
+    },
+    Oligarchy {
+        admin_root_old: BytesN<32>, // MUST equal AdminSet(group_id)
+    },
 }
 ```
 
-For Anarchy, `extra = None` (wire-compatible with today's clients that call the legacy
-`update_commitment`). For 1v1, the function returns `OneOnOneImmutable` unconditionally.
+For Anarchy, `extra = None` (wire-compatible with today's clients that call the
+legacy `update_commitment`). For 1v1, the function returns `OneOnOneImmutable`
+unconditionally.
+
+**Why `admin_root_old` is passed by the caller even though the contract could read it
+from storage.** The `admin_root_old` is a **Groth16 public input** bound by the
+Oligarchy circuit to the rest of the proof. It **must** be presented to the
+verifier, and that value is what the caller packages into `GovernancePublicInputs`.
+The contract additionally validates `extra.admin_root_old == AdminSet(group_id)` as
+defence-in-depth — this guarantees the verified proof was bound to the *current*
+admin set, not some historical one. Without the mismatch check, a caller could
+replay an old-epoch proof against a still-accepted old admin root. The apparent
+redundancy is intentional belt-and-braces.
+
+Democracy's `member_count_old` is handled differently: the contract **overrides** any
+caller-supplied value with the stored authoritative count before passing it to the
+verifier (and rejects mismatches with `MemberCountMismatch`). This is what closes
+the quorum-bypass gap — the caller cannot influence the value the circuit sees.
 
 #### 6.3.1 New error codes
 
@@ -301,6 +381,9 @@ MissingAdminRoot      = 19, // create_group_v2 with group_type == 3 and admin_ro
 AdminRootMismatch     = 20, // Oligarchy extra.admin_root_old != storage
 DemocracyInputMissing = 21, // group_type == 2 and extra != Some(Democracy{..})
 NotAdmin              = 22, // update_admin_set proof fails admin membership
+Invalid1v1Tier        = 23, // create_group_v2 with group_type == 1 and tier != 0
+MemberCountMismatch   = 24, // Democracy extra.member_count_old != stored.member_count
+MemberCountOutOfRange = 25, // Democracy extra.member_count_new outside {m-1, m, m+1}
 ```
 
 #### 6.3.2 Events
@@ -343,24 +426,34 @@ uncompressed. Verification cost remains 3 BLS12-381 pairings per proof.
 
 #### 6.4.2 `DemocracyUpdateCircuit`
 
-- **Purpose:** prove that a Commit is authorised by ≥ ⌈n/2⌉ member openings.
+- **Purpose:** prove that a Commit is authorised by at least half of the current
+  members, for an authoritative `n` pinned on-chain.
 - **Tier × K_max matrix:** compiled per tier and per maximum signer count `K_max`.
   v1 ships `(tier=0, K_max=32)` and `(tier=1, K_max=256)`; tier 2 is deferred.
-- **Public inputs:** `c_old`, `epoch_old`, `c_new`, `member_count_old`.
+- **Public inputs:** `c_old`, `epoch_old`, `c_new`, `member_count_old`,
+  `member_count_new`.
 - **Witnesses:** ordered list of `K` tuples `(sk_i, merkle_path_i, leaf_idx_i)` for
-  `K ≤ K_max`; `root_old`, `root_new`, `salt_old`, `salt_new`.
+  `1 ≤ K ≤ K_max`; `root_old`, `root_new`, `salt_old`, `salt_new`; delta witness
+  identifying the single leaf position changed between `root_old` and `root_new`.
 - **Key constraints:**
-  1. For each `i ∈ [0, K)`, `Poseidon(sk_i)` opens to `root_old` along `merkle_path_i`
-     at `leaf_idx_i`.
-  2. Indices `leaf_idx_0 < leaf_idx_1 < … < leaf_idx_{K-1}` (strict ascending, gives
+  1. `K ≥ 1` (no zero-opening Commits even if `member_count_old = 0`).
+  2. For each `i ∈ [0, K)`, `Poseidon(sk_i)` opens to `root_old` along
+     `merkle_path_i` at `leaf_idx_i`.
+  3. Indices `leaf_idx_0 < leaf_idx_1 < … < leaf_idx_{K-1}` (strict ascending, gives
      distinctness for free).
-  3. `2 · K ≥ member_count_old`.
-  4. `member_count_old ≤ 2^tier_depth` (sanity).
-  5. `c_old = Poseidon(Poseidon(root_old, epoch_old), salt_old)` — reuses the
+  4. `2 · K ≥ member_count_old` (the ≥50% threshold).
+  5. `member_count_old ≤ 2^tier_depth` and `member_count_new ≤ 2^tier_depth`.
+  6. `|member_count_new − member_count_old| ≤ 1` — exactly one leaf position differs
+     between `root_old` and `root_new`, and the leaf-change pattern (zero→nonzero,
+     nonzero→zero, or nonzero→nonzero) matches the count delta.
+  7. `c_old = Poseidon(Poseidon(root_old, epoch_old), salt_old)` — reuses the
      existing commitment gadget.
-  6. `c_new = Poseidon(Poseidon(root_new, epoch_old + 1), salt_new)`.
-  7. `member_count_old` is not itself bound to `c_old` in v1 (acceptable leakage; see
-     §8). A follow-up revision may include `n` inside the commitment.
+  8. `c_new = Poseidon(Poseidon(root_new, epoch_old + 1), salt_new)`.
+- **Authoritative `n` binding.** `member_count_old` is **not** bound cryptographically
+  to `c_old`. Instead, soundness is provided by the contract pre-check
+  `extra.member_count_old == stored.member_count` (§6.1, §6.3). The contract is the
+  source of truth; the caller cannot influence the verifier input. `member_count_new`
+  is circuit-bound to `c_new` via constraint 6 and is stored on success.
 - **Storage:** `DataKey::UpdateVKByType(tier, 2)`. Multiple `K_max` variants are
   discriminated by the leading byte of the proof envelope, not by separate DataKey
   variants — v1 ships one `K_max` per tier to avoid complexity.
@@ -386,10 +479,24 @@ uncompressed. Verification cost remains 3 BLS12-381 pairings per proof.
 
 Shape-identical to the existing `UpdateCircuit`, but over the admin tree:
 
-- **Public inputs:** `admin_root_old`, `admin_epoch_old`, `admin_root_new`.
+- **Public inputs:** `admin_c_old`, `admin_epoch_old`, `admin_c_new` (the *salted*
+  admin commitments, not bare Merkle roots — see §6.2.2).
 - **Constraints:** identical to `UpdateCircuit` with tree variables rebound to the
-  admin tree.
-- **Storage:** `DataKey::AdminUpdateVK(tier)`.
+  admin tree; binds `admin_c_old = Poseidon(Poseidon(admin_root_old, admin_epoch_old),
+  admin_salt_old)` and similarly for the new admin commitment.
+- **Admin ∈ Member invariant (intentionally *not* circuit-enforced).** The circuit
+  proves only that the prover is in the admin tree; it does **not** cross-check the
+  member tree. A client could therefore rotate the admin set to include a pubkey
+  that is not in the member tree. The resulting non-member admin can further rotate
+  the admin set but *cannot* produce an `OligarchyUpdateCircuit` proof (constraint 2
+  of §6.4.3 demands member-tree membership). The worst-case damage is confined to
+  admin-set churn; no member-level authority leaks. Enforcing the invariant in-
+  circuit would require threading the member root into `AdminUpdateCircuit` public
+  inputs, roughly doubling its constraint count. v1 treats this as a client-enforced
+  convention (iOS/Android UIs only surface "Promote" for current members); §8 T10
+  documents the residual risk.
+- **Storage:** `DataKey::AdminUpdateVK` (a single VK, tier 0 fixed; see §6.2.2 admin
+  tree tier note).
 
 ### 6.5 Invite flow (off-chain, unchanged transport)
 
@@ -439,9 +546,10 @@ Democracy Commits rely on off-chain co-opening collection. The protocol:
 - Ballots are identified off-chain by `ballot_id = SHA256(group_id ‖ c_old ‖ c_new)`.
   This prevents double-voting on the same proposal.
 - Members co-open by revealing their Poseidon leaf and a fresh signature over
-  `ballot_id`. This is a minor identity leak *within* the group (other members now know
-  who voted) but **not** on-chain. Leakage inside an encrypted group channel is
-  acceptable and matches user expectations for democratic voting.
+  `ballot_id`. This exposes voter identity *within* the group and makes votes on
+  successive ballots linkable for as long as a member's leaf is stable. It is **not**
+  on-chain leakage. See §8 T11 for the full treatment; clients **SHOULD** surface a
+  one-time notice to users that other members can see how they voted.
 - Ballots **SHOULD** have a client-configured TTL (default 24 hours); expired ballots
   are discarded locally.
 
@@ -478,7 +586,9 @@ recipient. Oligarchy selection marks the creator as the sole initial admin.
 and `removeMember(_:)` at ≈line 403) gains a per-type conditional:
 
 - Anarchy: unchanged. Tap-to-kick on any row.
-- 1v1: no kick affordance. A "Leave & Close" button replaces it.
+- 1v1: no kick affordance. A "Close Conversation" button replaces it (semantically
+  calls `deactivate_group` — "leave" is a misnomer since deactivation freezes the
+  group for both participants).
 - Democracy: tap-to-propose-kick opens a ballot composer. Pending ballots appear in a
   new `PendingBallotsView.swift`.
 - Oligarchy: admin badge next to admin rows; "Promote" / "Demote" buttons visible only
@@ -562,6 +672,8 @@ Extend the test module in `contracts/sep-xxxx/src/lib.rs` and the test snapshots
 **1v1.**
 - `test_1v1_create_success` — tier 0, exactly 2 leaves, proof via `OneOnOneCreateCircuit`.
 - `test_1v1_create_reject_3_leaves` — expect `InvalidProof`.
+- `test_1v1_create_reject_tier_nonzero` — tier 1 or 2 with `group_type = 1` returns
+  `Invalid1v1Tier`.
 - `test_1v1_update_rejected` — `update_commitment` on 1v1 group returns
   `OneOnOneImmutable`.
 - `test_1v1_deactivate_success` — either member can deactivate.
@@ -569,11 +681,22 @@ Extend the test module in `contracts/sep-xxxx/src/lib.rs` and the test snapshots
 **Democracy.**
 - `test_democracy_majority_accepts` — n=5, K=3, success.
 - `test_democracy_sub_majority_rejects` — n=5, K=2, `InvalidProof`.
+- `test_democracy_single_opening_rejects_when_n_large` — n=100, K=1, `InvalidProof`
+  (regression against the member-count-spoofing vulnerability).
 - `test_democracy_duplicate_vote_rejects` — K=3 but two paths to same leaf,
   `InvalidProof` (strict-ascending gadget catches this).
 - `test_democracy_even_boundary` — n=4, K=2 accepts (2·2 ≥ 4).
-- `test_democracy_member_count_mismatch` — `member_count_old` passed is wrong, circuit
-  rejects.
+- `test_democracy_member_count_spoofing_rejected` — caller passes
+  `extra.member_count_old = 2` when stored is `100`; contract rejects with
+  `MemberCountMismatch` before proof verification.
+- `test_democracy_member_count_new_out_of_range` — caller passes
+  `member_count_new = stored + 5`; contract rejects with `MemberCountOutOfRange`.
+- `test_democracy_member_count_one` — n=1, K=1 accepts (edge case; degenerate but
+  valid since `2·1 ≥ 1` and `K ≥ 1`).
+- `test_democracy_zero_opening_rejected` — K=0 with spoofed `member_count_old = 0`
+  rejected by the `K ≥ 1` constraint even if the contract pre-check passes.
+- `test_democracy_stored_count_tracks` — successive adds and removes: stored
+  `member_count` reflects each ±1 change across epochs.
 
 **Oligarchy.**
 - `test_oligarchy_create_requires_admin_root` — `group_type=3` with `admin_root=None`
@@ -587,13 +710,23 @@ Extend the test module in `contracts/sep-xxxx/src/lib.rs` and the test snapshots
   `update_admin_set`.
 - `test_oligarchy_frozen_after_all_admins_leave` — admin set rotated to empty-like
   state, subsequent `update_commitment` and `update_admin_set` fail.
+- `test_oligarchy_deactivate_by_any_member` — non-admin member calls
+  `deactivate_group`; succeeds (§6.1 safety valve).
 
-**Migration & replay.** All new proof types participate in the `UsedProof` replay
-tracking at `lib.rs:819-842`.
+**Dispatch & migration.**
+- `test_unknown_group_type_rejected` — `create_group_v2(group_type = 99)` returns
+  `UnknownGroupType`.
+- `test_legacy_lazy_upgrade_on_write` — write path correctly produces a `GroupV2`
+  record and removes the legacy entry.
+- `test_v2_precedence_on_concurrent_upgrade` — sequential V2-write then legacy-read
+  returns V2 data (no fallback shadowing).
+
+**Replay.** All new proof types participate in the `UsedProof` replay tracking at
+`lib.rs:824,836-838`.
 
 ### 7.2 Cross-platform test vectors
 
-Extend `/Users/programyzer/Developer/stellar-mls/docs/cross-platform-test-vectors.json`
+Extend `docs/cross-platform-test-vectors.json`
 with per-type vectors so iOS (Swift) and Android (Kotlin) reach bit-identical commitments
 and proofs. Vectors MUST cover:
 
@@ -650,11 +783,22 @@ admin circuit. A follow-up revision **MAY** introduce threshold-admin rules insi
 (`contracts/sep-xxxx/src/lib.rs:824,836-838`); replay is prevented identically to
 today's `UpdateCircuit`.
 
-**T6 — Member-count leakage (Democracy).** `member_count_old` is a public input on
-`DemocracyUpdateCircuit`. An observer who watches Democracy Commits learns the exact
-member count at each transition. The tier already leaks an upper bound; exact-count
-leakage is an additional but bounded concession. Out-of-scope for v1; a follow-up
-revision may bind `n` into the commitment.
+**T6 — Member-count integrity (Democracy, quorum-bypass class).** If the value of
+`n` used by the Democracy circuit were caller-supplied and unverified, a single
+member could spoof `member_count_old = 2` in an `n = 100` group and satisfy
+`2·K ≥ member_count_old` with a lone co-opening — trivially collapsing Democracy to
+Anarchy. **Mitigation (specified, not deferred):** `member_count` is stored on-chain
+in `CommitmentEntryV2`, written by `create_group_v2`, updated on every successful
+`update_commitment`, and **overridden** by the contract before proof verification
+(§6.1, §6.3). Any caller-supplied mismatch is rejected with `MemberCountMismatch`
+before any pairing check runs. Combined with the in-circuit `K ≥ 1` constraint
+(§6.4.2), a quorum-bypass by count spoofing is impossible.
+
+**Residual privacy leak.** The stored `member_count` is plaintext on chain; an
+observer reads the exact count at every Democracy transition. The tier already
+leaks an upper bound, so exact-count disclosure is a bounded additional concession.
+Binding `n` inside the commitment formula (as a privacy hardening — not a
+correctness fix) is tracked in §10 as a follow-up.
 
 **T7 — 1v1 count leak.** A 1v1 group is detectable as such from its `group_type`
 tag. This is semantic (the fact it's a 1v1 is the feature); no privacy loss beyond
@@ -672,6 +816,27 @@ attempt to route a pre-V2 anarchy group through the new dispatcher with spoofed
 on-chain storage (`CommitmentEntryV2.group_type` or synthesised `0` for legacy); the
 caller's `extra` input is only used for extension public inputs, not for type
 selection.
+
+**T10 — Non-member admin in Oligarchy.** Because `AdminUpdateCircuit` does not
+cross-check the member tree (§6.4.4), a malicious admin could rotate the admin set
+to include a BLS pubkey that is not a current member. The resulting "ghost admin"
+can further rotate the admin set (admin-tree membership alone is sufficient for
+`update_admin_set`) but **cannot** produce a valid `OligarchyUpdateCircuit` proof
+(which demands member-tree membership too) and therefore cannot modify the member
+set. Damage is confined to admin-set churn. **Mitigation:** iOS and Android
+`GroupInfoView.swift` surface the "Promote" affordance only on current members; a
+server-side linter could also validate admin-tree transitions against the latest
+member tree post-Commit. A future revision **MAY** enforce admin ∈ member inside
+the circuit at the cost of ~2× constraint count.
+
+**T11 — Democracy voter linkability within group.** The co-opening protocol (§6.6)
+reveals each voter's Poseidon leaf to the coordinator and to any member who ingests
+the ballot payload. Because a member's leaf is stable across epochs (until they
+rotate keys), a member's vote on ballot *X* is cryptographically linkable to their
+vote on ballot *Y*. This is leakage *within* the encrypted group channel — no
+external observer learns anything — and is consistent with how physical group votes
+work. Clients **SHOULD** document this to users ("others in the group can see how
+you voted"). No on-chain leak.
 
 ---
 

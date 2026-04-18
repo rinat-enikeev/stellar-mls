@@ -111,7 +111,9 @@ echo "==> work dir: $WORK"
 trap 'cleanup_kc; rm -rf "$WORK"' EXIT
 
 SRC_DIR="$SCRIPT_DIR/Sources/CeremonyTool"
-mapfile -t SRCS < <(find "$SRC_DIR" -name '*.swift' | sort)
+# macOS ships bash 3.2; mapfile/readarray is bash 4+. Use a portable loop.
+SRCS=()
+while IFS= read -r f; do SRCS+=("$f"); done < <(find "$SRC_DIR" -name '*.swift' | sort)
 echo "==> sources:"
 printf '    %s\n' "${SRCS[@]}"
 

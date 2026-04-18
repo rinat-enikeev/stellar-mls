@@ -248,7 +248,12 @@ pub async fn downloads(State(state): State<SharedState>) -> impl IntoResponse {
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
         .unwrap_or(fallback);
-    Json(body)
+    // no-store so the browser can't cache a pre-release empty response and
+    // keep showing "No release yet" after the manifest is installed.
+    (
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(body),
+    )
 }
 
 fn build_snapshot(state: &SharedState) -> StatusSnapshot {

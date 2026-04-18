@@ -31,9 +31,15 @@ is updated to point at them).
 
 ### SSH credentials (`sshPassword` type, works with key auth too)
 
-- **host** — container hostname on the `orchestration` Docker network.
-  `qa-agent` and `release-agent` exactly as in `docker-compose.dev.yml`.
-- **port** — always `22` (sshd inside the container).
+- **host** — `127.0.0.1`. Each agent's sshd is published on the host's
+  loopback by `docker-compose.dev.yml` (`127.0.0.1:2201:22` for qa,
+  `127.0.0.1:2202:22` for release). For this to resolve from inside the
+  n8n container, n8n must share the host's loopback — run the n8n
+  service with `network_mode: host` (or swap `host` for
+  `host.docker.internal` on Docker Desktop). The bridge-network route
+  via `qa-agent` / `release-agent` DNS names is no longer used.
+- **port** — `2201` for qa-agent, `2202` for release-agent (the host
+  ports published in `docker-compose.dev.yml`).
 - **username** — always `agent`.
 - **privateKey** — OpenSSH-format private key whose public half lives in
   `qa.env` / `release.env` as `N8N_SSH_PUBKEY`. Generate once:

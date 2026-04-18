@@ -2,8 +2,8 @@
   "name": "qa-agent SSH",
   "type": "sshPassword",
   "data": {
-    "host": "qa-agent",
-    "port": 22,
+    "host": "127.0.0.1",
+    "port": 2201,
     "username": "agent",
     "privateKey": "-----BEGIN OPENSSH PRIVATE KEY-----\nPASTE-PRIVATE-KEY-HERE\n-----END OPENSSH PRIVATE KEY-----\n",
     "passphrase": ""

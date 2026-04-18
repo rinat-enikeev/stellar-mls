@@ -73,10 +73,10 @@ DESIRED+=("pr-merge                  issue_comment")
 echo "==> fetching existing webhooks from $REPO"
 gh api "repos/$REPO/hooks" --paginate > /tmp/gh-hooks.json
 
-summarize_hook() {
-    jq -r --arg url "$1" \
-        '.[] | select(.config.url == $url)
-             | "id=\(.id) active=\(.active) events=\(.events | join(","))"' \
+summarize_hook_by_id() {
+    jq -r --argjson id "$1" \
+        '.[] | select(.id == $id)
+             | "id=\(.id) url=\(.config.url) events=\(.events | join(","))"' \
         /tmp/gh-hooks.json
 }
 
@@ -90,11 +90,15 @@ for line in "${DESIRED[@]}"; do
     EVENTS_JSON="$(printf '%s\n' "${EVENTS[@]}" | jq -Rs \
         'split("\n") | map(select(length > 0))')"
 
-    EXISTING_ID="$(jq -r --arg url "$URL" \
-        '.[] | select(.config.url == $url) | .id' /tmp/gh-hooks.json)"
+    # Match by /webhook/<path> suffix so changing the base URL still
+    # finds the existing hook and updates it in place (rather than
+    # leaking a new hook alongside a stale one).
+    EXISTING_ID="$(jq -r --arg suffix "/webhook/$PATH_SEG" \
+        '[.[] | select(.config.url | endswith($suffix)) | .id] | .[0] // empty' \
+        /tmp/gh-hooks.json)"
 
     if [ -z "$EXISTING_ID" ]; then
-        echo "==> creating   $PATH_SEG  (${EVENTS[*]})"
+        echo "==> creating   $PATH_SEG  →  $URL"
         BODY=$(jq -n --arg url "$URL" --argjson events "$EVENTS_JSON" '{
             name: "web",
             active: true,
@@ -107,34 +111,42 @@ for line in "${DESIRED[@]}"; do
         }')
         gh api -X POST "repos/$REPO/hooks" \
             --input - <<<"$BODY" >/dev/null
-        echo "    $(summarize_hook "$URL")"
-    else
-        # Compare event sets — only PATCH if different, to keep the noise
-        # (and the modified-at timestamp) down.
-        CURRENT_EVENTS="$(jq -r --arg url "$URL" \
-            '.[] | select(.config.url == $url) | .events | sort | join(",")' \
-            /tmp/gh-hooks.json)"
-        WANT_EVENTS="$(printf '%s\n' "${EVENTS[@]}" | sort | paste -sd, -)"
-
-        if [ "$CURRENT_EVENTS" = "$WANT_EVENTS" ]; then
-            echo "==> up-to-date $PATH_SEG  (${EVENTS[*]})"
-            continue
-        fi
-
-        echo "==> updating   $PATH_SEG  (${CURRENT_EVENTS} → ${WANT_EVENTS})"
-        BODY=$(jq -n --argjson events "$EVENTS_JSON" '{
-            active: true,
-            events: $events,
-            config: {
-                url: "'"$URL"'",
-                content_type: "json",
-                insecure_ssl: "0"
-            }
-        }')
-        gh api -X PATCH "repos/$REPO/hooks/$EXISTING_ID" \
-            --input - <<<"$BODY" >/dev/null
-        echo "    $(summarize_hook "$URL")"
+        NEW_ID="$(gh api "repos/$REPO/hooks" --paginate \
+            --jq --arg url "$URL" '.[] | select(.config.url == $url) | .id')"
+        echo "    id=$NEW_ID events=${EVENTS[*]}"
+        continue
     fi
+
+    CURRENT_URL="$(jq -r --argjson id "$EXISTING_ID" \
+        '.[] | select(.id == $id) | .config.url' /tmp/gh-hooks.json)"
+    CURRENT_EVENTS="$(jq -r --argjson id "$EXISTING_ID" \
+        '.[] | select(.id == $id) | .events | sort | join(",")' \
+        /tmp/gh-hooks.json)"
+    WANT_EVENTS="$(printf '%s\n' "${EVENTS[@]}" | sort | paste -sd, -)"
+
+    if [ "$CURRENT_URL" = "$URL" ] && [ "$CURRENT_EVENTS" = "$WANT_EVENTS" ]; then
+        echo "==> up-to-date $PATH_SEG  (id=$EXISTING_ID)"
+        continue
+    fi
+
+    CHANGES=()
+    [ "$CURRENT_URL" != "$URL" ] && CHANGES+=("url: $CURRENT_URL → $URL")
+    [ "$CURRENT_EVENTS" != "$WANT_EVENTS" ] && \
+        CHANGES+=("events: $CURRENT_EVENTS → $WANT_EVENTS")
+    echo "==> updating   $PATH_SEG  (id=$EXISTING_ID)"
+    for c in "${CHANGES[@]}"; do echo "    $c"; done
+
+    BODY=$(jq -n --arg url "$URL" --argjson events "$EVENTS_JSON" '{
+        active: true,
+        events: $events,
+        config: {
+            url: $url,
+            content_type: "json",
+            insecure_ssl: "0"
+        }
+    }')
+    gh api -X PATCH "repos/$REPO/hooks/$EXISTING_ID" \
+        --input - <<<"$BODY" >/dev/null
 done
 
 # Surface strays: hooks pointing at the same base URL but not in our

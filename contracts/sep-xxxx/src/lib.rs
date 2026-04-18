@@ -87,12 +87,19 @@ pub enum Error {
     /// An unsupported `VkKind` value was passed to `update_vk`.
     /// Introduced with the UpdateCircuit binding fix (#59).
     UnknownVkKind = 16,
-    // Codes 17 are reserved for Phase 1 (OneOnOneImmutable).
+    /// `update_commitment` was called on a 1v1 group. 1v1 groups are
+    /// immutable after creation — the only valid state transition is
+    /// `deactivate_group`, which either participant can call via their
+    /// membership proof.
+    OneOnOneImmutable = 17,
     /// `group_type` is not a known value (0 = Anarchy, 1 = 1v1, 2 = Democracy,
     /// 3 = Oligarchy) or is not yet enabled in this contract version.
     /// Introduced with the group-governance-types design.
     UnknownGroupType = 18,
-    // Codes 19–25 reserved for future governance-type phases.
+    // Codes 19–22 reserved for Phase 2 (Oligarchy).
+    /// 1v1 groups MUST use tier 0 (Small). Any other tier is rejected.
+    Invalid1v1Tier = 23,
+    // Codes 24–25 reserved for Phase 3 (Democracy).
 }
 
 // ================================================================
@@ -532,10 +539,27 @@ impl SepXxxxContract {
         if tier > 2 {
             return Err(Error::InvalidTier);
         }
-        if group_type != 0 {
-            // Phases 1–3 will enable types 1/2/3. Reject unknown values here
-            // so future clients fail loudly on old contract builds.
-            return Err(Error::UnknownGroupType);
+        match group_type {
+            0 => {
+                // Anarchy — any `member_count`, any tier.
+            }
+            1 => {
+                // 1v1: fixed two-member group, Small tier only. The member
+                // set is frozen at creation; `update_commitment` is rejected
+                // for group_type = 1. The participant count is persisted as
+                // an on-chain invariant so future clients can surface it
+                // without trusting the caller.
+                if tier != 0 {
+                    return Err(Error::Invalid1v1Tier);
+                }
+                if member_count != 2 {
+                    return Err(Error::PublicInputsMismatch);
+                }
+            }
+            _ => {
+                // Types 2/3 land in later phases.
+                return Err(Error::UnknownGroupType);
+            }
         }
         if public_inputs.commitment != commitment || public_inputs.epoch != 0 {
             return Err(Error::PublicInputsMismatch);
@@ -629,9 +653,11 @@ impl SepXxxxContract {
         }
         // Only Anarchy is routable through this function. Future phases
         // will dispatch on `group_type` to the appropriate update circuit
-        // (1v1 is frozen; Democracy/Oligarchy use their own update VKs).
-        if current.group_type != 0 {
-            return Err(Error::UnknownGroupType);
+        // (Democracy/Oligarchy use their own update VKs).
+        match current.group_type {
+            0 => {}
+            1 => return Err(Error::OneOnOneImmutable),
+            _ => return Err(Error::UnknownGroupType),
         }
 
         // N-22: Use checked_add to guard against u64 overflow (theoretical).
@@ -2465,14 +2491,14 @@ mod test {
             commitment: commitment.clone(),
             epoch: 0,
         };
-        // group_type = 1 (1v1) not yet enabled — must fail with
+        // group_type = 4 is beyond any defined value — must fail with
         // UnknownGroupType before any proof check runs.
         client.create_group_v2(
             &caller,
             &group_id,
             &commitment,
             &0u32,
-            &1u32,
+            &4u32,
             &0u32,
             &mock_proof(&env),
             &pi,
@@ -2625,5 +2651,113 @@ mod test {
         inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 0, 0, 0);
 
         client.bump_group_ttl(&group_id);
+    }
+
+    // ================================================================
+    // 1v1 Group Type Tests (governance-types Phase 1)
+    // ================================================================
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #23)")]
+    fn test_create_1v1_rejects_non_small_tier() {
+        // 1v1 groups MUST be Small (tier 0) — 32-leaf depth is the
+        // smallest supported and matches the two-member invariant.
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[24u8; 32]);
+        let commitment = BytesN::from_array(&env, &[25u8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        client.create_group_v2(
+            &caller,
+            &group_id,
+            &commitment,
+            &1u32, // Medium — not allowed for 1v1
+            &1u32, // 1v1
+            &2u32,
+            &mock_proof(&env),
+            &pi,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #23)")]
+    fn test_create_1v1_rejects_large_tier() {
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[26u8; 32]);
+        let commitment = BytesN::from_array(&env, &[27u8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        client.create_group_v2(
+            &caller,
+            &group_id,
+            &commitment,
+            &2u32, // Large — not allowed for 1v1
+            &1u32,
+            &2u32,
+            &mock_proof(&env),
+            &pi,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #10)")]
+    fn test_create_1v1_rejects_wrong_member_count() {
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[28u8; 32]);
+        let commitment = BytesN::from_array(&env, &[29u8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        // 1v1 requires member_count == 2 — 3 is rejected pre-proof.
+        client.create_group_v2(
+            &caller,
+            &group_id,
+            &commitment,
+            &0u32,
+            &1u32,
+            &3u32,
+            &mock_proof(&env),
+            &pi,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #17)")]
+    fn test_update_commitment_rejects_1v1_group() {
+        // A 1v1 group is immutable after creation — update_commitment must
+        // fail with OneOnOneImmutable regardless of proof validity.
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[30u8; 32]);
+        let commitment = BytesN::from_array(&env, &[31u8; 32]);
+        inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 0, 1, 2);
+
+        let upi = UpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: 0,
+            c_new: BytesN::from_array(&env, &[0u8; 32]),
+        };
+        client.update_commitment(&group_id, &mock_proof(&env), &upi);
+    }
+
+    #[test]
+    fn test_get_state_v2_for_1v1_reports_type_and_count() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[32u8; 32]);
+        let commitment = BytesN::from_array(&env, &[33u8; 32]);
+        inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 0, 1, 2);
+
+        let state = client.get_state_v2(&group_id);
+        assert_eq!(state.group_type, 1);
+        assert_eq!(state.member_count, 2);
+        assert_eq!(state.tier, 0);
+        assert!(state.active);
     }
 }

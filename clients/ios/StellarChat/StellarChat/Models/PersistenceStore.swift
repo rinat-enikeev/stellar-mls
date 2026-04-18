@@ -169,13 +169,56 @@ final class PersistenceStore {
         }
     }
 
+    /// Atomically replace a persisted message: delete `oldID` and insert `message`
+    /// on the same context with a single `context.save()`. Mirrors the Android
+    /// `@Transaction replaceMessageTransaction` so a crash between delete and
+    /// insert cannot lose the row.
+    func replaceMessage(oldID: String, with message: ChatMessage) {
+        let oldDescriptor = FetchDescriptor<PersistedMessage>(
+            predicate: #Predicate { $0.id == oldID }
+        )
+        if let existing = try? context.fetch(oldDescriptor) {
+            for item in existing { context.delete(item) }
+        }
+
+        let newID = message.id
+        let dupDescriptor = FetchDescriptor<PersistedMessage>(
+            predicate: #Predicate { $0.id == newID }
+        )
+        let alreadyExists = (try? context.fetchCount(dupDescriptor)).map { $0 > 0 } ?? false
+        if !alreadyExists, let persisted = encryptMessage(message) {
+            context.insert(persisted)
+            bumpLastMessageAt(groupID: message.groupID, timestamp: message.timestamp)
+        }
+        try? context.save()
+    }
+
     func replaceMessageAsync(oldID: String, with message: ChatMessage) {
         let message = message
         Self.writeQueue.async {
             autoreleasepool {
                 guard let writer = try? PersistenceStore() else { return }
-                writer.deleteMessage(id: oldID)
-                writer.saveMessage(message)
+                writer.replaceMessage(oldID: oldID, with: message)
+            }
+        }
+    }
+
+    func updateMessageStatus(id: String, status: MessageStatus) {
+        let descriptor = FetchDescriptor<PersistedMessage>(
+            predicate: #Predicate { $0.id == id }
+        )
+        guard let existing = try? context.fetch(descriptor), !existing.isEmpty else { return }
+        for item in existing { item.status = status.rawValue }
+        try? context.save()
+    }
+
+    func updateMessageStatusAsync(id: String, status: MessageStatus) {
+        let id = id
+        let status = status
+        Self.writeQueue.async {
+            autoreleasepool {
+                guard let writer = try? PersistenceStore() else { return }
+                writer.updateMessageStatus(id: id, status: status)
             }
         }
     }
@@ -553,7 +596,8 @@ final class PersistenceStore {
             encryptedMediaAttachment: encMedia,
             isSystemMessage: message.isSystemMessage,
             epoch: message.epoch.map { Int($0) },
-            replyToID: message.replyToID
+            replyToID: message.replyToID,
+            status: message.status.rawValue
         )
     }
 
@@ -567,6 +611,11 @@ final class PersistenceStore {
         } else {
             media = nil
         }
+        // Recover SENDING → FAILED on app restart: if a message was mid-send when
+        // the process died, the relay never confirmed it and it must surface as
+        // FAILED so the user can retry. Matches Android PersistenceStore.decryptMessage.
+        let rawStatus = persisted.status.flatMap { MessageStatus(rawValue: $0) } ?? .sent
+        let recoveredStatus: MessageStatus = (rawStatus == .sending) ? .failed : rawStatus
         return ChatMessage(
             id: persisted.id,
             groupID: persisted.groupID,
@@ -574,6 +623,7 @@ final class PersistenceStore {
             text: text,
             timestamp: persisted.timestamp,
             isMine: persisted.isMine,
+            status: recoveredStatus,
             mediaAttachment: media,
             isSystemMessage: persisted.isSystemMessage ?? false,
             epoch: persisted.epoch.map { UInt64($0) },

@@ -2471,13 +2471,17 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     store.updateMessageStatus(messageID, MessageStatus.SENDING)
                 }
 
-                val event = transport.send(
-                    group, failedMsg.text,
-                    overrideKey = effectiveEncryptionKey(group),
-                    overrideTopicTag = effectiveTopicTag(group),
-                    epoch = effectiveEpoch(group),
-                    replyToID = failedMsg.replyToID
-                )
+                // transport.send() serialises NIP-01 events and publishes to relays.
+                // Keep it off the Main dispatcher to match the surrounding pattern.
+                val event = withContext(Dispatchers.IO) {
+                    transport.send(
+                        group, failedMsg.text,
+                        overrideKey = effectiveEncryptionKey(group),
+                        overrideTopicTag = effectiveTopicTag(group),
+                        epoch = effectiveEpoch(group),
+                        replyToID = failedMsg.replyToID
+                    )
+                }
 
                 seenMessageIDs.computeIfAbsent(groupID) {
                     java.util.Collections.synchronizedSet(mutableSetOf())

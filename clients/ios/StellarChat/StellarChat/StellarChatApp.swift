@@ -2259,10 +2259,14 @@ final class AppState {
         chatTransport.onOK = { [weak self] eventID, accepted in
             guard let self else { return }
             Task { @MainActor in
-                // Find and update the message status
+                // Find and update the message status in-memory and on disk so the
+                // final state survives app restart (Android parity: setupOKHandler
+                // also persists via store.updateMessageStatus).
+                let newStatus: MessageStatus = accepted ? .sent : .failed
                 for (groupID, messages) in self.chatMessages {
                     if let index = messages.firstIndex(where: { $0.id == eventID }) {
-                        self.chatMessages[groupID]?[index].status = accepted ? .sent : .failed
+                        self.chatMessages[groupID]?[index].status = newStatus
+                        self.store.updateMessageStatusAsync(id: eventID, status: newStatus)
                         break
                     }
                 }
@@ -2330,6 +2334,7 @@ final class AppState {
                 await MainActor.run {
                     if let idx = self.chatMessages[groupID]?.firstIndex(where: { $0.id == event.id }) {
                         self.chatMessages[groupID]?[idx].status = .failed
+                        self.store.updateMessageStatusAsync(id: event.id, status: .failed)
                     }
                 }
             }
@@ -2346,6 +2351,7 @@ final class AppState {
         let text = chatMessages[groupID]![idx].text
         let replyToID = chatMessages[groupID]![idx].replyToID
         chatMessages[groupID]?[idx].status = .sending
+        store.updateMessageStatusAsync(id: messageID, status: .sending)
 
         Task {
             do {
@@ -2398,6 +2404,7 @@ final class AppState {
                 await MainActor.run {
                     if let i = self.chatMessages[groupID]?.firstIndex(where: { $0.id == messageID }) {
                         self.chatMessages[groupID]?[i].status = .failed
+                        self.store.updateMessageStatusAsync(id: messageID, status: .failed)
                     }
                 }
             }
@@ -2507,6 +2514,7 @@ final class AppState {
                 await MainActor.run {
                     if let idx = self.chatMessages[groupID]?.firstIndex(where: { $0.id == event.id }) {
                         self.chatMessages[groupID]?[idx].status = .failed
+                        self.store.updateMessageStatusAsync(id: event.id, status: .failed)
                     }
                 }
             }
@@ -2620,6 +2628,7 @@ final class AppState {
                 await MainActor.run {
                     if let idx = self.chatMessages[groupID]?.firstIndex(where: { $0.id == event.id }) {
                         self.chatMessages[groupID]?[idx].status = .failed
+                        self.store.updateMessageStatusAsync(id: event.id, status: .failed)
                     }
                 }
             }
@@ -2713,6 +2722,7 @@ final class AppState {
                 await MainActor.run {
                     if let idx = self.chatMessages[groupID]?.firstIndex(where: { $0.id == event.id }) {
                         self.chatMessages[groupID]?[idx].status = .failed
+                        self.store.updateMessageStatusAsync(id: event.id, status: .failed)
                     }
                 }
             }

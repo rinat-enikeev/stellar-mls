@@ -58,13 +58,31 @@ if [ -n "${APPLE_CERT_P12_BASE64:-}" ]; then
   KEYCHAIN_TMP="$(mktemp -t ceremony-keychain).keychain"
   KEYCHAIN_PWD="$(openssl rand -hex 16)"
   P12_PATH="$(mktemp -t ceremony-cert).p12"
-  printf '%s' "$APPLE_CERT_P12_BASE64" | base64 -d > "$P12_PATH"
+  # Tolerate whitespace — the base64 command wraps at 76 cols by default,
+  # so a secret pasted without `| tr -d '\n'` has embedded newlines that
+  # macOS `base64 -d` mis-decodes silently and produces a truncated file.
+  printf '%s' "$APPLE_CERT_P12_BASE64" | tr -d ' \t\r\n' | base64 -d > "$P12_PATH"
+  P12_SIZE=$(wc -c < "$P12_PATH" | tr -d ' ')
+  echo "==> decoded .p12: ${P12_SIZE} bytes"
+  if [ "$P12_SIZE" -lt 100 ]; then
+    echo "decoded .p12 is too small (${P12_SIZE} bytes) — APPLE_CERT_P12_BASE64 is malformed." >&2
+    echo "regenerate with:  base64 -i cert.p12 | tr -d '\\n' | pbcopy" >&2
+    exit 1
+  fi
   security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_TMP" >/dev/null
   security set-keychain-settings -lut 21600 "$KEYCHAIN_TMP" >/dev/null
   security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_TMP"
-  security import "$P12_PATH" -k "$KEYCHAIN_TMP" \
-    -P "$APPLE_CERT_P12_PASSWORD" \
-    -T /usr/bin/codesign >/dev/null
+  if ! security import "$P12_PATH" -k "$KEYCHAIN_TMP" \
+        -P "$APPLE_CERT_P12_PASSWORD" \
+        -T /usr/bin/codesign >/dev/null 2>import.err; then
+    echo "security import failed:" >&2
+    cat import.err >&2
+    echo "  → check APPLE_CERT_P12_PASSWORD matches the password used when exporting the .p12" >&2
+    echo "  → check APPLE_CERT_P12_BASE64 is the full base64 of a valid PKCS#12 file" >&2
+    rm -f import.err
+    exit 1
+  fi
+  rm -f import.err
   security set-key-partition-list -S apple-tool:,apple:,codesign: \
     -s -k "$KEYCHAIN_PWD" "$KEYCHAIN_TMP" >/dev/null
   # Make this keychain searchable in addition to the existing list.

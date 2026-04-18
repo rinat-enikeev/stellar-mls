@@ -103,6 +103,18 @@ if [ -n "${APPLE_CERT_P12_BASE64:-}" ]; then
   # shellcheck disable=SC2086
   security list-keychains -d user -s "$KEYCHAIN_TMP" $EXISTING
   shred -u "$P12_PATH" 2>/dev/null || rm -f "$P12_PATH"
+
+  echo "==> codesigning identities visible in temp keychain:"
+  security find-identity -v -p codesigning "$KEYCHAIN_TMP" || true
+  IDENT_COUNT="$(security find-identity -v -p codesigning "$KEYCHAIN_TMP" 2>/dev/null | awk '/valid identities found/{print $1}')"
+  if [ "${IDENT_COUNT:-0}" = "0" ]; then
+    echo "no codesigning identity in the temp keychain — the .p12 was" >&2
+    echo "exported WITHOUT its private key. In Keychain Access:" >&2
+    echo "  1. click the disclosure triangle next to the cert to reveal the key" >&2
+    echo "  2. cmd-click BOTH the cert and the private key (2 items selected)" >&2
+    echo "  3. right-click -> Export 2 items" >&2
+    exit 1
+  fi
 fi
 
 PROFILE="${APPLE_NOTARYTOOL_PROFILE:-ceremony-notarytool}"

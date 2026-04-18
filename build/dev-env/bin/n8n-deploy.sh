@@ -106,20 +106,26 @@ else
     echo '[]' > "$SCRATCH/existing-creds.json"
 fi
 
-# Join on name → inject existing id into the to-import record so import
-# UPDATEs instead of INSERTing a duplicate.
-jq -s '
-  . as $all
-  | $all[1] | map(
-      . as $c
-      | ($c.name) as $n
-      | ($all[0] | map(select(.name == $n)) | .[0] // null) as $match
-      | if $match == null then $c
-        else $c + {id: $match.id}
-        end
-    )
-' "$SCRATCH/existing-creds.json" "$SCRATCH/to-import.json" \
-    > "$SCRATCH/creds-with-ids.json"
+# Join on name → reuse existing id for upsert; mint a fresh 16-char
+# alnum id for new records (n8n import:credentials requires id to be
+# non-null — it will NOT generate one for you).
+: > "$SCRATCH/creds-with-ids.json"
+jq -c '.[]' "$SCRATCH/to-import.json" | while IFS= read -r cred; do
+    name="$(printf '%s' "$cred" | jq -r .name)"
+    existing_id="$(jq -r --arg n "$name" \
+        'map(select(.name == $n)) | .[0].id // ""' \
+        "$SCRATCH/existing-creds.json")"
+    if [ -n "$existing_id" ]; then
+        id="$existing_id"
+    else
+        id="$(openssl rand -hex 8)"
+    fi
+    printf '%s' "$cred" | jq --arg id "$id" '. + {id: $id}' \
+        >> "$SCRATCH/creds-with-ids.json"
+done
+# Wrap per-line objects back into a JSON array.
+jq -s '.' "$SCRATCH/creds-with-ids.json" > "$SCRATCH/creds-with-ids.arr.json"
+mv "$SCRATCH/creds-with-ids.arr.json" "$SCRATCH/creds-with-ids.json"
 
 docker cp "$SCRATCH/creds-with-ids.json" \
           "$N8N_CONTAINER:/tmp/n8n-deploy/creds.json"

@@ -191,15 +191,16 @@ for wf in "${WF_FILES[@]}"; do
         exit 1
     }
 
-    # 2. If a workflow with the same name already exists, inject its id so
-    #    import:workflow UPDATEs instead of INSERTing.
+    # 2. Inject a workflow id — reuse existing on upsert, mint a fresh
+    #    16-char alnum id otherwise (some n8n versions reject null ids).
     WF_NAME="$(jq -r '.name' "$OUT")"
     EXISTING_ID="$(jq -r --arg n "$WF_NAME" '.[$n] // empty' \
                      "$SCRATCH/wf-id-by-name.json")"
-    if [ -n "$EXISTING_ID" ]; then
-        jq --arg id "$EXISTING_ID" '. + {id: $id}' "$OUT" > "$OUT.tmp" \
-            && mv "$OUT.tmp" "$OUT"
+    if [ -z "$EXISTING_ID" ]; then
+        EXISTING_ID="$(openssl rand -hex 8)"
     fi
+    jq --arg id "$EXISTING_ID" '. + {id: $id}' "$OUT" > "$OUT.tmp" \
+        && mv "$OUT.tmp" "$OUT"
 done
 
 docker cp "$SCRATCH/workflows/." \
@@ -231,6 +232,22 @@ for wf in "${WF_FILES[@]}"; do
         --id="$ID" --active=true >/dev/null
     echo "  $(green OK)  $NAME (id=$ID) active"
 done
+
+# The CLI active flag doesn't register webhook paths with the running
+# n8n process — only process startup scans the workflow DB and wires up
+# /webhook/<path> routes. Restart so freshly-imported workflows can
+# actually receive events.
+echo "  restarting n8n so webhook routes register..."
+docker compose -f docker-compose.dev.yml restart n8n >/dev/null
+for _ in $(seq 1 60); do
+    if docker exec "$N8N_CONTAINER" \
+         sh -c 'wget -qO- --tries=1 --timeout=1 http://127.0.0.1:5678/healthz' \
+         >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+echo "  $(green OK)  n8n back up"
 
 # ---------- Phase 4: summary -----------------------------------------------
 echo

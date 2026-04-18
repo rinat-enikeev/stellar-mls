@@ -114,7 +114,7 @@ jobs:
             --target ${{ matrix.target }} \
             --bin ceremony_tool
 
-      - name: Package artifact
+      - name: Stage artifact
         id: package
         shell: bash
         run: |
@@ -125,14 +125,35 @@ jobs:
           test -f "$SRC"
           NAME=ceremony_tool-${{ inputs.tag }}-${{ matrix.target }}${EXT}
           cp "$SRC" dist/$NAME
-          # Prefer sha256sum; fall back to shasum for macOS runners.
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "path=dist/$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Sign + notarize (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_CERT_P12_PASSWORD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
+        shell: bash
+        run: |
+          if [ -z "$APPLE_DEVELOPER_ID" ] || [ -z "$APPLE_CERT_P12_BASE64" ]; then
+            echo "Apple signing secrets not set — skipping notarization"
+            exit 0
+          fi
+          scripts/sign-macos.sh dist/${{ steps.package.outputs.name }}
+
+      - name: Compute SHA-256
+        shell: bash
+        run: |
+          NAME=${{ steps.package.outputs.name }}
           if command -v sha256sum >/dev/null 2>&1; then
             (cd dist && sha256sum $NAME > $NAME.sha256)
           else
             (cd dist && shasum -a 256 $NAME > $NAME.sha256)
           fi
-          echo "name=$NAME" >> "$GITHUB_OUTPUT"
-          echo "path=dist/$NAME" >> "$GITHUB_OUTPUT"
 
       - name: Write buildinfo.json
         shell: bash
@@ -153,17 +174,21 @@ jobs:
             "commit": "$COMMIT",
             "rustc": "$RUSTC",
             "source_date_epoch": "$SOURCE_DATE_EPOCH",
-            "sha256": "$SHA"
+            "sha256": "$SHA",
+            "notarized": ${{ runner.os == 'macOS' && secrets.APPLE_DEVELOPER_ID != '' && 'true' || 'false' }}
           }
           EOF
 
       - name: Minisign (optional)
-        if: env.MINISIGN_SECRET_KEY != ''
         env:
-          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_SECRET_KEY_BASE64: ${{ secrets.MINISIGN_SECRET_KEY_BASE64 }}
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
         shell: bash
         run: |
+          if [ -z "$MINISIGN_SECRET_KEY_BASE64" ]; then
+            echo "minisign secret not set — skipping signature"
+            exit 0
+          fi
           # Install minisign per OS. On Windows we use the prebuilt binary
           # from jedisct1/minisign release tree; choco/scoop are slower and
           # add non-deterministic state to the runner image.
@@ -182,7 +207,7 @@ jobs:
               ;;
           esac
           mkdir -p ~/.minisign
-          printf '%s' "$MINISIGN_SECRET_KEY" > ~/.minisign/sk
+          printf '%s' "$MINISIGN_SECRET_KEY_BASE64" | base64 -d > ~/.minisign/sk
           NAME=${{ steps.package.outputs.name }}
           echo "$MINISIGN_PASSWORD" | minisign -Sm dist/$NAME -s ~/.minisign/sk -c "ceremony_tool ${{ inputs.tag }} / ${{ matrix.target }}"
           rm -f ~/.minisign/sk

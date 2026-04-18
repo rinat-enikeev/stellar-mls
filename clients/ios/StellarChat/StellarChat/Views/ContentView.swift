@@ -28,6 +28,7 @@ struct ContentView: View {
                     GroupListView()
                 }
             }
+            .badge(appState.pendingInvitations.count)
 
             Tab("Search", systemImage: "magnifyingglass", value: .search, role: .search) {
                 NavigationStack {

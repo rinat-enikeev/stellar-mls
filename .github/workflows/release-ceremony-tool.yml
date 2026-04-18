@@ -75,6 +75,15 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
 
+      - name: Ensure pinned toolchain has the matrix target
+        shell: bash
+        run: |
+          # dtolnay/rust-toolchain installed `stable` + the target, but
+          # rust-toolchain.toml pins a specific channel (e.g. 1.88.0) that
+          # auto-installs on first cargo invocation without the target.
+          # Force-install the target against the pinned channel here.
+          rustup target add ${{ matrix.target }}
+
       - name: Install musl cross tools (Linux)
         if: matrix.cross
         run: |

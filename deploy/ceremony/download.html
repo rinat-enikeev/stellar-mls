@@ -33,16 +33,36 @@
   </div>
 </section>
 
+  <!-- Inline SVG icon sprite. Referenced via <use href="#i-mac">, etc. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-mac" viewBox="0 0 24 24"><path fill="currentColor" d="M16.5 3.1a4 4 0 0 1-1 2.9 3.4 3.4 0 0 1-2.7 1.3 3.7 3.7 0 0 1 1-2.8 4 4 0 0 1 2.7-1.4ZM19.6 17a8.7 8.7 0 0 1-1 1.9c-.6 1-1.3 2-2.2 2-1 0-1.2-.6-2.4-.6s-1.5.6-2.4.6c-.9 0-1.7-1-2.3-2A9 9 0 0 1 7.7 13c0-2.4 1.6-3.7 3.1-3.7 1 0 1.9.6 2.5.6s1.7-.7 2.9-.6a4 4 0 0 1 3.1 1.7 3.5 3.5 0 0 0-2 3.2 3.6 3.6 0 0 0 2.2 3.3 8.4 8.4 0 0 1-.9 1.5Z"/></symbol>
+      <symbol id="i-linux" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2c-2.7 0-4.5 2.7-4.5 5.5 0 1.7.6 2.6 1.2 3.6.4.7.7 1.5.7 2.5 0 .8-.4 1.7-1.2 2.7C7 17.7 6 18.9 6 20.2c0 1.4 1.5 1.8 3.4 1.8 1 0 1.6-.4 2.6-.4s1.6.4 2.6.4c1.9 0 3.4-.4 3.4-1.8 0-1.3-1-2.5-2.2-3.9-.8-1-1.2-1.9-1.2-2.7 0-1 .3-1.8.7-2.5.6-1 1.2-1.9 1.2-3.6 0-2.8-1.8-5.5-4.5-5.5Zm-1.4 3.7c.4 0 .7.5.7 1.1s-.3 1.1-.7 1.1-.7-.5-.7-1.1.3-1.1.7-1.1Zm2.8 0c.4 0 .7.5.7 1.1s-.3 1.1-.7 1.1-.7-.5-.7-1.1.3-1.1.7-1.1Zm-1.4 4.6c.7 0 1.5.4 1.9.9.2.2.1.5-.2.6-.5.2-1.1.4-1.7.4s-1.2-.2-1.7-.4c-.3-.1-.4-.4-.2-.6.4-.5 1.2-.9 1.9-.9Z"/></symbol>
+      <symbol id="i-windows" viewBox="0 0 24 24"><path fill="currentColor" d="M3 5.5 11 4.4v7.4H3Zm0 7.4h8v7.4l-8-1.1ZM12 4.2 22 3v8.8H12Zm0 8.7h10V21l-10-1.2Z"/></symbol>
+      <symbol id="i-gui" viewBox="0 0 24 24"><path fill="currentColor" d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v9A2.5 2.5 0 0 1 17.5 17H13l.6 2.5h2.4a.75.75 0 0 1 0 1.5H8a.75.75 0 0 1 0-1.5h2.4L11 17H6.5A2.5 2.5 0 0 1 4 14.5Zm2.5-1A1 1 0 0 0 5.5 5.5V13h13V5.5a1 1 0 0 0-1-1Z"/></symbol>
+      <symbol id="i-cpu" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.5" d="M7 7h10v10H7zM3 9h2m-2 3h2m-2 3h2M19 9h2m-2 3h2m-2 3h2M9 3v2m3-2v2m3-2v2M9 19v2m3-2v2m3-2v2"/></symbol>
+    </defs>
+  </svg>
+
 <section class="container-narrow" x-data="downloads()" x-init="init()">
 
   <div class="step-card">
     <h2>Recommended for your system</h2>
     <template x-if="recommended">
-      <div class="panel">
-        <div class="row"><span>OS / arch</span><strong x-text="recommended.label"></strong></div>
-        <div class="row"><span>Filename</span><code x-text="recommended.asset || '— no binary matched —'"></code></div>
+      <div>
+        <div class="recommended-hero">
+          <span class="platform-icon lg" :class="iconClass(recommended)">
+            <svg aria-hidden="true"><use :href="'#' + iconId(recommended)"/></svg>
+          </span>
+          <div class="meta">
+            <div class="label">Detected platform</div>
+            <div class="title" x-text="recommended.label"></div>
+            <code x-text="recommended.asset || '— no binary matched —'"></code>
+          </div>
+        </div>
+
         <template x-if="recommended.asset">
-          <div class="flex flex-gap mt-2">
+          <div class="flex flex-gap flex-wrap mt-2">
             <a class="btn btn-primary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset">Download</a>
             <template x-if="recommended.kind === 'gui'">
               <a class="btn btn-secondary" :href="'https://github.com/rinat-enikeev/stellar-mls/releases/download/' + tag + '/' + recommended.asset + '.sha256'">SHA-256</a>
@@ -55,6 +75,7 @@
             </template>
           </div>
         </template>
+
         <template x-if="recommended.kind === 'gui'">
           <p class="text-dim mt-2">
             Drag-and-drop GUI: signed + notarized + stapled by Apple. No
@@ -64,11 +85,14 @@
           </p>
         </template>
         <template x-if="recommended.kind === 'gui' && useCli && cliFallback">
-          <div class="panel mt-2">
-            <div class="row"><span>CLI binary</span><code x-text="cliFallback.filename"></code></div>
-            <div class="row"><span>sha256</span><code class="hash" x-text="cliFallback.sha256"></code></div>
-            <div class="flex flex-gap mt-2">
-              <a class="btn btn-secondary btn-small" :href="cliFallback.url">Download CLI</a>
+          <div class="artifact-row mt-2">
+            <span class="platform-icon macos"><svg aria-hidden="true"><use href="#i-mac"/></svg></span>
+            <div>
+              <div class="name">macOS CLI</div>
+              <code class="filename" x-text="cliFallback.filename"></code>
+            </div>
+            <div class="actions">
+              <a class="btn btn-secondary btn-small" :href="cliFallback.url">Binary</a>
               <a class="btn btn-secondary btn-small" :href="cliFallback.url + '.minisig'">minisign</a>
               <a class="btn btn-secondary btn-small" :href="cliFallback.url + '.sha256'">sha256</a>
             </div>
@@ -112,22 +136,31 @@
     <h2>All artifacts</h2>
     <template x-if="assets.length">
       <div>
-        <div class="row text-dim"><span>Target</span><span>Filename</span></div>
         <template x-for="a in assets" :key="a.filename">
-          <div class="panel">
-            <div class="row">
-              <span>
-                <span x-text="a.target"></span>
-                <span class="badge" x-show="a.kind === 'gui'" style="margin-left:8px;">GUI</span>
-                <span class="badge" x-show="a.notarized" style="margin-left:6px;">notarized</span>
-              </span>
-              <code x-text="a.filename"></code>
+          <div class="artifact-row">
+            <span class="platform-icon" :class="iconClass(a)">
+              <svg aria-hidden="true"><use :href="'#' + iconId(a)"/></svg>
+            </span>
+            <div>
+              <div class="name">
+                <span x-text="prettyTarget(a)"></span>
+              </div>
+              <code class="filename" x-text="a.filename"></code>
+              <div class="badges">
+                <span class="badge badge-gui"   x-show="a.kind === 'gui'">drag-and-drop app</span>
+                <span class="badge badge-green" x-show="a.notarized">Apple-notarized</span>
+                <span class="badge badge-dim"   x-show="a.minisign">minisign</span>
+                <span class="badge badge-dim"   x-show="a.cosign">cosign</span>
+              </div>
+              <details>
+                <summary>sha256</summary>
+                <code class="hash" x-text="a.sha256"></code>
+              </details>
             </div>
-            <div class="row"><span>sha256</span><code class="hash" x-text="a.sha256"></code></div>
-            <div class="flex flex-gap mt-2">
-              <a class="btn btn-secondary btn-small" :href="a.url">Binary</a>
-              <a class="btn btn-secondary btn-small" :href="a.url + '.minisig'" x-show="a.minisign">minisign</a>
-              <a class="btn btn-secondary btn-small" :href="a.url + '.sig'" x-show="a.cosign">cosign sig</a>
+            <div class="actions">
+              <a class="btn btn-primary btn-small"   :href="a.url">Download</a>
+              <a class="btn btn-secondary btn-small" :href="a.url + '.minisig'" x-show="a.minisign">minisig</a>
+              <a class="btn btn-secondary btn-small" :href="a.url + '.sig'"     x-show="a.cosign">cosign</a>
               <a class="btn btn-secondary btn-small" :href="a.url + '.sha256'">sha256</a>
             </div>
           </div>
@@ -176,6 +209,32 @@ function downloads() {
     cliFallback: null,
     useCli: false,
     minisignPub: null,
+    iconId(a) {
+      if (a.kind === 'gui') return 'i-gui';
+      const t = a.target || '';
+      if (t.includes('apple-darwin')) return 'i-mac';
+      if (t.includes('linux')) return 'i-linux';
+      if (t.includes('windows')) return 'i-windows';
+      return 'i-cpu';
+    },
+    iconClass(a) {
+      if (a.kind === 'gui') return 'gui';
+      const t = a.target || '';
+      if (t.includes('apple-darwin')) return 'macos';
+      if (t.includes('linux')) return 'linux';
+      if (t.includes('windows')) return 'windows';
+      return '';
+    },
+    prettyTarget(a) {
+      if (a.kind === 'gui') return 'macOS · drag-and-drop app (universal)';
+      return ({
+        'aarch64-apple-darwin':       'macOS · Apple Silicon (CLI)',
+        'x86_64-apple-darwin':        'macOS · Intel (CLI)',
+        'x86_64-unknown-linux-musl':  'Linux · x86_64 (CLI, musl)',
+        'aarch64-unknown-linux-musl': 'Linux · arm64 (CLI, musl)',
+        'x86_64-pc-windows-msvc':     'Windows · x86_64 (CLI)',
+      })[a.target] || a.target;
+    },
     async init() {
       try {
         const r = await Ceremony.api.get('/downloads');

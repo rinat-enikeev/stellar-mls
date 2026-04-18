@@ -190,6 +190,7 @@
     },
     {
       "parameters": {
+        "authentication": "privateKey",
         "resource": "command",
         "command": "=set +e\nset -o pipefail\nPR={{ $json.prNumber }}\nBASE=\"{{ $json.prBaseRef }}\"\nSHA=\"{{ $json.prHeadSha }}\"\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngit fetch origin \"pull/$PR/head:pr-$PR\" 2>&1\ngit fetch origin \"$BASE\" 2>&1\ngit checkout \"pr-$PR\" 2>&1\nPROMPT=\"/tmp/review-$PR.txt\"\necho {{ $json.promptB64 }} | base64 -d > \"$PROMPT\"\necho \"\" >> \"$PROMPT\"\necho \"=== DIFF ===\" >> \"$PROMPT\"\ngit diff \"origin/$BASE...HEAD\" >> \"$PROMPT\"\nREVIEW=$(claude --print < \"$PROMPT\")\nCLAUDE_RC=$?\nrm -f \"$PROMPT\"\necho \"CLAUDE_RC=$CLAUDE_RC\"\nif [ -z \"$REVIEW\" ]; then\n  echo \"ERROR: empty review from claude\" >&2\n  exit 0\nfi\nBODY=\"/tmp/review-body-$PR.md\"\nprintf '%s\\n' \"$REVIEW\" > \"$BODY\"\ngh pr review \"$PR\" --comment --body-file \"$BODY\" 2>&1\nREVIEW_RC=$?\nrm -f \"$BODY\"\necho \"REVIEW_RC=$REVIEW_RC\"\nexit 0\n"
       },
@@ -207,6 +208,7 @@
     },
     {
       "parameters": {
+        "authentication": "privateKey",
         "resource": "command",
         "command": "=set +e\nset -o pipefail\nPR={{ $json.prNumber }}\nBASE=\"{{ $json.prBaseRef }}\"\nSHA=\"{{ $json.prHeadSha }}\"\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngit fetch origin \"pull/$PR/head:pr-$PR\" 2>&1\ngit fetch origin \"$BASE\" 2>&1\ngit checkout \"pr-$PR\" 2>&1\nPROMPT=\"/tmp/review-$PR.txt\"\necho {{ $json.promptB64 }} | base64 -d > \"$PROMPT\"\necho \"\" >> \"$PROMPT\"\necho \"=== DIFF ===\" >> \"$PROMPT\"\ngit diff \"origin/$BASE...HEAD\" >> \"$PROMPT\"\nREVIEW=$(claude --print < \"$PROMPT\")\nCLAUDE_RC=$?\nrm -f \"$PROMPT\"\necho \"CLAUDE_RC=$CLAUDE_RC\"\nif [ -z \"$REVIEW\" ]; then\n  echo \"ERROR: empty review from claude\" >&2\n  exit 0\nfi\nBODY=\"/tmp/review-body-$PR.md\"\nprintf '%s\\n' \"$REVIEW\" > \"$BODY\"\ngh pr review \"$PR\" --comment --body-file \"$BODY\" 2>&1\nREVIEW_RC=$?\nrm -f \"$BODY\"\necho \"REVIEW_RC=$REVIEW_RC\"\nexit 0\n"
       },

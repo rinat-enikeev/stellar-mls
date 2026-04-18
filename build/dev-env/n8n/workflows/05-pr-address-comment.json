@@ -185,6 +185,7 @@
     },
     {
       "parameters": {
+        "authentication": "privateKey",
         "resource": "command",
         "command": "=set +e\nset -o pipefail\nPR={{ $json.prNumber }}\nBRANCH=\"{{ $json.branch }}\"\nCID=\"{{ $json.commentId }}\"\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngit fetch origin \"$BRANCH\" 2>&1\ngit checkout \"$BRANCH\" 2>&1\ngit reset --hard \"origin/$BRANCH\" 2>&1\nPROMPT=\"/tmp/fix-$PR-$CID.txt\"\necho {{ $json.promptB64 }} | base64 -d > \"$PROMPT\"\nclaude --print < \"$PROMPT\"\nCLAUDE_RC=$?\nrm -f \"$PROMPT\"\necho \"CLAUDE_RC=$CLAUDE_RC\"\nif git diff --quiet \"origin/$BRANCH..HEAD\"; then\n  echo \"NO_CHANGES=1\"\n  exit 0\nfi\ngit push origin \"HEAD:$BRANCH\" 2>&1\nPUSH_RC=$?\necho \"PUSH_RC=$PUSH_RC\"\nNEW_SHA=$(git rev-parse HEAD)\necho \"NEW_SHA=$NEW_SHA\"\nexit 0\n"
       },
@@ -202,6 +203,7 @@
     },
     {
       "parameters": {
+        "authentication": "privateKey",
         "resource": "command",
         "command": "=set +e\nset -o pipefail\nPR={{ $json.prNumber }}\nBRANCH=\"{{ $json.branch }}\"\nCID=\"{{ $json.commentId }}\"\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngit fetch origin \"$BRANCH\" 2>&1\ngit checkout \"$BRANCH\" 2>&1\ngit reset --hard \"origin/$BRANCH\" 2>&1\nPROMPT=\"/tmp/fix-$PR-$CID.txt\"\necho {{ $json.promptB64 }} | base64 -d > \"$PROMPT\"\nclaude --print < \"$PROMPT\"\nCLAUDE_RC=$?\nrm -f \"$PROMPT\"\necho \"CLAUDE_RC=$CLAUDE_RC\"\nif git diff --quiet \"origin/$BRANCH..HEAD\"; then\n  echo \"NO_CHANGES=1\"\n  exit 0\nfi\ngit push origin \"HEAD:$BRANCH\" 2>&1\nPUSH_RC=$?\necho \"PUSH_RC=$PUSH_RC\"\nNEW_SHA=$(git rev-parse HEAD)\necho \"NEW_SHA=$NEW_SHA\"\nexit 0\n"
       },

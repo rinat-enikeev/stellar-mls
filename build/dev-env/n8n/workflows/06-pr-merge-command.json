@@ -149,6 +149,7 @@
     },
     {
       "parameters": {
+        "authentication": "privateKey",
         "resource": "command",
         "command": "=set +e\nset -o pipefail\nPR={{ $json.prNumber }}\nMETHOD=\"{{ $json.mergeMethod }}\"\nREPO=\"{{ $json.repoFull }}\"\nPR_TITLE={{ JSON.stringify($json.prTitle) }}\nPR_URL=\"{{ $json.prUrl }}\"\nQA_LOGIN=\"{{ $json.qaLogin }}\"\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngh pr merge \"$PR\" --\"$METHOD\" --delete-branch --repo \"$REPO\" 2>&1\nMERGE_RC=$?\necho \"MERGE_RC=$MERGE_RC\"\nif [ $MERGE_RC -ne 0 ]; then\n  echo \"SMOKE_URL=\"\n  exit 0\nfi\nBODY=\"/tmp/smoke-body-$PR.md\"\ncat > \"$BODY\" <<EOF\nSmoke-test request for merged PR $PR_URL.\n\nFlows to verify:\n- Pull latest main locally or from the \\`pr-${PR}-build\\` build artefacts.\n- Walk the golden path described in the PR body above.\n- Exploratory pass on both iOS and Android clients.\n\nClose this issue when verification is complete. File a new issue (link it back here) for any regressions discovered.\nEOF\nSMOKE_OUT=$(gh issue create --repo \"$REPO\" \\\n  --title \"Smoke test: $PR_TITLE\" \\\n  --assignee \"$QA_LOGIN\" \\\n  --label smoke-test \\\n  --body-file \"$BODY\" 2>&1)\nSMOKE_RC=$?\nrm -f \"$BODY\"\necho \"SMOKE_RC=$SMOKE_RC\"\necho \"SMOKE_OUT<<__END__\"\necho \"$SMOKE_OUT\"\necho \"__END__\"\nSMOKE_URL=$(printf '%s\\n' \"$SMOKE_OUT\" | grep -Eo 'https://github.com/[^ ]+/issues/[0-9]+' | tail -1)\necho \"SMOKE_URL=$SMOKE_URL\"\nexit 0\n"
       },
@@ -166,6 +167,7 @@
     },
     {
       "parameters": {
+        "authentication": "privateKey",
         "resource": "command",
         "command": "=set +e\nset -o pipefail\nPR={{ $json.prNumber }}\nMETHOD=\"{{ $json.mergeMethod }}\"\nREPO=\"{{ $json.repoFull }}\"\nPR_TITLE={{ JSON.stringify($json.prTitle) }}\nPR_URL=\"{{ $json.prUrl }}\"\nQA_LOGIN=\"{{ $json.qaLogin }}\"\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngh pr merge \"$PR\" --\"$METHOD\" --delete-branch --repo \"$REPO\" 2>&1\nMERGE_RC=$?\necho \"MERGE_RC=$MERGE_RC\"\nif [ $MERGE_RC -ne 0 ]; then\n  echo \"SMOKE_URL=\"\n  exit 0\nfi\nBODY=\"/tmp/smoke-body-$PR.md\"\ncat > \"$BODY\" <<EOF\nSmoke-test request for merged PR $PR_URL.\n\nFlows to verify:\n- Pull latest main locally or from the \\`pr-${PR}-build\\` build artefacts.\n- Walk the golden path described in the PR body above.\n- Exploratory pass on both iOS and Android clients.\n\nClose this issue when verification is complete. File a new issue (link it back here) for any regressions discovered.\nEOF\nSMOKE_OUT=$(gh issue create --repo \"$REPO\" \\\n  --title \"Smoke test: $PR_TITLE\" \\\n  --assignee \"$QA_LOGIN\" \\\n  --label smoke-test \\\n  --body-file \"$BODY\" 2>&1)\nSMOKE_RC=$?\nrm -f \"$BODY\"\necho \"SMOKE_RC=$SMOKE_RC\"\necho \"SMOKE_OUT<<__END__\"\necho \"$SMOKE_OUT\"\necho \"__END__\"\nSMOKE_URL=$(printf '%s\\n' \"$SMOKE_OUT\" | grep -Eo 'https://github.com/[^ ]+/issues/[0-9]+' | tail -1)\necho \"SMOKE_URL=$SMOKE_URL\"\nexit 0\n"
       },

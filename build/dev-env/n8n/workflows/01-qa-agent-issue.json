@@ -166,6 +166,7 @@
     },
     {
       "parameters": {
+        "authentication": "privateKey",
         "resource": "command",
         "command": "=set +e\nset -o pipefail\nBRANCH=\"agent/issue-{{ $json.issueNumber }}\"\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngit fetch origin main 2>&1\ngit checkout -B \"$BRANCH\" origin/main 2>&1\necho {{ $json.promptB64 }} | base64 -d > /tmp/prompt-{{ $json.issueNumber }}.txt\nclaude --print < /tmp/prompt-{{ $json.issueNumber }}.txt\nCLAUDE_RC=$?\nrm -f /tmp/prompt-{{ $json.issueNumber }}.txt\necho \"CLAUDE_RC=$CLAUDE_RC\"\nif git diff --quiet origin/main..HEAD; then\n  echo \"PR_URL=\"\n  echo \"ERROR: no changes produced by claude\" >&2\n  exit 0\nfi\ngit push -u origin \"$BRANCH\" --force 2>&1\nPUSH_RC=$?\necho \"PUSH_RC=$PUSH_RC\"\nif [ $PUSH_RC -ne 0 ]; then\n  echo \"PR_URL=\"\n  exit 0\nfi\nEXISTING=$(gh pr list --head \"$BRANCH\" --state open --json url --jq '.[0].url' 2>&1)\nif [ -n \"$EXISTING\" ] && [ \"${EXISTING#https://}\" != \"$EXISTING\" ]; then\n  echo \"PR_URL=$EXISTING\"\n  echo \"reused existing PR\"\n  exit 0\nfi\nGH_OUT=$(gh pr create --fill --base main --head \"$BRANCH\" --label ai-generated --reviewer \"{{ $json.reviewerLogin }}\" 2>&1)\nGH_RC=$?\necho \"GH_RC=$GH_RC\"\necho \"GH_OUT<<__END__\"\necho \"$GH_OUT\"\necho \"__END__\"\nPR_URL=$(printf '%s\\n' \"$GH_OUT\" | grep -Eo 'https://github.com/[^ ]+/pull/[0-9]+' | tail -1)\necho \"PR_URL=$PR_URL\"\nexit 0\n"
       },
@@ -183,6 +184,7 @@
     },
     {
       "parameters": {
+        "authentication": "privateKey",
         "resource": "command",
         "command": "=set +e\nset -o pipefail\nBRANCH=\"agent/issue-{{ $json.issueNumber }}\"\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngit fetch origin main 2>&1\ngit checkout -B \"$BRANCH\" origin/main 2>&1\necho {{ $json.promptB64 }} | base64 -d > /tmp/prompt-{{ $json.issueNumber }}.txt\nclaude --print < /tmp/prompt-{{ $json.issueNumber }}.txt\nCLAUDE_RC=$?\nrm -f /tmp/prompt-{{ $json.issueNumber }}.txt\necho \"CLAUDE_RC=$CLAUDE_RC\"\nif git diff --quiet origin/main..HEAD; then\n  echo \"PR_URL=\"\n  echo \"ERROR: no changes produced by claude\" >&2\n  exit 0\nfi\ngit push -u origin \"$BRANCH\" --force 2>&1\nPUSH_RC=$?\necho \"PUSH_RC=$PUSH_RC\"\nif [ $PUSH_RC -ne 0 ]; then\n  echo \"PR_URL=\"\n  exit 0\nfi\nEXISTING=$(gh pr list --head \"$BRANCH\" --state open --json url --jq '.[0].url' 2>&1)\nif [ -n \"$EXISTING\" ] && [ \"${EXISTING#https://}\" != \"$EXISTING\" ]; then\n  echo \"PR_URL=$EXISTING\"\n  echo \"reused existing PR\"\n  exit 0\nfi\nGH_OUT=$(gh pr create --fill --base main --head \"$BRANCH\" --label ai-generated --reviewer \"{{ $json.reviewerLogin }}\" 2>&1)\nGH_RC=$?\necho \"GH_RC=$GH_RC\"\necho \"GH_OUT<<__END__\"\necho \"$GH_OUT\"\necho \"__END__\"\nPR_URL=$(printf '%s\\n' \"$GH_OUT\" | grep -Eo 'https://github.com/[^ ]+/pull/[0-9]+' | tail -1)\necho \"PR_URL=$PR_URL\"\nexit 0\n"
       },

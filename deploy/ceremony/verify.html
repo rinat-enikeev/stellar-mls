@@ -104,7 +104,12 @@
       the same verifier from the command line. It's the exact binary the
       coordinator shells out to on upload:
     </p>
-    <pre><code x-text="'# Download artifacts, then:\nceremony_tool verify-state \\\n  --in-dir ./round-' + (round ?? 'N')"></code></pre>
+    <template x-if="round && round > 0">
+      <pre><code x-text="'# Download round ' + (round - 1) + ' and round ' + round + ' into sibling dirs, then:\nceremony_tool verify-contribution \\\n  --before-state-dir ./round-' + (round - 1) + ' \\\n  --after-state-dir  ./round-' + round"></code></pre>
+    </template>
+    <template x-if="!round || round === 0">
+      <pre><code x-text="'# Round 0 is the genesis — verify the initial-contribution proof:\nceremony_tool verify-state \\\n  --state-dir ./round-' + (round ?? 0)"></code></pre>
+    </template>
     <p class="text-dim">
       The WASM verifier on this page is built from the same Rust crate
       (<code>crates/ceremony-wasm</code>) as the CLI — same pairing engine,

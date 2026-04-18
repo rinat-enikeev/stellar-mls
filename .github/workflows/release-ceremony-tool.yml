@@ -207,7 +207,14 @@ jobs:
               ;;
           esac
           mkdir -p ~/.minisign
-          printf '%s' "$MINISIGN_SECRET_KEY_BASE64" | base64 -d > ~/.minisign/sk
+          # Strip whitespace — GNU base64 (Linux) rejects embedded newlines
+          # by default; macOS/BSD base64 tolerates them. Secrets pasted
+          # from `base64 -i key` without `tr -d '\n'` carry 76-col wraps.
+          printf '%s' "$MINISIGN_SECRET_KEY_BASE64" | tr -d ' \t\r\n' | base64 -d > ~/.minisign/sk
+          if [ ! -s ~/.minisign/sk ]; then
+            echo "decoded minisign secret is empty — check MINISIGN_SECRET_KEY_BASE64" >&2
+            exit 1
+          fi
           NAME=${{ steps.package.outputs.name }}
           echo "$MINISIGN_PASSWORD" | minisign -Sm dist/$NAME -s ~/.minisign/sk -c "ceremony_tool ${{ inputs.tag }} / ${{ matrix.target }}"
           rm -f ~/.minisign/sk

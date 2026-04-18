@@ -282,7 +282,7 @@ struct GroupRow: View {
 
 // MARK: - Member Subtitle
 
-private func memberSubtitle(for group: ChatGroup, aliases: ContactAliasStore?) -> String {
+@MainActor private func memberSubtitle(for group: ChatGroup, aliases: ContactAliasStore?) -> String {
     group.members.map { member in
         let hex = member.publicKeyCompressed.map { String(format: "%02x", $0) }.joined()
         return aliases?.displayName(for: hex) ?? String(hex.prefix(8))

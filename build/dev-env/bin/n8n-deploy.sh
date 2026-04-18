@@ -39,8 +39,7 @@ echo "==> preflight"
 command -v jq >/dev/null 2>&1 || die "jq is required on the host (brew install jq)"
 command -v docker >/dev/null 2>&1 || die "docker is required"
 
-if ! docker compose -f docker-compose.dev.yml ps "$N8N_CONTAINER" \
-        --status running --quiet | grep -q .; then
+if [ "$(docker inspect -f '{{.State.Running}}' "$N8N_CONTAINER" 2>/dev/null)" != "true" ]; then
     die "$N8N_CONTAINER is not running — run ./bin/up.sh first"
 fi
 

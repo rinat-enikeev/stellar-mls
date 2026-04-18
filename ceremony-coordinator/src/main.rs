@@ -105,6 +105,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/tiers/:tier/rounds/:round/artifacts/:name",
             get(handlers::transcript::round_artifact),
         )
+        .route(
+            "/api/v1/tiers/:tier/rounds/:round/prev.zip",
+            get(handlers::transcript::round_prev_zip),
+        )
         .route("/api/v1/signup", post(handlers::signup::signup))
         .route("/api/v1/tiers/:tier/claim", post(handlers::slot::claim))
         .route(

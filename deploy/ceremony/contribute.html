@@ -189,14 +189,71 @@
     <p>Run the native binary on an <em>air-gapped or ephemeral</em> machine. Don't paste secrets, don't let the scalar touch persistent storage.</p>
     <ol class="mt-2">
       <li>
-        Download previous round artifacts:
-        <ul class="mt-2">
-          <li><a :href="prevBlobs.srs" x-text="'state.srs (' + Ceremony.fmt.hash(prevBlobs.srs_hash) + ')'"></a></li>
-          <li><a :href="prevBlobs.txt" x-text="'state.txt (' + Ceremony.fmt.hash(prevBlobs.txt_hash) + ')'"></a></li>
-          <li><a :href="prevBlobs.receipt" x-text="'receipt.txt (' + Ceremony.fmt.hash(prevBlobs.receipt_hash) + ')'"></a></li>
-        </ul>
+        Download the previous round bundle (unzips to <code>./prev/</code>):
+        <p class="mt-2">
+          <a class="btn btn-primary" :href="'/api/v1/tiers/' + tier + '/rounds/' + prevBlobs.round + '/prev.zip'" :download="'prev-' + tier + '-round' + prevBlobs.round + '.zip'">
+            Download prev.zip
+          </a>
+        </p>
+        <details class="mt-2">
+          <summary>Verify the three hashes after unzip (optional)</summary>
+          <ul class="mt-2">
+            <li><code>prev/state.srs</code> — sha256 <code class="hash" x-text="prevBlobs.srs_hash"></code></li>
+            <li><code>prev/state.txt</code> — sha256 <code class="hash" x-text="prevBlobs.txt_hash"></code></li>
+            <li><code>prev/receipt.txt</code> — sha256 <code class="hash" x-text="prevBlobs.receipt_hash"></code></li>
+          </ul>
+          <p class="mt-2 text-dim" style="font-size:0.88rem;">Blossom also serves each file individually: <a :href="prevBlobs.srs">state.srs</a>, <a :href="prevBlobs.txt">state.txt</a>, <a :href="prevBlobs.receipt">receipt.txt</a>.</p>
+        </details>
       </li>
-      <li class="mt-2">Run the binary (<a href="/download.html">download</a> if needed):
+      <li class="mt-2">
+        Download <code>ceremony_tool</code> for your system
+        <template x-if="toolAsset">
+          <div class="mt-2">
+            <p>
+              Detected: <strong x-text="osLabel"></strong>.
+              <template x-if="toolAsset.tag">
+                <span>Version <strong x-text="toolAsset.tag"></strong>.</span>
+              </template>
+            </p>
+            <p class="mt-2">
+              <a class="btn btn-primary" :href="toolAsset.url" x-text="toolAsset.filename"></a>
+            </p>
+            <p class="mt-2 text-dim" style="font-size:0.88rem;">
+              sha256: <code class="hash" x-text="toolAsset.sha256"></code> &middot;
+              <a href="/download.html">all platforms &amp; signatures</a>
+            </p>
+            <template x-if="toolAsset.target.includes('apple-darwin')">
+              <details class="mt-2">
+                <summary>macOS says "could not verify &hellip; is free of malware"</summary>
+                <div class="mt-2">
+                  <p>
+                    The binary isn't Apple-notarized yet (coming in Phase B of
+                    the ceremony rollout). Until then, macOS Gatekeeper
+                    quarantines downloaded binaries by default. That's expected
+                    — you're running a signed-but-not-notarized Rust binary
+                    from the ceremony repo, not actually being attacked.
+                  </p>
+                  <p class="mt-2"><strong>Clear the quarantine flag after downloading:</strong></p>
+                  <pre><code x-text="'chmod +x ~/Downloads/' + toolAsset.filename + '\nxattr -d com.apple.quarantine ~/Downloads/' + toolAsset.filename + '\nmv ~/Downloads/' + toolAsset.filename + ' /usr/local/bin/ceremony_tool'"></code></pre>
+                  <p class="mt-2"><strong>Or via the UI:</strong> open Finder, locate the file, right-click &rarr; <em>Open</em> &rarr; <em>Open</em> again in the warning dialog. If the second dialog offers no "Open" button, go to <em>System Settings &rarr; Privacy &amp; Security</em>, scroll to the bottom and click <em>Allow Anyway</em> for the blocked binary.</p>
+                  <p class="mt-2"><strong>Verify what you just ran:</strong></p>
+                  <pre><code x-text="'shasum -a 256 /usr/local/bin/ceremony_tool\n# expect: ' + toolAsset.sha256"></code></pre>
+                </div>
+              </details>
+            </template>
+            <template x-if="toolAsset.target.includes('linux')">
+              <p class="mt-2 text-dim" style="font-size:0.88rem;">After download: <code x-text="'chmod +x ' + toolAsset.filename + ' &amp;&amp; sudo mv ' + toolAsset.filename + ' /usr/local/bin/ceremony_tool'"></code></p>
+            </template>
+            <template x-if="toolAsset.target.includes('windows')">
+              <p class="mt-2 text-dim" style="font-size:0.88rem;">Rename to <code>ceremony_tool.exe</code> and run from an elevated PowerShell. SmartScreen may prompt — <em>More info &rarr; Run anyway</em>.</p>
+            </template>
+          </div>
+        </template>
+        <template x-if="!toolAsset">
+          <p class="mt-2 text-dim">Couldn't detect your platform automatically — pick your download from <a href="/download.html">the release page</a>.</p>
+        </template>
+      </li>
+      <li class="mt-2">Run the tool:
         <pre><code x-text="'ceremony_tool contribute \\\n  --tier ' + tier + ' \\\n  --in-dir ./prev \\\n  --out-dir ./mine \\\n  --participant ' + pubkey"></code></pre>
       </li>
       <li class="mt-2">Upload the three files from <code>./mine</code>:
@@ -260,6 +317,8 @@ function contribute() {
     files: { state_srs: null, state_txt: null, receipt: null },
     busy: false,
     error: '',
+    toolAsset: null,
+    osLabel: '',
 
     depthFor(t) { return { small: 5, medium: 8, large: 11 }[t] ?? '?'; },
 
@@ -272,8 +331,58 @@ function contribute() {
       if (window.nostr && window.nostr.getPublicKey) {
         try { this.pubkey = await window.nostr.getPublicKey(); await this.refresh(); } catch (_) {}
       }
+      this.detectToolAsset();
       setInterval(() => this.tick(), 1000);
       Ceremony.status.subscribe(snap => { this.tiers = snap.tiers || []; });
+    },
+
+    async detectToolAsset() {
+      try {
+        const m = await Ceremony.api.get('/downloads');
+        const assets = m.assets || [];
+        if (!assets.length) return;
+        const target = this.pickTarget();
+        this.osLabel = this.labelFor(target);
+        const a = assets.find(x => x.target === target)
+          || assets.find(x => x.target.includes('apple-darwin'))
+          || assets[0];
+        this.toolAsset = { ...a, tag: m.tag };
+      } catch (_) { /* download page handles the error path */ }
+    },
+
+    pickTarget() {
+      const uad = navigator.userAgentData;
+      const ua = navigator.userAgent || '';
+      const platform = (uad?.platform || navigator.platform || '').toLowerCase();
+      const arch = (uad?.arch || '').toLowerCase();
+      const mobile = uad?.mobile;
+      const isMac = /mac/.test(platform);
+      const isWin = /win/.test(platform);
+      const isLinux = /linux/.test(platform) && !/android/.test(ua.toLowerCase());
+      // Apple Silicon detection: navigator.userAgentData.arch is 'arm' on M-series.
+      // Fallback heuristic: modern Safari on ARM still reports "MacIntel", so we
+      // can't always tell — prefer aarch64 since most current Macs are M-series.
+      if (isMac) {
+        if (arch === 'x86' || arch === 'x86_64') return 'x86_64-apple-darwin';
+        return 'aarch64-apple-darwin';
+      }
+      if (isWin) return 'x86_64-pc-windows-msvc';
+      if (isLinux) {
+        if (arch === 'arm' || /aarch64|arm64/.test(ua)) return 'aarch64-unknown-linux-musl';
+        return 'x86_64-unknown-linux-musl';
+      }
+      // Mobile / unknown: default to Apple Silicon (most ceremony participants use a Mac).
+      return mobile ? 'aarch64-apple-darwin' : 'x86_64-unknown-linux-musl';
+    },
+
+    labelFor(target) {
+      return {
+        'aarch64-apple-darwin': 'macOS (Apple Silicon)',
+        'x86_64-apple-darwin': 'macOS (Intel)',
+        'x86_64-unknown-linux-musl': 'Linux x86_64',
+        'aarch64-unknown-linux-musl': 'Linux arm64',
+        'x86_64-pc-windows-msvc': 'Windows x86_64',
+      }[target] || target;
     },
 
     tick() {

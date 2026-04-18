@@ -43,6 +43,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
 time = { version = "0.3", features = ["serde", "macros"] }
 
+zip = { version = "2", default-features = false }
+
 async-trait = "0.1"
 async-stream = "0.3"
 async-tungstenite = { version = "0.25", features = ["tokio-runtime", "tokio-rustls-native-certs"] }

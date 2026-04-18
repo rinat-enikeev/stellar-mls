@@ -1,12 +1,15 @@
+use axum::body::Bytes;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::{IntoResponse, Redirect};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
 use futures::stream::Stream;
 use serde::Serialize;
 use std::convert::Infallible;
+use std::io::Write;
 use std::str::FromStr;
+use zip::write::SimpleFileOptions;
 
 use crate::model::{
     now_unix, CurrentSlot, Round, SignupStatus, StatusSnapshot, Tier, TierStatus,
@@ -107,6 +110,59 @@ pub async fn round_artifact(
         _ => return Err((StatusCode::NOT_FOUND, "unknown artifact".into())),
     };
     Ok(Redirect::to(&state.blossom.public_blob_url(&hash)))
+}
+
+pub async fn round_prev_zip(
+    State(state): State<SharedState>,
+    Path((tier, round)): Path<(String, i64)>,
+) -> Result<Response, (StatusCode, String)> {
+    let tier = Tier::from_str(&tier).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let r = state
+        .store
+        .get_round(tier, round)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "round not found".into()))?;
+
+    let (srs, txt, receipt) = tokio::try_join!(
+        state.blossom.get(&r.srs_hash),
+        state.blossom.get(&r.state_txt_hash),
+        state.blossom.get(&r.receipt_hash),
+    )
+    .map_err(|e| (StatusCode::BAD_GATEWAY, format!("blossom fetch: {e}")))?;
+
+    let filename = format!("prev-{}-round{}.zip", tier.as_str(), round);
+    let buf = tokio::task::spawn_blocking(move || build_prev_zip(&srs, &txt, &receipt))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/zip".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        Bytes::from(buf),
+    )
+        .into_response())
+}
+
+fn build_prev_zip(srs: &[u8], txt: &[u8], receipt: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
+    {
+        let mut zw = zip::ZipWriter::new(&mut cursor);
+        let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zw.start_file("prev/state.srs", opts)?;
+        zw.write_all(srs)?;
+        zw.start_file("prev/state.txt", opts)?;
+        zw.write_all(txt)?;
+        zw.start_file("prev/receipt.txt", opts)?;
+        zw.write_all(receipt)?;
+        zw.finish()?;
+    }
+    Ok(cursor.into_inner())
 }
 
 pub async fn phase2_round_artifact(

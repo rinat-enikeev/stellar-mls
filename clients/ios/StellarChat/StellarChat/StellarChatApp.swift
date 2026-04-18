@@ -167,6 +167,10 @@ final class AppState {
     var chatMessages: [String: [ChatMessage]] = [:]
     /// Dedup set for chat message event IDs, keyed by group ID.
     private var seenMessageIDs: [String: Set<String>] = [:]
+    /// Message IDs currently being retried. Prevents two rapid taps on the same
+    /// failed message from launching concurrent retries (mirrors Android's
+    /// `retryingMessageIDs`). Access is serialised on the @MainActor class.
+    private var retryingMessageIDs: Set<String> = []
     /// Unread message count per group. Reset when the user opens the chat.
     var unreadCounts: [String: Int] = [:]
     /// The group ID currently being viewed, used to suppress unread increments.
@@ -2259,10 +2263,14 @@ final class AppState {
         chatTransport.onOK = { [weak self] eventID, accepted in
             guard let self else { return }
             Task { @MainActor in
-                // Find and update the message status
+                // Find and update the message status in-memory and on disk so the
+                // final state survives app restart (Android parity: setupOKHandler
+                // also persists via store.updateMessageStatus).
+                let newStatus: MessageStatus = accepted ? .sent : .failed
                 for (groupID, messages) in self.chatMessages {
                     if let index = messages.firstIndex(where: { $0.id == eventID }) {
-                        self.chatMessages[groupID]?[index].status = accepted ? .sent : .failed
+                        self.chatMessages[groupID]?[index].status = newStatus
+                        self.store.updateMessageStatusAsync(id: eventID, status: newStatus)
                         break
                     }
                 }
@@ -2330,6 +2338,7 @@ final class AppState {
                 await MainActor.run {
                     if let idx = self.chatMessages[groupID]?.firstIndex(where: { $0.id == event.id }) {
                         self.chatMessages[groupID]?[idx].status = .failed
+                        self.store.updateMessageStatusAsync(id: event.id, status: .failed)
                     }
                 }
             }
@@ -2343,9 +2352,16 @@ final class AppState {
               chatMessages[groupID]?[idx].status == .failed
         else { return }
 
-        let text = chatMessages[groupID]![idx].text
-        let replyToID = chatMessages[groupID]![idx].replyToID
+        // Double-tap guard: drop the call if a retry is already in flight for
+        // this message ID. Android uses the same pattern in retryingMessageIDs.
+        guard retryingMessageIDs.insert(messageID).inserted else { return }
+
+        let originalMsg = chatMessages[groupID]![idx]
+        let text = originalMsg.text
+        let replyToID = originalMsg.replyToID
+        let originalSenderPubkey = originalMsg.senderPubkey
         chatMessages[groupID]?[idx].status = .sending
+        store.updateMessageStatusAsync(id: messageID, status: .sending)
 
         Task {
             do {
@@ -2370,23 +2386,44 @@ final class AppState {
                     kind: 44114, tags: [["t", sendTopic], ["epoch", "\(sendEpoch)"]], content: content, keyManager: keyManager,
                     ephemeralSigner: try RustBackedNostrSigner.ephemeral()
                 )
+
+                // Mark new event ID as seen before publishing so the relay
+                // echo is deduplicated and cannot create a duplicate message.
+                self.seenMessageIDs[groupID, default: []].insert(event.id)
+
                 try await chatTransport.publishToRelays(event)
                 await MainActor.run {
-                    // Replace the message with updated ID and sent status
-                    if let i = self.chatMessages[groupID]?.firstIndex(where: { $0.id == messageID }) {
-                        let old = self.chatMessages[groupID]![i]
-                        self.chatMessages[groupID]?[i] = ChatMessage(
-                            id: event.id, groupID: old.groupID, senderPubkey: old.senderPubkey,
-                            text: old.text, timestamp: old.timestamp, isMine: old.isMine, status: .sent,
-                            epoch: sendEpoch, replyToID: old.replyToID
-                        )
+                    // Preserve the original message's senderPubkey (BLS hex)
+                    // so retried messages keep the same sender identity they
+                    // were persisted with. Matches Android's
+                    // `failedMsg.copy(id = event.id, ...)` pattern. Using
+                    // keyManager.publicKeyHex here would overwrite with the
+                    // Nostr ed25519 key, diverging from sendMessage/setupChatHandler.
+                    let newMsg = ChatMessage(
+                        id: event.id, groupID: groupID, senderPubkey: originalSenderPubkey,
+                        text: text, timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
+                        isMine: true, status: .sent,
+                        epoch: sendEpoch, replyToID: replyToID
+                    )
+
+                    // If the relay echo arrived before this block, a message
+                    // with event.id already exists — just remove the old entry.
+                    if self.chatMessages[groupID]?.contains(where: { $0.id == event.id }) == true {
+                        self.chatMessages[groupID]?.removeAll { $0.id == messageID }
+                        self.store.deleteMessageAsync(id: messageID)
+                    } else if let i = self.chatMessages[groupID]?.firstIndex(where: { $0.id == messageID }) {
+                        self.chatMessages[groupID]?[i] = newMsg
+                        self.store.replaceMessageAsync(oldID: messageID, with: newMsg)
                     }
+                    self.retryingMessageIDs.remove(messageID)
                 }
             } catch {
                 await MainActor.run {
                     if let i = self.chatMessages[groupID]?.firstIndex(where: { $0.id == messageID }) {
                         self.chatMessages[groupID]?[i].status = .failed
+                        self.store.updateMessageStatusAsync(id: messageID, status: .failed)
                     }
+                    self.retryingMessageIDs.remove(messageID)
                 }
             }
         }
@@ -2495,6 +2532,7 @@ final class AppState {
                 await MainActor.run {
                     if let idx = self.chatMessages[groupID]?.firstIndex(where: { $0.id == event.id }) {
                         self.chatMessages[groupID]?[idx].status = .failed
+                        self.store.updateMessageStatusAsync(id: event.id, status: .failed)
                     }
                 }
             }
@@ -2608,6 +2646,7 @@ final class AppState {
                 await MainActor.run {
                     if let idx = self.chatMessages[groupID]?.firstIndex(where: { $0.id == event.id }) {
                         self.chatMessages[groupID]?[idx].status = .failed
+                        self.store.updateMessageStatusAsync(id: event.id, status: .failed)
                     }
                 }
             }
@@ -2701,6 +2740,7 @@ final class AppState {
                 await MainActor.run {
                     if let idx = self.chatMessages[groupID]?.firstIndex(where: { $0.id == event.id }) {
                         self.chatMessages[groupID]?[idx].status = .failed
+                        self.store.updateMessageStatusAsync(id: event.id, status: .failed)
                     }
                 }
             }

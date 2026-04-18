@@ -62,7 +62,9 @@ data class PersistedMessage(
     @ColumnInfo(defaultValue = "0")
     val isSystemMessage: Boolean = false,
     val epoch: Int? = null,
-    val replyToID: String? = null
+    val replyToID: String? = null,
+    @ColumnInfo(defaultValue = "SENT")
+    val status: String = "SENT"
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

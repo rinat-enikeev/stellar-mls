@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 
 @Dao
 interface StellarChatDao {
@@ -21,6 +22,18 @@ interface StellarChatDao {
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun saveMessage(message: PersistedMessage)
+
+    @Query("DELETE FROM messages WHERE id = :id")
+    suspend fun deleteMessage(id: String)
+
+    @Query("UPDATE messages SET status = :status WHERE id = :id")
+    suspend fun updateMessageStatus(id: String, status: String)
+
+    @Transaction
+    suspend fun replaceMessageTransaction(oldID: String, message: PersistedMessage) {
+        deleteMessage(oldID)
+        saveMessage(message)
+    }
 
     @Query("DELETE FROM messages WHERE groupID = :groupID")
     suspend fun deleteMessages(groupID: String)

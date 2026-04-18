@@ -166,6 +166,8 @@ final class PersistedMessage {
     var isSystemMessage: Bool?
     var epoch: Int?
     var replyToID: String?
+    /// Raw value of `MessageStatus` (optional for SwiftData lightweight migration from older stores).
+    var status: String?
 
     init(
         id: String,
@@ -177,7 +179,8 @@ final class PersistedMessage {
         encryptedMediaAttachment: Data? = nil,
         isSystemMessage: Bool = false,
         epoch: Int? = nil,
-        replyToID: String? = nil
+        replyToID: String? = nil,
+        status: String? = nil
     ) {
         self.id = id
         self.groupID = groupID
@@ -189,5 +192,6 @@ final class PersistedMessage {
         self.isSystemMessage = isSystemMessage
         self.epoch = epoch
         self.replyToID = replyToID
+        self.status = status
     }
 }

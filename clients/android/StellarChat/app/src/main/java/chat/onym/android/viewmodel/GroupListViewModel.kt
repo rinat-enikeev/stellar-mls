@@ -2398,6 +2398,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     val updated = messages.toMutableList()
                     updated[index] = updated[index].copy(status = newStatus)
                     chatMessages[groupID] = updated
+                    viewModelScope.launch {
+                        try { store.updateMessageStatus(eventID, newStatus) } catch (_: Exception) { }
+                    }
                     break
                 }
             }
@@ -2448,30 +2451,76 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /** Retry a failed message by re-encrypting and re-publishing. */
+    private val retryingMessageIDs = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
     fun retryMessage(groupID: String, messageID: String) {
         val group = groups.find { it.id == groupID } ?: return
         val messages = chatMessages[groupID] ?: return
         val idx = messages.indexOfFirst { it.id == messageID && it.status == MessageStatus.FAILED }
         if (idx < 0) return
+        if (!retryingMessageIDs.add(messageID)) return
 
         val failedMsg = messages[idx]
         val updated = messages.toMutableList()
         updated[idx] = failedMsg.copy(status = MessageStatus.SENDING)
         chatMessages[groupID] = updated
 
-        val event = transport.send(
-            group, failedMsg.text,
-            overrideKey = effectiveEncryptionKey(group),
-            overrideTopicTag = effectiveTopicTag(group),
-            epoch = effectiveEpoch(group),
-            replyToID = failedMsg.replyToID
-        )
-        // Update the message ID to the new event and mark as SENDING (OK handler will set SENT/FAILED)
-        val current = chatMessages[groupID]?.toMutableList() ?: return
-        val i = current.indexOfFirst { it.id == messageID }
-        if (i >= 0) {
-            current[i] = current[i].copy(id = event.id, status = MessageStatus.SENDING)
-            chatMessages[groupID] = current
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    store.updateMessageStatus(messageID, MessageStatus.SENDING)
+                }
+
+                // transport.send() serialises NIP-01 events and publishes to relays.
+                // Keep it off the Main dispatcher to match the surrounding pattern.
+                val event = withContext(Dispatchers.IO) {
+                    transport.send(
+                        group, failedMsg.text,
+                        overrideKey = effectiveEncryptionKey(group),
+                        overrideTopicTag = effectiveTopicTag(group),
+                        epoch = effectiveEpoch(group),
+                        replyToID = failedMsg.replyToID
+                    )
+                }
+
+                seenMessageIDs.computeIfAbsent(groupID) {
+                    java.util.Collections.synchronizedSet(mutableSetOf())
+                }.add(event.id)
+
+                val newMsg = failedMsg.copy(id = event.id, status = MessageStatus.SENDING)
+
+                // Update the in-memory list BEFORE the IO write. setupOKHandler
+                // looks up chatMessages by event.id when the relay acks, and the
+                // ack can arrive while this coroutine is suspended inside the
+                // replaceMessage IO call. If we updated in-memory after the IO
+                // write, the OK handler would miss the message (still keyed by
+                // the old ID) and leave it stuck in SENDING until next restart.
+                val current = chatMessages[groupID]?.toMutableList() ?: return@launch
+                val i = current.indexOfFirst { it.id == messageID }
+                if (i >= 0) {
+                    current[i] = newMsg
+                    chatMessages[groupID] = current
+                }
+
+                withContext(Dispatchers.IO) {
+                    store.replaceMessage(messageID, newMsg)
+                }
+            } catch (e: Exception) {
+                Log.e("GroupListVM", "retryMessage failed", e)
+                val reverted = chatMessages[groupID]?.toMutableList() ?: return@launch
+                val ri = reverted.indexOfFirst { it.id == messageID }
+                if (ri >= 0) {
+                    reverted[ri] = reverted[ri].copy(status = MessageStatus.FAILED)
+                    chatMessages[groupID] = reverted
+                }
+                try {
+                    withContext(Dispatchers.IO) {
+                        store.updateMessageStatus(messageID, MessageStatus.FAILED)
+                    }
+                } catch (_: Exception) { }
+            } finally {
+                retryingMessageIDs.remove(messageID)
+            }
         }
     }
 

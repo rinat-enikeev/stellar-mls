@@ -1,0 +1,9 @@
+{
+  "name": "qa-bot GitHub",
+  "type": "githubApi",
+  "data": {
+    "server": "https://api.github.com",
+    "user": "qa-bot",
+    "accessToken": "PASTE-GITHUB-APP-INSTALLATION-TOKEN-OR-FINE-GRAINED-PAT-HERE"
+  }
+}

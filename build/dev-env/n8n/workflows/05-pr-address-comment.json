@@ -1,0 +1,301 @@
+{
+  "name": "05 PR address comment",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pr-address-comment",
+        "responseMode": "onReceived",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "a5000000-0000-0000-0000-000000000001",
+      "name": "Webhook (issue_comment)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 220],
+      "webhookId": "pr-address-comment"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pr-address-review-comment",
+        "responseMode": "onReceived",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "a5000000-0000-0000-0000-000000000002",
+      "name": "Webhook (review_comment)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 380],
+      "webhookId": "pr-address-review-comment"
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 2
+      },
+      "id": "a5000000-0000-0000-0000-000000000003",
+      "name": "Merge webhooks",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "b5000000-0000-0000-0000-000000000001",
+              "leftValue": "={{ (() => { const body = $json.body; if (body.action !== 'created') return false; const isIssueComment = !!body.issue; const isReviewComment = !isIssueComment && !!body.comment && !!body.pull_request; if (isIssueComment && !body.issue.pull_request) return false; if (body.sender && body.sender.type === 'Bot') return false; const botLogins = ($env.N8N_BOT_LOGINS || '').split(',').map(s => s.trim()).filter(Boolean); if (botLogins.includes(body.sender && body.sender.login)) return false; const commenter = body.comment && body.comment.user && body.comment.user.login; if (botLogins.includes(commenter)) return false; const text = ((body.comment && body.comment.body) || '').trim(); if (/^\\/(build|merge|review)\\b/i.test(text)) return false; return true; })() }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a5000000-0000-0000-0000-000000000004",
+      "name": "Is human PR comment?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $json.body;\nconst isReviewComment = !b.issue && !!b.pull_request;\nconst prNumber = isReviewComment ? b.pull_request.number : b.issue.number;\nconst commentBody = (b.comment && b.comment.body) || '';\nreturn [{ json: {\n  isReviewComment,\n  prNumber,\n  commentId: b.comment && b.comment.id,\n  commentBody,\n  commentUrl: (b.comment && b.comment.html_url) || '',\n  path: (b.comment && b.comment.path) || null,\n  line: (b.comment && (b.comment.line || b.comment.original_line)) || null,\n  diffHunk: (b.comment && b.comment.diff_hunk) || null,\n  repoOwner: b.repository.owner.login,\n  repoName: b.repository.name,\n  repoFull: b.repository.full_name,\n  senderLogin: b.sender && b.sender.login\n}}];\n"
+      },
+      "id": "a5000000-0000-0000-0000-000000000005",
+      "name": "Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.github.com/repos/{{ $json.repoOwner }}/{{ $json.repoName }}/pulls/{{ $json.prNumber }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github+json" },
+            { "name": "X-GitHub-Api-Version", "value": "2022-11-28" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a5000000-0000-0000-0000-000000000006",
+      "name": "Get PR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 300],
+      "credentials": {
+        "githubApi": {
+          "id": "REPLACE_ME",
+          "name": "qa-bot GitHub"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const pr = $json;\nconst prev = $('Normalize').item.json;\nconst map = JSON.parse($env.N8N_AGENT_MAP || '{}');\nconst prAuthor = pr.user && pr.user.login;\nconst authorEntry = map[prAuthor];\nconst hasFixSlash = /^\\/fix\\b/i.test((prev.commentBody || '').trim());\nconst targetLogin = (authorEntry && authorEntry.role === 'implementer')\n  ? prAuthor\n  : (hasFixSlash ? $env.N8N_IMPLEMENTER_DEFAULT : null);\nif (!targetLogin) {\n  return [];\n}\nconst entry = map[targetLogin];\nif (!entry) {\n  throw new Error(`N8N_AGENT_MAP missing implementer \"${targetLogin}\"`);\n}\nreturn [{ json: {\n  ...prev,\n  branch: pr.head.ref,\n  baseRef: pr.base.ref,\n  headSha: pr.head.sha,\n  prAuthor,\n  host: entry.host,\n  sshPort: entry.port,\n  sshUser: entry.user,\n}}];\n"
+      },
+      "id": "a5000000-0000-0000-0000-000000000007",
+      "name": "Resolve implementer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst location = j.path ? ` at ${j.path}${j.line ? ':' + j.line : ''}` : '';\nconst diffBlock = j.diffHunk ? `\\n\\nRelevant diff hunk:\\n\\`\\`\\`diff\\n${j.diffHunk}\\n\\`\\`\\`\\n` : '';\nconst prompt = `You are addressing review feedback on PR #${j.prNumber}, branch ${j.branch}.\n\nReviewer comment${location}:\n---\n${j.commentBody}\n---${diffBlock}\n\nMake the smallest change that addresses the comment. If the comment is a question, answer it inline by committing a clarifying code comment — never just echo back. Commit with message:\n\"address review comment ${j.commentId}\". Do not rebase. Do not push — the workflow handles push.\n`;\nreturn [{ json: { ...j, promptB64: Buffer.from(prompt, 'utf8').toString('base64') } }];\n"
+      },
+      "id": "a5000000-0000-0000-0000-000000000008",
+      "name": "Encode fix prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "d5000000-0000-0000-0000-000000000001",
+                    "leftValue": "={{ $json.host }}",
+                    "rightValue": "release-agent",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "release-agent"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "d5000000-0000-0000-0000-000000000002",
+                    "leftValue": "={{ $json.host }}",
+                    "rightValue": "qa-agent",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "qa-agent"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a5000000-0000-0000-0000-000000000009",
+      "name": "Switch by host",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "resource": "command",
+        "command": "=set +e\nset -o pipefail\nPR={{ $json.prNumber }}\nBRANCH=\"{{ $json.branch }}\"\nCID=\"{{ $json.commentId }}\"\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngit fetch origin \"$BRANCH\" 2>&1\ngit checkout \"$BRANCH\" 2>&1\ngit reset --hard \"origin/$BRANCH\" 2>&1\nPROMPT=\"/tmp/fix-$PR-$CID.txt\"\necho {{ $json.promptB64 }} | base64 -d > \"$PROMPT\"\nclaude --print < \"$PROMPT\"\nCLAUDE_RC=$?\nrm -f \"$PROMPT\"\necho \"CLAUDE_RC=$CLAUDE_RC\"\nif git diff --quiet \"origin/$BRANCH..HEAD\"; then\n  echo \"NO_CHANGES=1\"\n  exit 0\nfi\ngit push origin \"HEAD:$BRANCH\" 2>&1\nPUSH_RC=$?\necho \"PUSH_RC=$PUSH_RC\"\nNEW_SHA=$(git rev-parse HEAD)\necho \"NEW_SHA=$NEW_SHA\"\nexit 0\n"
+      },
+      "id": "a5000000-0000-0000-0000-000000000010",
+      "name": "Run fix in release-agent",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [2000, 220],
+      "credentials": {
+        "sshPassword": {
+          "id": "REPLACE_ME",
+          "name": "release-agent SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "command",
+        "command": "=set +e\nset -o pipefail\nPR={{ $json.prNumber }}\nBRANCH=\"{{ $json.branch }}\"\nCID=\"{{ $json.commentId }}\"\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngit fetch origin \"$BRANCH\" 2>&1\ngit checkout \"$BRANCH\" 2>&1\ngit reset --hard \"origin/$BRANCH\" 2>&1\nPROMPT=\"/tmp/fix-$PR-$CID.txt\"\necho {{ $json.promptB64 }} | base64 -d > \"$PROMPT\"\nclaude --print < \"$PROMPT\"\nCLAUDE_RC=$?\nrm -f \"$PROMPT\"\necho \"CLAUDE_RC=$CLAUDE_RC\"\nif git diff --quiet \"origin/$BRANCH..HEAD\"; then\n  echo \"NO_CHANGES=1\"\n  exit 0\nfi\ngit push origin \"HEAD:$BRANCH\" 2>&1\nPUSH_RC=$?\necho \"PUSH_RC=$PUSH_RC\"\nNEW_SHA=$(git rev-parse HEAD)\necho \"NEW_SHA=$NEW_SHA\"\nexit 0\n"
+      },
+      "id": "a5000000-0000-0000-0000-000000000011",
+      "name": "Run fix in qa-agent",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [2000, 380],
+      "credentials": {
+        "sshPassword": {
+          "id": "REPLACE_ME",
+          "name": "qa-agent SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "numberInputs": 2
+      },
+      "id": "a5000000-0000-0000-0000-000000000012",
+      "name": "Merge SSH outputs",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [2220, 300]
+    },
+    {
+      "parameters": {
+        "resource": "issue",
+        "operation": "createComment",
+        "owner": "={{ $('Normalize').item.json.repoOwner }}",
+        "repository": "={{ $('Normalize').item.json.repoName }}",
+        "issueNumber": "={{ $('Normalize').item.json.prNumber }}",
+        "body": "={{ (() => { const out = $json.stdout || ''; const noChanges = /NO_CHANGES=1/.test(out); const pushRc = (out.match(/PUSH_RC=(\\d+)/) || [])[1]; const newSha = (out.match(/NEW_SHA=([a-f0-9]+)/) || [])[1]; const cid = $('Normalize').item.json.commentId; if (noChanges) return `agent ran on comment ${cid} but produced no changes.`; if (pushRc && pushRc !== '0') return `agent addressed comment ${cid} but push failed (rc=${pushRc}) — see workflow logs.`; if (newSha) return `addressed in \\`${newSha.slice(0,7)}\\` (comment ${cid}).`; return `agent finished comment ${cid} — see workflow logs.`; })() }}"
+      },
+      "id": "a5000000-0000-0000-0000-000000000013",
+      "name": "Post result on PR",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [2440, 300],
+      "credentials": {
+        "githubApi": {
+          "id": "REPLACE_ME",
+          "name": "qa-bot GitHub"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook (issue_comment)": {
+      "main": [[{ "node": "Merge webhooks", "type": "main", "index": 0 }]]
+    },
+    "Webhook (review_comment)": {
+      "main": [[{ "node": "Merge webhooks", "type": "main", "index": 1 }]]
+    },
+    "Merge webhooks": {
+      "main": [[{ "node": "Is human PR comment?", "type": "main", "index": 0 }]]
+    },
+    "Is human PR comment?": {
+      "main": [
+        [{ "node": "Normalize", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Normalize": {
+      "main": [[{ "node": "Get PR", "type": "main", "index": 0 }]]
+    },
+    "Get PR": {
+      "main": [[{ "node": "Resolve implementer", "type": "main", "index": 0 }]]
+    },
+    "Resolve implementer": {
+      "main": [[{ "node": "Encode fix prompt", "type": "main", "index": 0 }]]
+    },
+    "Encode fix prompt": {
+      "main": [[{ "node": "Switch by host", "type": "main", "index": 0 }]]
+    },
+    "Switch by host": {
+      "main": [
+        [{ "node": "Run fix in release-agent", "type": "main", "index": 0 }],
+        [{ "node": "Run fix in qa-agent", "type": "main", "index": 0 }]
+      ]
+    },
+    "Run fix in release-agent": {
+      "main": [[{ "node": "Merge SSH outputs", "type": "main", "index": 0 }]]
+    },
+    "Run fix in qa-agent": {
+      "main": [[{ "node": "Merge SSH outputs", "type": "main", "index": 1 }]]
+    },
+    "Merge SSH outputs": {
+      "main": [[{ "node": "Post result on PR", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

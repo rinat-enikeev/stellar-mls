@@ -68,7 +68,7 @@ build/dev-env/
 │   ├── remote-xcodebuild.sh     # baked to /usr/local/bin/remote-xcodebuild in container
 │   └── remote-jnilibs.sh        # baked to /usr/local/bin/remote-jnilibs
 ├── n8n/
-│   ├── README.md                # workflow specs
+│   ├── README.md                # workflow specs (6 workflows — see docs/design-n8n-agent-round-trip.md for the round-trip)
 │   └── workflows/               # exported JSON (manual import in n8n UI)
 └── host/                        # deployed manually to the Mac mini
     ├── host-build-dispatch.sh
@@ -306,13 +306,27 @@ launchctl load -w ~/Library/LaunchAgents/com.stellar.devenv.plist
 
 Requires Docker Desktop (or OrbStack) to auto-start at login.
 
-### 11. n8n credentials + webhooks
+### 11. n8n credentials + workflows
 
-See `n8n/README.md` for the full playbook. TL;DR: create the owner
-account at http://127.0.0.1:5678, add an SSH credential whose pubkey
-goes into each agent's `.env` as `N8N_SSH_PUBKEY`, register two
-scoped GitHub Apps (qa-bot, release-bot), and point a cloudflared
-tunnel at n8n's webhook endpoint.
+```bash
+cp -R n8n/secrets.example n8n/secrets
+chmod 600 n8n/secrets/*.json
+# Fill in: ssh-qa-agent.json, ssh-release-agent.json,
+#          github-qa-bot.json, github-release-bot.json
+#          (see n8n/secrets.example/README.md for field-by-field guide)
+
+./bin/n8n-deploy.sh
+```
+
+`n8n-deploy.sh` imports every credential + workflow into
+`stellar-n8n`, rewrites `REPLACE_ME` IDs to real ones, activates the
+six workflows, and prints each webhook URL.
+
+You still need to create the owner account at
+http://127.0.0.1:5678 (UI, one-time) and point a cloudflared tunnel at
+`http://stellar-n8n:5678` — set the resulting public URL as
+`WEBHOOK_URL` in `n8n.env` before running the deploy script so the
+printed webhook URLs are correct. Full playbook: `n8n/README.md`.
 
 ---
 
@@ -357,10 +371,16 @@ Then the end-to-end smoke tests:
    remote-xcodebuild "$SHA"    # logs stream over stderr; ARTIFACT: line on success
    ```
 
-5. **End-to-end n8n flow**: open a dummy issue on GitHub, add the
-   `agent-task` label, watch workflow 01 open a PR within ~2 min. Merge
-   a trivial PR to confirm workflow 02 pushes a tag and
-   `release.yml` runs on GitHub.
+5. **End-to-end n8n flow**: open a dummy issue on GitHub, assign
+   `@programyzer` (or add the `agent-task` label), watch workflow 01
+   open a PR within ~2 min with `@releaseng` auto-requested as
+   reviewer. Workflow 04 should then post a Claude review within
+   ~60s. Leave a PR review comment — workflow 05 pushes a follow-up
+   commit. Comment `/merge` as `@alexpovstin` — workflow 06 merges
+   and files a smoke-test issue, then workflow 02 tags the release
+   and `release.yml` runs on GitHub. See
+   `docs/design-n8n-agent-round-trip.md` for the full verification
+   checklist.
 
 ---
 
@@ -371,6 +391,7 @@ Then the end-to-end smoke tests:
 ./bin/down.sh                   # stop + remove containers (keeps volumes)
 ./bin/reset-agent.sh qa         # nuke qa-agent's volumes and rebuild
 ./bin/doctor.sh                 # structural + reachability checks
+./bin/n8n-deploy.sh             # (re)push workflows + credentials into n8n
 docker compose -f docker-compose.dev.yml logs -f qa-agent
 ```
 

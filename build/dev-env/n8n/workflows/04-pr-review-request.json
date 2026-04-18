@@ -1,0 +1,257 @@
+{
+  "name": "04 PR review request",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pr-review-request",
+        "responseMode": "onReceived",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "a4000000-0000-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "webhookId": "pr-review-request"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "b4000000-0000-0000-0000-000000000001",
+              "leftValue": "={{ (() => { const body = $json.body; if (body.action !== 'review_requested') return false; if (body.sender && body.sender.type === 'Bot') return false; const botLogins = ($env.N8N_BOT_LOGINS || '').split(',').map(s => s.trim()).filter(Boolean); if (botLogins.includes(body.sender && body.sender.login)) return false; const reviewer = body.requested_reviewer && body.requested_reviewer.login; if (!reviewer) return false; let map = {}; try { map = JSON.parse($env.N8N_AGENT_MAP || '{}'); } catch (e) { return false; } return !!(map[reviewer] && map[reviewer].role === 'reviewer'); })() }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a4000000-0000-0000-0000-000000000002",
+      "name": "Is review_requested for agent?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c4000000-0000-0000-0000-000000000001",
+              "name": "prNumber",
+              "value": "={{ $json.body.pull_request.number }}",
+              "type": "number"
+            },
+            {
+              "id": "c4000000-0000-0000-0000-000000000002",
+              "name": "prTitle",
+              "value": "={{ $json.body.pull_request.title }}",
+              "type": "string"
+            },
+            {
+              "id": "c4000000-0000-0000-0000-000000000003",
+              "name": "prBody",
+              "value": "={{ $json.body.pull_request.body || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "c4000000-0000-0000-0000-000000000004",
+              "name": "prHeadRef",
+              "value": "={{ $json.body.pull_request.head.ref }}",
+              "type": "string"
+            },
+            {
+              "id": "c4000000-0000-0000-0000-000000000005",
+              "name": "prHeadSha",
+              "value": "={{ $json.body.pull_request.head.sha }}",
+              "type": "string"
+            },
+            {
+              "id": "c4000000-0000-0000-0000-000000000006",
+              "name": "prBaseRef",
+              "value": "={{ $json.body.pull_request.base.ref }}",
+              "type": "string"
+            },
+            {
+              "id": "c4000000-0000-0000-0000-000000000007",
+              "name": "reviewerLogin",
+              "value": "={{ $json.body.requested_reviewer.login }}",
+              "type": "string"
+            },
+            {
+              "id": "c4000000-0000-0000-0000-000000000008",
+              "name": "repoOwner",
+              "value": "={{ $json.body.repository.owner.login }}",
+              "type": "string"
+            },
+            {
+              "id": "c4000000-0000-0000-0000-000000000009",
+              "name": "repoName",
+              "value": "={{ $json.body.repository.name }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a4000000-0000-0000-0000-000000000003",
+      "name": "Extract PR fields",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [680, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $input.first().json;\nconst map = JSON.parse($env.N8N_AGENT_MAP || '{}');\nconst entry = map[prev.reviewerLogin];\nif (!entry || entry.role !== 'reviewer') {\n  throw new Error(`N8N_AGENT_MAP has no reviewer entry for login \"${prev.reviewerLogin}\"`);\n}\nreturn [{ json: { ...prev, host: entry.host, sshPort: entry.port, sshUser: entry.user } }];\n"
+      },
+      "id": "a4000000-0000-0000-0000-000000000004",
+      "name": "Resolve reviewer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [790, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst prompt = `You are reviewing PR #${j.prNumber}: ${j.prTitle}\n\nPR description:\n${j.prBody}\n\nProduce a concise code review. Focus on:\n- correctness bugs in the diff\n- test coverage gaps\n- API / backward-compat regressions\n- obvious security issues\n\nOutput format: plain markdown. Start with a one-line verdict\n(APPROVE / REQUEST_CHANGES / COMMENT). Then bullet findings with\nfile:line references. If nothing substantive, say so in one line.\nThe diff is appended below after === DIFF ===.\n`;\nreturn [{ json: { ...j, promptB64: Buffer.from(prompt, 'utf8').toString('base64') } }];\n"
+      },
+      "id": "a4000000-0000-0000-0000-000000000005",
+      "name": "Encode review prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 220]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "d4000000-0000-0000-0000-000000000001",
+                    "leftValue": "={{ $json.host }}",
+                    "rightValue": "qa-agent",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "qa-agent"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "d4000000-0000-0000-0000-000000000002",
+                    "leftValue": "={{ $json.host }}",
+                    "rightValue": "release-agent",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "release-agent"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a4000000-0000-0000-0000-000000000006",
+      "name": "Switch by host",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1020, 220]
+    },
+    {
+      "parameters": {
+        "resource": "command",
+        "command": "=set +e\nset -o pipefail\nPR={{ $json.prNumber }}\nBASE=\"{{ $json.prBaseRef }}\"\nSHA=\"{{ $json.prHeadSha }}\"\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngit fetch origin \"pull/$PR/head:pr-$PR\" 2>&1\ngit fetch origin \"$BASE\" 2>&1\ngit checkout \"pr-$PR\" 2>&1\nPROMPT=\"/tmp/review-$PR.txt\"\necho {{ $json.promptB64 }} | base64 -d > \"$PROMPT\"\necho \"\" >> \"$PROMPT\"\necho \"=== DIFF ===\" >> \"$PROMPT\"\ngit diff \"origin/$BASE...HEAD\" >> \"$PROMPT\"\nREVIEW=$(claude --print < \"$PROMPT\")\nCLAUDE_RC=$?\nrm -f \"$PROMPT\"\necho \"CLAUDE_RC=$CLAUDE_RC\"\nif [ -z \"$REVIEW\" ]; then\n  echo \"ERROR: empty review from claude\" >&2\n  exit 0\nfi\nBODY=\"/tmp/review-body-$PR.md\"\nprintf '%s\\n' \"$REVIEW\" > \"$BODY\"\ngh pr review \"$PR\" --comment --body-file \"$BODY\" 2>&1\nREVIEW_RC=$?\nrm -f \"$BODY\"\necho \"REVIEW_RC=$REVIEW_RC\"\nexit 0\n"
+      },
+      "id": "a4000000-0000-0000-0000-000000000007",
+      "name": "Run review in qa-agent",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [1240, 140],
+      "credentials": {
+        "sshPassword": {
+          "id": "REPLACE_ME",
+          "name": "qa-agent SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "command",
+        "command": "=set +e\nset -o pipefail\nPR={{ $json.prNumber }}\nBASE=\"{{ $json.prBaseRef }}\"\nSHA=\"{{ $json.prHeadSha }}\"\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngit fetch origin \"pull/$PR/head:pr-$PR\" 2>&1\ngit fetch origin \"$BASE\" 2>&1\ngit checkout \"pr-$PR\" 2>&1\nPROMPT=\"/tmp/review-$PR.txt\"\necho {{ $json.promptB64 }} | base64 -d > \"$PROMPT\"\necho \"\" >> \"$PROMPT\"\necho \"=== DIFF ===\" >> \"$PROMPT\"\ngit diff \"origin/$BASE...HEAD\" >> \"$PROMPT\"\nREVIEW=$(claude --print < \"$PROMPT\")\nCLAUDE_RC=$?\nrm -f \"$PROMPT\"\necho \"CLAUDE_RC=$CLAUDE_RC\"\nif [ -z \"$REVIEW\" ]; then\n  echo \"ERROR: empty review from claude\" >&2\n  exit 0\nfi\nBODY=\"/tmp/review-body-$PR.md\"\nprintf '%s\\n' \"$REVIEW\" > \"$BODY\"\ngh pr review \"$PR\" --comment --body-file \"$BODY\" 2>&1\nREVIEW_RC=$?\nrm -f \"$BODY\"\necho \"REVIEW_RC=$REVIEW_RC\"\nexit 0\n"
+      },
+      "id": "a4000000-0000-0000-0000-000000000008",
+      "name": "Run review in release-agent",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [1240, 300],
+      "credentials": {
+        "sshPassword": {
+          "id": "REPLACE_ME",
+          "name": "release-agent SSH"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Is review_requested for agent?", "type": "main", "index": 0 }]]
+    },
+    "Is review_requested for agent?": {
+      "main": [
+        [{ "node": "Extract PR fields", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Extract PR fields": {
+      "main": [[{ "node": "Resolve reviewer", "type": "main", "index": 0 }]]
+    },
+    "Resolve reviewer": {
+      "main": [[{ "node": "Encode review prompt", "type": "main", "index": 0 }]]
+    },
+    "Encode review prompt": {
+      "main": [[{ "node": "Switch by host", "type": "main", "index": 0 }]]
+    },
+    "Switch by host": {
+      "main": [
+        [{ "node": "Run review in qa-agent", "type": "main", "index": 0 }],
+        [{ "node": "Run review in release-agent", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

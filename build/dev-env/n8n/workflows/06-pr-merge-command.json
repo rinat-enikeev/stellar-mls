@@ -1,0 +1,256 @@
+{
+  "name": "06 PR merge command",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pr-merge",
+        "responseMode": "onReceived",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "a6000000-0000-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "webhookId": "pr-merge"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "b6000000-0000-0000-0000-000000000001",
+              "leftValue": "={{ (() => { const body = $json.body; if (body.action !== 'created') return false; if (!body.issue || !body.issue.pull_request) return false; if (body.sender && body.sender.type === 'Bot') return false; const allowed = ($env.N8N_MERGE_AUTHORIZED_LOGINS || '').split(',').map(s => s.trim()).filter(Boolean); if (!allowed.includes(body.sender && body.sender.login)) return false; const text = ((body.comment && body.comment.body) || '').trim(); return /^\\/merge\\b/i.test(text); })() }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a6000000-0000-0000-0000-000000000002",
+      "name": "Is /merge from authorized?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body;\nconst text = ((body.comment && body.comment.body) || '').trim();\nconst m = text.match(/^\\/merge(?:\\s+(squash|rebase|merge))?\\b/i);\nconst method = (m && m[1] ? m[1] : 'squash').toLowerCase();\nreturn [{ json: {\n  mergeMethod: method,\n  prNumber: body.issue.number,\n  repoOwner: body.repository.owner.login,\n  repoName: body.repository.name,\n  repoFull: body.repository.full_name,\n  senderLogin: body.sender && body.sender.login,\n  commentUrl: (body.comment && body.comment.html_url) || ''\n}}];\n"
+      },
+      "id": "a6000000-0000-0000-0000-000000000003",
+      "name": "Parse merge command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 220]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.github.com/repos/{{ $json.repoOwner }}/{{ $json.repoName }}/pulls/{{ $json.prNumber }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Accept", "value": "application/vnd.github+json" },
+            { "name": "X-GitHub-Api-Version", "value": "2022-11-28" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a6000000-0000-0000-0000-000000000004",
+      "name": "Get PR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 220],
+      "credentials": {
+        "githubApi": {
+          "id": "REPLACE_ME",
+          "name": "qa-bot GitHub"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const pr = $json;\nconst prev = $('Parse merge command').item.json;\nconst map = JSON.parse($env.N8N_AGENT_MAP || '{}');\nconst prAuthor = pr.user && pr.user.login;\nconst authorEntry = map[prAuthor];\nconst targetLogin = (authorEntry && authorEntry.role === 'implementer')\n  ? prAuthor\n  : $env.N8N_IMPLEMENTER_DEFAULT;\nconst entry = map[targetLogin];\nif (!entry) {\n  throw new Error(`N8N_AGENT_MAP missing implementer \"${targetLogin}\"`);\n}\nconst qaLogin = $env.N8N_HUMAN_QA_LOGIN;\nif (!qaLogin) {\n  throw new Error('N8N_HUMAN_QA_LOGIN is not set');\n}\nreturn [{ json: {\n  ...prev,\n  prTitle: pr.title,\n  prBody: pr.body || '',\n  prUrl: pr.html_url,\n  prHeadRef: pr.head.ref,\n  prAuthor,\n  host: entry.host,\n  sshPort: entry.port,\n  sshUser: entry.user,\n  qaLogin\n}}];\n"
+      },
+      "id": "a6000000-0000-0000-0000-000000000005",
+      "name": "Resolve implementer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 220]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "d6000000-0000-0000-0000-000000000001",
+                    "leftValue": "={{ $json.host }}",
+                    "rightValue": "release-agent",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "release-agent"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "d6000000-0000-0000-0000-000000000002",
+                    "leftValue": "={{ $json.host }}",
+                    "rightValue": "qa-agent",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "qa-agent"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a6000000-0000-0000-0000-000000000006",
+      "name": "Switch by host",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1340, 220]
+    },
+    {
+      "parameters": {
+        "resource": "command",
+        "command": "=set +e\nset -o pipefail\nPR={{ $json.prNumber }}\nMETHOD=\"{{ $json.mergeMethod }}\"\nREPO=\"{{ $json.repoFull }}\"\nPR_TITLE={{ JSON.stringify($json.prTitle) }}\nPR_URL=\"{{ $json.prUrl }}\"\nQA_LOGIN=\"{{ $json.qaLogin }}\"\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngh pr merge \"$PR\" --\"$METHOD\" --delete-branch --repo \"$REPO\" 2>&1\nMERGE_RC=$?\necho \"MERGE_RC=$MERGE_RC\"\nif [ $MERGE_RC -ne 0 ]; then\n  echo \"SMOKE_URL=\"\n  exit 0\nfi\nBODY=\"/tmp/smoke-body-$PR.md\"\ncat > \"$BODY\" <<EOF\nSmoke-test request for merged PR $PR_URL.\n\nFlows to verify:\n- Pull latest main locally or from the \\`pr-${PR}-build\\` build artefacts.\n- Walk the golden path described in the PR body above.\n- Exploratory pass on both iOS and Android clients.\n\nClose this issue when verification is complete. File a new issue (link it back here) for any regressions discovered.\nEOF\nSMOKE_OUT=$(gh issue create --repo \"$REPO\" \\\n  --title \"Smoke test: $PR_TITLE\" \\\n  --assignee \"$QA_LOGIN\" \\\n  --label smoke-test \\\n  --body-file \"$BODY\" 2>&1)\nSMOKE_RC=$?\nrm -f \"$BODY\"\necho \"SMOKE_RC=$SMOKE_RC\"\necho \"SMOKE_OUT<<__END__\"\necho \"$SMOKE_OUT\"\necho \"__END__\"\nSMOKE_URL=$(printf '%s\\n' \"$SMOKE_OUT\" | grep -Eo 'https://github.com/[^ ]+/issues/[0-9]+' | tail -1)\necho \"SMOKE_URL=$SMOKE_URL\"\nexit 0\n"
+      },
+      "id": "a6000000-0000-0000-0000-000000000007",
+      "name": "Merge + smoke in release-agent",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [1560, 140],
+      "credentials": {
+        "sshPassword": {
+          "id": "REPLACE_ME",
+          "name": "release-agent SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "command",
+        "command": "=set +e\nset -o pipefail\nPR={{ $json.prNumber }}\nMETHOD=\"{{ $json.mergeMethod }}\"\nREPO=\"{{ $json.repoFull }}\"\nPR_TITLE={{ JSON.stringify($json.prTitle) }}\nPR_URL=\"{{ $json.prUrl }}\"\nQA_LOGIN=\"{{ $json.qaLogin }}\"\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngh pr merge \"$PR\" --\"$METHOD\" --delete-branch --repo \"$REPO\" 2>&1\nMERGE_RC=$?\necho \"MERGE_RC=$MERGE_RC\"\nif [ $MERGE_RC -ne 0 ]; then\n  echo \"SMOKE_URL=\"\n  exit 0\nfi\nBODY=\"/tmp/smoke-body-$PR.md\"\ncat > \"$BODY\" <<EOF\nSmoke-test request for merged PR $PR_URL.\n\nFlows to verify:\n- Pull latest main locally or from the \\`pr-${PR}-build\\` build artefacts.\n- Walk the golden path described in the PR body above.\n- Exploratory pass on both iOS and Android clients.\n\nClose this issue when verification is complete. File a new issue (link it back here) for any regressions discovered.\nEOF\nSMOKE_OUT=$(gh issue create --repo \"$REPO\" \\\n  --title \"Smoke test: $PR_TITLE\" \\\n  --assignee \"$QA_LOGIN\" \\\n  --label smoke-test \\\n  --body-file \"$BODY\" 2>&1)\nSMOKE_RC=$?\nrm -f \"$BODY\"\necho \"SMOKE_RC=$SMOKE_RC\"\necho \"SMOKE_OUT<<__END__\"\necho \"$SMOKE_OUT\"\necho \"__END__\"\nSMOKE_URL=$(printf '%s\\n' \"$SMOKE_OUT\" | grep -Eo 'https://github.com/[^ ]+/issues/[0-9]+' | tail -1)\necho \"SMOKE_URL=$SMOKE_URL\"\nexit 0\n"
+      },
+      "id": "a6000000-0000-0000-0000-000000000008",
+      "name": "Merge + smoke in qa-agent",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [1560, 300],
+      "credentials": {
+        "sshPassword": {
+          "id": "REPLACE_ME",
+          "name": "qa-agent SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "numberInputs": 2
+      },
+      "id": "a6000000-0000-0000-0000-000000000009",
+      "name": "Merge SSH outputs",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1780, 220]
+    },
+    {
+      "parameters": {
+        "resource": "issue",
+        "operation": "createComment",
+        "owner": "={{ $('Parse merge command').item.json.repoOwner }}",
+        "repository": "={{ $('Parse merge command').item.json.repoName }}",
+        "issueNumber": "={{ $('Parse merge command').item.json.prNumber }}",
+        "body": "={{ (() => { const out = $json.stdout || ''; const mergeRc = (out.match(/MERGE_RC=(\\d+)/) || [])[1]; const smokeUrl = (out.match(/SMOKE_URL=(\\S+)/) || [])[1]; if (mergeRc && mergeRc !== '0') return `merge failed (rc=${mergeRc}) — see workflow logs.`; if (smokeUrl) return `Merged. Smoke-test issue: ${smokeUrl}`; return `Merged. (Smoke-test issue creation failed — see workflow logs.)`; })() }}"
+      },
+      "id": "a6000000-0000-0000-0000-000000000010",
+      "name": "Post merge result",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [2000, 220],
+      "credentials": {
+        "githubApi": {
+          "id": "REPLACE_ME",
+          "name": "qa-bot GitHub"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Is /merge from authorized?", "type": "main", "index": 0 }]]
+    },
+    "Is /merge from authorized?": {
+      "main": [
+        [{ "node": "Parse merge command", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Parse merge command": {
+      "main": [[{ "node": "Get PR", "type": "main", "index": 0 }]]
+    },
+    "Get PR": {
+      "main": [[{ "node": "Resolve implementer", "type": "main", "index": 0 }]]
+    },
+    "Resolve implementer": {
+      "main": [[{ "node": "Switch by host", "type": "main", "index": 0 }]]
+    },
+    "Switch by host": {
+      "main": [
+        [{ "node": "Merge + smoke in release-agent", "type": "main", "index": 0 }],
+        [{ "node": "Merge + smoke in qa-agent", "type": "main", "index": 0 }]
+      ]
+    },
+    "Merge + smoke in release-agent": {
+      "main": [[{ "node": "Merge SSH outputs", "type": "main", "index": 0 }]]
+    },
+    "Merge + smoke in qa-agent": {
+      "main": [[{ "node": "Merge SSH outputs", "type": "main", "index": 1 }]]
+    },
+    "Merge SSH outputs": {
+      "main": [[{ "node": "Post merge result", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

@@ -1,0 +1,9 @@
+{
+  "name": "release-bot GitHub",
+  "type": "githubApi",
+  "data": {
+    "server": "https://api.github.com",
+    "user": "release-bot",
+    "accessToken": "PASTE-GITHUB-APP-INSTALLATION-TOKEN-OR-FINE-GRAINED-PAT-HERE"
+  }
+}

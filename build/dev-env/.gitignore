@@ -2,4 +2,5 @@
 *.env
 !*.env.example
 n8n/credentials.json
+n8n/secrets/
 keys/

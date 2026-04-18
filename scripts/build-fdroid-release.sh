@@ -38,8 +38,15 @@ apt-get update
 apt-get install -y rustup gcc libc-dev
 
 # === init step (from fdroiddata metadata) ===
-rustup default 1.94.1
-rustup target add aarch64-linux-android
+# F-Droid metadata pins rustc 1.94.1 for this app. The repo root also
+# ships rust-toolchain.toml (ceremony_tool pin, rustc 1.88.0) — that file
+# would otherwise win over "rustup default" when cargo runs and break
+# the build because we only installed the Android target on 1.94.1.
+# RUSTUP_TOOLCHAIN overrides rust-toolchain.toml, so export it.
+FDROID_RUSTC="1.94.1"
+rustup default "$FDROID_RUSTC"
+rustup target add --toolchain "$FDROID_RUSTC" aarch64-linux-android
+export RUSTUP_TOOLCHAIN="$FDROID_RUSTC"
 
 # Copy source to the SAME path F-Droid CI uses (critical for reproducible .so files)
 BUILD_DIR="/builds/fdroid/fdroiddata/build/chat.onym.android"

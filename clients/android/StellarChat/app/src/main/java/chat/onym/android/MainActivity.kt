@@ -56,6 +56,7 @@ import chat.onym.android.viewmodel.ChatViewModel
 import chat.onym.android.viewmodel.CreateGroupViewModel
 import chat.onym.android.viewmodel.GroupListViewModel
 import chat.onym.android.viewmodel.JoinGroupViewModel
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val groupListViewModel: GroupListViewModel by viewModels()
@@ -367,16 +368,24 @@ fun StellarChatNavHost(
             }
 
             composable("restore_identity") {
+                val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
                 RestoreIdentityScreen(
-                    onRestore = { mnemonic ->
-                        try {
-                            chat.onym.android.crypto.KeyManager.restoreFromMnemonic(
-                                context,
-                                mnemonic
-                            )
-                            true
-                        } catch (e: Exception) {
-                            false
+                    onRestore = { mnemonic, onResult ->
+                        coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                            try {
+                                val newKeyManager = chat.onym.android.crypto.KeyManager.restoreFromMnemonic(
+                                    context,
+                                    mnemonic
+                                )
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                    groupListViewModel.replaceKeyManager(newKeyManager)
+                                    onResult(true)
+                                }
+                            } catch (e: Exception) {
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                    onResult(false)
+                                }
+                            }
                         }
                     },
                     onBack = { navController.popBackStack() }

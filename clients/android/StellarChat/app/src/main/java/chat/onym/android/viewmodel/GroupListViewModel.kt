@@ -91,7 +91,13 @@ sealed class PendingTransitionState {
 }
 
 class GroupListViewModel(application: Application) : AndroidViewModel(application) {
-    val keyManager = KeyManager.create(application)
+    var keyManager = KeyManager.create(application)
+        private set
+
+    /** Replace the active key manager after a BIP39 restore. */
+    fun replaceKeyManager(newKeyManager: KeyManager) {
+        keyManager = newKeyManager
+    }
     val groups = mutableStateListOf<ChatGroup>()
     val pendingInvitations = mutableStateListOf<PendingInvitation>()
 

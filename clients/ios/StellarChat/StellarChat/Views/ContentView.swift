@@ -154,10 +154,10 @@ struct OnboardingView: View {
 
             Spacer().frame(height: 32)
         }
-        .sheet(isPresented: $showRestore, onDismiss: {
-            // If restore succeeded, skip onboarding
-        }) {
-            RestoreIdentityView()
+        .sheet(isPresented: $showRestore) {
+            RestoreIdentityView(onRestoreComplete: {
+                hasSeenOnboarding = true
+            })
         }
     }
 }

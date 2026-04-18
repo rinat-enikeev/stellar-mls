@@ -156,6 +156,7 @@ dependencies {
 
     // Security
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.biometric:biometric:1.1.0")
 
     // Bouncy Castle (Ed25519 + X25519 for API 26+)
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")

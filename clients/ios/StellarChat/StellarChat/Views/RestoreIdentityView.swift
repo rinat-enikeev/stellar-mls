@@ -8,6 +8,7 @@ struct RestoreIdentityView: View {
     @State private var errorMessage: String?
     @State private var isRestoring = false
     @State private var restored = false
+    var onRestoreComplete: (() -> Void)?
 
     var body: some View {
         NavigationStack {
@@ -72,7 +73,10 @@ struct RestoreIdentityView: View {
                 }
                 if restored {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
+                        Button("Done") {
+                            onRestoreComplete?()
+                            dismiss()
+                        }
                     }
                 }
             }
@@ -89,13 +93,20 @@ struct RestoreIdentityView: View {
             .split(separator: /\s+/)
             .joined(separator: " ")
 
-        do {
-            let newKeyManager = try KeyManager.restoreFromMnemonic(mnemonic)
-            appState.replaceKeyManager(newKeyManager)
-            restored = true
-        } catch {
-            errorMessage = error.localizedDescription
+        Task.detached(priority: .userInitiated) {
+            do {
+                let newKeyManager = try KeyManager.restoreFromMnemonic(mnemonic)
+                await MainActor.run {
+                    appState.replaceKeyManager(newKeyManager)
+                    restored = true
+                    isRestoring = false
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    isRestoring = false
+                }
+            }
         }
-        isRestoring = false
     }
 }

@@ -128,10 +128,9 @@ class Bip39Test {
         val nostrHex = nostrKey.toHex()
         val blsHex = blsKey.toHex()
 
-        // Different info strings must produce different keys
-        assertNotEquals("Nostr and BLS keys must differ", nostrHex, blsHex)
-        assertTrue(nostrHex.isNotEmpty())
-        assertTrue(blsHex.isNotEmpty())
+        // These MUST match the iOS test vectors exactly
+        assertEquals("7cbc4d71b42367f74dd2356e3ba1ec8f1f26e7ed5a8cf150c5820efb2fc701d2", nostrHex)
+        assertEquals("0b402ebb55641736888bb315fb7c6dc49ae0a50ce066a05227f6e55f71c6a097", blsHex)
     }
 
     @Test

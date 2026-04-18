@@ -104,6 +104,7 @@ struct Bip39KeyDerivationTests {
     }
 
     /// Cross-platform test vector 2: 0x42 repeating entropy
+    /// Both iOS and Android must derive identical keys from this mnemonic.
     @Test("Key derivation from 0x42 entropy mnemonic")
     func hex42EntropyKeyDerivation() {
         let entropy = Data(repeating: 0x42, count: 16)
@@ -115,15 +116,13 @@ struct Bip39KeyDerivationTests {
         #expect(nostrKey.count == 32)
         #expect(blsKey.count == 32)
 
-        // The mnemonic and derived keys must be deterministic and cross-platform identical
         let nostrHex = nostrKey.map { String(format: "%02x", $0) }.joined()
         let blsHex = blsKey.map { String(format: "%02x", $0) }.joined()
 
-        // Record the derived values for Android comparison
-        // (both platforms run the same HKDF-SHA256 over the same PBKDF2 seed)
-        #expect(!nostrHex.isEmpty)
-        #expect(!blsHex.isEmpty)
-        #expect(nostrHex != blsHex) // Different info strings → different keys
+        // These are the canonical cross-platform test vectors.
+        // Android tests MUST produce the same values.
+        #expect(nostrHex == "7cbc4d71b42367f74dd2356e3ba1ec8f1f26e7ed5a8cf150c5820efb2fc701d2")
+        #expect(blsHex == "0b402ebb55641736888bb315fb7c6dc49ae0a50ce066a05227f6e55f71c6a097")
     }
 
     /// Verify that Stellar and X25519 keys derived from the BIP39-derived Nostr key

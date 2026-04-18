@@ -101,11 +101,19 @@ final class KeyManager: Codable {
         self.keyAgreementKey = Self.deriveKeyAgreementKey(from: self.nostrSecretKey)
     }
 
+    /// Serial queue protecting Keychain writes during restore to prevent races
+    /// between `restoreFromMnemonic` saving keys and `init()` reading them.
+    private static let restoreLock = NSLock()
+
     /// Restore identity from a BIP39 recovery phrase. Replaces any existing keys.
+    /// Thread-safe: serialized with `restoreLock` to prevent races with concurrent `init()`.
     static func restoreFromMnemonic(_ mnemonic: String) throws -> KeyManager {
         guard Bip39.isValidMnemonic(mnemonic) else {
             throw KeyManagerError.invalidMnemonic
         }
+        restoreLock.lock()
+        defer { restoreLock.unlock() }
+
         let entropy = Bip39.entropyFromMnemonic(mnemonic)!
         let seed = Bip39.seedFromMnemonic(mnemonic)
         let nostrKey = Bip39.deriveNostrKey(from: seed)

@@ -38,7 +38,7 @@ import androidx.compose.ui.unit.dp
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RestoreIdentityScreen(
-    onRestore: (mnemonic: String) -> Boolean,
+    onRestore: (mnemonic: String, onResult: (Boolean) -> Unit) -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -144,18 +144,16 @@ fun RestoreIdentityScreen(
                         val mnemonic = phraseInput.trim().lowercase()
                             .split("\\s+".toRegex())
                             .joinToString(" ")
-                        try {
-                            val success = onRestore(mnemonic)
+                        onRestore(mnemonic) { success ->
                             if (success) {
                                 restored = true
+                                isRestoring = false
                                 Toast.makeText(context, "Identity restored", Toast.LENGTH_SHORT).show()
                             } else {
                                 errorMessage = "Invalid recovery phrase. Check your words and try again."
+                                isRestoring = false
                             }
-                        } catch (e: Exception) {
-                            errorMessage = e.message ?: "Restore failed"
                         }
-                        isRestoring = false
                     },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = phraseInput.trim().isNotEmpty() && !isRestoring && !restored

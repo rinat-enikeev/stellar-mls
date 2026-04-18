@@ -28,7 +28,7 @@ GitHub handles are configurable via `.env`:
 One `N8N_AGENT_MAP` JSON var in `n8n.env` beats scattered `N8N_USER_MAP_*` vars: single source of truth, trivial to read from a Code node via `JSON.parse($env.N8N_AGENT_MAP)`, easy to diff.
 
 ```
-N8N_AGENT_MAP={"programyzer":{"role":"implementer","host":"release-agent","port":22,"user":"agent","sshCredentialName":"release-agent SSH","githubCredentialName":"programyzer GitHub"},"releaseng":{"role":"reviewer","host":"qa-agent","port":22,"user":"agent","sshCredentialName":"qa-agent SSH","githubCredentialName":"releaseng GitHub"}}
+N8N_AGENT_MAP={"programyzer":{"role":"implementer","host":"qa-agent","port":22,"user":"agent","sshCredentialName":"qa-agent SSH","githubCredentialName":"programyzer GitHub"},"releaseng":{"role":"reviewer","host":"release-agent","port":22,"user":"agent","sshCredentialName":"release-agent SSH","githubCredentialName":"releaseng GitHub"}}
 N8N_HUMAN_QA_LOGIN=alexpovstin
 N8N_IMPLEMENTER_DEFAULT=programyzer
 N8N_REVIEWER_DEFAULT=releaseng
@@ -124,7 +124,7 @@ Manual end-to-end after import; workflow import order does not matter (they are 
 1. **Env sanity**: `docker exec stellar-n8n node -e 'console.log(JSON.parse(process.env.N8N_AGENT_MAP))'` — must print the parsed object without throwing.
 2. **Credentials**: in the n8n UI, confirm two SSH creds (`release-agent SSH`, `qa-agent SSH`) and two GitHub App creds (`programyzer GitHub`, `releaseng GitHub`) with the exact names used in the Switch branches.
 3. **App events**: each GitHub App subscribed to `issues`, `pull_request`, `issue_comment`, `pull_request_review`, `pull_request_review_comment`.
-4. **Workflow 01 (modified)**: create an issue, assign `@programyzer` (no label) → a PR opens from the release-agent container with `@releaseng` as the reviewer. Also verify the label-only path still works (backward compat).
+4. **Workflow 01 (modified)**: create an issue, assign `@programyzer` (no label) → a PR opens from the qa-agent container with `@releaseng` as the reviewer. Also verify the label-only path still works (backward compat).
 5. **Workflow 04**: on the auto-requested review from step 4, expect a review comment posted by `@releaseng`'s GitHub App within ~60s, starting with a verdict line.
 6. **Workflow 05**: as `@alexpovstin`, leave an inline review comment ("please add a unit test here") → expect a new commit on the PR branch plus a reply linking the SHA. Leave a PR conversation comment starting with `/fix …` → same outcome via the `issue_comment` path. Leave a conversation comment as `@releaseng` or `@programyzer` → workflow must NOT fire (commenter-in-bots guard).
 7. **Workflow 03 (unchanged sanity)**: `/build android` from `@alexpovstin` → APK link posted.

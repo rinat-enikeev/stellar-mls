@@ -42,6 +42,12 @@
               "leftValue": "={{ /^\\/build\\s+(ios|android)\\b/i.test(($json.body.comment.body || '').trim()) }}",
               "rightValue": true,
               "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            },
+            {
+              "id": "b3000000-0000-0000-0000-000000000004",
+              "leftValue": "={{ (() => { const users = ($env.N8N_COMMAND_USERS || '').split(',').map(s => s.trim()).filter(Boolean); const login = ($json.body.sender && $json.body.sender.login) || ''; return users.includes(login); })() }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
             }
           ],
           "combinator": "and"

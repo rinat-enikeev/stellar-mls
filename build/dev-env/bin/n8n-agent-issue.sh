@@ -36,20 +36,31 @@ PROMPT_FILE="/tmp/prompt-issue-$ISSUE.txt"
 
 cleanup() {
   cd "$PRIMARY" 2>/dev/null || return
-  git worktree remove --force "$WT_DIR" 2>&1 || rm -rf "$WT_DIR"
-  git worktree prune 2>&1
+  git worktree remove --force "$WT_DIR" >/dev/null 2>&1 || rm -rf "$WT_DIR" 2>/dev/null
+  git worktree prune >/dev/null 2>&1
 }
 
 cd "$PRIMARY" || { echo "ERROR: $PRIMARY not found" >&2; echo "PR_URL="; exit 10; }
 
+# Idempotency: GitHub fires several events per issue (opened, labeled,
+# assigned) and the workflow filter accepts all of them, so the same issue
+# can trigger this script multiple times. If a PR for this branch is
+# already open, skip the whole run (no Claude, no push, no extra comment).
+EXISTING=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url' 2>&1)
+if [ -n "$EXISTING" ] && [ "${EXISTING#https://}" != "$EXISTING" ]; then
+  echo "SKIPPED=existing-pr"
+  echo "PR_URL=$EXISTING"
+  exit 0
+fi
+
 mkdir -p "$WT_ROOT"
-git worktree prune 2>&1
+git worktree prune >/dev/null 2>&1
 if [ -d "$WT_DIR" ]; then
-  git worktree remove --force "$WT_DIR" 2>&1 || rm -rf "$WT_DIR"
+  git worktree remove --force "$WT_DIR" >/dev/null 2>&1 || rm -rf "$WT_DIR"
 fi
 # Stale branch from a prior failed run would block `worktree add -B`.
-git branch -D "$BRANCH" 2>&1
-git worktree add -B "$BRANCH" "$WT_DIR" origin/main 2>&1 || {
+git branch -D "$BRANCH" >/dev/null 2>&1
+git worktree add -B "$BRANCH" "$WT_DIR" origin/main >/dev/null 2>&1 || {
   echo "ERROR: could not create worktree $WT_DIR" >&2
   echo "PR_URL="
   exit 11
@@ -81,8 +92,9 @@ fi
 
 EXISTING=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url' 2>&1)
 if [ -n "$EXISTING" ] && [ "${EXISTING#https://}" != "$EXISTING" ]; then
+  # Another concurrent run raced us to PR creation. Don't double-comment.
+  echo "SKIPPED=reused-pr"
   echo "PR_URL=$EXISTING"
-  echo "reused existing PR"
   cleanup
   exit 0
 fi

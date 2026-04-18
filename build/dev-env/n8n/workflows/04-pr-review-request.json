@@ -27,7 +27,7 @@
           "conditions": [
             {
               "id": "b4000000-0000-0000-0000-000000000001",
-              "leftValue": "={{ (() => { const body = $json.body; if (body.action !== 'review_requested') return false; if (body.sender && body.sender.type === 'Bot') return false; const botLogins = ($env.N8N_BOT_LOGINS || '').split(',').map(s => s.trim()).filter(Boolean); if (botLogins.includes(body.sender && body.sender.login)) return false; const reviewer = body.requested_reviewer && body.requested_reviewer.login; if (!reviewer) return false; let map = {}; try { map = JSON.parse($env.N8N_AGENT_MAP || '{}'); } catch (e) { return false; } return !!(map[reviewer] && map[reviewer].role === 'reviewer'); })() }}",
+              "leftValue": "={{ (() => { const body = $json.body; if (body.action !== 'review_requested') return false; if (body.sender && body.sender.type === 'Bot') return false; const botLogins = ($env.N8N_BOT_LOGINS || '').split(',').map(s => s.trim()).filter(Boolean); if (botLogins.includes(body.sender && body.sender.login)) return false; const reviewer = body.requested_reviewer && body.requested_reviewer.login; if (!reviewer) return false; let map = {}; try { map = JSON.parse($env.N8N_AGENT_MAP || '{}'); } catch (e) { return false; } return !!map[reviewer]; })() }}",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
@@ -116,7 +116,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const prev = $input.first().json;\nconst map = JSON.parse($env.N8N_AGENT_MAP || '{}');\nconst entry = map[prev.reviewerLogin];\nif (!entry || entry.role !== 'reviewer') {\n  throw new Error(`N8N_AGENT_MAP has no reviewer entry for login \"${prev.reviewerLogin}\"`);\n}\nreturn [{ json: { ...prev, host: entry.host, sshPort: entry.port, sshUser: entry.user } }];\n"
+        "jsCode": "const prev = $input.first().json;\nconst map = JSON.parse($env.N8N_AGENT_MAP || '{}');\nconst entry = map[prev.reviewerLogin];\nif (!entry) {\n  throw new Error(`N8N_AGENT_MAP has no entry for login \"${prev.reviewerLogin}\"`);\n}\nreturn [{ json: { ...prev, host: entry.host, sshPort: entry.port, sshUser: entry.user } }];\n"
       },
       "id": "a4000000-0000-0000-0000-000000000004",
       "name": "Resolve reviewer",

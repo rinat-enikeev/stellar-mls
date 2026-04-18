@@ -32,8 +32,8 @@ BODY_FILE="/tmp/review-body-$PR.md"
 
 cleanup() {
   cd "$PRIMARY" 2>/dev/null || return
-  git worktree remove --force "$WT_DIR" 2>&1 || rm -rf "$WT_DIR"
-  git worktree prune 2>&1
+  git worktree remove --force "$WT_DIR" >/dev/null 2>&1 || rm -rf "$WT_DIR" 2>/dev/null
+  git worktree prune >/dev/null 2>&1
 }
 
 cd "$PRIMARY" || { echo "ERROR: $PRIMARY not found" >&2; exit 10; }
@@ -45,11 +45,11 @@ git fetch origin "pull/$PR/head" 2>&1
 git fetch origin "$BASE" 2>&1
 
 mkdir -p "$WT_ROOT"
-git worktree prune 2>&1
+git worktree prune >/dev/null 2>&1
 if [ -d "$WT_DIR" ]; then
-  git worktree remove --force "$WT_DIR" 2>&1 || rm -rf "$WT_DIR"
+  git worktree remove --force "$WT_DIR" >/dev/null 2>&1 || rm -rf "$WT_DIR"
 fi
-git worktree add --detach "$WT_DIR" "$SHA" 2>&1 || {
+git worktree add --detach "$WT_DIR" "$SHA" >/dev/null 2>&1 || {
   echo "ERROR: could not create worktree $WT_DIR at $SHA" >&2
   exit 11
 }

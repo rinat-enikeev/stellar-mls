@@ -33,8 +33,8 @@ PROMPT_FILE="/tmp/fix-$PR-$CID.txt"
 
 cleanup() {
   cd "$PRIMARY" 2>/dev/null || return
-  git worktree remove --force "$WT_DIR" 2>&1 || rm -rf "$WT_DIR"
-  git worktree prune 2>&1
+  git worktree remove --force "$WT_DIR" >/dev/null 2>&1 || rm -rf "$WT_DIR" 2>/dev/null
+  git worktree prune >/dev/null 2>&1
 }
 
 cd "$PRIMARY" || { echo "ERROR: $PRIMARY not found" >&2; exit 10; }
@@ -42,12 +42,12 @@ cd "$PRIMARY" || { echo "ERROR: $PRIMARY not found" >&2; exit 10; }
 git fetch origin "$BRANCH" 2>&1
 
 mkdir -p "$WT_ROOT"
-git worktree prune 2>&1
+git worktree prune >/dev/null 2>&1
 if [ -d "$WT_DIR" ]; then
-  git worktree remove --force "$WT_DIR" 2>&1 || rm -rf "$WT_DIR"
+  git worktree remove --force "$WT_DIR" >/dev/null 2>&1 || rm -rf "$WT_DIR"
 fi
-git branch -D "$BRANCH" 2>&1
-git worktree add -B "$BRANCH" "$WT_DIR" "origin/$BRANCH" 2>&1 || {
+git branch -D "$BRANCH" >/dev/null 2>&1
+git worktree add -B "$BRANCH" "$WT_DIR" "origin/$BRANCH" >/dev/null 2>&1 || {
   echo "ERROR: could not create worktree $WT_DIR for $BRANCH" >&2
   exit 11
 }

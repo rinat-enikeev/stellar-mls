@@ -158,6 +158,15 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 mv "$APP_BIN" "$APP/Contents/MacOS/CeremonyTool"
 mv "$TOOL_BIN" "$APP/Contents/Resources/ceremony_tool"
 
+# ----- Render app icon ------------------------------------------------------
+# assets/make-iconset.swift draws every iconset size in CoreGraphics so the
+# build has no external dependencies beyond the Swift toolchain.
+ICONSET="$WORK/AppIcon.iconset"
+echo "==> render iconset"
+xcrun swift "$SCRIPT_DIR/assets/make-iconset.swift" "$ICONSET"
+echo "==> iconutil -c icns"
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
+
 INFO_TMPL="$SCRIPT_DIR/Info.plist.template"
 sed "s/__VERSION__/${VERSION}/g" "$INFO_TMPL" > "$APP/Contents/Info.plist"
 

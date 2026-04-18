@@ -8,6 +8,10 @@
     <string>Onym Ceremony Tool</string>
     <key>CFBundleExecutable</key>
     <string>CeremonyTool</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>chat.onym.ceremony-tool</string>
     <key>CFBundleInfoDictionaryVersion</key>

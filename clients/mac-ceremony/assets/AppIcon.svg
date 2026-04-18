@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Onym Ceremony Tool app icon.
+
+  1024x1024 canvas following the Big Sur+ squircle-with-padding guideline
+  (82.4 px margin ≈ 8% on each side, squircle ~22.4% radius).
+
+  Visual: three overlapping chain links (the contribution chain) on a deep
+  purple squircle with the Onym accent gradient glow — the same palette as
+  ceremony.onym.chat (accent #6c5ce7, accent-glow #a29bfe).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+
+  <defs>
+    <!-- Rich purple body with soft highlight on the top-left -->
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#5847d4"/>
+      <stop offset="55%" stop-color="#3b2d9c"/>
+      <stop offset="100%" stop-color="#241a6e"/>
+    </linearGradient>
+
+    <!-- Soft top-left specular highlight -->
+    <radialGradient id="shine" cx="28%" cy="24%" r="55%">
+      <stop offset="0%"  stop-color="#a29bfe" stop-opacity="0.55"/>
+      <stop offset="55%" stop-color="#a29bfe" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#a29bfe" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Glow behind the link cluster -->
+    <radialGradient id="linkGlow" cx="50%" cy="50%" r="55%">
+      <stop offset="0%"  stop-color="#a29bfe" stop-opacity="0.55"/>
+      <stop offset="55%" stop-color="#6c5ce7" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#6c5ce7" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Chain link stroke gradient (light edge, body accent) -->
+    <linearGradient id="linkStroke" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#ffffff"/>
+      <stop offset="60%" stop-color="#d7d3ff"/>
+      <stop offset="100%" stop-color="#a29bfe"/>
+    </linearGradient>
+
+    <!-- Inner shadow so the rings read as recessed tubes -->
+    <filter id="inset" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+
+    <!-- Squircle clip so the highlight never bleeds past the body -->
+    <clipPath id="squircleClip">
+      <path d="M 512 83.2
+               C 282.6 83.2 83.2 282.6 83.2 512
+               S 282.6 940.8 512 940.8
+               S 940.8 741.4 940.8 512
+               S 741.4 83.2 512 83.2 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- Body -->
+  <g clip-path="url(#squircleClip)">
+    <path d="M 512 83.2
+             C 282.6 83.2 83.2 282.6 83.2 512
+             S 282.6 940.8 512 940.8
+             S 940.8 741.4 940.8 512
+             S 741.4 83.2 512 83.2 Z"
+          fill="url(#body)"/>
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#shine)"/>
+    <circle cx="512" cy="520" r="340" fill="url(#linkGlow)"/>
+  </g>
+
+  <!-- Subtle rim for definition at small sizes -->
+  <path d="M 512 83.2
+           C 282.6 83.2 83.2 282.6 83.2 512
+           S 282.6 940.8 512 940.8
+           S 940.8 741.4 940.8 512
+           S 741.4 83.2 512 83.2 Z"
+        fill="none" stroke="#a29bfe" stroke-opacity="0.22" stroke-width="4"/>
+
+  <!--
+    Chain of three overlapping rings, suggesting the contribution chain
+    (each ring = one round). Center ring forward; side rings behind.
+
+    Ring geometry:
+      outer r = 170, inner r = 110  (stroke width = 60 px)
+      centers: left (330, 540), middle (512, 470), right (694, 540)
+    The middle ring sits forward to create the interlocked look.
+  -->
+  <g stroke="url(#linkStroke)" stroke-width="60" fill="none"
+     stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- LEFT ring (back) -->
+    <circle cx="330" cy="540" r="140"/>
+
+    <!-- RIGHT ring (back) -->
+    <circle cx="694" cy="540" r="140"/>
+
+    <!-- MIDDLE ring (front) -->
+    <circle cx="512" cy="470" r="140"/>
+  </g>
+
+  <!-- Interlock illusion: short arc fragments where middle ring passes over -->
+  <g stroke="url(#linkStroke)" stroke-width="60" fill="none"
+     stroke-linecap="round">
+    <!-- Re-stroke the front of the middle ring to sit on top of neighbours -->
+    <path d="M 380 500 A 140 140 0 0 0 644 500"
+          stroke="url(#linkStroke)" fill="none"/>
+  </g>
+
+  <!-- Tiny sparkle dots to hint at "randomness / toxic waste" -->
+  <g fill="#ffffff" opacity="0.85">
+    <circle cx="250" cy="300" r="6"/>
+    <circle cx="780" cy="330" r="5"/>
+    <circle cx="820" cy="720" r="6"/>
+    <circle cx="220" cy="740" r="5"/>
+    <circle cx="512" cy="260" r="4"/>
+  </g>
+
+</svg>

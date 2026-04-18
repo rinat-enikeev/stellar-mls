@@ -28,35 +28,15 @@ struct CeremonyRunner {
         let prevRoot = workspace.appendingPathComponent("extracted", isDirectory: true)
         try fm.createDirectory(at: prevRoot, withIntermediateDirectories: true)
 
-        var isDir: ObjCBool = false
-        if !fm.fileExists(atPath: sourceURL.path, isDirectory: &isDir) {
-            throw CeremonyRunnerError(message: "Dropped item no longer exists: \(sourceURL.path)")
-        }
-        if isDir.boolValue {
-            log("Using dropped folder directly.")
-            for item in try fm.contentsOfDirectory(at: sourceURL, includingPropertiesForKeys: nil) {
-                let dst = prevRoot.appendingPathComponent(item.lastPathComponent)
-                try fm.copyItem(at: item, to: dst)
-            }
-        } else {
-            log("Extracting \(sourceURL.lastPathComponent)…")
-            _ = try await run(
-                executable: "/usr/bin/unzip",
-                args: ["-oqq", sourceURL.path, "-d", prevRoot.path],
-                log: log,
-                registerProcess: registerProcess
-            )
-        }
+        try await materialize(sourceURL: sourceURL, into: prevRoot, log: log,
+                              registerProcess: registerProcess)
 
-        let inDir = try resolveInDir(prevRoot, fm: fm)
+        let inDir = try resolveStateDir(prevRoot, fm: fm)
         let outDir = workspace.appendingPathComponent("mine", isDirectory: true)
         try fm.createDirectory(at: outDir, withIntermediateDirectories: true)
 
         // Step 2: run ceremony_tool contribute.
-        guard let toolURL = Bundle.main.url(forResource: "ceremony_tool", withExtension: nil) else {
-            throw CeremonyRunnerError(message: "Bundled ceremony_tool not found in app resources.")
-        }
-        // Best-effort version log.
+        let toolURL = try bundledTool()
         _ = try? await run(executable: toolURL.path, args: ["--version"], log: log,
                            registerProcess: registerProcess)
 
@@ -92,26 +72,126 @@ struct CeremonyRunner {
         return outZip
     }
 
-    /// Pick the right "in-dir" from the extracted tree. The coordinator emits
-    /// a zip that unpacks to `prev/state.srs`, but some users drop a zip
-    /// without the wrapping folder.
-    private func resolveInDir(_ extracted: URL, fm: FileManager) throws -> URL {
-        let prev = extracted.appendingPathComponent("prev", isDirectory: true)
-        var isDir: ObjCBool = false
-        if fm.fileExists(atPath: prev.appendingPathComponent("state.srs").path) {
-            return prev
+    /// Verify one or two state directories with the bundled CLI.
+    ///
+    /// - If only `before` is provided → `verify-state --state-dir <before>`
+    ///   (use this to check a single round's self-consistency; for round 0
+    ///   this also verifies the initial-contribution proof).
+    /// - If both are provided → `verify-contribution --before-state-dir <before>
+    ///   --after-state-dir <after>` (the full six-pairing chained check).
+    func verify(
+        beforeURL: URL,
+        afterURL: URL?,
+        log: @escaping (String) -> Void,
+        registerProcess: @escaping (Process) -> Void
+    ) async throws {
+        let fm = FileManager.default
+        let workspace = fm.temporaryDirectory
+            .appendingPathComponent("verify-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: workspace) }
+
+        let beforeRoot = workspace.appendingPathComponent("before", isDirectory: true)
+        try fm.createDirectory(at: beforeRoot, withIntermediateDirectories: true)
+        try await materialize(sourceURL: beforeURL, into: beforeRoot, log: log,
+                              registerProcess: registerProcess)
+        let beforeDir = try resolveStateDir(beforeRoot, fm: fm)
+
+        let toolURL = try bundledTool()
+        _ = try? await run(executable: toolURL.path, args: ["--version"], log: log,
+                           registerProcess: registerProcess)
+
+        if let afterURL = afterURL {
+            let afterRoot = workspace.appendingPathComponent("after", isDirectory: true)
+            try fm.createDirectory(at: afterRoot, withIntermediateDirectories: true)
+            try await materialize(sourceURL: afterURL, into: afterRoot, log: log,
+                                  registerProcess: registerProcess)
+            let afterDir = try resolveStateDir(afterRoot, fm: fm)
+
+            log("Running ceremony_tool verify-contribution …")
+            _ = try await run(
+                executable: toolURL.path,
+                args: [
+                    "verify-contribution",
+                    "--before-state-dir", beforeDir.path,
+                    "--after-state-dir", afterDir.path,
+                ],
+                log: log,
+                registerProcess: registerProcess
+            )
+        } else {
+            log("Running ceremony_tool verify-state …")
+            _ = try await run(
+                executable: toolURL.path,
+                args: ["verify-state", "--state-dir", beforeDir.path],
+                log: log,
+                registerProcess: registerProcess
+            )
         }
-        if fm.fileExists(atPath: extracted.appendingPathComponent("state.srs").path) {
-            return extracted
+    }
+
+    // MARK: - internals
+
+    private func bundledTool() throws -> URL {
+        guard let toolURL = Bundle.main.url(forResource: "ceremony_tool", withExtension: nil) else {
+            throw CeremonyRunnerError(message: "Bundled ceremony_tool not found in app resources.")
+        }
+        return toolURL
+    }
+
+    /// Copy a folder or unzip an archive into `dest`.
+    private func materialize(
+        sourceURL: URL,
+        into dest: URL,
+        log: @escaping (String) -> Void,
+        registerProcess: @escaping (Process) -> Void
+    ) async throws {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: sourceURL.path, isDirectory: &isDir) else {
+            throw CeremonyRunnerError(message: "Item no longer exists: \(sourceURL.path)")
+        }
+        if isDir.boolValue {
+            log("Using \(sourceURL.lastPathComponent)/ directly.")
+            for item in try fm.contentsOfDirectory(at: sourceURL, includingPropertiesForKeys: nil) {
+                let dst = dest.appendingPathComponent(item.lastPathComponent)
+                try fm.copyItem(at: item, to: dst)
+            }
+        } else {
+            log("Extracting \(sourceURL.lastPathComponent)…")
+            _ = try await run(
+                executable: "/usr/bin/unzip",
+                args: ["-oqq", sourceURL.path, "-d", dest.path],
+                log: log,
+                registerProcess: registerProcess
+            )
+        }
+    }
+
+    /// Pick the right state-dir from an extracted tree. The coordinator emits
+    /// zips that unpack to `prev/state.srs`, but users sometimes drop a zip
+    /// without the wrapping folder.
+    private func resolveStateDir(_ extracted: URL, fm: FileManager) throws -> URL {
+        // Look for state.srs at common locations.
+        let candidates: [URL] = [
+            extracted.appendingPathComponent("prev", isDirectory: true),
+            extracted.appendingPathComponent("mine", isDirectory: true),
+            extracted,
+        ]
+        for c in candidates {
+            if fm.fileExists(atPath: c.appendingPathComponent("state.srs").path) {
+                return c
+            }
         }
         // Single wrapper dir? Use it if it contains state.srs.
         let kids = (try? fm.contentsOfDirectory(at: extracted, includingPropertiesForKeys: nil)) ?? []
+        var isDir: ObjCBool = false
         if kids.count == 1,
            fm.fileExists(atPath: kids[0].path, isDirectory: &isDir), isDir.boolValue,
            fm.fileExists(atPath: kids[0].appendingPathComponent("state.srs").path) {
             return kids[0]
         }
-        throw CeremonyRunnerError(message: "Could not locate state.srs in the dropped archive.")
+        throw CeremonyRunnerError(message: "Could not locate state.srs in \(extracted.lastPathComponent).")
     }
 
     /// Spawns a subprocess, streams stdout+stderr to `log` line-by-line, and

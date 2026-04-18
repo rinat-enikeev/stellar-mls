@@ -79,7 +79,8 @@ fun GroupListScreen(
     onJoinGroup: () -> Unit,
     onInvitations: () -> Unit = {},
     onDeleteGroup: (String) -> Unit,
-    onRefresh: () -> Unit = {}
+    onRefresh: () -> Unit = {},
+    onRestore: (() -> Unit)? = null
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
     var groupToDelete by remember { mutableStateOf<ChatGroup?>(null) }
@@ -380,7 +381,8 @@ fun GroupListScreen(
                 onDismiss = {
                     prefs.edit().putBoolean("has_seen_onboarding", true).apply()
                     showOnboarding = false
-                }
+                },
+                onRestore = onRestore
             )
         }
     }
@@ -388,7 +390,7 @@ fun GroupListScreen(
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun OnboardingSheet(onDismiss: () -> Unit, isRevisit: Boolean = false) {
+fun OnboardingSheet(onDismiss: () -> Unit, isRevisit: Boolean = false, onRestore: (() -> Unit)? = null) {
     val pages = remember {
         listOf(
             Triple(Icons.Default.Lock, "Now your messages and\nmetadata are encrypted", "Most messengers encrypt your messages but still collect who you talk to, when, and how often. That metadata tells a complete story about you."),
@@ -499,6 +501,18 @@ fun OnboardingSheet(onDismiss: () -> Unit, isRevisit: Boolean = false) {
                     if (pagerState.currentPage < totalPages - 1) "Next" else lastPageText,
                     fontWeight = FontWeight.SemiBold
                 )
+            }
+            if (!isRevisit && onRestore != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        onDismiss()
+                        onRestore()
+                    },
+                    modifier = Modifier.padding(horizontal = 32.dp)
+                ) {
+                    Text("Restore from Recovery Phrase", style = MaterialTheme.typography.labelMedium)
+                }
             }
         }
     }

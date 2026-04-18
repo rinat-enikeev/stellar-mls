@@ -7,6 +7,7 @@ enum KeyManagerError: LocalizedError {
     case keychainWriteFailed(key: String, status: OSStatus)
     case invalidStoredKey(key: String, reason: String)
     case signerInitializationFailed(reason: String)
+    case invalidMnemonic
 
     var errorDescription: String? {
         switch self {
@@ -18,6 +19,8 @@ enum KeyManagerError: LocalizedError {
             return "Stored key \(key) is invalid: \(reason)"
         case let .signerInitializationFailed(reason):
             return "Nostr signer initialization failed: \(reason)"
+        case .invalidMnemonic:
+            return "Invalid recovery phrase"
         }
     }
 }
@@ -35,20 +38,42 @@ final class KeyManager: Codable {
     /// X25519 private key for invitation ECDH, derived from nostrSecretKey via HKDF.
     private let keyAgreementKey: Curve25519.KeyAgreement.PrivateKey
 
-    init() throws {
-        // Load or generate Nostr key (preserves existing identity)
-        if let existing = try Self.loadFromKeychain(key: Self.nostrKeychainKey) {
-            self.nostrSecretKey = existing
-        } else {
-            self.nostrSecretKey = Self.generateRandom(count: 32)
-            try Self.saveToKeychain(self.nostrSecretKey, key: Self.nostrKeychainKey)
-        }
+    /// Whether this identity is backed by a BIP39 mnemonic (new installs).
+    /// Legacy installs (pre-BIP39) will have this as false.
+    private(set) var isBip39Backed: Bool
 
-        // Load or generate independent BLS key
-        if let existing = try Self.loadFromKeychain(key: Self.blsKeychainKey) {
-            self.blsSecretKey = existing
+    init() throws {
+        // Check if we have existing keys (legacy install) or need to generate BIP39 identity
+        let existingNostr = try Self.loadFromKeychain(key: Self.nostrKeychainKey)
+        let existingBls = try Self.loadFromKeychain(key: Self.blsKeychainKey)
+
+        if existingNostr != nil || existingBls != nil {
+            // Existing identity — load keys (legacy or BIP39, either way they're stored)
+            if let nostr = existingNostr {
+                self.nostrSecretKey = nostr
+            } else {
+                self.nostrSecretKey = Self.generateRandom(count: 32)
+                try Self.saveToKeychain(self.nostrSecretKey, key: Self.nostrKeychainKey)
+            }
+            if let bls = existingBls {
+                self.blsSecretKey = bls
+            } else {
+                self.blsSecretKey = Self.generateRandom(count: 32)
+                try Self.saveToKeychain(self.blsSecretKey, key: Self.blsKeychainKey)
+            }
+            // Check if BIP39 entropy is stored (migrated or new BIP39 install)
+            let storedEntropy = try Self.loadFromKeychain(key: Self.mnemonicKeychainKey)
+            self.isBip39Backed = storedEntropy != nil
         } else {
-            self.blsSecretKey = Self.generateRandom(count: 32)
+            // Fresh install — generate BIP39-backed identity
+            let mnemonic = Bip39.generateMnemonic()
+            let entropy = Bip39.entropyFromMnemonic(mnemonic)!
+            let seed = Bip39.seedFromMnemonic(mnemonic)
+            self.nostrSecretKey = Bip39.deriveNostrKey(from: seed)
+            self.blsSecretKey = Bip39.deriveBlsKey(from: seed)
+            self.isBip39Backed = true
+            try Self.saveToKeychain(entropy, key: Self.mnemonicKeychainKey)
+            try Self.saveToKeychain(self.nostrSecretKey, key: Self.nostrKeychainKey)
             try Self.saveToKeychain(self.blsSecretKey, key: Self.blsKeychainKey)
         }
 
@@ -74,6 +99,34 @@ final class KeyManager: Codable {
         }
         self.stellarPrivateKey = Self.deriveStellarKey(from: self.nostrSecretKey)
         self.keyAgreementKey = Self.deriveKeyAgreementKey(from: self.nostrSecretKey)
+    }
+
+    /// Restore identity from a BIP39 recovery phrase. Replaces any existing keys.
+    static func restoreFromMnemonic(_ mnemonic: String) throws -> KeyManager {
+        guard Bip39.isValidMnemonic(mnemonic) else {
+            throw KeyManagerError.invalidMnemonic
+        }
+        let entropy = Bip39.entropyFromMnemonic(mnemonic)!
+        let seed = Bip39.seedFromMnemonic(mnemonic)
+        let nostrKey = Bip39.deriveNostrKey(from: seed)
+        let blsKey = Bip39.deriveBlsKey(from: seed)
+
+        // Persist all keys
+        try saveToKeychain(entropy, key: mnemonicKeychainKey)
+        try saveToKeychain(nostrKey, key: nostrKeychainKey)
+        try saveToKeychain(blsKey, key: blsKeychainKey)
+
+        // Return a fresh KeyManager that will load the just-stored keys
+        return try KeyManager()
+    }
+
+    /// The BIP39 recovery phrase for this identity, or nil for legacy (pre-BIP39) identities.
+    var recoveryPhrase: String? {
+        guard isBip39Backed,
+              let entropy = try? Self.loadFromKeychain(key: Self.mnemonicKeychainKey) else {
+            return nil
+        }
+        return Bip39.mnemonicFromEntropy(entropy)
     }
 
     var publicKeyHex: String {
@@ -251,7 +304,7 @@ final class KeyManager: Codable {
     // MARK: - Codable (exclude derived keys)
 
     enum CodingKeys: String, CodingKey {
-        case nostrSecretKey, blsSecretKey, publicKey
+        case nostrSecretKey, blsSecretKey, publicKey, isBip39Backed
     }
 
     init(from decoder: Decoder) throws {
@@ -259,6 +312,7 @@ final class KeyManager: Codable {
         self.nostrSecretKey = try container.decode(Data.self, forKey: .nostrSecretKey)
         self.blsSecretKey = try container.decode(Data.self, forKey: .blsSecretKey)
         self.publicKey = try container.decode(Data.self, forKey: .publicKey)
+        self.isBip39Backed = try container.decodeIfPresent(Bool.self, forKey: .isBip39Backed) ?? false
         self.signer = try RustBackedNostrSigner(secretKey: self.nostrSecretKey)
         self.stellarPrivateKey = Self.deriveStellarKey(from: self.nostrSecretKey)
         self.keyAgreementKey = Self.deriveKeyAgreementKey(from: self.nostrSecretKey)
@@ -269,6 +323,7 @@ final class KeyManager: Codable {
         try container.encode(nostrSecretKey, forKey: .nostrSecretKey)
         try container.encode(blsSecretKey, forKey: .blsSecretKey)
         try container.encode(publicKey, forKey: .publicKey)
+        try container.encode(isBip39Backed, forKey: .isBip39Backed)
     }
 
     // MARK: - Keychain
@@ -276,6 +331,7 @@ final class KeyManager: Codable {
     private static let keychainService = "chat.onym.ios.keys"
     private static let nostrKeychainKey = "chat.onym.ios.nostrSecretKey"
     private static let blsKeychainKey = "chat.onym.ios.blsSecretKey"
+    private static let mnemonicKeychainKey = "chat.onym.ios.bip39Entropy"
 
     private static func generateRandom(count: Int) -> Data {
         var bytes = [UInt8](repeating: 0, count: count)

@@ -162,7 +162,7 @@ The architecture assumes relays may drop traffic, prune old events quickly, or r
 
 ### 7.1 Single-seed device model
 
-> **Status: Not yet implemented.** The current apps derive keys from a Nostr secp256k1 secret via HKDF. BIP39 mnemonic generation, display, and recovery are planned but not yet available. Users currently have no key backup mechanism.
+> **Status: Implemented.** Both iOS and Android clients generate a BIP39 mnemonic (12 words, 128-bit entropy) on first launch. All identity keys (Nostr secp256k1, BLS12-381, Stellar Ed25519, X25519) are derived deterministically from the BIP39 seed via HKDF-SHA256. Users can back up their recovery phrase in Settings (behind biometric/passcode authentication) and restore identity from a recovery phrase during onboarding. Legacy (pre-BIP39) installs continue working with their existing keys.
 
 Each device has a BIP39 seed from which it derives all required identities:
 
@@ -364,10 +364,15 @@ The relay layer should not require special anti-spam semantics beyond what the N
 - Specify which fields are cleartext versus encrypted
 - Specify ciphertext padding rules and relay-hint format
 
-### Phase 2 — Key derivation
+### Phase 2 — Key derivation *(implemented)*
 
-- Standardize BIP39 derivation paths for Stellar, BLS12-381, Nostr, and MLS device material
-- Document device recovery behavior and seed portability assumptions
+- ~~Standardize BIP39 derivation paths for Stellar, BLS12-381, Nostr, and MLS device material~~
+  - BIP39 12-word mnemonic → PBKDF2-HMAC-SHA512 seed → HKDF-SHA256 per-algorithm keys
+  - Nostr: `HKDF(seed, salt="chat.onym.bip39", info="nostr-secp256k1-v1")`
+  - BLS: `HKDF(seed, salt="chat.onym.bip39", info="bls12-381-v1")`
+  - Stellar/X25519: derived from Nostr key via existing HKDF paths
+- ~~Document device recovery behavior and seed portability assumptions~~
+  - Cross-platform restore verified via shared test vectors
 
 ### Phase 3 — Client verification
 

@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var showJoin = false
     @State private var showAbout = false
     @State private var showShareSheet = false
+    @State private var showRecoveryPhrase = false
 
     enum SettingsTab: Hashable {
         case invite, preferences
@@ -39,6 +40,9 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(items: [appState.keyManager.keyAgreementPublicKeyHex])
+        }
+        .sheet(isPresented: $showRecoveryPhrase) {
+            RecoveryPhraseView()
         }
     }
 
@@ -204,6 +208,25 @@ struct SettingsView: View {
                 Text("Protocol")
             } footer: {
                 Text("New groups will use this tier. Larger tiers support more members but use bigger ZK circuits.")
+            }
+
+            // Security
+            if appState.keyManager.isBip39Backed {
+                Section {
+                    Button {
+                        showRecoveryPhrase = true
+                    } label: {
+                        row(
+                            icon: SettingsIconBox(systemImage: "key.fill", background: .orange),
+                            title: "Backup Recovery Phrase",
+                            detail: nil
+                        )
+                    }
+                } header: {
+                    Text("Security")
+                } footer: {
+                    Text("View your 12-word recovery phrase. You will need it to restore your identity on a new device.")
+                }
             }
 
             // Advanced

@@ -374,6 +374,12 @@ final class AppState {
         Task { await connectAndSubscribeAllGroups() }
     }
 
+    /// Replace the active key manager after a BIP39 restore.
+    /// The caller is responsible for triggering any re-subscription or reconnection.
+    func replaceKeyManager(_ newKeyManager: KeyManager) {
+        self.keyManager = newKeyManager
+    }
+
     func addGroup(_ group: ChatGroup) {
         groups.append(group)
         store.saveGroup(group)

@@ -48,6 +48,8 @@ import chat.onym.android.ui.screens.InviteMemberScreen
 import chat.onym.android.ui.screens.SearchScreen
 import chat.onym.android.ui.screens.JoinGroupScreen
 import chat.onym.android.ui.screens.PendingInvitationsScreen
+import chat.onym.android.ui.screens.RecoveryPhraseScreen
+import chat.onym.android.ui.screens.RestoreIdentityScreen
 import chat.onym.android.ui.screens.SettingsScreen
 import chat.onym.android.ui.theme.StellarChatTheme
 import chat.onym.android.viewmodel.ChatViewModel
@@ -227,7 +229,8 @@ fun StellarChatNavHost(
                     onJoinGroup = { navController.navigate("join") },
                     onInvitations = { navController.navigate("invitations") },
                     onDeleteGroup = { id -> groupListViewModel.removeGroup(id) },
-                    onRefresh = { groupListViewModel.reconnectRelays() }
+                    onRefresh = { groupListViewModel.reconnectRelays() },
+                    onRestore = { navController.navigate("restore_identity") }
                 )
             }
 
@@ -346,7 +349,37 @@ fun StellarChatNavHost(
 
             composable("settings") {
                 SettingsScreen(
-                    viewModel = groupListViewModel
+                    viewModel = groupListViewModel,
+                    onBackupRecoveryPhrase = {
+                        navController.navigate("recovery_phrase")
+                    }
+                )
+            }
+
+            composable("recovery_phrase") {
+                val phrase = groupListViewModel.keyManager.recoveryPhrase
+                if (phrase != null) {
+                    RecoveryPhraseScreen(
+                        recoveryPhrase = phrase,
+                        onBack = { navController.popBackStack() }
+                    )
+                }
+            }
+
+            composable("restore_identity") {
+                RestoreIdentityScreen(
+                    onRestore = { mnemonic ->
+                        try {
+                            chat.onym.android.crypto.KeyManager.restoreFromMnemonic(
+                                context,
+                                mnemonic
+                            )
+                            true
+                        } catch (e: Exception) {
+                            false
+                        }
+                    },
+                    onBack = { navController.popBackStack() }
                 )
             }
 

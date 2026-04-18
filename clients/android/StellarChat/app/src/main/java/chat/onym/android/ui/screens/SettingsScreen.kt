@@ -56,7 +56,8 @@ import com.stellarmls.mls.SEPTier
 @Composable
 fun SettingsScreen(
     viewModel: GroupListViewModel,
-    onBack: (() -> Unit)? = null
+    onBack: (() -> Unit)? = null,
+    onBackupRecoveryPhrase: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val km = viewModel.keyManager
@@ -373,6 +374,25 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp)
                 )
+            }
+
+            // Security — Recovery phrase backup
+            if (km.isBip39Backed && onBackupRecoveryPhrase != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                SettingsCard("Security") {
+                    Button(
+                        onClick = onBackupRecoveryPhrase,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Backup Recovery Phrase")
+                    }
+                    Text(
+                        "View your 12-word recovery phrase. You will need it to restore your identity on a new device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(12.dp))

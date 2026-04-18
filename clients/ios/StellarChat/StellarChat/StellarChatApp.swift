@@ -2356,15 +2356,16 @@ final class AppState {
         // this message ID. Android uses the same pattern in retryingMessageIDs.
         guard retryingMessageIDs.insert(messageID).inserted else { return }
 
-        let text = chatMessages[groupID]![idx].text
-        let replyToID = chatMessages[groupID]![idx].replyToID
+        let originalMsg = chatMessages[groupID]![idx]
+        let text = originalMsg.text
+        let replyToID = originalMsg.replyToID
+        let originalSenderPubkey = originalMsg.senderPubkey
         chatMessages[groupID]?[idx].status = .sending
         store.updateMessageStatusAsync(id: messageID, status: .sending)
 
         Task {
             do {
                 let blsPubkey = try keyManager.blsPublicKey
-                let blsPubkeyHex = blsPubkey.map { String(format: "%02x", $0) }.joined()
                 let ts = Int64(Date().timeIntervalSince1970)
                 var wrapper: [String: Any] = [
                     "v": 2, "type": "chat", "text": text,
@@ -2392,12 +2393,14 @@ final class AppState {
 
                 try await chatTransport.publishToRelays(event)
                 await MainActor.run {
-                    // Use the BLS pubkey hex for sender attribution — matches
-                    // sendMessage and setupChatHandler. Using keyManager.publicKeyHex
-                    // here would store the Nostr ed25519 key instead, breaking
-                    // sender identity on retried messages.
+                    // Preserve the original message's senderPubkey (BLS hex)
+                    // so retried messages keep the same sender identity they
+                    // were persisted with. Matches Android's
+                    // `failedMsg.copy(id = event.id, ...)` pattern. Using
+                    // keyManager.publicKeyHex here would overwrite with the
+                    // Nostr ed25519 key, diverging from sendMessage/setupChatHandler.
                     let newMsg = ChatMessage(
-                        id: event.id, groupID: groupID, senderPubkey: blsPubkeyHex,
+                        id: event.id, groupID: groupID, senderPubkey: originalSenderPubkey,
                         text: text, timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
                         isMine: true, status: .sent,
                         epoch: sendEpoch, replyToID: replyToID

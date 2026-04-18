@@ -131,6 +131,7 @@ back-post as the right GitHub identity by consulting env vars set in
 | `N8N_HUMAN_QA_LOGIN` | Receives the smoke-test issue created by workflow 06. |
 | `N8N_BOT_LOGINS` | CSV of logins whose events must never re-trigger the round-trip. Include every agent-bound handle from `N8N_AGENT_MAP` plus `github-actions[bot]`. |
 | `N8N_MERGE_AUTHORIZED_LOGINS` | CSV of logins whose `/merge` comments workflow 06 will honour. |
+| `N8N_COMMAND_USERS` | CSV of logins allowed to address agents in PR comments by `@`-mentioning an implementer (see workflow 05). Can include agent handles — loop-proof because bot-posted comments never match the `@<login> <free text>` pattern. |
 
 **Adding a new agent**: add a JSON key to `N8N_AGENT_MAP`; create the
 matching n8n SSH + GitHub credentials; add a new branch to the `Switch
@@ -165,11 +166,20 @@ agent-triggering workflow gates on all four of:
   comments posted by the implementer don't accidentally qualify as
   merge or build commands.
 
-Workflow 05 has one more guard: it *only* runs the auto-fix when either
-the PR author is an implementer in the map (implicit opt-in for
-agent-authored PRs) OR the comment starts with `/fix` (explicit opt-in
-on human-authored PRs). This keeps the agent from mutating unrelated
-human PRs based on passing review comments.
+Workflow 05 has one more guard: it *only* runs the auto-fix when one of
+these is true (checked in order):
+
+1. The commenter is in `N8N_COMMAND_USERS` AND the comment `@`-mentions
+   an implementer login from `N8N_AGENT_MAP` — routes to the mentioned
+   agent, using the comment body (minus the mention) as the prompt.
+2. The PR author is an implementer in the map (implicit opt-in for
+   agent-authored PRs) — routes to the PR author's agent with a generic
+   "address review comment" prompt.
+3. The comment starts with `/fix` — routes to `N8N_IMPLEMENTER_DEFAULT`.
+
+This keeps the agent from mutating unrelated human PRs based on passing
+review comments while still letting authorised humans address specific
+agents by name on any PR.
 
 ---
 
@@ -363,12 +373,23 @@ Both feed the same downstream chain via a Merge (append).
    `{prNumber, commentId, commentBody, path?, line?, diffHunk?, …}`.
 4. **Get PR** (HTTP, githubApi). Reveals `head.ref`, `base.ref`, and
    `user.login` (the PR author).
-5. **Resolve implementer** (Code): opt-in rule. If the PR author is an
-   `implementer` in the map → target that agent. Else, only proceed if
-   the comment starts with `/fix` (then use
-   `N8N_IMPLEMENTER_DEFAULT`). Otherwise return an empty array and the
-   workflow exits cleanly.
-6. **Encode fix prompt** (Code).
+5. **Resolve implementer** (Code): opt-in rule, priority order:
+   1. If the commenter is in `N8N_COMMAND_USERS` and the comment
+      `@`-mentions an implementer from `N8N_AGENT_MAP` → target that
+      agent, and strip the mention from the body to use as the
+      free-text instruction.
+   2. Else if the PR author is an `implementer` in the map → target
+      that agent (legacy auto-fix path for agent-authored PRs).
+   3. Else if the comment starts with `/fix` → use
+      `N8N_IMPLEMENTER_DEFAULT`.
+   4. Otherwise return an empty array and the workflow exits cleanly.
+
+   Output includes `implementerLogin`, `instructionMode` (`mention` /
+   `author-implementer` / `fix-slash`) and `instruction` so the next
+   node can pick the right prompt template.
+6. **Encode fix prompt** (Code): emits a free-text-instruction prompt
+   when `instructionMode === 'mention'`, else the generic "address
+   review comment" prompt.
 7. **Switch by host**.
 8. **SSH to the implementer agent**:
    ```bash

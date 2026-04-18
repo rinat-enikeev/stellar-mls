@@ -68,11 +68,17 @@ git worktree add -B "$BRANCH" "$WT_DIR" origin/main >/dev/null 2>&1 || {
 
 cd "$WT_DIR" || { cleanup; echo "PR_URL="; exit 12; }
 
+CLAUDE_LOG="/tmp/claude-issue-$ISSUE.log"
 echo "$PROMPT_B64" | base64 -d > "$PROMPT_FILE"
-claude --print < "$PROMPT_FILE"
+claude --print < "$PROMPT_FILE" > "$CLAUDE_LOG" 2>&1
 CLAUDE_RC=$?
 rm -f "$PROMPT_FILE"
 echo "CLAUDE_RC=$CLAUDE_RC"
+echo "CLAUDE_LOG_BYTES=$(wc -c < "$CLAUDE_LOG" 2>/dev/null || echo 0)"
+echo "CLAUDE_LOG_TAIL<<__END__"
+tail -n 40 "$CLAUDE_LOG" 2>/dev/null || true
+echo "__END__"
+rm -f "$CLAUDE_LOG"
 
 if git diff --quiet origin/main..HEAD; then
   echo "PR_URL="

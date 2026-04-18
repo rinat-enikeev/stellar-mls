@@ -41,8 +41,8 @@ cd "$PRIMARY" || { echo "ERROR: $PRIMARY not found" >&2; exit 10; }
 # Fetch the PR head commit (via the pull ref) and the base ref so the diff
 # below is correct. Using FETCH_HEAD is enough because we reference $SHA
 # explicitly when adding the worktree.
-git fetch origin "pull/$PR/head" 2>&1
-git fetch origin "$BASE" 2>&1
+git fetch origin "pull/$PR/head" >/dev/null 2>&1
+git fetch origin "$BASE" >/dev/null 2>&1
 
 mkdir -p "$WT_ROOT"
 git worktree prune >/dev/null 2>&1

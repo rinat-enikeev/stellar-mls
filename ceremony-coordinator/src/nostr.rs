@@ -68,23 +68,17 @@ impl NostrPublisher {
         self.coordinator_pk.as_deref()
     }
 
+    /// Returns a clone of the signing key, if one is configured.
+    pub fn signing_key(&self) -> Option<SigningKey> {
+        self.signing_key.clone()
+    }
+
     pub fn publish(&self, event: UnsignedEvent) -> Result<Option<String>> {
         let Some(key) = &self.signing_key else {
             return Ok(None);
         };
-        let pubkey = self.coordinator_pk.clone().unwrap_or_default();
-        let created_at = now_unix();
-        let id = compute_event_id(&pubkey, created_at, &event);
-        let sig = sign_event_id(key, &id)?;
-        let signed = SignedEvent {
-            id: id.clone(),
-            pubkey,
-            created_at,
-            kind: event.kind,
-            tags: event.tags,
-            content: event.content,
-            sig,
-        };
+        let signed = sign(key, event)?;
+        let id = signed.id.clone();
         if let Some(tx) = &self.tx {
             let _ = tx.send(signed);
         }
@@ -92,10 +86,31 @@ impl NostrPublisher {
     }
 }
 
-fn parse_signing_key(nsec_hex: &str) -> Result<SigningKey> {
+pub fn parse_signing_key(nsec_hex: &str) -> Result<SigningKey> {
     let bytes = hex::decode(nsec_hex).context("decode nsec hex")?;
     let arr: [u8; 32] = bytes.try_into().map_err(|_| anyhow::anyhow!("nsec must be 32 bytes"))?;
     SigningKey::from_bytes(&arr).context("parse signing key")
+}
+
+pub fn pubkey_hex(key: &SigningKey) -> String {
+    hex::encode(key.verifying_key().to_bytes())
+}
+
+/// Build a signed Nostr event (without sending it to the relay).
+pub fn sign(key: &SigningKey, event: UnsignedEvent) -> Result<SignedEvent> {
+    let pubkey = pubkey_hex(key);
+    let created_at = now_unix();
+    let id = compute_event_id(&pubkey, created_at, &event);
+    let sig = sign_event_id(key, &id)?;
+    Ok(SignedEvent {
+        id,
+        pubkey,
+        created_at,
+        kind: event.kind,
+        tags: event.tags,
+        content: event.content,
+        sig,
+    })
 }
 
 fn compute_event_id(pubkey: &str, created_at: i64, event: &UnsignedEvent) -> String {

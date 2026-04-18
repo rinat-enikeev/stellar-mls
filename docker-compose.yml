@@ -59,7 +59,7 @@ services:
     environment:
       - CEREMONY_BIND=0.0.0.0:9090
       - CEREMONY_DB_PATH=/data/ceremony.sqlite
-      - CEREMONY_BLOSSOM_URL=http://blossom:3000
+      - CEREMONY_BLOSSOM_URL=https://blossom.onym.chat
       - CEREMONY_BLOSSOM_PUBLIC_URL=https://blossom.onym.chat
       - CEREMONY_NOSTR_RELAY=ws://nostr-relay:7777
       - CEREMONY_TOOL_BIN=/usr/local/bin/ceremony_tool

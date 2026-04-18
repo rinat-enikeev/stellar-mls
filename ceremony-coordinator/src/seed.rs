@@ -76,7 +76,9 @@ pub async fn run(tier_str: &str) -> Result<()> {
         .cloned()
         .ok_or_else(|| anyhow!("state.txt missing circuit_id"))?;
 
-    let blossom = BlossomClient::new(config.blossom_url.clone(), config.blossom_public_url.clone());
+    let nostr = NostrPublisher::new(config.nostr_relay.clone(), config.coordinator_nsec.clone());
+    let blossom = BlossomClient::new(config.blossom_url.clone(), config.blossom_public_url.clone())
+        .with_signing_key(nostr.signing_key());
     let srs_blob = blossom
         .put(srs_bytes, "application/octet-stream")
         .await
@@ -90,7 +92,6 @@ pub async fn run(tier_str: &str) -> Result<()> {
         .await
         .context("blossom put receipt.txt")?;
 
-    let nostr = NostrPublisher::new(config.nostr_relay.clone(), config.coordinator_nsec.clone());
     let nostr_event_id = publish_round0_event(
         &nostr,
         tier,

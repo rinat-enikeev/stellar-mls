@@ -65,14 +65,15 @@ async fn main() -> anyhow::Result<()> {
     let store = Store::open(&config.db_path)?;
     store.run_migrations()?;
 
-    let blossom = blossom::BlossomClient::new(
-        config.blossom_url.clone(),
-        config.blossom_public_url.clone(),
-    );
     let nostr = nostr::NostrPublisher::new(
         config.nostr_relay.clone(),
         config.coordinator_nsec.clone(),
     );
+    let blossom = blossom::BlossomClient::new(
+        config.blossom_url.clone(),
+        config.blossom_public_url.clone(),
+    )
+    .with_signing_key(nostr.signing_key());
     let ceremony_tool = ceremony_exec::CeremonyTool::new(
         config.ceremony_tool_bin.clone(),
         config.work_dir.clone(),

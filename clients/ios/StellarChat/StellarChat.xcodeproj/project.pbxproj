@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0029F253BA68E6B4CA11E864 /* BootstrapPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA96977038D2F9F4EC31EF3D /* BootstrapPayload.swift */; };
 		01083F180D3E8311A7E002C6 /* CreateGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF781055530F3AF0953DE842 /* CreateGroupView.swift */; };
+		062CEEDA662A11DE74EEB83B /* vk-small.json in Resources */ = {isa = PBXBuildFile; fileRef = 387869FA0926B4F57B27BBA0 /* vk-small.json */; };
 		08EF0A9E890B87680DE253A9 /* GroupCryptoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F33C8AAAF9A2C4EA161050D8 /* GroupCryptoTests.swift */; };
 		093FB54E41C5835F525E8494 /* vk-medium.json in Resources */ = {isa = PBXBuildFile; fileRef = 1492BFF03652C63278A1559B /* vk-medium.json */; };
 		09EC25786F839A9A840E509A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E292A37C859D6BE12BE2376 /* ContentView.swift */; };
@@ -16,6 +17,7 @@
 		16ADABAE1C78B394179DD74B /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76C1E6E24CEC0349F3C9A60A /* ChatViewModel.swift */; };
 		1AA0059A3C3D6B195FB5615C /* SecurityLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C987955167382BF0E0E251C /* SecurityLog.swift */; };
 		1F2DC6C7FF3C465CBD31ABA9 /* PendingInvitationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6867C765FBB9480D9E0D9FC /* PendingInvitationsView.swift */; };
+		23BD248EBBBFD23FDC078265 /* medium.bin in Resources */ = {isa = PBXBuildFile; fileRef = 16CACD19E9FF995FA27F087E /* medium.bin */; };
 		2567EA1F6AD89933D7A3FEBC /* PushNotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 768AD875E03E5137536C5563 /* PushNotificationManager.swift */; };
 		276E482D1A8B67CFB9B7ADF1 /* InvitationTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C958564E515954D41E226897 /* InvitationTransport.swift */; };
 		2AEA33F14364C4EE65AB090D /* FirstGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28FB2F8640C54066D58B3FA9 /* FirstGroupView.swift */; };
@@ -24,6 +26,8 @@
 		3B5518BB5C6DB07F6628E7BD /* ForkGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC5B1B630CCFBA76B3C56C87 /* ForkGroupView.swift */; };
 		3EC81E8DA76069452870626F /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68F22F3B02C2C003269BA135 /* QRScannerView.swift */; };
 		3EE35BCE5D589F7930DBE7CD /* vk-small.json in Resources */ = {isa = PBXBuildFile; fileRef = DB6F458946661A40FAC38DD2 /* vk-small.json */; };
+		40C619A3144D30891F999B0F /* update-large.bin in Resources */ = {isa = PBXBuildFile; fileRef = 3E5BE0783C802E2A5B127D05 /* update-large.bin */; };
+		44A9F373DB7EA116813B3038 /* vk-update-small.json in Resources */ = {isa = PBXBuildFile; fileRef = EE55F7CB9B9CC14306944040 /* vk-update-small.json */; };
 		4517DD86FF56160F98C99FB8 /* medium.bin in Resources */ = {isa = PBXBuildFile; fileRef = 4A4B6451B3583EB5078ECE1F /* medium.bin */; };
 		459BB52914DCD2B789CA689C /* MediaCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBAE6FF501ED7880C298C7FC /* MediaCrypto.swift */; };
 		4B45989EA613CA80A4D8FFCB /* ContactsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A14AE9A1C9F0583137C7797 /* ContactsView.swift */; };
@@ -39,7 +43,7 @@
 		78062C236F67BC5FADD88916 /* StorageEncryption.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD61B2440CA5ED81C983DA87 /* StorageEncryption.swift */; };
 		79801A2E3794EC90D770BED1 /* ShareInviteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B64379BF75810BB45AB9838 /* ShareInviteView.swift */; };
 		7C027F9FEC64BC2471784A58 /* InviteMemberView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8D38B6A8AA5A166074EA951 /* InviteMemberView.swift */; };
-		7CFC71A334B518B26ACD1323 /* keyset-v1 in Resources */ = {isa = PBXBuildFile; fileRef = B2998F757062059B4B591821 /* keyset-v1 */; };
+		7D7E48F7470EA613F527641C /* vk-update-large.json in Resources */ = {isa = PBXBuildFile; fileRef = 716BB3CAA96FE6F62CC8EA00 /* vk-update-large.json */; };
 		7E322A06E7A5D688E206F2F3 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 3316A7A4CF4C52BEBFF32B30 /* WebRTC */; };
 		816EB9A5EB988647F86E220B /* ContactAliasStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F67E0578F1C0DC64C2004D62 /* ContactAliasStore.swift */; };
 		833FF1A77449454BF4ADC801 /* GroupInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7446E889E7A95E042201A70D /* GroupInfoView.swift */; };
@@ -51,6 +55,8 @@
 		9A2E9C3E41BAD4719895F302 /* PNRelayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA247CDB4DE5023BE0A6BF52 /* PNRelayClient.swift */; };
 		9CEA673CD2010A812F5C7FA2 /* ModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E81687A278F166A5B7E5F557 /* ModelsTests.swift */; };
 		9EABBA75189DA35E0BA71054 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD4DD514A884BAD2FC5B2D73 /* SearchView.swift */; };
+		A1DEC6A8811A4A4E753E9F70 /* vk-update-medium.json in Resources */ = {isa = PBXBuildFile; fileRef = B0EA74F19D71BB7C486F8B09 /* vk-update-medium.json */; };
+		A3F0BECCC4A78C39876F4F40 /* vk-large.json in Resources */ = {isa = PBXBuildFile; fileRef = F54F3D7E2C0BC7FAD658557C /* vk-large.json */; };
 		A49A5C6B2401EEB1847229DE /* QRCodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C2E0A174CC0B050D6BADB3 /* QRCodeView.swift */; };
 		A59B1DBBCD75C4882A4A7EF6 /* CallKitProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4A3E005A9C5AF2DE5743188 /* CallKitProvider.swift */; };
 		AE25761903B1EA84D9AFADD2 /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8ACE473C3096412015326C52 /* ImageCache.swift */; };
@@ -68,13 +74,19 @@
 		D6C3C9E90F39CCA80D2DD029 /* GroupListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C2B0F0A2A137DC1BE419CC3 /* GroupListView.swift */; };
 		D80AA787557EC39AC88FF3F3 /* KeyAttestation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37304476C52093C0D34ECB92 /* KeyAttestation.swift */; };
 		D8CE0C737C0C3FE425C2F8B4 /* PushSubscriptionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9C563AA269E4B62C095C93E /* PushSubscriptionStore.swift */; };
+		DDD383111230FCE8E4653FDD /* vk-medium.json in Resources */ = {isa = PBXBuildFile; fileRef = 09B5C46349E19FFD0B8AEF53 /* vk-medium.json */; };
 		E10FD8A2E1B0D8169A2BEB15 /* BlossomClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FCDBA22391412C6D05BB99E /* BlossomClient.swift */; };
 		E54951E56532C7FBD90317DE /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70C111DF10AF94B4F95C4742 /* ChatView.swift */; };
 		EBC0BEE01D60D74615750B15 /* PushSubscriptionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9C563AA269E4B62C095C93E /* PushSubscriptionStore.swift */; };
+		EDA145AF8D7848926709D3DD /* update-medium.bin in Resources */ = {isa = PBXBuildFile; fileRef = 7833102BD2AA4AF867F51671 /* update-medium.bin */; };
 		EDF053D5AE1660633B823B48 /* NostrEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 703A9C8CDE76DF5C28608301 /* NostrEvent.swift */; };
 		EFB9DF389A99555142550086 /* NostrMessageTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEE93134C2D32A03E89226B8 /* NostrMessageTransport.swift */; };
+		F56DDAE7EFB2CBD68E2BB709 /* large.bin in Resources */ = {isa = PBXBuildFile; fileRef = D598C68B195A10B97A59B334 /* large.bin */; };
 		F5E26B4C634D5DFCC4ECBD28 /* NostrRelayConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0884F32E9A807B2566DD234 /* NostrRelayConnection.swift */; };
+		F5FCA09754043D393C936FCD /* update-small.bin in Resources */ = {isa = PBXBuildFile; fileRef = CE90686ED5EF142D49635B5B /* update-small.bin */; };
 		F7159773858364D2C8D16FE1 /* KeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5EB556EBD80A9DC1A99F1F4 /* KeyManager.swift */; };
+		F7B4A337D8D4AFE6F3562FA6 /* small.bin in Resources */ = {isa = PBXBuildFile; fileRef = 7AB3927E9D56D699C794C301 /* small.bin */; };
+		FBA66357B7F60979E3491129 /* keyset-v2 in Resources */ = {isa = PBXBuildFile; fileRef = C3437AAAE11597FA39EA2B67 /* keyset-v2 */; };
 		FD4A35DD21888E8B52788996 /* small.bin in Resources */ = {isa = PBXBuildFile; fileRef = BD9FA6FCA3EF79096682957B /* small.bin */; };
 		FE754451C690FD52A395B8B2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */; };
 		FF4A530CF3321A480E61DE6B /* GroupCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8210CED65D67082D16673F07 /* GroupCrypto.swift */; };
@@ -116,9 +128,11 @@
 		03DDE39E8A2DC3CBF08D400C /* StellarChatTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = StellarChatTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		06014BB7573399F26644F9F6 /* OnChainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnChainService.swift; sourceTree = "<group>"; };
 		0734DFA865A663F2138CD236 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		09B5C46349E19FFD0B8AEF53 /* vk-medium.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "vk-medium.json"; sourceTree = "<group>"; };
 		0AB5BDD8C1704CEBD3F2D879 /* StorageEncryptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageEncryptionTests.swift; sourceTree = "<group>"; };
 		0E25D14293AC1BC6E3FB1E28 /* PersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStore.swift; sourceTree = "<group>"; };
 		1492BFF03652C63278A1559B /* vk-medium.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "vk-medium.json"; sourceTree = "<group>"; };
+		16CACD19E9FF995FA27F087E /* medium.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = medium.bin; sourceTree = "<group>"; };
 		1C987955167382BF0E0E251C /* SecurityLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityLog.swift; sourceTree = "<group>"; };
 		1E76AF13A26CCEC2E75C8310 /* VoiceRecordButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceRecordButton.swift; sourceTree = "<group>"; };
 		211AE30EB5115E4BB85D9084 /* swift-mls */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "swift-mls"; path = "../../../swift-mls"; sourceTree = SOURCE_ROOT; };
@@ -126,7 +140,9 @@
 		2CB66BD4710970306321664D /* RelayerDefaults.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayerDefaults.generated.swift; sourceTree = "<group>"; };
 		30F3176E6A6E2A7C75F9CB47 /* Phase3Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Phase3Tests.swift; sourceTree = "<group>"; };
 		37304476C52093C0D34ECB92 /* KeyAttestation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyAttestation.swift; sourceTree = "<group>"; };
+		387869FA0926B4F57B27BBA0 /* vk-small.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "vk-small.json"; sourceTree = "<group>"; };
 		3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StellarStrKey.swift; sourceTree = "<group>"; };
+		3E5BE0783C802E2A5B127D05 /* update-large.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = "update-large.bin"; sourceTree = "<group>"; };
 		4705F8234AA6022CD782348E /* PersistedModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistedModels.swift; sourceTree = "<group>"; };
 		485C53049C1128D91F1CA2DB /* CallManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallManager.swift; sourceTree = "<group>"; };
 		4A4B6451B3583EB5078ECE1F /* medium.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = medium.bin; sourceTree = "<group>"; };
@@ -138,11 +154,14 @@
 		6E292A37C859D6BE12BE2376 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		703A9C8CDE76DF5C28608301 /* NostrEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrEvent.swift; sourceTree = "<group>"; };
 		70C111DF10AF94B4F95C4742 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		716BB3CAA96FE6F62CC8EA00 /* vk-update-large.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "vk-update-large.json"; sourceTree = "<group>"; };
 		7446E889E7A95E042201A70D /* GroupInfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupInfoView.swift; sourceTree = "<group>"; };
 		7485EE02F3B736EE786818FB /* StellarChatNotificationService.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StellarChatNotificationService.entitlements; sourceTree = "<group>"; };
 		768AD875E03E5137536C5563 /* PushNotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushNotificationManager.swift; sourceTree = "<group>"; };
 		76C1E6E24CEC0349F3C9A60A /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
+		7833102BD2AA4AF867F51671 /* update-medium.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = "update-medium.bin"; sourceTree = "<group>"; };
 		7A14AE9A1C9F0583137C7797 /* ContactsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactsView.swift; sourceTree = "<group>"; };
+		7AB3927E9D56D699C794C301 /* small.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = small.bin; sourceTree = "<group>"; };
 		7B64379BF75810BB45AB9838 /* ShareInviteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareInviteView.swift; sourceTree = "<group>"; };
 		7C2B0F0A2A137DC1BE419CC3 /* GroupListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupListView.swift; sourceTree = "<group>"; };
 		7E005C90D6C91D9810C11364 /* CallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallView.swift; sourceTree = "<group>"; };
@@ -152,30 +171,35 @@
 		A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A4A3E005A9C5AF2DE5743188 /* CallKitProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallKitProvider.swift; sourceTree = "<group>"; };
 		B0884F32E9A807B2566DD234 /* NostrRelayConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrRelayConnection.swift; sourceTree = "<group>"; };
-		B2998F757062059B4B591821 /* keyset-v1 */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "keyset-v1"; path = "StellarChat/Resources/keyset-v1"; sourceTree = SOURCE_ROOT; };
+		B0EA74F19D71BB7C486F8B09 /* vk-update-medium.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "vk-update-medium.json"; sourceTree = "<group>"; };
 		BA643A0E8E9EAA763609E1EA /* StellarChat.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StellarChat.entitlements; sourceTree = "<group>"; };
 		BD9FA6FCA3EF79096682957B /* small.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = small.bin; sourceTree = "<group>"; };
 		BF781055530F3AF0953DE842 /* CreateGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateGroupView.swift; sourceTree = "<group>"; };
 		C1FB5F184FBA9633C01BDFBC /* VideoCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCache.swift; sourceTree = "<group>"; };
+		C3437AAAE11597FA39EA2B67 /* keyset-v2 */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "keyset-v2"; path = "StellarChat/Resources/keyset-v2"; sourceTree = SOURCE_ROOT; };
 		C6867C765FBB9480D9E0D9FC /* PendingInvitationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingInvitationsView.swift; sourceTree = "<group>"; };
 		C958564E515954D41E226897 /* InvitationTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InvitationTransport.swift; sourceTree = "<group>"; };
 		C9C563AA269E4B62C095C93E /* PushSubscriptionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushSubscriptionStore.swift; sourceTree = "<group>"; };
 		CA247CDB4DE5023BE0A6BF52 /* PNRelayClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PNRelayClient.swift; sourceTree = "<group>"; };
 		CE1DB9EAD5AE4BE3069DD5EF /* NostrEventTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrEventTests.swift; sourceTree = "<group>"; };
+		CE90686ED5EF142D49635B5B /* update-small.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = "update-small.bin"; sourceTree = "<group>"; };
 		CEE93134C2D32A03E89226B8 /* NostrMessageTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrMessageTransport.swift; sourceTree = "<group>"; };
 		D24B0BEDBA88DF1ED4D09AF8 /* large.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = large.bin; sourceTree = "<group>"; };
+		D598C68B195A10B97A59B334 /* large.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = large.bin; sourceTree = "<group>"; };
 		D8C92D1E1F59A902BCED5859 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		D93193C84699A94AF7090C64 /* StellarChatNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = StellarChatNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		DB6F458946661A40FAC38DD2 /* vk-small.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "vk-small.json"; sourceTree = "<group>"; };
 		E81687A278F166A5B7E5F557 /* ModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsTests.swift; sourceTree = "<group>"; };
 		E8D38B6A8AA5A166074EA951 /* InviteMemberView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InviteMemberView.swift; sourceTree = "<group>"; };
 		EC5B1B630CCFBA76B3C56C87 /* ForkGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForkGroupView.swift; sourceTree = "<group>"; };
+		EE55F7CB9B9CC14306944040 /* vk-update-small.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "vk-update-small.json"; sourceTree = "<group>"; };
 		EF0E72244FC0BE4C56CDFB4F /* CrossPlatformVectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossPlatformVectorTests.swift; sourceTree = "<group>"; };
 		F0C2E0A174CC0B050D6BADB3 /* QRCodeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeView.swift; sourceTree = "<group>"; };
 		F0F0E18BDAE3BFB365657BA8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		F1F7647C522D0F7D1F86CE17 /* VerificationBadgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerificationBadgeView.swift; sourceTree = "<group>"; };
 		F33C8AAAF9A2C4EA161050D8 /* GroupCryptoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupCryptoTests.swift; sourceTree = "<group>"; };
 		F406EABD519847834878AA47 /* StellarChat.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = StellarChat.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F54F3D7E2C0BC7FAD658557C /* vk-large.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "vk-large.json"; sourceTree = "<group>"; };
 		F578D34CACAEC0D640025618 /* FirstJoinView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstJoinView.swift; sourceTree = "<group>"; };
 		F5EB556EBD80A9DC1A99F1F4 /* KeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyManager.swift; sourceTree = "<group>"; };
 		F67E0578F1C0DC64C2004D62 /* ContactAliasStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactAliasStore.swift; sourceTree = "<group>"; };
@@ -211,6 +235,7 @@
 			isa = PBXGroup;
 			children = (
 				A4F0BC9F48FD82738A8AD252 /* keyset-v1 */,
+				401860857213C310A628E118 /* keyset-v2 */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -244,7 +269,7 @@
 		237EA72C7CEF1AD9196D281B = {
 			isa = PBXGroup;
 			children = (
-				B2998F757062059B4B591821 /* keyset-v1 */,
+				C3437AAAE11597FA39EA2B67 /* keyset-v2 */,
 				ABDD2AD803B8C85F0ACC3714 /* Packages */,
 				80602CB4E8F63DBA92D87C56 /* StellarChat */,
 				49940AF5B123283EAE1AACDB /* StellarChatNotificationService */,
@@ -278,6 +303,25 @@
 				C1FB5F184FBA9633C01BDFBC /* VideoCache.swift */,
 			);
 			path = Models;
+			sourceTree = "<group>";
+		};
+		401860857213C310A628E118 /* keyset-v2 */ = {
+			isa = PBXGroup;
+			children = (
+				D598C68B195A10B97A59B334 /* large.bin */,
+				16CACD19E9FF995FA27F087E /* medium.bin */,
+				7AB3927E9D56D699C794C301 /* small.bin */,
+				3E5BE0783C802E2A5B127D05 /* update-large.bin */,
+				7833102BD2AA4AF867F51671 /* update-medium.bin */,
+				CE90686ED5EF142D49635B5B /* update-small.bin */,
+				F54F3D7E2C0BC7FAD658557C /* vk-large.json */,
+				09B5C46349E19FFD0B8AEF53 /* vk-medium.json */,
+				387869FA0926B4F57B27BBA0 /* vk-small.json */,
+				716BB3CAA96FE6F62CC8EA00 /* vk-update-large.json */,
+				B0EA74F19D71BB7C486F8B09 /* vk-update-medium.json */,
+				EE55F7CB9B9CC14306944040 /* vk-update-small.json */,
+			);
+			path = "keyset-v2";
 			sourceTree = "<group>";
 		};
 		49940AF5B123283EAE1AACDB /* StellarChatNotificationService */ = {
@@ -499,13 +543,25 @@
 			buildActionMask = 2147483647;
 			files = (
 				FE754451C690FD52A395B8B2 /* Assets.xcassets in Resources */,
-				7CFC71A334B518B26ACD1323 /* keyset-v1 in Resources */,
+				FBA66357B7F60979E3491129 /* keyset-v2 in Resources */,
 				64EEB4AECF4F978F545823B0 /* large.bin in Resources */,
+				F56DDAE7EFB2CBD68E2BB709 /* large.bin in Resources */,
 				4517DD86FF56160F98C99FB8 /* medium.bin in Resources */,
+				23BD248EBBBFD23FDC078265 /* medium.bin in Resources */,
 				FD4A35DD21888E8B52788996 /* small.bin in Resources */,
+				F7B4A337D8D4AFE6F3562FA6 /* small.bin in Resources */,
+				40C619A3144D30891F999B0F /* update-large.bin in Resources */,
+				EDA145AF8D7848926709D3DD /* update-medium.bin in Resources */,
+				F5FCA09754043D393C936FCD /* update-small.bin in Resources */,
 				C550DD6040190C3D04ACE570 /* vk-large.json in Resources */,
+				A3F0BECCC4A78C39876F4F40 /* vk-large.json in Resources */,
 				093FB54E41C5835F525E8494 /* vk-medium.json in Resources */,
+				DDD383111230FCE8E4653FDD /* vk-medium.json in Resources */,
 				3EE35BCE5D589F7930DBE7CD /* vk-small.json in Resources */,
+				062CEEDA662A11DE74EEB83B /* vk-small.json in Resources */,
+				7D7E48F7470EA613F527641C /* vk-update-large.json in Resources */,
+				A1DEC6A8811A4A4E753E9F70 /* vk-update-medium.json in Resources */,
+				44A9F373DB7EA116813B3038 /* vk-update-small.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

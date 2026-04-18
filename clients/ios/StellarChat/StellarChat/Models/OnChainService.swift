@@ -57,22 +57,27 @@ actor OnChainService {
     private var provingKeys: [SEPTier: Data] = [:]
 
     /// Cached UpdateCircuit proving keys per tier. #59 fix: distinct circuit
-    /// from the membership circuit, bundled in keyset-v2 after the ceremony.
-    /// Until keyset-v2 lands (Phase 8), dev builds fall back to a testing key.
+    /// from the membership circuit, bundled in keyset-v2.
     private var updateProvingKeys: [SEPTier: Data] = [:]
 
     private static let maxRetries = 3
     private static let baseRetryDelay: TimeInterval = 1.0
 
     /// Current keyset version. Must match the resources in keyset-vN/.
-    static let keysetVersion = 1
+    static let keysetVersion = 2
 
-    /// Expected SHA-256 hashes of proving keys per tier.
-    /// Update these after running scripts/generate-keyset.sh.
+    /// Expected SHA-256 hashes of membership proving keys per tier (keyset-v2).
     private static let provingKeyHashes: [SEPTier: String] = [
-        .small: "adca1962089d3f6bd89135f2cb1c20f44f7b5be3f83b279b8a8517ad5233f2d1",
-        .medium: "630fbf2ad238f6153a143cf625c176b625870fd57535426133ed90e9fe03f215",
-        .large: "f1e577cc9dde0cfa6cac569c66726199478a76c87b6c07067b3859783a4e355f",
+        .small: "88ae981de7f91d79caad9cdb9076dd990980beab575aba461777aae592ff599d",
+        .medium: "206400e7d1e74f6cbe96ebdab989a3e79090bdd042ddf19dcc1dee02277c0cf0",
+        .large: "2daafd9ab533daea483fe433d18922b2c7a63058f2c166e298d17b843ed45d16",
+    ]
+
+    /// Expected SHA-256 hashes of UpdateCircuit proving keys per tier (keyset-v2).
+    private static let updateProvingKeyHashes: [SEPTier: String] = [
+        .small: "6b83e2300430bb1bd37b929ccb7d135f81d4f966745da661df100d38d1e8dbcc",
+        .medium: "ee468305f7566782448bc495f122ded42280299bad088c4f567b245205e6ed54",
+        .large: "16ce9e2e712bfcc1c46bbd9d4274a9210bdcd13f7258294b96ccfd47a5f60900",
     ]
 
     /// Execute an async block with exponential backoff retry on URLError.
@@ -117,13 +122,12 @@ actor OnChainService {
     }
 
     /// Load or return a cached UpdateCircuit proving key for the given tier.
-    /// TODO(Phase 8): load from `keyset-v2/update-<tier>.bin` with hash check.
-    /// Dev fallback generates a deterministic testing key.
+    /// Loads from `keyset-v<N>/update-<tier>.bin` with SHA-256 hash verification.
     func ensureUpdateProvingKey(tier: SEPTier) throws -> Data {
         if let cached = updateProvingKeys[tier] {
             return cached
         }
-        let pk = try SEPProofGenerator.generateTestingUpdateProvingKey(tier: tier)
+        let pk = try Self.loadUpdateProvingKeyFromBundle(tier: tier)
         updateProvingKeys[tier] = pk
         return pk
     }
@@ -156,6 +160,29 @@ actor OnChainService {
 
         #if DEBUG
         print("[OnChainService] loaded proving key from bundle: \(subdirectory)/\(name).bin (\(data.count) bytes)")
+        #endif
+        return data
+    }
+
+    private static func loadUpdateProvingKeyFromBundle(tier: SEPTier) throws -> Data {
+        let name = "update-\(tierResourceName(tier: tier))"
+        let subdirectory = "keyset-v\(keysetVersion)"
+
+        guard let url = Bundle.main.url(forResource: name, withExtension: "bin", subdirectory: subdirectory) else {
+            throw OnChainError.provingKeyNotFound(tier: tier, keyset: keysetVersion)
+        }
+
+        let data = try Data(contentsOf: url)
+
+        if let expectedHash = updateProvingKeyHashes[tier] {
+            let actualHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            guard actualHash == expectedHash else {
+                throw OnChainError.provingKeyHashMismatch(tier: tier, expected: expectedHash, actual: actualHash)
+            }
+        }
+
+        #if DEBUG
+        print("[OnChainService] loaded update proving key from bundle: \(subdirectory)/\(name).bin (\(data.count) bytes)")
         #endif
         return data
     }

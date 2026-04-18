@@ -85,7 +85,7 @@ if [ -z "$CONTRACT_ID" ]; then
     exit 1
 fi
 
-echo "==> Initializing contract with test verification keys"
+echo "==> Initializing contract with test verification keys (6: membership + update per tier)"
 stellar contract invoke \
     --config-dir "$CONFIG_DIR" \
     --network "$NETWORK" \
@@ -95,7 +95,10 @@ stellar contract invoke \
     --admin "$DEPLOYER_ADDRESS" \
     --vk-small-file-path "$FIXTURE_DIR/vk-small.json" \
     --vk-medium-file-path "$FIXTURE_DIR/vk-medium.json" \
-    --vk-large-file-path "$FIXTURE_DIR/vk-large.json" >/dev/null
+    --vk-large-file-path "$FIXTURE_DIR/vk-large.json" \
+    --update-vk-small-file-path "$FIXTURE_DIR/vk-update-small.json" \
+    --update-vk-medium-file-path "$FIXTURE_DIR/vk-update-medium.json" \
+    --update-vk-large-file-path "$FIXTURE_DIR/vk-update-large.json" >/dev/null
 
 echo "==> create_group"
 stellar contract invoke \
@@ -127,7 +130,7 @@ VERIFY_0="$(
 VERIFY_0_COMPACT="$(printf '%s' "$VERIFY_0" | tr -d '[:space:]')"
 printf '%s' "$VERIFY_0_COMPACT" | grep -F 'true'
 
-echo "==> update_commitment to epoch 1"
+echo "==> update_commitment to epoch 1 (UpdateCircuit — #59 fix binds c_new to the proof)"
 stellar contract invoke \
     --config-dir "$CONFIG_DIR" \
     --network "$NETWORK" \
@@ -135,10 +138,8 @@ stellar contract invoke \
     --source-account "$IDENTITY" \
     -- update_commitment \
     --group-id "$GROUP_ID" \
-    --new-commitment "$COMMITMENT_1" \
-    --new-epoch 1 \
-    --proof-file-path "$FIXTURE_DIR/proof-epoch-0-update.json" \
-    --public-inputs-file-path "$FIXTURE_DIR/public-inputs-epoch-0.json" >/dev/null
+    --proof-file-path "$FIXTURE_DIR/proof-update-0-to-1.json" \
+    --public-inputs-file-path "$FIXTURE_DIR/update-public-inputs-0-to-1.json" >/dev/null
 
 echo "==> get_state after update"
 STATE_AFTER_UPDATE="$(

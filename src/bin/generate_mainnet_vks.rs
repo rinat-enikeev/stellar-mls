@@ -12,7 +12,7 @@
 
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use ark_bls12_381::{Bls12_381, G1Affine, G2Affine};
 use ark_groth16::VerifyingKey;
@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     for tier in TIERS {
-        eprintln!("  {} tier (depth {})", tier.name, tier.depth);
+        eprintln!("  {} tier (depth {}) — membership", tier.name, tier.depth);
 
         let vk = match &source {
             KeySource::Keyset(dir) => {
@@ -74,6 +74,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let json = verification_key_json(&vk);
         let path = out_dir.join(format!("vk-{}.json", tier.name));
         fs::write(&path, &json)?;
+
+        eprintln!("  {} tier (depth {}) — update", tier.name, tier.depth);
+
+        let update_vk = match &source {
+            KeySource::Keyset(dir) => {
+                let vk_path = dir.join(tier.name).join("update_verifying_key.bin");
+                let bytes = fs::read(&vk_path)
+                    .map_err(|e| format!("failed to read {}: {e}", vk_path.display()))?;
+                VerifyingKey::<Bls12_381>::deserialize_compressed(&bytes[..])
+                    .map_err(|e| format!("failed to deserialize update VK for {}: {e}", tier.name))?
+            }
+            KeySource::Seed(seed) => {
+                let mut rng = ChaCha20Rng::seed_from_u64(seed.wrapping_add(1_000));
+                let setup = prover::setup_update(tier.depth, &mut rng)?;
+                setup.verifying_key
+            }
+        };
+
+        let update_json = verification_key_json(&update_vk);
+        let update_path = out_dir.join(format!("vk-update-{}.json", tier.name));
+        fs::write(&update_path, &update_json)?;
     }
 
     eprintln!("Done. VK files written to {}", out_dir.display());

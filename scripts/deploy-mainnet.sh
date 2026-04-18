@@ -129,7 +129,8 @@ else
     fi
 fi
 
-for f in vk-small.json vk-medium.json vk-large.json; do
+for f in vk-small.json vk-medium.json vk-large.json \
+         vk-update-small.json vk-update-medium.json vk-update-large.json; do
     if [ ! -f "$VK_DIR/$f" ]; then
         echo "ERROR: Expected VK file at $VK_DIR/$f" >&2
         exit 1
@@ -164,7 +165,10 @@ stellar contract invoke \
     --admin "$DEPLOYER_ADDRESS" \
     --vk-small-file-path "$VK_DIR/vk-small.json" \
     --vk-medium-file-path "$VK_DIR/vk-medium.json" \
-    --vk-large-file-path "$VK_DIR/vk-large.json" >/dev/null
+    --vk-large-file-path "$VK_DIR/vk-large.json" \
+    --update-vk-small-file-path "$VK_DIR/vk-update-small.json" \
+    --update-vk-medium-file-path "$VK_DIR/vk-update-medium.json" \
+    --update-vk-large-file-path "$VK_DIR/vk-update-large.json" >/dev/null
 
 echo "    Initialized successfully"
 

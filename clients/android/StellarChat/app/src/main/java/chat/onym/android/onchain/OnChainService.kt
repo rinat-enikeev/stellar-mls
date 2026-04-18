@@ -42,8 +42,7 @@ class OnChainService(private val context: Context, contractID: String, transport
 
     /**
      * Cached UpdateCircuit proving keys per tier. #59 fix: distinct circuit
-     * from the membership circuit, bundled in keyset-v2 after the ceremony.
-     * Until keyset-v2 lands (Phase 8), dev builds fall back to a testing key.
+     * from the membership circuit, bundled in keyset-v2.
      */
     private val updateProvingKeys = mutableMapOf<SEPTier, ByteArray>()
 
@@ -71,24 +70,33 @@ class OnChainService(private val context: Context, contractID: String, transport
         private const val BASE_RETRY_DELAY_MS = 1000L
 
         /** Current keyset version. Must match the assets in keyset-vN/. */
-        const val KEYSET_VERSION = 1
+        const val KEYSET_VERSION = 2
 
-        /** Expected SHA-256 hashes of proving keys per tier.
-         *  Update these after running scripts/generate-keyset.sh. */
+        /** Expected SHA-256 hashes of membership proving keys per tier (keyset-v2). */
         val PROVING_KEY_HASHES = mapOf(
-            SEPTier.SMALL to "adca1962089d3f6bd89135f2cb1c20f44f7b5be3f83b279b8a8517ad5233f2d1",
-            SEPTier.MEDIUM to "630fbf2ad238f6153a143cf625c176b625870fd57535426133ed90e9fe03f215",
-            SEPTier.LARGE to "f1e577cc9dde0cfa6cac569c66726199478a76c87b6c07067b3859783a4e355f",
+            SEPTier.SMALL to "88ae981de7f91d79caad9cdb9076dd990980beab575aba461777aae592ff599d",
+            SEPTier.MEDIUM to "206400e7d1e74f6cbe96ebdab989a3e79090bdd042ddf19dcc1dee02277c0cf0",
+            SEPTier.LARGE to "2daafd9ab533daea483fe433d18922b2c7a63058f2c166e298d17b843ed45d16",
         )
 
-        private fun tierAssetName(tier: SEPTier): String {
-            val name = when (tier) {
-                SEPTier.SMALL -> "small"
-                SEPTier.MEDIUM -> "medium"
-                SEPTier.LARGE -> "large"
-            }
-            return "keyset-v$KEYSET_VERSION/$name.bin"
+        /** Expected SHA-256 hashes of UpdateCircuit proving keys per tier (keyset-v2). */
+        val UPDATE_PROVING_KEY_HASHES = mapOf(
+            SEPTier.SMALL to "6b83e2300430bb1bd37b929ccb7d135f81d4f966745da661df100d38d1e8dbcc",
+            SEPTier.MEDIUM to "ee468305f7566782448bc495f122ded42280299bad088c4f567b245205e6ed54",
+            SEPTier.LARGE to "16ce9e2e712bfcc1c46bbd9d4274a9210bdcd13f7258294b96ccfd47a5f60900",
+        )
+
+        private fun tierName(tier: SEPTier): String = when (tier) {
+            SEPTier.SMALL -> "small"
+            SEPTier.MEDIUM -> "medium"
+            SEPTier.LARGE -> "large"
         }
+
+        private fun tierAssetName(tier: SEPTier): String =
+            "keyset-v$KEYSET_VERSION/${tierName(tier)}.bin"
+
+        private fun updateTierAssetName(tier: SEPTier): String =
+            "keyset-v$KEYSET_VERSION/update-${tierName(tier)}.bin"
     }
 
     /** Load a proving key from bundled assets, verifying its hash. */
@@ -100,12 +108,11 @@ class OnChainService(private val context: Context, contractID: String, transport
 
     /**
      * Load or return a cached UpdateCircuit proving key for the given tier.
-     * TODO(Phase 8): load from `keyset-v2/update-<tier>.bin` with hash check.
-     * Dev fallback generates a deterministic testing key.
+     * Loads from `keyset-v<N>/update-<tier>.bin` with SHA-256 hash verification.
      */
     fun ensureUpdateProvingKey(tier: SEPTier): ByteArray {
         return updateProvingKeys.getOrPut(tier) {
-            SEPProofGenerator.generateTestingUpdateProvingKey(tier)
+            loadUpdateProvingKeyFromAssets(tier)
         }
     }
 
@@ -113,7 +120,6 @@ class OnChainService(private val context: Context, contractID: String, transport
         val assetPath = tierAssetName(tier)
         val bytes = context.assets.open(assetPath).use { it.readBytes() }
 
-        // Verify hash if configured
         val expectedHash = PROVING_KEY_HASHES[tier]
         if (expectedHash != null) {
             val actualHash = MessageDigest.getInstance("SHA-256")
@@ -125,6 +131,24 @@ class OnChainService(private val context: Context, contractID: String, transport
         }
 
         Log.d(TAG, "Loaded proving key from assets: $assetPath (${bytes.size} bytes)")
+        return bytes
+    }
+
+    private fun loadUpdateProvingKeyFromAssets(tier: SEPTier): ByteArray {
+        val assetPath = updateTierAssetName(tier)
+        val bytes = context.assets.open(assetPath).use { it.readBytes() }
+
+        val expectedHash = UPDATE_PROVING_KEY_HASHES[tier]
+        if (expectedHash != null) {
+            val actualHash = MessageDigest.getInstance("SHA-256")
+                .digest(bytes)
+                .joinToString("") { "%02x".format(it) }
+            require(actualHash == expectedHash) {
+                "Update proving key hash mismatch for $tier: expected $expectedHash, got $actualHash"
+            }
+        }
+
+        Log.d(TAG, "Loaded update proving key from assets: $assetPath (${bytes.size} bytes)")
         return bytes
     }
 

@@ -11,7 +11,9 @@ use sha2::{Digest, Sha256};
 
 use sep_xxxx_circuits::commitment::field_to_bytes_be;
 use sep_xxxx_circuits::merkle::{CanonicalMember, compressed_public_key_bytes};
-use sep_xxxx_circuits::prover::{self, ProverInput, SetupResult, compute_leaf_hash};
+use sep_xxxx_circuits::prover::{
+    self, ProverInput, SetupResult, UpdateProverInput, compute_leaf_hash,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = parse_out_dir(env::args().skip(1))?;
@@ -20,6 +22,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let small_setup = deterministic_setup(5, 1001)?;
     let medium_setup = deterministic_setup(8, 1002)?;
     let large_setup = deterministic_setup(11, 1003)?;
+
+    let small_update_setup = deterministic_update_setup(5, 2001)?;
+    let medium_update_setup = deterministic_update_setup(8, 2002)?;
+    let large_update_setup = deterministic_update_setup(11, 2003)?;
 
     let member_secret_keys = vec![Fr::from(100u64), Fr::from(200u64)];
     let members = member_secret_keys
@@ -44,11 +50,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let (proof_epoch_0_create, public_inputs_epoch_0) =
         prover::prove(&small_setup.proving_key, &input_epoch_0, &mut prove_rng)?;
-    let (proof_epoch_0_update, public_inputs_epoch_0_update) =
-        prover::prove(&small_setup.proving_key, &input_epoch_0, &mut prove_rng)?;
 
     let input_epoch_1 = ProverInput {
-        members,
+        members: members.clone(),
         secret_key: member_secret_keys[0],
         epoch: 1,
         salt: salt_epoch_1,
@@ -56,6 +60,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let (proof_epoch_1, public_inputs_epoch_1) =
         prover::prove(&small_setup.proving_key, &input_epoch_1, &mut prove_rng)?;
+
+    // UpdateCircuit fixture: prove the 0 → 1 transition.
+    // Members_old == members_new (no roster change), so root_old == root_new.
+    // Salts differ (per-epoch salt rotation), and the circuit binds the epoch
+    // increment to 1 via the in-circuit `epoch_new = epoch_old + 1` constraint.
+    let update_input = UpdateProverInput {
+        members_old: members.clone(),
+        members_new: members,
+        secret_key: member_secret_keys[0],
+        epoch_old: 0,
+        salt_old: salt_epoch_0,
+        salt_new: salt_epoch_1,
+        depth: 5,
+    };
+    let (proof_update, update_public_inputs) = prover::prove_update(
+        &small_update_setup.proving_key,
+        &update_input,
+        &mut prove_rng,
+    )?;
+
+    // Sanity: the UpdateCircuit's c_old / c_new must coincide with the
+    // membership commitments at epochs 0 and 1, otherwise the contract's
+    // on-chain state cross-check at update_commitment would fail.
+    assert_eq!(
+        field_to_bytes_be(&update_public_inputs.c_old),
+        field_to_bytes_be(&public_inputs_epoch_0.commitment),
+        "UpdateCircuit c_old must match membership commitment at epoch 0",
+    );
+    assert_eq!(
+        field_to_bytes_be(&update_public_inputs.c_new),
+        field_to_bytes_be(&public_inputs_epoch_1.commitment),
+        "UpdateCircuit c_new must match membership commitment at epoch 1",
+    );
 
     write_string(
         &out_dir.join("group-id.hex"),
@@ -87,24 +124,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &verification_key_json(&large_setup.verifying_key),
     )?;
     write_string(
-        &out_dir.join("proof-epoch-0-create.json"),
-        &proof_json(&proof_epoch_0_create),
+        &out_dir.join("vk-update-small.json"),
+        &verification_key_json(&small_update_setup.verifying_key),
     )?;
     write_string(
-        &out_dir.join("proof-epoch-0-update.json"),
-        &proof_json(&proof_epoch_0_update),
+        &out_dir.join("vk-update-medium.json"),
+        &verification_key_json(&medium_update_setup.verifying_key),
+    )?;
+    write_string(
+        &out_dir.join("vk-update-large.json"),
+        &verification_key_json(&large_update_setup.verifying_key),
+    )?;
+    write_string(
+        &out_dir.join("proof-epoch-0-create.json"),
+        &proof_json(&proof_epoch_0_create),
     )?;
     write_string(
         &out_dir.join("proof-epoch-1.json"),
         &proof_json(&proof_epoch_1),
     )?;
-
-    // Public inputs for each epoch (commitment + epoch as expected by the contract's PublicInputs type)
-    assert_eq!(
-        field_to_bytes_be(&public_inputs_epoch_0.commitment),
-        field_to_bytes_be(&public_inputs_epoch_0_update.commitment),
-        "epoch-0 commitments should match across distinct proofs"
-    );
+    write_string(
+        &out_dir.join("proof-update-0-to-1.json"),
+        &proof_json(&proof_update),
+    )?;
+    write_string(
+        &out_dir.join("update-public-inputs-0-to-1.json"),
+        &update_public_inputs_json(
+            &field_to_bytes_be(&update_public_inputs.c_old),
+            0,
+            &field_to_bytes_be(&update_public_inputs.c_new),
+        ),
+    )?;
 
     write_string(
         &out_dir.join("public-inputs-epoch-0.json"),
@@ -132,11 +182,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "    \"vk_small\": \"vk-small.json\",\n",
             "    \"vk_medium\": \"vk-medium.json\",\n",
             "    \"vk_large\": \"vk-large.json\",\n",
+            "    \"vk_update_small\": \"vk-update-small.json\",\n",
+            "    \"vk_update_medium\": \"vk-update-medium.json\",\n",
+            "    \"vk_update_large\": \"vk-update-large.json\",\n",
             "    \"proof_epoch_0_create\": \"proof-epoch-0-create.json\",\n",
-            "    \"proof_epoch_0_update\": \"proof-epoch-0-update.json\",\n",
             "    \"proof_epoch_1\": \"proof-epoch-1.json\",\n",
+            "    \"proof_update_0_to_1\": \"proof-update-0-to-1.json\",\n",
             "    \"public_inputs_epoch_0\": \"public-inputs-epoch-0.json\",\n",
-            "    \"public_inputs_epoch_1\": \"public-inputs-epoch-1.json\"\n",
+            "    \"public_inputs_epoch_1\": \"public-inputs-epoch-1.json\",\n",
+            "    \"update_public_inputs_0_to_1\": \"update-public-inputs-0-to-1.json\"\n",
             "  }}\n",
             "}}\n"
         ),
@@ -173,6 +227,14 @@ fn deterministic_setup(
 ) -> Result<SetupResult, Box<dyn std::error::Error>> {
     let mut rng = ChaCha20Rng::seed_from_u64(seed);
     prover::setup(depth, &mut rng)
+}
+
+fn deterministic_update_setup(
+    depth: usize,
+    seed: u64,
+) -> Result<SetupResult, Box<dyn std::error::Error>> {
+    let mut rng = ChaCha20Rng::seed_from_u64(seed);
+    prover::setup_update(depth, &mut rng)
 }
 
 fn verification_key_json(vk: &VerifyingKey<Bls12_381>) -> String {
@@ -226,6 +288,21 @@ fn public_inputs_json(commitment_bytes: &[u8], epoch: u64) -> String {
         ),
         hex_encode(commitment_bytes),
         epoch,
+    )
+}
+
+fn update_public_inputs_json(c_old_bytes: &[u8], epoch_old: u64, c_new_bytes: &[u8]) -> String {
+    format!(
+        concat!(
+            "{{",
+            "\"c_old\":\"{}\",",
+            "\"epoch_old\":{},",
+            "\"c_new\":\"{}\"",
+            "}}\n"
+        ),
+        hex_encode(c_old_bytes),
+        epoch_old,
+        hex_encode(c_new_bytes),
     )
 }
 

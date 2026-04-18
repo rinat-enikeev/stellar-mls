@@ -18,6 +18,10 @@ struct ChatGroup: Identifiable, Codable {
     /// Governance type selected at creation. Existing persisted groups
     /// decode this as `.anarchy` (the historical default).
     var groupType: SEPGroupType = .anarchy
+    /// Hex-encoded BLS pubkeys (lowercase) of members with admin privileges.
+    /// Only meaningful for `.oligarchy` groups; seeded with the creator at
+    /// group creation. Existing persisted groups decode this as empty.
+    var adminPubkeys: Set<String> = []
     var isPublishedOnChain: Bool = false
     /// Unix timestamp of the last received event, used for offline catch-up.
     var lastEventTimestamp: Int64 = 0

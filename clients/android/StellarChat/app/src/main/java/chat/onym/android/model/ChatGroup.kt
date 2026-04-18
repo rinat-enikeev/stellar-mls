@@ -34,6 +34,10 @@ data class ChatGroup(
     /** Governance type selected at creation. Existing persisted groups
      *  default to [SEPGroupType.ANARCHY] (the historical behavior). */
     var groupType: SEPGroupType = SEPGroupType.ANARCHY,
+    /** Hex-encoded BLS pubkeys (lowercase) of members with admin privileges.
+     *  Only meaningful for [SEPGroupType.OLIGARCHY] groups; seeded with the creator
+     *  at group creation. Existing persisted groups decode this as empty. */
+    var adminPubkeys: MutableSet<String> = mutableSetOf(),
     var isPublishedOnChain: Boolean = false,
     /** Unix timestamp of the last received event, used for offline catch-up. */
     var lastEventTimestamp: Long = 0,

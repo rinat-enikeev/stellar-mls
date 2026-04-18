@@ -1593,6 +1593,31 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         return contactAliasStore.displayName(hex) ?: (hex.take(8) + "...")
     }
 
+    /** Propose a Democracy-group vote to remove a member. Inserts a locally visible
+     *  ballot system message. On-chain vote submission is gated on the Democracy
+     *  circuit VK ceremony; this method only surfaces the proposal in chat.
+     *
+     *  Text format (parsed by `ChatScreen`): `VOTE_PROPOSAL::v1::remove::<targetHex>::<ballotID>` */
+    fun proposeRemovalVote(groupID: String, targetPubkeyHex: String) {
+        val group = groups.firstOrNull { it.id == groupID } ?: return
+        if (group.groupType != com.stellarmls.mls.SEPGroupType.DEMOCRACY) return
+        val ballotID = java.util.UUID.randomUUID().toString().take(8)
+        val text = "VOTE_PROPOSAL::v1::remove::$targetPubkeyHex::$ballotID"
+        val msg = ChatMessage(
+            id = "vote-${groupID.take(8)}-$ballotID",
+            groupID = groupID,
+            senderPubkey = keyManager.publicKeyHex,
+            text = text,
+            timestamp = java.util.Date(),
+            isMine = true,
+            isSystemMessage = true,
+            epoch = group.epoch
+        )
+        chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
+        bumpGroupLastMessage(groupID, msg.timestamp.time)
+        viewModelScope.launch { try { store.saveMessage(msg) } catch (_: Exception) { } }
+    }
+
     /** Insert a system message into chatMessages (and persist). Uses deterministic IDs for dedup. */
     private fun insertSystemMessage(groupID: String, text: String, event: String, epoch: Long) {
         val id = "sys-$event-${groupID.take(8)}-$epoch"

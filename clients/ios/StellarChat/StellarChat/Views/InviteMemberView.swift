@@ -1,3 +1,4 @@
+import SwiftMLS
 import SwiftUI
 
 struct InviteMemberView: View {
@@ -10,6 +11,40 @@ struct InviteMemberView: View {
 
     var body: some View {
         NavigationStack {
+            if group.groupType == .oneOnOne {
+                oneOnOneBlocker
+            } else {
+                inviteForm
+            }
+        }
+    }
+
+    private var oneOnOneBlocker: some View {
+        VStack(spacing: 16) {
+            Spacer()
+            Image(systemName: "person.2.fill")
+                .font(.system(size: 44))
+                .foregroundStyle(.blue)
+            Text("1-on-1 chats are sealed")
+                .font(.headline)
+            Text("This conversation was created as a 1-on-1 chat. Membership is frozen — no one else can be added.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+            Spacer()
+        }
+        .navigationTitle("Invite via Nostr")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Close") { dismiss() }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var inviteForm: some View {
             Form {
                 Section("Group") {
                     LabeledContent("Name") { Text(group.name) }
@@ -72,7 +107,6 @@ struct InviteMemberView: View {
                     showScanner = false
                 }
             }
-        }
     }
 
     private func sendInvitation() {

@@ -552,6 +552,9 @@ fun StellarChatNavHost(
                             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                         }
                     },
+                    onProposeRemovalVote = { targetHex ->
+                        groupListViewModel.proposeRemovalVote(groupId, targetHex)
+                    },
                     contactAliasStore = groupListViewModel.contactAliasStore,
                     dao = groupListViewModel.store.dao,
                     onBack = { navController.popBackStack() }

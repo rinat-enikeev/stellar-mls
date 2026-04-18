@@ -10,8 +10,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.People
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextAlign
+import com.stellarmls.mls.SEPGroupType
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -65,6 +71,51 @@ fun InviteMemberScreen(
                     recipientKey = trimmed
                 }
                 showScanner = false
+            }
+        }
+        return
+    }
+
+    // 1v1 chats have frozen membership — render a blocker instead of the invite form.
+    if (group.groupType == SEPGroupType.ONE_ON_ONE) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Invite Member") },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    }
+                )
+            }
+        ) { padding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(32.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    androidx.compose.material.icons.Icons.Filled.People,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(44.dp)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    "1-on-1 chats are sealed",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "This conversation was created as a 1-on-1 chat. Membership is frozen \u2014 no one else can be added.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
             }
         }
         return

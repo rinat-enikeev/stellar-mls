@@ -89,6 +89,11 @@ class CreateGroupViewModel : ViewModel() {
                 tier = effectiveTier,
                 groupType = groupType
             )
+            // Oligarchy creator is seeded as the initial admin. Demoting this
+            // member (via future on-chain flows) requires another admin's consent.
+            if (groupType == SEPGroupType.OLIGARCHY) {
+                group.adminPubkeys.add(myLeaf.publicKeyCompressed.toHex())
+            }
             group.recomputeCommitment()
 
             val invite = InviteCode(

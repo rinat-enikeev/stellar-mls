@@ -148,6 +148,13 @@ class PersistenceStore(context: Context) {
 
     private fun encryptGroup(group: ChatGroup): PersistedGroup {
         val membersJson = serializeMembers(group.members)
+        val encAdmins = if (group.adminPubkeys.isEmpty()) {
+            null
+        } else {
+            val arr = JSONArray()
+            for (hex in group.adminPubkeys.sorted()) arr.put(hex)
+            StorageEncryption.encrypt(arr.toString().toByteArray())
+        }
         return PersistedGroup(
             id = group.id,
             encryptedName = StorageEncryption.encrypt(group.name),
@@ -167,7 +174,8 @@ class PersistenceStore(context: Context) {
             removedByPubkeyHex = group.removedByPubkeyHex,
             pushNotificationsEnabled = group.pushNotificationsEnabled,
             lastMessageAt = group.lastMessageAt,
-            isPinned = group.isPinned
+            isPinned = group.isPinned,
+            encryptedAdminPubkeys = encAdmins
         )
     }
 
@@ -188,6 +196,13 @@ class PersistenceStore(context: Context) {
             SEPGroupType.ANARCHY
         }
 
+        val adminPubkeys: MutableSet<String> = persisted.encryptedAdminPubkeys?.let { enc ->
+            try {
+                val arr = JSONArray(String(StorageEncryption.decrypt(enc)))
+                (0 until arr.length()).map { arr.getString(it) }.toMutableSet()
+            } catch (_: Exception) { mutableSetOf() }
+        } ?: mutableSetOf()
+
         return ChatGroup(
             id = persisted.id,
             name = name,
@@ -200,6 +215,7 @@ class PersistenceStore(context: Context) {
             commitment = commitment,
             tier = tier,
             groupType = groupType,
+            adminPubkeys = adminPubkeys,
             isPublishedOnChain = persisted.isPublishedOnChain,
             pinnedEpoch = persisted.pinnedEpoch?.toLong(),
             forkedFromGroupID = persisted.forkedFromGroupID,

@@ -30,7 +30,10 @@ data class PersistedGroup(
     /** Governance type id (0 = Anarchy, 1 = 1v1, 2 = Democracy, 3 = Oligarchy).
      *  Existing groups migrate in as 0 (Anarchy), preserving historical behavior. */
     @ColumnInfo(defaultValue = "0")
-    val groupTypeRawValue: Int = 0
+    val groupTypeRawValue: Int = 0,
+    /** Encrypted JSON-encoded list of admin BLS pubkey hex strings (lowercase).
+     *  Only populated for Oligarchy groups; existing groups migrate in as null. */
+    val encryptedAdminPubkeys: ByteArray? = null
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

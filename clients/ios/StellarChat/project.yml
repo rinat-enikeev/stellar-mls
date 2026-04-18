@@ -43,7 +43,9 @@ targets:
       - name: Generate Relayer Defaults
         script: |
           ENV_FILE="${SRCROOT}/../../../relayer/.env"
+          [ -f "$ENV_FILE" ] || ENV_FILE="${SRCROOT}/../../../relayer/.env.example"
           ROOT_ENV="${SRCROOT}/../../../.env"
+          [ -f "$ROOT_ENV" ] || ROOT_ENV="${SRCROOT}/../../../.env.example"
           OUT="${SRCROOT}/StellarChat/RelayerDefaults.generated.swift"
           EP=""; CID=""; BIND=""; AUTH=""; DOMAIN=""
           if [ -f "$ENV_FILE" ]; then

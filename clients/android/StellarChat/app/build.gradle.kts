@@ -23,8 +23,10 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
 
-        // Read relayer/.env for build-time defaults
-        val envFile = rootProject.file("../../../relayer/.env")
+        // Read relayer/.env for build-time defaults; fall back to .env.example
+        // so a fresh clone without a local .env still gets sensible defaults.
+        val envFile = rootProject.file("../../../relayer/.env").takeIf { it.exists() }
+            ?: rootProject.file("../../../relayer/.env.example")
         val envMap = mutableMapOf<String, String>()
         if (envFile.exists()) {
             envFile.readLines().forEach { line ->
@@ -42,8 +44,9 @@ android {
             }
         }
 
-        // Read root .env for DOMAIN only (do NOT ship secrets like API keys)
-        val rootEnvFile = rootProject.file("../../../.env")
+        // Read root .env for DOMAIN only; fall back to .env.example.
+        val rootEnvFile = rootProject.file("../../../.env").takeIf { it.exists() }
+            ?: rootProject.file("../../../.env.example")
         var domain = ""
         if (rootEnvFile.exists()) {
             rootEnvFile.readLines().forEach { line ->

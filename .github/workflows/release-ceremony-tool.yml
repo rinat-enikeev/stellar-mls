@@ -212,7 +212,13 @@ jobs:
       - name: Build ceremony-downloads.json
         shell: bash
         run: |
-          python3 scripts/update-ceremony-downloads.py \
+          # Read pubkey from the committed file if present; the manifest
+          # will carry null otherwise, which the download page handles.
+          PUB=""
+          if [ -f .minisign/ceremony-tool.pub ]; then
+            PUB=$(tail -1 .minisign/ceremony-tool.pub)
+          fi
+          MINISIGN_PUBKEY="$PUB" python3 scripts/update-ceremony-downloads.py \
             --tag "${{ inputs.tag }}" \
             --dist-dir dist \
             --out dist/ceremony-downloads.json

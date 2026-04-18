@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 
 RELEASE_URL_FMT = (
@@ -31,6 +32,11 @@ def main() -> int:
     ap.add_argument("--tag", required=True)
     ap.add_argument("--dist-dir", required=True, type=Path)
     ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument(
+        "--minisign-pubkey",
+        default=None,
+        help="Minisign public key string (RWS...). Read from MINISIGN_PUBKEY env var if flag omitted.",
+    )
     args = ap.parse_args()
 
     # Filenames are always "ceremony_tool-<tag>-<target>[.exe]". We parse by
@@ -68,10 +74,14 @@ def main() -> int:
             "cosign": (args.dist_dir / (binary.name + ".sig")).exists(),
         })
 
+    minisign_pubkey = args.minisign_pubkey or os.environ.get("MINISIGN_PUBKEY") or None
+    if minisign_pubkey:
+        minisign_pubkey = minisign_pubkey.strip() or None
+
     manifest = {
         "tag": args.tag,
         "assets": assets,
-        "minisign_pubkey": None,
+        "minisign_pubkey": minisign_pubkey,
         "cosign_identity": None,
     }
     args.out.write_text(json.dumps(manifest, indent=2) + "\n")

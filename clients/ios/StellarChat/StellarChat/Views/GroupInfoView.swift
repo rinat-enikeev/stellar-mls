@@ -82,7 +82,8 @@ struct GroupInfoView: View {
                     ))
                 }
 
-                if appState.isMember(of: group) {
+                // 1v1 groups have frozen membership — no invites after creation.
+                if appState.isMember(of: group) && group.groupType != .oneOnOne {
                     // MARK: - Invite Member
                     Section {
                         TextField("X25519 public key (hex)", text: $recipientInboxKey)
@@ -138,53 +139,7 @@ struct GroupInfoView: View {
 
                 Section("Members") {
                     ForEach(group.members, id: \.publicKeyCompressed) { member in
-                        let pubkeyHex = member.publicKeyCompressed.map { String(format: "%02x", $0) }.joined()
-                        let alias = appState.contactAliasStore.displayName(for: pubkeyHex)
-                        HStack {
-                            VStack(alignment: .leading) {
-                                if let alias {
-                                    Text(alias)
-                                        .font(.caption)
-                                }
-                                Text(pubkeyHex.prefix(16) + "...")
-                                    .font(.caption2)
-                                    .monospaced()
-                                    .foregroundStyle(alias != nil ? .secondary : .primary)
-
-                                if isMyKey(member) {
-                                    Text("You")
-                                        .font(.caption2)
-                                        .foregroundStyle(.blue)
-                                }
-                            }
-
-                            Spacer()
-
-                            if !isMyKey(member) {
-                                Button(role: .destructive) {
-                                    memberToRemove = member
-                                    showRemoveConfirmation = true
-                                } label: {
-                                    Image(systemName: "person.badge.minus")
-                                }
-                                .disabled(isRemovingMember)
-                            }
-                        }
-                        .contextMenu {
-                            Button {
-                                aliasText = alias ?? ""
-                                aliasTarget = pubkeyHex
-                            } label: {
-                                Label("Set Name", systemImage: "pencil")
-                            }
-                            if alias != nil {
-                                Button(role: .destructive) {
-                                    appState.contactAliasStore.removeAlias(pubkey: pubkeyHex)
-                                } label: {
-                                    Label("Remove Name", systemImage: "trash")
-                                }
-                            }
-                        }
+                        memberRow(for: member)
                     }
                 }
 
@@ -398,6 +353,75 @@ struct GroupInfoView: View {
     private func isMyKey(_ member: SEPGroupMemberLeaf) -> Bool {
         guard let myLeaf = try? appState.keyManager.memberLeaf else { return false }
         return member.publicKeyCompressed == myLeaf.publicKeyCompressed
+    }
+
+    @ViewBuilder
+    private func memberRow(for member: SEPGroupMemberLeaf) -> some View {
+        let pubkeyHex = member.publicKeyCompressed.map { String(format: "%02x", $0) }.joined()
+        let alias = appState.contactAliasStore.displayName(for: pubkeyHex)
+        let isAdmin = group.groupType == .oligarchy && group.adminPubkeys.contains(pubkeyHex)
+        let isSelf = isMyKey(member)
+        let showVoteButton = !isSelf && group.groupType == .democracy
+        let showKickButton = !isSelf && group.groupType != .oneOnOne && group.groupType != .democracy
+
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                if let alias {
+                    Text(alias).font(.caption)
+                }
+                Text(pubkeyHex.prefix(16) + "...")
+                    .font(.caption2)
+                    .monospaced()
+                    .foregroundStyle(alias != nil ? .secondary : .primary)
+
+                HStack(spacing: 6) {
+                    if isSelf {
+                        Text("You").font(.caption2).foregroundStyle(.blue)
+                    }
+                    if isAdmin {
+                        Label("Admin", systemImage: "star.fill")
+                            .labelStyle(.titleAndIcon)
+                            .font(.caption2)
+                            .foregroundStyle(.yellow)
+                    }
+                }
+            }
+
+            Spacer()
+
+            if showVoteButton {
+                Button {
+                    appState.proposeRemovalVote(groupID: group.id, targetPubkeyHex: pubkeyHex)
+                } label: {
+                    Image(systemName: "hand.raised")
+                }
+                .help("Propose vote to remove")
+            }
+            if showKickButton {
+                Button(role: .destructive) {
+                    memberToRemove = member
+                    showRemoveConfirmation = true
+                } label: {
+                    Image(systemName: "person.badge.minus")
+                }
+                .disabled(isRemovingMember)
+            }
+        }
+        .contextMenu {
+            Button {
+                aliasText = alias ?? ""
+                aliasTarget = pubkeyHex
+            } label: {
+                Label("Set Name", systemImage: "pencil")
+            }
+            if alias != nil {
+                Button(role: .destructive) {
+                    appState.contactAliasStore.removeAlias(pubkey: pubkeyHex)
+                } label: {
+                    Label("Remove Name", systemImage: "trash")
+                }
+            }
+        }
     }
 
     private func removeMember(_ member: SEPGroupMemberLeaf) {

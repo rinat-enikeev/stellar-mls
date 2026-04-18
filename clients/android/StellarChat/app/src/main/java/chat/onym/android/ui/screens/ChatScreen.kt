@@ -96,6 +96,11 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.filled.HowToVote
+import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Warning
+import com.stellarmls.mls.SEPGroupType
 import chat.onym.android.blossom.BlossomClient
 import chat.onym.android.blossom.ImageCache
 import chat.onym.android.blossom.VideoCache
@@ -190,6 +195,31 @@ fun ChatScreen(
                 .padding(padding)
                 .imePadding()
         ) {
+            // Governance type banner — highlights the rules for this group.
+            // Anarchy is surfaced as a warning (any member can kick/invite);
+            // 1v1 / Democracy / Oligarchy get an informational notice.
+            val governancePrefs = remember { context.getSharedPreferences("stellar_chat", Context.MODE_PRIVATE) }
+            val groupIdForBanner = viewModel.group?.id
+            val governanceDismissKey = remember(groupIdForBanner) { "governance_banner_dismissed_${groupIdForBanner ?: ""}" }
+            var governanceBannerDismissed by remember(groupIdForBanner) {
+                mutableStateOf(
+                    groupIdForBanner != null &&
+                    governancePrefs.getBoolean(governanceDismissKey, false)
+                )
+            }
+            val governanceType = viewModel.group?.groupType
+            if (governanceType != null && !governanceBannerDismissed) {
+                GovernanceBanner(
+                    groupType = governanceType,
+                    onDismiss = {
+                        governanceBannerDismissed = true
+                        if (groupIdForBanner != null) {
+                            governancePrefs.edit().putBoolean(governanceDismissKey, true).apply()
+                        }
+                    }
+                )
+            }
+
             // Epoch pin banner
             val pinnedEpoch = viewModel.group?.pinnedEpoch
             val group = viewModel.group
@@ -405,7 +435,15 @@ fun ChatScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
-                                    SystemMessage(message.text)
+                                    if (message.text.startsWith("VOTE_PROPOSAL::")) {
+                                        VoteProposalCard(
+                                            rawPayload = message.text,
+                                            senderAlias = contactAliasStore?.displayName(message.senderPubkey),
+                                            targetAliasResolver = { hex -> contactAliasStore?.displayName(hex) }
+                                        )
+                                    } else {
+                                        SystemMessage(message.text)
+                                    }
                                     if (message.text.contains("joined the group") &&
                                         (viewModel.group?.members?.size ?: 0) == 2) {
                                         Text(
@@ -1600,6 +1638,131 @@ fun QuotedReplyView(parent: ChatMessage, isMine: Boolean, onClick: () -> Unit) {
                 overflow = TextOverflow.Ellipsis
             )
         }
+    }
+}
+
+@Composable
+fun GovernanceBanner(groupType: SEPGroupType, onDismiss: () -> Unit = {}) {
+    val (title, subtitle, icon, tint) = when (groupType) {
+        SEPGroupType.ANARCHY -> GovernanceBannerSpec(
+            "Anarchy group",
+            "Any member can kick or invite anyone, unilaterally. Choose members carefully.",
+            Icons.Filled.Warning,
+            Color(0xFFE65100)
+        )
+        SEPGroupType.ONE_ON_ONE -> GovernanceBannerSpec(
+            "1-on-1 chat",
+            "Membership is frozen \u2014 no one else can be added. Leaving ends the chat.",
+            Icons.Filled.People,
+            Color(0xFF1565C0)
+        )
+        SEPGroupType.DEMOCRACY -> GovernanceBannerSpec(
+            "Democracy group",
+            "Kicks and invites require a majority vote from current members.",
+            Icons.Filled.HowToVote,
+            Color(0xFF6A1B9A)
+        )
+        SEPGroupType.OLIGARCHY -> GovernanceBannerSpec(
+            "Oligarchy group",
+            "Only admins can kick members or approve new invites.",
+            Icons.Filled.Star,
+            Color(0xFFF9A825)
+        )
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(tint.copy(alpha = 0.12f))
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+            Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+            Icon(Icons.Default.Close, contentDescription = "Dismiss", modifier = Modifier.size(14.dp))
+        }
+    }
+}
+
+private data class GovernanceBannerSpec(
+    val title: String,
+    val subtitle: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val tint: Color
+)
+
+/** Inline ballot card for a `VOTE_PROPOSAL::v1::...` system message. Yes/No
+ *  buttons are stubs — on-chain submission is gated on the Democracy circuit
+ *  VK ceremony. The card surfaces who proposed what so members see it. */
+@Composable
+fun VoteProposalCard(
+    rawPayload: String,
+    senderAlias: String?,
+    targetAliasResolver: (String) -> String?
+) {
+    val parts = rawPayload.split("::")
+    val valid = parts.size >= 5 && parts[0] == "VOTE_PROPOSAL" && parts[1] == "v1" && parts[2] == "remove"
+    if (!valid) {
+        SystemMessage("Ballot (unrecognized)")
+        return
+    }
+    val targetHex = parts[3]
+    val ballotID = parts[4]
+    val targetLabel = targetAliasResolver(targetHex)
+        ?: (targetHex.take(12) + "\u2026" + targetHex.takeLast(6))
+    var choice by remember(ballotID) { mutableStateOf<Boolean?>(null) }
+    val tint = Color(0xFF6A1B9A)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(tint.copy(alpha = 0.08f))
+            .padding(10.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Filled.HowToVote,
+                contentDescription = null,
+                tint = tint,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text("Ballot", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.weight(1f))
+            Text("#$ballotID", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "${senderAlias ?: "A member"} proposed to remove:",
+            style = MaterialTheme.typography.labelSmall
+        )
+        Text(targetLabel, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedButton(
+                onClick = { choice = true },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(if (choice == true) "\u2713 Yes" else "Yes", style = MaterialTheme.typography.labelSmall)
+            }
+            OutlinedButton(
+                onClick = { choice = false },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(if (choice == false) "\u2715 No" else "No", style = MaterialTheme.typography.labelSmall)
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "On-chain voting activates once the Democracy circuit is deployed.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

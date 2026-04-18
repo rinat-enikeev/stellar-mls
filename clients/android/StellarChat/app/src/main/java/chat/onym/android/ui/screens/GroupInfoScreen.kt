@@ -24,7 +24,9 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.HowToVote
 import androidx.compose.material.icons.filled.PersonRemove
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -78,6 +80,7 @@ fun GroupInfoScreen(
     onSendInvitation: ((recipientKeyHex: String, onResult: (Result<Unit>) -> Unit) -> Unit)? = null,
     inviteLink: String? = null,
     onTogglePushNotifications: ((Boolean) -> Unit)? = null,
+    onProposeRemovalVote: ((targetPubkeyHex: String) -> Unit)? = null,
     contactAliasStore: ContactAliasStore? = null,
     dao: StellarChatDao? = null,
     onBack: () -> Unit
@@ -195,6 +198,8 @@ fun GroupInfoScreen(
                         val isMe = member.publicKeyCompressed.contentEquals(myBlsPubkey)
                         val hex = member.publicKeyCompressed.toHex()
                         val alias = contactAliasStore?.displayName(hex)
+                        val isAdmin = group.groupType == com.stellarmls.mls.SEPGroupType.OLIGARCHY &&
+                                      group.adminPubkeys.contains(hex)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -218,15 +223,53 @@ fun GroupInfoScreen(
                                     color = if (alias != null) MaterialTheme.colorScheme.onSurfaceVariant
                                         else MaterialTheme.colorScheme.onSurface
                                 )
-                                if (isMe) {
-                                    Text(
-                                        "You",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (isMe) {
+                                        Text(
+                                            "You",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    if (isAdmin) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                Icons.Filled.Star,
+                                                contentDescription = null,
+                                                tint = Color(0xFFF9A825),
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                            Spacer(Modifier.width(2.dp))
+                                            Text(
+                                                "Admin",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = Color(0xFFF9A825)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            // Democracy: ballot proposal replaces direct kick.
+                            if (!isMe && isMember &&
+                                group.groupType == com.stellarmls.mls.SEPGroupType.DEMOCRACY &&
+                                onProposeRemovalVote != null) {
+                                IconButton(onClick = { onProposeRemovalVote(hex) }) {
+                                    Icon(
+                                        Icons.Filled.HowToVote,
+                                        contentDescription = "Propose vote to remove",
+                                        tint = Color(0xFF6A1B9A)
                                     )
                                 }
                             }
-                            if (!isMe && isMember) {
+                            // Kick hidden for 1v1 (frozen membership) and Democracy (uses ballots).
+                            // Oligarchy still renders it, but the ceremony-gated contract rejects
+                            // its update_commitment calls until VKs are published.
+                            if (!isMe && isMember &&
+                                group.groupType != com.stellarmls.mls.SEPGroupType.ONE_ON_ONE &&
+                                group.groupType != com.stellarmls.mls.SEPGroupType.DEMOCRACY) {
                                 IconButton(
                                     onClick = { memberToRemove = member },
                                     enabled = !isRemovingMember
@@ -244,8 +287,9 @@ fun GroupInfoScreen(
                 }
             }
 
-            // Invite Member section
-            if (isMember && onSendInvitation != null) {
+            // Invite Member section — hidden for 1v1 groups (frozen membership).
+            if (isMember && onSendInvitation != null &&
+                group.groupType != com.stellarmls.mls.SEPGroupType.ONE_ON_ONE) {
                 Spacer(modifier = Modifier.height(16.dp))
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
@@ -313,8 +357,9 @@ fun GroupInfoScreen(
                 }
             }
 
-            // Copy Invite Link section
-            if (isMember && inviteLink != null) {
+            // Copy Invite Link section — hidden for 1v1 groups (frozen membership).
+            if (isMember && inviteLink != null &&
+                group.groupType != com.stellarmls.mls.SEPGroupType.ONE_ON_ONE) {
                 Spacer(modifier = Modifier.height(16.dp))
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {

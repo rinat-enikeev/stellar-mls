@@ -1,5 +1,6 @@
 import AVKit
 import PhotosUI
+import SwiftMLS
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -20,10 +21,22 @@ struct ChatView: View {
     @State private var showCallScreen = false
     @State private var showForkSheet = false
     @State private var pushBannerDismissed = false
+    @State private var governanceBannerDismissed: [String: Bool] = [:]
     @AppStorage("hasSeenFirstGroupWelcome") private var hasSeenFirstGroupWelcome = false
 
     var body: some View {
         VStack(spacing: 0) {
+            // Governance type banner — highlights the rules for this group.
+            // Anarchy is surfaced as a warning (any member can kick/invite);
+            // 1v1 / Democracy / Oligarchy get an informational notice.
+            if let group = viewModel.group,
+               governanceBannerDismissed[group.id] != true {
+                GovernanceBanner(
+                    groupType: group.groupType,
+                    onDismiss: { governanceBannerDismissed[group.id] = true }
+                )
+            }
+
             // Welcome banner for first group
             if !hasSeenFirstGroupWelcome, appState.groups.count == 1 {
                 HStack(spacing: 8) {
@@ -151,7 +164,15 @@ struct ChatView: View {
 
                                     if message.isSystemMessage {
                                         VStack(spacing: 4) {
-                                            SystemMessageView(text: message.text)
+                                            if message.text.hasPrefix("VOTE_PROPOSAL::") {
+                                                VoteProposalCard(
+                                                    rawPayload: message.text,
+                                                    senderAlias: appState.contactAliasStore.displayName(for: message.senderPubkey),
+                                                    targetAlias: { hex in appState.contactAliasStore.displayName(for: hex) }
+                                                )
+                                            } else {
+                                                SystemMessageView(text: message.text)
+                                            }
                                             if message.text.contains("joined the group"),
                                                appState.groups.count == 1,
                                                let group = viewModel.group,
@@ -529,6 +550,177 @@ struct SystemMessageView: View {
             .padding(.vertical, 4)
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - Governance Banner
+
+struct GovernanceBanner: View {
+    let groupType: SEPGroupType
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .foregroundStyle(tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(tint.opacity(0.12))
+    }
+
+    private var icon: String {
+        switch groupType {
+        case .anarchy: return "exclamationmark.triangle"
+        case .oneOnOne: return "person.2.fill"
+        case .democracy: return "hand.raised.fill"
+        case .oligarchy: return "star.fill"
+        }
+    }
+
+    private var tint: Color {
+        switch groupType {
+        case .anarchy: return .orange
+        case .oneOnOne: return .blue
+        case .democracy: return .purple
+        case .oligarchy: return .yellow
+        }
+    }
+
+    private var title: String {
+        switch groupType {
+        case .anarchy: return "Anarchy group"
+        case .oneOnOne: return "1-on-1 chat"
+        case .democracy: return "Democracy group"
+        case .oligarchy: return "Oligarchy group"
+        }
+    }
+
+    private var subtitle: String {
+        switch groupType {
+        case .anarchy:
+            return "Any member can kick or invite anyone, unilaterally. Choose members carefully."
+        case .oneOnOne:
+            return "Membership is frozen — no one else can be added. Leaving ends the chat."
+        case .democracy:
+            return "Kicks and invites require a majority vote from current members."
+        case .oligarchy:
+            return "Only admins can kick members or approve new invites."
+        }
+    }
+}
+
+// MARK: - Democracy Vote Proposal Card
+
+/// Renders an inline ballot card for a `VOTE_PROPOSAL::v1::...` system message.
+/// Yes / No buttons are stubs — actual vote submission is gated on the
+/// Democracy circuit VK ceremony. The card surfaces who proposed what so
+/// members can see the ballot exists.
+struct VoteProposalCard: View {
+    let rawPayload: String
+    let senderAlias: String?
+    let targetAlias: (String) -> String?
+
+    @State private var myChoice: Bool?
+
+    private var parsed: VoteProposalPayload? {
+        VoteProposalPayload.parse(rawPayload)
+    }
+
+    var body: some View {
+        if let parsed {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "hand.raised.fill")
+                        .foregroundStyle(.purple)
+                    Text("Ballot")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Text("#\(parsed.ballotID)")
+                        .font(.caption2)
+                        .monospaced()
+                        .foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(senderAlias ?? "A member") proposed to remove:")
+                        .font(.caption)
+                    Text(displayTarget(parsed.targetPubkeyHex))
+                        .font(.caption)
+                        .monospaced()
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                HStack(spacing: 8) {
+                    Button {
+                        myChoice = true
+                    } label: {
+                        Label("Yes", systemImage: myChoice == true ? "checkmark.circle.fill" : "checkmark.circle")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.green)
+
+                    Button {
+                        myChoice = false
+                    } label: {
+                        Label("No", systemImage: myChoice == false ? "xmark.circle.fill" : "xmark.circle")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    Spacer()
+                }
+                Text("On-chain voting activates once the Democracy circuit is deployed.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(10)
+            .background(Color.purple.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            SystemMessageView(text: "Ballot (unrecognized)")
+        }
+    }
+
+    private func displayTarget(_ hex: String) -> String {
+        if let alias = targetAlias(hex) { return alias }
+        return hex.prefix(12) + "…" + hex.suffix(6)
+    }
+}
+
+struct VoteProposalPayload {
+    let targetPubkeyHex: String
+    let ballotID: String
+
+    static func parse(_ raw: String) -> VoteProposalPayload? {
+        // `VOTE_PROPOSAL::v1::remove::<targetHex>::<ballotID>`
+        let parts = raw.components(separatedBy: "::")
+        guard parts.count >= 5,
+              parts[0] == "VOTE_PROPOSAL",
+              parts[1] == "v1",
+              parts[2] == "remove" else { return nil }
+        return VoteProposalPayload(
+            targetPubkeyHex: parts[3],
+            ballotID: parts[4]
+        )
     }
 }
 

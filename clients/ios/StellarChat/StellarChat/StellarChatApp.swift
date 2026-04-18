@@ -595,6 +595,13 @@ final class AppState {
             tier: tier
         )
         group.groupType = groupType
+        // Oligarchy creator is seeded as the initial admin. Demoting this
+        // member (via future on-chain flows) requires another admin's consent.
+        if groupType == .oligarchy {
+            let creatorHex = myLeaf.publicKeyCompressed
+                .map { String(format: "%02x", $0) }.joined()
+            group.adminPubkeys = [creatorHex]
+        }
         try group.recomputeCommitment()
         addGroup(group)
         captureEpochSnapshot(group: group, changeDescription: "Group created")
@@ -1130,6 +1137,34 @@ final class AppState {
         }
         let hex = blsPubkey.map { String(format: "%02x", $0) }.joined()
         return contactAliasStore?.displayName(for: hex) ?? (String(hex.prefix(8)) + "...")
+    }
+
+    /// Propose a Democracy-group vote to remove a member. Inserts a locally
+    /// visible ballot system message. The actual on-chain vote flow is gated
+    /// on the Democracy circuit VK ceremony; this method only surfaces the
+    /// proposal in chat so members can see it.
+    ///
+    /// Text format (parsed by `ChatView`): `VOTE_PROPOSAL::v1::remove::<targetHex>`
+    func proposeRemovalVote(groupID: String, targetPubkeyHex: String) {
+        guard let group = groups.first(where: { $0.id == groupID }),
+              group.groupType == .democracy else { return }
+        let ballotID = UUID().uuidString.prefix(8)
+        let text = "VOTE_PROPOSAL::v1::remove::\(targetPubkeyHex)::\(ballotID)"
+        let msg = ChatMessage(
+            id: "vote-\(String(groupID.prefix(8)))-\(ballotID)",
+            groupID: groupID,
+            senderPubkey: keyManager.publicKeyHex,
+            text: text,
+            timestamp: Date(),
+            isMine: true,
+            isSystemMessage: true,
+            epoch: group.epoch
+        )
+        var messages = chatMessages[groupID, default: []]
+        messages.append(msg)
+        chatMessages[groupID] = messages
+        bumpGroupLastMessage(groupID: groupID, timestamp: msg.timestamp)
+        store.saveMessageAsync(msg)
     }
 
     /// Insert a system message into chatMessages (and persist). Uses deterministic IDs for dedup.

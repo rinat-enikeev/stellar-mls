@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PersistedTransportBundle::class, PersistedPendingRekey::class,
         PersistedEpochSnapshot::class
     ],
-    version = 13
+    version = 14
 )
 abstract class StellarChatDatabase : RoomDatabase() {
     abstract fun dao(): StellarChatDao
@@ -129,13 +129,21 @@ abstract class StellarChatDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Oligarchy admin set: encrypted JSON list of BLS pubkey hex strings.
+                // Null for non-oligarchy groups and pre-existing rows.
+                db.execSQL("ALTER TABLE groups ADD COLUMN encryptedAdminPubkeys BLOB")
+            }
+        }
+
         fun getInstance(context: Context): StellarChatDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     StellarChatDatabase::class.java,
                     "stellar_chat.db"
-                ).addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
+                ).addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
                 .fallbackToDestructiveMigration()
                 .build().also { instance = it }
             }

@@ -64,6 +64,7 @@ services:
       - CEREMONY_NOSTR_RELAY=ws://nostr-relay:7777
       - CEREMONY_TOOL_BIN=/usr/local/bin/ceremony_tool
       - CEREMONY_WORK_DIR=/data/work
+      - CEREMONY_DOWNLOADS_MANIFEST=/data/ceremony-downloads.json
       - RUST_LOG=ceremony_coordinator=info,tower_http=info
     volumes:
       - ceremony-data:/data

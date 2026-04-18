@@ -231,15 +231,23 @@ pub async fn participant(
     Ok(Json(out))
 }
 
-pub async fn downloads(State(_state): State<SharedState>) -> impl IntoResponse {
-    // Populated by the release workflow; for now return an empty list so the
-    // download page renders cleanly in staging before the first release.
-    let body = serde_json::json!({
+pub async fn downloads(State(state): State<SharedState>) -> impl IntoResponse {
+    // Serve whatever ceremony-downloads.json the operator placed at the
+    // configured path (the release workflow emits this file as a release
+    // asset; the rollout doc instructs the operator to fetch it onto the
+    // coordinator host). If absent or unparseable, fall back to empty so the
+    // download page renders cleanly.
+    let path = &state.config.downloads_manifest;
+    let fallback = serde_json::json!({
         "tag": null,
         "assets": [],
         "minisign_pubkey": null,
         "cosign_identity": null,
     });
+    let body = std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .unwrap_or(fallback);
     Json(body)
 }
 

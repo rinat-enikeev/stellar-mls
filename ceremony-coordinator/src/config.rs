@@ -16,6 +16,7 @@ pub struct Config {
     pub pow_bits: u32,
     pub allow_browser_contribute: bool,
     pub rate_limit_rpm: u32,
+    pub downloads_manifest: PathBuf,
 }
 
 impl Config {
@@ -66,6 +67,10 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(60);
 
+        let downloads_manifest = env::var("CEREMONY_DOWNLOADS_MANIFEST")
+            .unwrap_or_else(|_| "/app/data/ceremony-downloads.json".into())
+            .into();
+
         Ok(Self {
             bind,
             db_path,
@@ -80,6 +85,7 @@ impl Config {
             pow_bits,
             allow_browser_contribute,
             rate_limit_rpm,
+            downloads_manifest,
         })
     }
 

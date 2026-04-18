@@ -251,6 +251,25 @@ x86_64-unknown-linux-musl` rebuilds the Linux binary in the pinned
 Docker image and diffs against the published `buildinfo.json`. See
 `docs/ceremony-reproducible-build.md`.
 
+Finally, drop the generated download manifest into the coordinator's
+data volume so `/api/v1/downloads` — and therefore `/download.html` —
+lists real artifacts:
+
+```bash
+# From your laptop, with the droplet reachable via ssh (Path A uses
+# root@<droplet-ip>; Path B uses whatever user you deploy as):
+DOMAIN=<your-domain>
+TAG=v0.1.0
+curl -fL -o /tmp/ceremony-downloads.json \
+  "https://github.com/<your-gh-user>/stellar-mls/releases/download/$TAG/ceremony-downloads.json"
+scp /tmp/ceremony-downloads.json root@$DOMAIN:/tmp/
+ssh root@$DOMAIN "docker run --rm -v onym_ceremony-data:/data -v /tmp:/src alpine \
+  cp /src/ceremony-downloads.json /data/ceremony-downloads.json"
+```
+
+No container restart needed — the coordinator reads the file on every
+request.
+
 ---
 
 ## 6a. Path A — deploy to DigitalOcean

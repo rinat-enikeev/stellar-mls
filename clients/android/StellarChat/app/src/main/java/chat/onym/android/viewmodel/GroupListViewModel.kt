@@ -94,9 +94,11 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     var keyManager = KeyManager.create(application)
         private set
 
-    /** Replace the active key manager after a BIP39 restore. */
+    /** Replace the active key manager after a BIP39 restore.
+     *  Reconnects relays so the inbox subscription uses the new identity's keys. */
     fun replaceKeyManager(newKeyManager: KeyManager) {
         keyManager = newKeyManager
+        reconnectRelays()
     }
     val groups = mutableStateListOf<ChatGroup>()
     val pendingInvitations = mutableStateListOf<PendingInvitation>()

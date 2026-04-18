@@ -134,7 +134,7 @@ class Bip39Test {
     }
 
     @Test
-    fun stellarAndX25519_fromBip39DerivedNostrKey() {
+    fun stellarAndX25519_fromBip39DerivedNostrKey_zeroEntropy() {
         val mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
         val seed = Bip39.seedFromMnemonic(mnemonic)
         val nostrKey = Bip39.deriveNostrKey(seed)
@@ -157,7 +157,100 @@ class Bip39Test {
 
         assertEquals(32, stellarKey.size)
         assertEquals(32, x25519Key.size)
-        assertFalse("Stellar and X25519 keys must differ", stellarKey.contentEquals(x25519Key))
-        assertFalse("Stellar and Nostr keys must differ", stellarKey.contentEquals(nostrKey))
+
+        // Pinned cross-platform values — iOS tests MUST produce the same hex
+        assertEquals("45d014863f395145d396e193adcd6d761c919d8db64d5356486e9fff4a32c4ca", stellarKey.toHex())
+        assertEquals("b86719ab1a4317618b81cf7225be405c92dc315886d0c817da71cc12fb08cc17", x25519Key.toHex())
+    }
+
+    @Test
+    fun stellarAndX25519_fromBip39DerivedNostrKey_hex42Entropy() {
+        val entropy = ByteArray(16) { 0x42 }
+        val mnemonic = Bip39.mnemonicFromEntropy(entropy)
+        val seed = Bip39.seedFromMnemonic(mnemonic)
+        val nostrKey = Bip39.deriveNostrKey(seed)
+
+        val stellarKey = GroupCrypto.hkdf(
+            ikm = nostrKey,
+            salt = "chat.onym.ios".toByteArray(),
+            info = "stellar-ed25519-v1".toByteArray(),
+            length = 32
+        )
+
+        val x25519Key = GroupCrypto.hkdf(
+            ikm = nostrKey,
+            salt = "chat.onym.ios".toByteArray(),
+            info = "x25519-key-agreement-v1".toByteArray(),
+            length = 32
+        )
+
+        assertEquals(32, stellarKey.size)
+        assertEquals(32, x25519Key.size)
+
+        // Pinned cross-platform values — iOS tests MUST produce the same hex
+        assertEquals("6ec053eb7fb174f774fcd80bd6f2b7dc839e3e4e20fa99d2c01a1f85c475a2bb", stellarKey.toHex())
+        assertEquals("81497994b0a24bb8b4295c0621541427253d5a02a10e00833cb03913bfd15c56", x25519Key.toHex())
+    }
+
+    // -----------------------------------------------------------------------
+    // Restore Round-Trip
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun restoreRoundTrip_keysMatchOriginal() {
+        // Generate a mnemonic, derive keys, then re-derive from the same mnemonic
+        // and verify we get identical keys — this is the critical restore path.
+        val mnemonic = Bip39.generateMnemonic()
+        val seed1 = Bip39.seedFromMnemonic(mnemonic)
+        val nostr1 = Bip39.deriveNostrKey(seed1)
+        val bls1 = Bip39.deriveBlsKey(seed1)
+
+        // Simulate restore: re-derive from the same mnemonic
+        val entropy = Bip39.entropyFromMnemonic(mnemonic)
+        assertNotNull(entropy)
+        val restored = Bip39.mnemonicFromEntropy(entropy!!)
+        assertEquals(mnemonic, restored)
+
+        val seed2 = Bip39.seedFromMnemonic(restored)
+        val nostr2 = Bip39.deriveNostrKey(seed2)
+        val bls2 = Bip39.deriveBlsKey(seed2)
+
+        assertArrayEquals("Nostr keys must match after restore", nostr1, nostr2)
+        assertArrayEquals("BLS keys must match after restore", bls1, bls2)
+
+        // Also verify Stellar and X25519 derived keys match
+        val stellar1 = GroupCrypto.hkdf(nostr1, "chat.onym.ios".toByteArray(), "stellar-ed25519-v1".toByteArray(), 32)
+        val stellar2 = GroupCrypto.hkdf(nostr2, "chat.onym.ios".toByteArray(), "stellar-ed25519-v1".toByteArray(), 32)
+        assertArrayEquals("Stellar keys must match after restore", stellar1, stellar2)
+
+        val x1 = GroupCrypto.hkdf(nostr1, "chat.onym.ios".toByteArray(), "x25519-key-agreement-v1".toByteArray(), 32)
+        val x2 = GroupCrypto.hkdf(nostr2, "chat.onym.ios".toByteArray(), "x25519-key-agreement-v1".toByteArray(), 32)
+        assertArrayEquals("X25519 keys must match after restore", x1, x2)
+    }
+
+    // -----------------------------------------------------------------------
+    // Legacy Install Path
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun legacyInstall_noBip39Entropy_returnsNullPhrase() {
+        // A legacy install has keys but no BIP39 entropy.
+        // Verify that entropyFromMnemonic returns null for invalid input,
+        // simulating what happens when there's no stored entropy.
+        val invalidMnemonic = "not a valid mnemonic phrase"
+        assertNull(Bip39.entropyFromMnemonic(invalidMnemonic))
+        assertFalse(Bip39.isValidMnemonic(invalidMnemonic))
+    }
+
+    @Test
+    fun legacyInstall_randomKeysNotBip39Derivable() {
+        // Legacy installs have random keys that won't match any BIP39 derivation.
+        // Verify that arbitrary 32-byte keys don't accidentally collide with BIP39 paths.
+        val randomKey = ByteArray(32) { (it * 7 + 13).toByte() }
+        val mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+        val seed = Bip39.seedFromMnemonic(mnemonic)
+        val bip39Nostr = Bip39.deriveNostrKey(seed)
+
+        assertFalse("Random key must not match BIP39-derived key", randomKey.contentEquals(bip39Nostr))
     }
 }

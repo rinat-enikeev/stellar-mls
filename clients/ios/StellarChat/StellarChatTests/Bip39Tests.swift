@@ -126,14 +126,13 @@ struct Bip39KeyDerivationTests {
     }
 
     /// Verify that Stellar and X25519 keys derived from the BIP39-derived Nostr key
-    /// use the existing HKDF derivation paths (cross-platform parity).
-    @Test("Stellar and X25519 derivation from BIP39-derived Nostr key is deterministic")
-    func stellarAndX25519FromBip39() {
+    /// produce pinned cross-platform values (zero-entropy vector).
+    @Test("Stellar and X25519 derivation from zero-entropy Nostr key matches pinned values")
+    func stellarAndX25519FromBip39_zeroEntropy() {
         let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
         let seed = Bip39.seedFromMnemonic(mnemonic)
         let nostrKey = Bip39.deriveNostrKey(from: seed)
 
-        // Derive Stellar Ed25519 using the same path as KeyManager
         let stellarDerived = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: nostrKey),
             salt: Data("chat.onym.ios".utf8),
@@ -142,7 +141,6 @@ struct Bip39KeyDerivationTests {
         )
         let stellarKey = stellarDerived.withUnsafeBytes { Data($0) }
 
-        // Derive X25519 using the same path as KeyManager
         let x25519Derived = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: nostrKey),
             salt: Data("chat.onym.ios".utf8),
@@ -153,7 +151,108 @@ struct Bip39KeyDerivationTests {
 
         #expect(stellarKey.count == 32)
         #expect(x25519Key.count == 32)
-        #expect(stellarKey != x25519Key)
-        #expect(stellarKey != nostrKey)
+
+        // Pinned cross-platform values — Android tests MUST produce the same hex
+        let stellarHex = stellarKey.map { String(format: "%02x", $0) }.joined()
+        let x25519Hex = x25519Key.map { String(format: "%02x", $0) }.joined()
+        #expect(stellarHex == "45d014863f395145d396e193adcd6d761c919d8db64d5356486e9fff4a32c4ca")
+        #expect(x25519Hex == "b86719ab1a4317618b81cf7225be405c92dc315886d0c817da71cc12fb08cc17")
+    }
+
+    /// Verify Stellar and X25519 pinned values for 0x42 entropy vector.
+    @Test("Stellar and X25519 derivation from 0x42-entropy Nostr key matches pinned values")
+    func stellarAndX25519FromBip39_hex42Entropy() {
+        let entropy = Data(repeating: 0x42, count: 16)
+        let mnemonic = Bip39.mnemonicFromEntropy(entropy)
+        let seed = Bip39.seedFromMnemonic(mnemonic)
+        let nostrKey = Bip39.deriveNostrKey(from: seed)
+
+        let stellarDerived = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: nostrKey),
+            salt: Data("chat.onym.ios".utf8),
+            info: Data("stellar-ed25519-v1".utf8),
+            outputByteCount: 32
+        )
+        let stellarKey = stellarDerived.withUnsafeBytes { Data($0) }
+
+        let x25519Derived = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: nostrKey),
+            salt: Data("chat.onym.ios".utf8),
+            info: Data("x25519-key-agreement-v1".utf8),
+            outputByteCount: 32
+        )
+        let x25519Key = x25519Derived.withUnsafeBytes { Data($0) }
+
+        #expect(stellarKey.count == 32)
+        #expect(x25519Key.count == 32)
+
+        let stellarHex = stellarKey.map { String(format: "%02x", $0) }.joined()
+        let x25519Hex = x25519Key.map { String(format: "%02x", $0) }.joined()
+        #expect(stellarHex == "6ec053eb7fb174f774fcd80bd6f2b7dc839e3e4e20fa99d2c01a1f85c475a2bb")
+        #expect(x25519Hex == "81497994b0a24bb8b4295c0621541427253d5a02a10e00833cb03913bfd15c56")
+    }
+}
+
+// MARK: - Restore Round-Trip
+
+@Suite("BIP39: Restore Round-Trip")
+struct Bip39RestoreTests {
+
+    @Test("Mnemonic → keys → entropy → mnemonic → keys produces identical keys")
+    func restoreRoundTrip() {
+        let mnemonic = Bip39.generateMnemonic()
+        let seed1 = Bip39.seedFromMnemonic(mnemonic)
+        let nostr1 = Bip39.deriveNostrKey(from: seed1)
+        let bls1 = Bip39.deriveBlsKey(from: seed1)
+
+        // Simulate restore: entropy round-trip
+        let entropy = Bip39.entropyFromMnemonic(mnemonic)
+        #expect(entropy != nil)
+        let restored = Bip39.mnemonicFromEntropy(entropy!)
+        #expect(restored == mnemonic)
+
+        let seed2 = Bip39.seedFromMnemonic(restored)
+        let nostr2 = Bip39.deriveNostrKey(from: seed2)
+        let bls2 = Bip39.deriveBlsKey(from: seed2)
+
+        #expect(nostr1 == nostr2, "Nostr keys must match after restore")
+        #expect(bls1 == bls2, "BLS keys must match after restore")
+
+        // Also verify downstream Stellar and X25519 keys match
+        let stellar1 = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: nostr1),
+            salt: Data("chat.onym.ios".utf8),
+            info: Data("stellar-ed25519-v1".utf8),
+            outputByteCount: 32
+        ).withUnsafeBytes { Data($0) }
+        let stellar2 = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: SymmetricKey(data: nostr2),
+            salt: Data("chat.onym.ios".utf8),
+            info: Data("stellar-ed25519-v1".utf8),
+            outputByteCount: 32
+        ).withUnsafeBytes { Data($0) }
+        #expect(stellar1 == stellar2, "Stellar keys must match after restore")
+    }
+}
+
+// MARK: - Legacy Install Path
+
+@Suite("BIP39: Legacy Install Path")
+struct Bip39LegacyTests {
+
+    @Test("Invalid mnemonic returns nil entropy and fails validation")
+    func legacyInstall_noBip39Entropy() {
+        let invalidMnemonic = "not a valid mnemonic phrase"
+        #expect(Bip39.entropyFromMnemonic(invalidMnemonic) == nil)
+        #expect(!Bip39.isValidMnemonic(invalidMnemonic))
+    }
+
+    @Test("Random keys do not collide with BIP39-derived keys")
+    func legacyInstall_randomKeysNotBip39Derivable() {
+        let randomKey = Data((0..<32).map { UInt8(($0 * 7 + 13) & 0xFF) })
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+        let seed = Bip39.seedFromMnemonic(mnemonic)
+        let bip39Nostr = Bip39.deriveNostrKey(from: seed)
+        #expect(randomKey != bip39Nostr, "Random key must not match BIP39-derived key")
     }
 }

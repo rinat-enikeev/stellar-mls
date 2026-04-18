@@ -67,14 +67,17 @@ final class KeyManager: Codable {
         } else {
             // Fresh install — generate BIP39-backed identity
             let mnemonic = Bip39.generateMnemonic()
-            let entropy = Bip39.entropyFromMnemonic(mnemonic)!
-            let seed = Bip39.seedFromMnemonic(mnemonic)
+            var entropy = Bip39.entropyFromMnemonic(mnemonic)!
+            var seed = Bip39.seedFromMnemonic(mnemonic)
             self.nostrSecretKey = Bip39.deriveNostrKey(from: seed)
             self.blsSecretKey = Bip39.deriveBlsKey(from: seed)
             self.isBip39Backed = true
             try Self.saveToKeychain(entropy, key: Self.mnemonicKeychainKey)
             try Self.saveToKeychain(self.nostrSecretKey, key: Self.nostrKeychainKey)
             try Self.saveToKeychain(self.blsSecretKey, key: Self.blsKeychainKey)
+            // Zeroize sensitive intermediates
+            seed.resetBytes(in: seed.startIndex..<seed.endIndex)
+            entropy.resetBytes(in: entropy.startIndex..<entropy.endIndex)
         }
 
         guard nostrSecretKey.count == 32 else {
@@ -114,21 +117,32 @@ final class KeyManager: Codable {
         restoreLock.lock()
         defer { restoreLock.unlock() }
 
-        let entropy = Bip39.entropyFromMnemonic(mnemonic)!
-        let seed = Bip39.seedFromMnemonic(mnemonic)
-        let nostrKey = Bip39.deriveNostrKey(from: seed)
-        let blsKey = Bip39.deriveBlsKey(from: seed)
+        var entropy = Bip39.entropyFromMnemonic(mnemonic)!
+        var seed = Bip39.seedFromMnemonic(mnemonic)
+        var nostrKey = Bip39.deriveNostrKey(from: seed)
+        var blsKey = Bip39.deriveBlsKey(from: seed)
 
         // Persist all keys
         try saveToKeychain(entropy, key: mnemonicKeychainKey)
         try saveToKeychain(nostrKey, key: nostrKeychainKey)
         try saveToKeychain(blsKey, key: blsKeychainKey)
 
+        // Zeroize sensitive intermediates
+        seed.resetBytes(in: seed.startIndex..<seed.endIndex)
+        nostrKey.resetBytes(in: nostrKey.startIndex..<nostrKey.endIndex)
+        blsKey.resetBytes(in: blsKey.startIndex..<blsKey.endIndex)
+        entropy.resetBytes(in: entropy.startIndex..<entropy.endIndex)
+
         // Return a fresh KeyManager that will load the just-stored keys
         return try KeyManager()
     }
 
     /// The BIP39 recovery phrase for this identity, or nil for legacy (pre-BIP39) identities.
+    ///
+    /// SECURITY NOTE: Reconstructed from stored entropy on each access. The returned String
+    /// is an immutable Swift value that cannot be zeroized — it persists in memory until
+    /// deallocated. Accepted trade-off: only retrieved when user explicitly views the backup
+    /// screen (behind biometric auth).
     var recoveryPhrase: String? {
         guard isBip39Backed,
               let entropy = try? Self.loadFromKeychain(key: Self.mnemonicKeychainKey) else {

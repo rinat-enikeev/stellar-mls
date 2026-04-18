@@ -47,6 +47,7 @@ import chat.onym.android.ui.screens.GroupListScreen
 import chat.onym.android.ui.screens.InviteMemberScreen
 import chat.onym.android.ui.screens.SearchScreen
 import chat.onym.android.ui.screens.JoinGroupScreen
+import chat.onym.android.ui.screens.LegacyIdentityScreen
 import chat.onym.android.ui.screens.PendingInvitationsScreen
 import chat.onym.android.ui.screens.RecoveryPhraseScreen
 import chat.onym.android.ui.screens.RestoreIdentityScreen
@@ -56,7 +57,9 @@ import chat.onym.android.viewmodel.ChatViewModel
 import chat.onym.android.viewmodel.CreateGroupViewModel
 import chat.onym.android.viewmodel.GroupListViewModel
 import chat.onym.android.viewmodel.JoinGroupViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private val groupListViewModel: GroupListViewModel by viewModels()
@@ -364,6 +367,9 @@ fun StellarChatNavHost(
                         recoveryPhrase = phrase,
                         onBack = { navController.popBackStack() }
                     )
+                } else {
+                    // Legacy (pre-BIP39) install — no recovery phrase available
+                    LegacyIdentityScreen(onBack = { navController.popBackStack() })
                 }
             }
 
@@ -371,18 +377,18 @@ fun StellarChatNavHost(
                 val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
                 RestoreIdentityScreen(
                     onRestore = { mnemonic, onResult ->
-                        coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        coroutineScope.launch(Dispatchers.IO) {
                             try {
                                 val newKeyManager = chat.onym.android.crypto.KeyManager.restoreFromMnemonic(
                                     context,
                                     mnemonic
                                 )
-                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                withContext(Dispatchers.Main) {
                                     groupListViewModel.replaceKeyManager(newKeyManager)
                                     onResult(true)
                                 }
                             } catch (e: Exception) {
-                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                withContext(Dispatchers.Main) {
                                     onResult(false)
                                 }
                             }

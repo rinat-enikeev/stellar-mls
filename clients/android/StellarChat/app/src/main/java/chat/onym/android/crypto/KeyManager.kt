@@ -13,6 +13,7 @@ import org.bouncycastle.crypto.signers.Ed25519Signer
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import java.security.SecureRandom
+import java.util.Arrays
 
 class KeyManagerException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
 
@@ -53,6 +54,13 @@ class KeyManager private constructor(private val prefs: android.content.SharedPr
                 .putString(BIP39_ENTROPY, entropy.toHex())
                 .putBoolean(IDENTITY_INITIALIZED, true)
                 .commit()
+
+            // Zeroize sensitive intermediates
+            Arrays.fill(seed, 0)
+            Arrays.fill(nostrKey, 0)
+            Arrays.fill(blsKey, 0)
+            Arrays.fill(entropy, 0)
+
             if (!saved) throw KeyManagerException("Failed to persist restored identity keys")
 
             return KeyManager(prefs)
@@ -113,7 +121,15 @@ class KeyManager private constructor(private val prefs: android.content.SharedPr
     /** Whether this identity is backed by a BIP39 mnemonic. */
     val isBip39Backed: Boolean
 
-    /** The BIP39 recovery phrase, or null for legacy (pre-BIP39) identities. */
+    /**
+     * The BIP39 recovery phrase, or null for legacy (pre-BIP39) identities.
+     *
+     * SECURITY NOTE: Reconstructed from stored entropy on each access. The returned String
+     * is an immutable JVM object that cannot be zeroized — it will persist in memory until
+     * GC'd. This is an accepted trade-off: the phrase is only retrieved when the user
+     * explicitly views the backup screen (behind biometric auth). Using CharArray would not
+     * help since Compose text rendering requires String.
+     */
     val recoveryPhrase: String?
         get() {
             val entropyHex = prefs.getString(BIP39_ENTROPY, null) ?: return null
@@ -139,6 +155,11 @@ class KeyManager private constructor(private val prefs: android.content.SharedPr
                 .putString(BIP39_ENTROPY, entropy.toHex())
                 .putBoolean(IDENTITY_INITIALIZED, true)
                 .commit()
+            // Zeroize sensitive intermediates
+            Arrays.fill(seed, 0)
+            Arrays.fill(key, 0)
+            Arrays.fill(blsKey, 0)
+            Arrays.fill(entropy, 0)
             if (!saved) {
                 throw KeyManagerException("Failed to persist newly generated identity keys")
             }

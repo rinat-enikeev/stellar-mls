@@ -44,6 +44,22 @@ const LEDGER_BUMP: u32 = 518_400;
 /// The admin can increase this limit by re-deploying with a higher value.
 const MAX_GROUPS_PER_TIER: u32 = 10_000;
 
+/// Number of filled leaves a Merkle tree of the given tier can hold.
+/// * tier 0 (Small)  — depth 5  → 32
+/// * tier 1 (Medium) — depth 8  → 256
+/// * tier 2 (Large)  — depth 11 → 2048
+///
+/// Callers MUST validate `tier <= 2` before invoking; behaviour for
+/// out-of-range tiers is undefined.
+fn tier_capacity(tier: u32) -> u32 {
+    match tier {
+        0 => 32,
+        1 => 256,
+        2 => 2048,
+        _ => 0,
+    }
+}
+
 // ================================================================
 // Errors
 // ================================================================
@@ -103,11 +119,20 @@ pub enum Error {
     /// The supplied `admin_root` public input does not match the current
     /// stored admin-tree root for the group.
     AdminRootMismatch = 20,
-    // Codes 21–22 reserved for Phase 3 (DemocracyInputMissing) and
-    // Phase 2 (NotAdmin — the dedicated circuit-driven check).
+    /// A Democracy update omitted the member-count public input, or the
+    /// caller failed to supply the quorum witness bundle.
+    /// Reserved for the ceremony-gated update dispatch.
+    DemocracyInputMissing = 21,
+    // Code 22 reserved for `NotAdmin` (Oligarchy update dispatch).
     /// 1v1 groups MUST use tier 0 (Small). Any other tier is rejected.
     Invalid1v1Tier = 23,
-    // Codes 24–25 reserved for Phase 3 (Democracy).
+    /// The `member_count` public input for a Democracy update does not
+    /// match the authoritative value stored on-chain.
+    /// Reserved for the ceremony-gated update dispatch.
+    MemberCountMismatch = 24,
+    /// `member_count` is out of range for the requested tier / group type
+    /// (e.g. < 2 for Democracy, or > 2^depth for the selected tier).
+    MemberCountOutOfRange = 25,
 }
 
 // ================================================================
@@ -568,8 +593,24 @@ impl SepXxxxContract {
                     return Err(Error::PublicInputsMismatch);
                 }
             }
+            2 => {
+                // Democracy: ≥50% quorum on kick/invite. The quorum check
+                // is enforced inside the `DemocracyUpdateCircuit`
+                // (ceremony-gated — not active in this build). We require
+                // member_count ≥ 2 at creation so a single-member
+                // "democracy" can't exist, and bound it by the tier's leaf
+                // capacity so later updates can't silently overflow the
+                // Merkle tree.
+                if member_count < 2 {
+                    return Err(Error::MemberCountOutOfRange);
+                }
+                if member_count > tier_capacity(tier) {
+                    return Err(Error::MemberCountOutOfRange);
+                }
+            }
             _ => {
-                // Types 2/3 land in later phases.
+                // Oligarchy uses `create_oligarchy_group` which takes the
+                // admin_root seed. Types > 3 are not defined.
                 return Err(Error::UnknownGroupType);
             }
         }
@@ -2654,8 +2695,11 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #18)")]
-    fn test_create_group_v2_rejects_democracy_type() {
+    fn test_create_group_v2_accepts_democracy_type_at_validation() {
+        // With Phase 3 enabled, group_type = 2 (Democracy) with a valid
+        // member_count reaches the Groth16 verifier. The mock proof fails
+        // there (host rejects zero G1 points), which proves dispatch
+        // passed the governance check.
         let (env, client, _admin, _cid) = setup_initialized();
         let caller = Address::generate(&env);
         let group_id = BytesN::from_array(&env, &[10u8; 32]);
@@ -2664,7 +2708,7 @@ mod test {
             commitment: commitment.clone(),
             epoch: 0,
         };
-        client.create_group_v2(
+        let result = client.try_create_group_v2(
             &caller,
             &group_id,
             &commitment,
@@ -2674,6 +2718,10 @@ mod test {
             &mock_proof(&env),
             &pi,
         );
+        match result {
+            Err(Err(_)) => { /* reached Groth16 verifier — dispatch OK */ }
+            other => panic!("expected verifier abort, got {:?}", other),
+        }
     }
 
     #[test]
@@ -3083,6 +3131,163 @@ mod test {
             c_new: BytesN::from_array(&env, &[0u8; 32]),
         };
         client.update_commitment(&group_id, &mock_proof(&env), &upi);
+    }
+
+    // ================================================================
+    // Democracy Group Type Tests (governance-types Phase 3)
+    // ================================================================
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #25)")]
+    fn test_create_democracy_rejects_member_count_zero() {
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[60u8; 32]);
+        let commitment = BytesN::from_array(&env, &[61u8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        client.create_group_v2(
+            &caller,
+            &group_id,
+            &commitment,
+            &0u32,
+            &2u32, // Democracy
+            &0u32, // member_count = 0 — invalid
+            &mock_proof(&env),
+            &pi,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #25)")]
+    fn test_create_democracy_rejects_member_count_one() {
+        // "Democracy of one" collapses to unilateral control — forbidden.
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[62u8; 32]);
+        let commitment = BytesN::from_array(&env, &[63u8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        client.create_group_v2(
+            &caller,
+            &group_id,
+            &commitment,
+            &0u32,
+            &2u32,
+            &1u32, // member_count = 1 — invalid
+            &mock_proof(&env),
+            &pi,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #25)")]
+    fn test_create_democracy_rejects_member_count_exceeds_small_capacity() {
+        // Small tier holds 32 leaves; 33 members overflows the Merkle tree.
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[64u8; 32]);
+        let commitment = BytesN::from_array(&env, &[65u8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        client.create_group_v2(
+            &caller,
+            &group_id,
+            &commitment,
+            &0u32,   // Small tier (cap = 32)
+            &2u32,
+            &33u32, // exceeds capacity
+            &mock_proof(&env),
+            &pi,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #25)")]
+    fn test_create_democracy_rejects_member_count_exceeds_large_capacity() {
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[66u8; 32]);
+        let commitment = BytesN::from_array(&env, &[67u8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        client.create_group_v2(
+            &caller,
+            &group_id,
+            &commitment,
+            &2u32,      // Large tier (cap = 2048)
+            &2u32,
+            &2049u32, // exceeds capacity
+            &mock_proof(&env),
+            &pi,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #18)")]
+    fn test_update_commitment_rejects_democracy_pending_ceremony() {
+        // Democracy quorum enforcement lives in `DemocracyUpdateCircuit`,
+        // which is ceremony-gated. Until the VK ships, update_commitment
+        // must reject group_type = 2 with UnknownGroupType.
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[68u8; 32]);
+        let commitment = BytesN::from_array(&env, &[69u8; 32]);
+        inject_group_v2(
+            &env,
+            &contract_id,
+            &group_id,
+            &commitment,
+            0,
+            0,
+            2, // Democracy
+            5,
+        );
+
+        let upi = UpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: 0,
+            c_new: BytesN::from_array(&env, &[0u8; 32]),
+        };
+        client.update_commitment(&group_id, &mock_proof(&env), &upi);
+    }
+
+    #[test]
+    fn test_get_state_v2_for_democracy_reports_member_count() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[70u8; 32]);
+        let commitment = BytesN::from_array(&env, &[71u8; 32]);
+        inject_group_v2(
+            &env,
+            &contract_id,
+            &group_id,
+            &commitment,
+            3,
+            1,
+            2,   // Democracy
+            17,
+        );
+
+        let state = client.get_state_v2(&group_id);
+        assert_eq!(state.group_type, 2);
+        assert_eq!(state.member_count, 17);
+        assert_eq!(state.epoch, 3);
+    }
+
+    #[test]
+    fn test_tier_capacity_constants() {
+        // The Merkle-tree leaf bounds are a consensus-critical invariant
+        // of the governance scheme — lock them in.
+        assert_eq!(tier_capacity(0), 32);
+        assert_eq!(tier_capacity(1), 256);
+        assert_eq!(tier_capacity(2), 2048);
     }
 
     #[test]

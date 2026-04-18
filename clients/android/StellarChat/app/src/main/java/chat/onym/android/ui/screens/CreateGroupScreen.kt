@@ -101,6 +101,7 @@ import chat.onym.android.viewmodel.CreationPhase
 import chat.onym.android.viewmodel.GroupListViewModel
 import chat.onym.android.viewmodel.InvitationStatus
 import chat.onym.android.viewmodel.OnChainPublishStatus
+import com.stellarmls.mls.SEPGroupType
 
 private enum class InputStep { IDENTITY, PEOPLE }
 
@@ -390,6 +391,50 @@ private fun IdentityStep(
                     }
                 }
             }
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        // Governance picker
+        Column(Modifier.fillMaxWidth()) {
+            Text(
+                "GOVERNANCE",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
+            )
+            val types = listOf(
+                SEPGroupType.ANARCHY to "Anarchy",
+                SEPGroupType.ONE_ON_ONE to "1v1",
+                SEPGroupType.DEMOCRACY to "Democracy",
+                SEPGroupType.OLIGARCHY to "Oligarchy"
+            )
+            androidx.compose.material3.SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                types.forEachIndexed { index, (type, label) ->
+                    androidx.compose.material3.SegmentedButton(
+                        selected = viewModel.groupType == type,
+                        onClick = { viewModel.setGroupType(type) },
+                        shape = androidx.compose.material3.SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = types.size
+                        ),
+                        label = { Text(label, fontSize = 12.sp) }
+                    )
+                }
+            }
+            val help = when (viewModel.groupType) {
+                SEPGroupType.ANARCHY -> "Any member can add or remove anyone. Default behavior."
+                SEPGroupType.ONE_ON_ONE -> "Sealed 2-person chat. Membership cannot change."
+                SEPGroupType.DEMOCRACY -> "Membership changes require a majority ballot."
+                SEPGroupType.OLIGARCHY -> "Only admins can add or remove members. Creator is first admin."
+            }
+            Text(
+                help,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
+            )
         }
 
         Spacer(Modifier.height(20.dp))

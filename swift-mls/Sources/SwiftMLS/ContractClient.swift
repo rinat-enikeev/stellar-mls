@@ -77,6 +77,19 @@ public struct SEPContractClient {
         try await invoke("create_group", payload: request, responseType: SEPSubmissionResponse.self)
     }
 
+    /// Create a group via the V2 entrypoint. Accepts Anarchy, 1v1, and
+    /// Democracy governance types. Oligarchy MUST use
+    /// `createOligarchyGroup`. Non-Anarchy types currently reject later
+    /// `update_commitment` calls until the per-type VK ceremonies land.
+    public func createGroupV2(_ request: SEPCreateGroupV2Request) async throws -> SEPSubmissionResponse {
+        try await invoke("create_group_v2", payload: request, responseType: SEPSubmissionResponse.self)
+    }
+
+    /// Create an Oligarchy group and seed its admin-tree root.
+    public func createOligarchyGroup(_ request: SEPCreateOligarchyGroupRequest) async throws -> SEPSubmissionResponse {
+        try await invoke("create_oligarchy_group", payload: request, responseType: SEPSubmissionResponse.self)
+    }
+
     public func updateCommitment(_ request: SEPUpdateCommitmentRequest) async throws -> SEPSubmissionResponse {
         try await invoke("update_commitment", payload: request, responseType: SEPSubmissionResponse.self)
     }
@@ -102,6 +115,27 @@ public struct SEPContractClient {
             "get_history",
             payload: SEPGetHistoryRequest(groupID: groupID, maxEntries: maxEntries),
             responseType: [SEPCommitmentEntry].self
+        )
+    }
+
+    /// Read the governance-aware `CommitmentEntryV2` for a group.
+    /// Legacy V1 groups are projected as `groupType = .anarchy`,
+    /// `memberCount = 0` by the contract.
+    public func getStateV2(groupID: Data) async throws -> SEPCommitmentEntryV2 {
+        try await invoke(
+            "get_state_v2",
+            payload: SEPGetStateRequest(groupID: groupID),
+            responseType: SEPCommitmentEntryV2.self
+        )
+    }
+
+    /// Read the Poseidon admin-tree root of an Oligarchy group.
+    /// Fails with `missing_admin_root` for non-Oligarchy groups.
+    public func getAdminRoot(groupID: Data) async throws -> Data {
+        try await invoke(
+            "get_admin_root",
+            payload: SEPGetStateRequest(groupID: groupID),
+            responseType: Data.self
         )
     }
 

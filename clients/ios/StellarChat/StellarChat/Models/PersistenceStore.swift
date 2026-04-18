@@ -657,7 +657,8 @@ final class PersistenceStore {
             removedByPubkeyHex: group.removedByPubkeyHex,
             pushNotificationsEnabled: group.pushNotificationsEnabled,
             lastMessageAt: group.lastMessageAt,
-            isPinned: group.isPinned
+            isPinned: group.isPinned,
+            groupTypeRawValue: Int(group.groupType.rawValue)
         )
     }
 
@@ -700,6 +701,9 @@ final class PersistenceStore {
         group.pushNotificationsEnabled = persisted.pushNotificationsEnabled
         group.lastMessageAt = persisted.lastMessageAt
         group.isPinned = persisted.isPinned
+        if let raw = persisted.groupTypeRawValue, let parsed = SEPGroupType(rawValue: UInt32(raw)) {
+            group.groupType = parsed
+        }
         return group
     }
 

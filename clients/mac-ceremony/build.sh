@@ -123,7 +123,8 @@ build_arch() {
   local arch="$1"
   local triple="$2"
   local out="$WORK/CeremonyTool-$arch"
-  echo "==> swiftc ($arch)"
+  # Diagnostics go to stderr so command substitution captures only the path.
+  echo "==> swiftc ($arch)" >&2
   xcrun swiftc \
     -sdk "$SDK_PATH" \
     -target "$triple" \
@@ -131,7 +132,7 @@ build_arch() {
     -parse-as-library \
     -module-name CeremonyTool \
     -o "$out" \
-    "${SRCS[@]}"
+    "${SRCS[@]}" >&2
   echo "$out"
 }
 

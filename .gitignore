@@ -68,6 +68,11 @@ deploy/certbot/webroot/
 # Production env
 .env.production
 
+# Nostr signing keys (coordinator + admin) for the trusted-setup ceremony.
+# The private scalars must never leave this machine; the directory is
+# created by the operator and never committed.
+.nostr/
+
 # iOS App Store release automation
 /clients/apple.env
 /clients/fastlane/.appstoreconnect_api_key.json

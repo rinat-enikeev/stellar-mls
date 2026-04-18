@@ -1,328 +1,428 @@
-# Rolling out a ceremony to your own server
+# Rolling out a ceremony from a fresh clone
 
-This doc walks a fresh clone of `stellar-mls` to a running public trusted
-setup ceremony at `ceremony.<yourdomain>`. Two paths:
+This doc takes a just-cloned `stellar-mls` repo to **a live ceremony stack
+at `ceremony.<yourdomain>` that is ready to accept contributions**. It
+deliberately stops short of kicking the ceremony off — the coordinator
+box must exist, be healthy, and have verified binaries published before
+you pick the moment to announce Phase 1.
 
-- **Path A — DigitalOcean + Cloudflare.** One script provisions the droplet,
-  DNS, SSL, and brings every service up. What the upstream operator uses.
-- **Path B — Any Linux host.** You bring a server and DNS; the script is
-  replaced by ~8 manual steps.
+Two paths are supported and share every step except §6:
 
-The release of the participant-facing `ceremony_tool` binaries is separate
-(GitHub Actions) and is covered at the end.
+- **Path A — DigitalOcean + Cloudflare.** `deploy/digitalocean/deploy.sh`
+  provisions the droplet, the DNS records, the TLS certs, and brings the
+  stack up. This is what the upstream operator uses.
+- **Path B — any Linux box you already own.** You bring SSH and DNS; the
+  certbot init script does SSL and `docker compose up -d` does the rest.
+
+Acceptance criteria are §8. If everything there is green, you are ready
+to kick off the ceremony.
 
 ---
 
-## Prerequisites
+## 1. Prerequisites
 
 On your workstation:
 
 - `git`, `docker`, `docker compose`
-- `rustup` with a stable toolchain (for building the WASM verifier locally;
-  the droplet never needs Rust)
-- `wasm-pack`: `curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh`
-- Path A only: `doctl` (`brew install doctl` or
-  `snap install doctl --classic`) and a Cloudflare API token with
-  `Zone.DNS edit` on your zone
+- `wasm-pack` for the browser verifier:
+  `curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh`
+  (needs a stable Rust toolchain via `rustup`)
+- Path A only: `doctl` (`brew install doctl` / `snap install doctl`)
 
 On the server (Path B only):
 
 - Ubuntu 22.04 / 24.04 or Debian 12, root or sudo
-- Ports 22, 80, 443 reachable from the internet
-- Docker + Docker Compose plugin
+- Ports 22, 80, 443 open to the internet
+- Docker + the Docker Compose plugin
 
-You will need:
+Things you need to have on hand before you start:
 
-- A domain you control (registrar pointed at Cloudflare for Path A, or
-  wherever you manage DNS for Path B).
-- A Nostr keypair to act as **coordinator identity**. Generate one with any
-  Nostr client or with `ceremony_tool keygen` (the binary ships a
-  generator). Keep the `nsec` secret; the `npub` (hex) is public.
-- One or more Nostr pubkeys (hex) to act as **Phase 2 admins** — they are
-  the only ones allowed to call `freeze`, `set-beacon`, and publish
-  Phase 2 rounds.
+- A domain you control.
+- A Nostr keypair to act as **coordinator identity**. The `nsec` (hex
+  secret) signs every kind-30078 transcript event. Generate one with any
+  Nostr client or `ceremony_tool keygen`.
+- One or more Nostr **admin pubkeys** (hex). These are the only
+  identities that can call Phase 2 endpoints (`freeze`, `set-beacon`,
+  publish round). Include your own.
+- Path A only: a DigitalOcean API token and a Cloudflare token with
+  `Zone.DNS edit` on your zone.
 
 ---
 
-## 1. Clone and pick your domain
+## 2. Clone and pick your domain
 
 ```bash
 git clone https://github.com/rinat-enikeev/stellar-mls.git
 cd stellar-mls
 ```
 
-The stock configuration assumes `onym.chat`. Replace it with yours across
-all nginx vhost configs:
+The stock config hardcodes `onym.chat` in a handful of non-env places.
+Replace it with your domain across those files:
 
 ```bash
-# macOS: use `gsed` (brew install gnu-sed) or add `''` after -i
-sed -i 's/onym\.chat/yourdomain.com/g' deploy/nginx/conf.d/*.conf
+# nginx vhosts — hostnames + cert paths
+sed -i '' 's/onym\.chat/yourdomain.com/g' deploy/nginx/conf.d/*.conf     # macOS
+# sed -i   's/onym\.chat/yourdomain.com/g' deploy/nginx/conf.d/*.conf    # Linux
+
+# docker-compose hardcodes the public Blossom URL that the coordinator
+# returns in API responses — the browser uses it to pull blobs directly
+sed -i '' 's|blossom\.onym\.chat|blossom.yourdomain.com|g' docker-compose.yml
 ```
 
-The six subdomains the stack expects are:
+The six subdomains the full stack uses:
 
-| Host                            | Purpose                                |
-|---------------------------------|----------------------------------------|
-| `yourdomain.com`                | marketing site (`deploy/website`)      |
-| `ceremony.yourdomain.com`       | ceremony UI + coordinator API          |
-| `blossom.yourdomain.com`        | content-addressed blob store           |
-| `nostr.yourdomain.com`          | strfry relay for the transcript        |
-| `relay.yourdomain.com`          | stellar-mls relayer                    |
-| `push.yourdomain.com`           | push notification relay (optional)     |
+| Host                            | Required for ceremony? | Served by              |
+|---------------------------------|------------------------|------------------------|
+| `yourdomain.com`                | no (marketing site)    | `deploy/website/`      |
+| `ceremony.yourdomain.com`       | **yes**                | coordinator + static UI |
+| `blossom.yourdomain.com`        | **yes**                | `blossom` container    |
+| `nostr.yourdomain.com`          | **yes**                | `nostr-relay` (strfry) |
+| `relay.yourdomain.com`          | no (Stellar relayer)   | `relayer` container    |
+| `push.yourdomain.com`           | no (mobile push)       | `pn-relay` container   |
 
-If you don't need all of them, delete the matching file under
-`deploy/nginx/conf.d/` and the corresponding service in
-`docker-compose.yml` — but `ceremony`, `blossom`, and `nostr` are the
-minimum for a working ceremony.
+If you only care about the ceremony, you can delete
+`deploy/nginx/conf.d/{relay,push}.onym.chat.conf` and the
+`relayer` / `pn-relay` services in `docker-compose.yml`. Either way,
+**`relay` and `push` still need stub `.env` files** because `deploy.sh`
+SCPs them blindly (§6a note). That's covered below.
 
 ---
 
-## 2. Configure the coordinator
+## 3. Fill in the `.env` files
 
-Copy the example env and fill in the admin + coordinator keys:
+The repo ships `.env.example` templates you copy and fill in. There are
+four of them; only the first two matter for running a ceremony.
+
+### 3a. Top-level `.env` — deploy-script config
+
+```bash
+cp .env.production.example .env
+$EDITOR .env
+```
+
+What goes in it:
+
+```ini
+DOMAIN=yourdomain.com
+CERTBOT_EMAIL=you@yourdomain.com
+
+# Path A only (DigitalOcean + Cloudflare). Leave blank for Path B —
+# deploy.sh will still prompt, but you won't run deploy.sh at all.
+DO_API_KEY=
+CF_API_TOKEN=
+DO_REGION=ams3
+DO_DROPLET_SIZE=s-2vcpu-4gb
+SSH_KEY_PATH=~/.ssh/id_ed25519
+```
+
+`deploy.sh` rewrites this file on every run and appends `DROPLET_ID` and
+`DROPLET_IP` after the first successful provision, so it stays idempotent
+across re-runs. Commit nothing from here — `.env` is gitignored.
+
+### 3b. `ceremony-coordinator/.env` — coordinator secrets
 
 ```bash
 cp ceremony-coordinator/.env.example ceremony-coordinator/.env
 $EDITOR ceremony-coordinator/.env
 ```
 
-Minimum edits:
+Most lines in the example are already correct for the dockerized stack
+(`CEREMONY_BIND`, `CEREMONY_DB_PATH`, the internal `http://blossom:3000`
+and `ws://nostr-relay:7777` URLs, the binary path). Those values are
+*also* set inline in `docker-compose.yml` and win over the `.env` file —
+leaving them in the file is harmless.
+
+The lines you **must** fill in:
 
 ```ini
-# Public URL of your Blossom, used in API responses so clients can fetch
-# blobs directly without going through the coordinator.
-CEREMONY_BLOSSOM_PUBLIC_URL=https://blossom.yourdomain.com
-
-# Comma-separated hex pubkeys allowed to hit Phase 2 admin endpoints.
+# Hex Nostr pubkeys (no npub prefix) allowed to hit admin endpoints.
+# Include your own. Comma-separated, no spaces.
 CEREMONY_ADMIN_PUBKEYS=d1a2...e9,b4c5...77
 
-# Hex secret key the coordinator uses to sign kind-30078 transcript
-# events. Never commit this.
-CEREMONY_COORDINATOR_NSEC=<64-hex-chars>
+# Hex Nostr secret key the coordinator uses to sign kind-30078
+# transcript events. NEVER commit. If blank, the coordinator boots
+# read-only and refuses to commit rounds.
+CEREMONY_COORDINATOR_NSEC=<64 hex chars>
 ```
 
-Everything else in `.env.example` has working defaults for the dockerized
-stack. Do not set `CEREMONY_ALLOW_BROWSER_CONTRIBUTE=true` on a public
-deployment — browser-side δ generation is not safe.
+Lines you may want to tune:
+
+```ini
+CEREMONY_SLOT_DEADLINE_SECS=7200     # 2h per slot; lower for a dry run
+CEREMONY_POW_BITS=8                  # signup anti-spam difficulty
+CEREMONY_RATE_LIMIT_RPM=60
+CEREMONY_ALLOW_BROWSER_CONTRIBUTE=false   # LEAVE false in production
+```
+
+### 3c. `relayer/.env` — only if you use the Stellar relayer
+
+```bash
+cp relayer/.env.example relayer/.env
+$EDITOR relayer/.env
+```
+
+If you don't run the Stellar relayer, `deploy.sh` still requires the file
+to exist (it SCPs it unconditionally). Either leave the example values in
+place (the container will fail to connect — harmless, it's isolated on
+the internal network), or delete the `relayer` service from
+`docker-compose.yml` and create an empty stub:
+
+```bash
+touch relayer/.env
+```
+
+### 3d. `pn-relay/.env` — only if you use mobile push
+
+```bash
+cp pn-relay/.env.example pn-relay/.env   # optional
+# or:
+touch pn-relay/.env                      # empty stub, container noops
+```
+
+Not used by the ceremony. Skip unless you also run the mobile clients.
 
 ---
 
-## 3. Build the browser WASM verifier
+## 4. Build the browser WASM verifier
 
-The `/verify` page runs the six pairing equations client-side. The WASM
-bundle has to be built on your workstation and shipped with the static
-site (the server has no Rust toolchain):
+`/verify.html` runs the six pairing equations client-side. The WASM
+bundle is built on your workstation (the server has no Rust toolchain)
+and shipped as part of `deploy/ceremony/`:
 
 ```bash
 bash deploy/ceremony/tools/build-wasm.sh
 ```
 
-Output lands in `deploy/ceremony/wasm/` and is picked up by nginx's
-`/wasm/` location. Commit nothing — the directory's `.gitignore` already
-excludes the build artifacts.
+Output:
+
+```
+deploy/ceremony/wasm/ceremony_wasm.js
+deploy/ceremony/wasm/ceremony_wasm_bg.wasm   # ~155 KB (62 KB gz)
+deploy/ceremony/wasm/ceremony_wasm.d.ts
+```
+
+The directory is gitignored except for `.gitkeep`; rebuild before every
+deploy. Path A's `deploy.sh` runs this script for you, but it warns and
+continues on failure — run it manually once first to confirm your
+toolchain is set up.
 
 ---
 
-## 4a. Path A — deploy to DigitalOcean
+## 5. Release `ceremony_tool` binaries
 
-One script, first run takes ~10 minutes (DNS propagation is the slow part):
+Participants will download these binaries from GitHub Releases; the
+coordinator shells out to **the same binary** (built into its image from
+this repo) to verify uploads. You should cut the release before you
+announce the ceremony so `/download.html` points at real artifacts.
 
 ```bash
-export DO_API_KEY=...                # DigitalOcean personal access token
-export CF_API_TOKEN=...              # Cloudflare token, Zone.DNS:edit
-export DOMAIN=yourdomain.com
-export CERTBOT_EMAIL=you@yourdomain.com
+# 1. Create a signed tag (the workflow only accepts existing tags):
+git tag -s v0.1.0 -m "ceremony_tool v0.1.0"
+git push origin v0.1.0
 
+# 2. Fire the release workflow:
+gh workflow run release-ceremony-tool.yml -f tag=v0.1.0
+gh run watch
+```
+
+The matrix publishes five targets: Linux x86_64/aarch64 musl, macOS
+x86_64/aarch64, Windows x86_64 MSVC. Per artifact you get the binary,
+`.sha256`, `.buildinfo.json`, and (optionally) `.minisig`.
+
+Optional but recommended — add minisign signing:
+
+```bash
+minisign -G -p minisign.pub -s minisign.key   # one-time keygen
+gh secret set MINISIGN_SECRET_KEY < minisign.key
+gh secret set MINISIGN_PASSWORD                # paste passphrase, Ctrl-D
+```
+
+Then pin the **public** key in three places so a single compromise can't
+switch it silently — full instructions in
+`docs/ceremony-tool-verification.md`:
+
+- `deploy/ceremony/download.html` (the text block next to the downloads)
+- the GitHub Release's release notes
+- a kind-30078 Nostr event on your relay with
+  `d="sepceremony1:releasekeys"`
+
+Reproducibility: `./scripts/verify-ceremony-tool.sh v0.1.0
+x86_64-unknown-linux-musl` rebuilds the Linux binary in the pinned
+Docker image and diffs against the published `buildinfo.json`. See
+`docs/ceremony-reproducible-build.md`.
+
+---
+
+## 6a. Path A — deploy to DigitalOcean
+
+Everything you edited in §§2–4 is on disk; the four `.env` files are
+filled. Run:
+
+```bash
 bash deploy/digitalocean/deploy.sh
 ```
 
-What it does, in order:
+First run takes ~10 minutes (DNS propagation dominates). What it does:
 
-1. Uploads your `~/.ssh/id_ed25519.pub` to DO (reuses if present).
-2. Creates an `s-2vcpu-4gb` Ubuntu 24.04 droplet in `ams3`
-   (override via `DO_REGION`, `DO_DROPLET_SIZE`). Records the ID in
-   `.env` so re-runs reuse the same box.
-3. Creates/updates A records for the six subdomains on Cloudflare.
-4. SCPs the repo's `deploy/`, `docker-compose.yml`, `ceremony-coordinator/`,
-   and friends to `/opt/onym-chat` on the droplet.
-5. `docker compose build --pull` on the droplet.
-6. Bootstraps Let's Encrypt certs via
-   `deploy/certbot/init-certs.sh` (self-signed placeholder first so nginx
-   starts, then webroot ACME for the real cert covering all six SANs).
-7. Smoke-tests each public URL and prints a summary.
+1. Uploads `~/.ssh/id_ed25519.pub` to DO (reuses the key if present).
+2. Creates an `s-2vcpu-4gb` Ubuntu 24.04 droplet in `ams3` if no
+   `DROPLET_ID` is saved in `.env` yet. Cloud-init installs Docker and
+   opens the firewall.
+3. Calls the Cloudflare API to create/update A records for
+   `@`, `relay`, `nostr`, `blossom`, `push`, `ceremony`.
+4. `git clone`s the repo on the droplet into `/opt/onym-chat`.
+5. Re-runs `deploy/ceremony/tools/build-wasm.sh` locally and SCPs the
+   local `deploy/`, `docker-compose.yml`, and every service's `.env` /
+   `Dockerfile` / `src/` on top of the clone. Your uncommitted edits win
+   over whatever is on `origin/main`.
+6. `docker compose build --pull` on the droplet.
+7. If `/etc/letsencrypt/live/$DOMAIN/fullchain.pem` doesn't exist, waits
+   for DNS propagation, then runs
+   `deploy/certbot/init-certs.sh "$CERTBOT_EMAIL" "$DOMAIN"` to place a
+   self-signed placeholder, start nginx, and request the real cert via
+   webroot ACME.
+8. `docker compose up -d` and smoke-tests each public URL.
 
-Subsequent runs skip droplet/DNS/SSL bootstrap and only push updated
-code + `docker compose up -d`.
+Subsequent runs skip droplet/DNS/SSL bootstrap and just redeploy code.
 
 ---
 
-## 4b. Path B — deploy to any Linux host
+## 6b. Path B — deploy to your own Linux box
 
-```bash
-# On your workstation:
-rsync -az --delete \
-  deploy docker-compose.yml ceremony-coordinator rust-toolchain.toml \
-  root@YOUR_HOST:/opt/ceremony/
-
-# On the server:
-cd /opt/ceremony
-docker compose build --pull
-```
-
-Point these A records at the server's public IP at your DNS host (TTL 300):
+Point your DNS at the server. Minimum A records (TTL 300):
 
 ```
-yourdomain.com         A  <server-ip>
+yourdomain.com          A  <server-ip>
 ceremony.yourdomain.com A  <server-ip>
 blossom.yourdomain.com  A  <server-ip>
 nostr.yourdomain.com    A  <server-ip>
 ```
 
-Wait for propagation (`dig +short ceremony.yourdomain.com` returns your IP),
-then bootstrap SSL + bring everything up:
+Wait for propagation:
 
 ```bash
-bash deploy/certbot/init-certs.sh you@yourdomain.com yourdomain.com
-docker compose up -d
+dig +short ceremony.yourdomain.com   # must return <server-ip>
 ```
 
-The certbot sidecar renews automatically every 12 h; nginx reloads on
-its own schedule.
+Rsync the tree up and build:
+
+```bash
+rsync -az --delete \
+  deploy docker-compose.yml ceremony-coordinator relayer pn-relay \
+  rust-toolchain.toml .env \
+  root@YOUR_HOST:/opt/ceremony/
+
+ssh root@YOUR_HOST 'cd /opt/ceremony && docker compose build --pull'
+```
+
+Bootstrap SSL, then bring everything up:
+
+```bash
+ssh root@YOUR_HOST 'cd /opt/ceremony && \
+  bash deploy/certbot/init-certs.sh "you@yourdomain.com" "yourdomain.com" && \
+  docker compose up -d'
+```
+
+The certbot sidecar renews every 12 h.
 
 ---
 
-## 5. Verify the stack is live
+## 7. Smoke tests
+
+Run these from your workstation. Any non-200 / missing field is a stop
+sign.
 
 ```bash
+# Coordinator is up and the reverse proxy is routing:
 curl -fsS https://ceremony.yourdomain.com/api/v1/healthz
-curl -fsS https://ceremony.yourdomain.com/                 # landing page
+# → "ok"
+
+# Queue state is reachable and all three tiers are initialised:
+curl -fsS https://ceremony.yourdomain.com/api/v1/status | jq '.tiers | keys'
+# → ["large","medium","small"]
+
+# Static landing page:
+curl -fsSI https://ceremony.yourdomain.com/ | head -1
+# → HTTP/2 200
+
+# WASM verifier served with the right MIME type:
 curl -fsSI https://ceremony.yourdomain.com/wasm/ceremony_wasm_bg.wasm \
-  | grep -i content-type   # → application/wasm
+  | grep -i '^content-type'
+# → content-type: application/wasm
+
+# Blossom is reachable and returns its kind-0 info doc:
+curl -fsS https://blossom.yourdomain.com/ | head -c 120
+
+# Nostr relay accepts websocket upgrades:
+curl -fsSI -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+  https://nostr.yourdomain.com/ | head -1
+# → HTTP/2 101 (or a 426 from nginx if no wss — both mean the hop is live)
+
+# GitHub Release has the binaries the UI will link to:
+gh release view v0.1.0 --json assets --jq '.assets[].name' | sort
+# → ceremony_tool-v0.1.0-aarch64-apple-darwin
+#   ceremony_tool-v0.1.0-aarch64-apple-darwin.buildinfo.json
+#   ...one buildinfo + sha256 per target, 5 targets
 ```
 
-Open `https://ceremony.yourdomain.com/` in a browser. The queue should
-load; `/verify.html` should instantiate WASM without a console error.
+Open `https://ceremony.yourdomain.com/verify.html` in a browser. Open
+DevTools → Console. You should see the WASM module instantiate and no
+red errors. The page will say "no round selected yet" — that's fine,
+the ceremony hasn't started.
 
 ---
 
-## 6. Release `ceremony_tool` binaries
+## 8. Acceptance checklist — ready to kick off
 
-Participants don't build from source — they download signed binaries from
-GitHub Releases and the coordinator shells out to the same binary it
-served to them. To cut a release:
+You are ready to announce and kick off the ceremony when every box is
+checked:
 
-```bash
-# 1. Tag (the workflow refuses untagged refs)
-git tag -s v0.1.0 -m "ceremony_tool v0.1.0"
-git push origin v0.1.0
+- [ ] `https://ceremony.<domain>/api/v1/healthz` returns `ok`.
+- [ ] `https://ceremony.<domain>/api/v1/status` lists all three tiers
+      (`small`, `medium`, `large`) with empty queues.
+- [ ] `https://ceremony.<domain>/` landing page loads and the "For
+      Humans / For Mathematicians" toggle works.
+- [ ] `https://ceremony.<domain>/verify.html` instantiates WASM without
+      console errors.
+- [ ] `https://ceremony.<domain>/download.html` lists a binary for every
+      platform you intend to support, and every SHA-256 on the page
+      matches the corresponding `.sha256` sibling on the GitHub Release.
+- [ ] `https://blossom.<domain>/` is reachable and writable by the
+      coordinator (tested by looking at `docker compose logs
+      ceremony-coordinator` for a successful boot-time probe).
+- [ ] `wss://nostr.<domain>/` accepts connections.
+- [ ] `gh release view vX.Y.Z` shows all five targets with minisign
+      signatures (if you enabled minisign).
+- [ ] The minisign public key you'll pin is identical on (a)
+      `/download.html`, (b) the GitHub Release notes, (c) the
+      `sepceremony1:releasekeys` Nostr event on your relay. (Skip if you
+      aren't using minisign.)
+- [ ] Your Nostr pubkey is in `CEREMONY_ADMIN_PUBKEYS` and the
+      coordinator picked it up:
+      `docker compose exec ceremony-coordinator env | grep ADMIN_PUBKEYS`.
+- [ ] Nightly backups of `ceremony-data` and `blossom-data` volumes are
+      scheduled somewhere. One-shot example:
+      ```bash
+      docker run --rm -v onym_ceremony-data:/src -v "$(pwd)":/dst alpine \
+        tar czf /dst/ceremony-$(date +%F).tar.gz -C /src .
+      ```
 
-# 2. Dispatch the release workflow
-gh workflow run release-ceremony-tool.yml -f tag=v0.1.0
-gh run watch
-```
-
-The matrix builds Linux (x86_64 + aarch64 musl), macOS (x86_64 +
-aarch64), and Windows (x86_64 MSVC). For each artifact the workflow
-publishes:
-
-```
-ceremony_tool-<tag>-<target>[.exe]
-ceremony_tool-<tag>-<target>[.exe].sha256
-ceremony_tool-<tag>-<target>[.exe].buildinfo.json
-ceremony_tool-<tag>-<target>[.exe].minisig   # if MINISIGN_SECRET_KEY set
-```
-
-Optional minisign signing: add two repo secrets and the workflow will
-sign every artifact.
-
-```
-gh secret set MINISIGN_SECRET_KEY < ~/.minisign/minisign.key
-gh secret set MINISIGN_PASSWORD   < /dev/stdin   # paste, then Ctrl-D
-```
-
-Pin the minisign **public** key in three places so no single compromise
-can switch it without tripping cross-checks — see
-`docs/ceremony-tool-verification.md`:
-
-- `deploy/ceremony/download.html`
-- the GitHub Release notes
-- a kind-30078 Nostr event on your relay with `d="sepceremony1:releasekeys"`
-
-To confirm the released Linux binary is byte-for-byte reproducible:
-
-```bash
-./scripts/verify-ceremony-tool.sh v0.1.0 x86_64-unknown-linux-musl
-```
-
-Details in `docs/ceremony-reproducible-build.md`.
-
----
-
-## 7. Kick off the ceremony
-
-Phase 1 starts the moment the coordinator boots with an empty database —
-the first participant to claim a slot on each tier contributes on top of
-the canonical initial SRS. No manual bootstrap is needed.
-
-When Phase 1 has enough contributors (plan calls for ≥1 honest
-participant per tier, realistically target 20+), freeze and move to
-Phase 2. Signed as one of the admin pubkeys you configured in step 2:
-
-```bash
-# Freeze Phase 1:
-ceremony_tool admin freeze \
-  --coordinator https://ceremony.yourdomain.com \
-  --tier small
-
-# Pin the beacon block (choose a future Bitcoin block height):
-ceremony_tool admin set-beacon \
-  --coordinator https://ceremony.yourdomain.com \
-  --tier small --height 900000
-```
-
-Phase 2 contributors then use the snarkjs handoff helper, built from this
-repo:
-
-```bash
-docker build -t onym/phase2-helper docker/phase2-helper
-docker run --rm -v "$(pwd):/work" onym/phase2-helper contribute \
-  --input  round04.zkey \
-  --output round05.zkey \
-  --name   "alice@keybase"
-```
-
-Upload the output via `/phase2.html` while signed in with an admin
-Nostr key. `docs/phase2-mpc-integration.md` is the long-form playbook.
-
----
-
-## Operational notes
-
-- **Backups.** The coordinator's SQLite DB and the Blossom blob store
-  both live in named Docker volumes (`ceremony-data`, `blossom-data`).
-  The authoritative transcript is on the Nostr relay and in Blossom — a
-  full rebuild from those two alone is supported and documented. Still
-  take nightly snapshots (`docker run --rm -v ceremony-data:/src -v
-  $(pwd):/dst alpine tar czf /dst/ceremony-$(date +%F).tar.gz -C /src .`).
-- **Logs.** `docker compose logs -f ceremony-coordinator` streams
-  structured logs; `RUST_LOG=ceremony_coordinator=debug` in the `.env`
-  raises verbosity.
-- **Upgrading.** `git pull && docker compose build && docker compose up -d`.
-  Migrations under `ceremony-coordinator/migrations/` are applied
-  automatically on boot via a `schema_migrations` table.
-- **Teardown (DO).** `doctl compute droplet delete $DROPLET_ID` — the
-  Cloudflare records and the DO SSH key are left alone so re-runs are
-  cheap.
+When all of the above is green, kicking off the ceremony is a matter of
+announcing the coordinator URL to participants — Phase 1 auto-bootstraps
+from the canonical initial SRS as soon as the first slot is claimed on
+each tier. That announcement is out of scope for this doc.
 
 ---
 
 ## Troubleshooting
 
-| Symptom                                          | Likely cause / fix                                                                     |
-|--------------------------------------------------|----------------------------------------------------------------------------------------|
-| `/api/v1/healthz` returns 502                    | `ceremony-coordinator` container crashed — `docker compose logs ceremony-coordinator`. |
-| `/verify.html` shows "WebAssembly failed to instantiate" | `deploy/ceremony/wasm/` was empty at deploy time — rerun `build-wasm.sh` and redeploy. |
-| Let's Encrypt rate-limited during cert issue     | Wait an hour, or use Let's Encrypt staging: `STAGING=1 bash deploy/certbot/init-certs.sh ...` |
-| `gh workflow run` says `no tag`                  | Push the tag first: `git push origin vX.Y.Z`.                                          |
-| `deploy.sh` hangs on DNS propagation             | Cloudflare proxy is on — open the zone in the dashboard and set each A record to "DNS only" (grey cloud). |
-| `admin freeze` returns 403                       | Your signing pubkey is not in `CEREMONY_ADMIN_PUBKEYS`. Update the env and restart the container. |
+| Symptom                                                   | Likely cause / fix                                                                 |
+|-----------------------------------------------------------|------------------------------------------------------------------------------------|
+| `/api/v1/healthz` returns 502                             | Coordinator crashed — `docker compose logs ceremony-coordinator`. Most common cause: `CEREMONY_COORDINATOR_NSEC` is not 64 hex chars. |
+| `/api/v1/status` returns 500 with "admin allowlist empty" | `CEREMONY_ADMIN_PUBKEYS` wasn't picked up. Restart the container after editing the `.env`: `docker compose up -d ceremony-coordinator`. |
+| `/verify.html` shows "WebAssembly failed to instantiate"  | `deploy/ceremony/wasm/` was empty at deploy time — rerun `build-wasm.sh` and redeploy. |
+| `gh workflow run` errors `no tag`                         | Push the tag first: `git push origin vX.Y.Z`.                                      |
+| `deploy.sh` hangs on DNS propagation                      | Cloudflare proxy is on — open the zone and set each A record to "DNS only" (grey cloud). |
+| Let's Encrypt rate-limited during cert issue              | Wait an hour. To iterate in the meantime, edit `deploy/certbot/init-certs.sh` to pass `--staging` to certbot. |
+| Coordinator boots but `/api/v1/status` 404s               | You forgot to rewrite `CEREMONY_BLOSSOM_PUBLIC_URL` in `docker-compose.yml` — the inline block there overrides `.env`. Re-sed, redeploy. |
+| `docker compose build` fails on `ceremony-coordinator`    | You skipped §4. Run `build-wasm.sh` — the coordinator image copies the built WASM into the frontend tree during its own build. |

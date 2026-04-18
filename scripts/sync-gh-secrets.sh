@@ -56,7 +56,9 @@ while IFS= read -r line || [ -n "$line" ]; do
   fi
 
   printf '  set   %s\n' "$key"
-  printf '%s' "$val" | gh secret set "$key" --repo "$REPO" --body -
+  # Omit --body entirely so gh reads the value from stdin.
+  # `--body -` would store the literal string "-" (1 char) — DO NOT use.
+  printf '%s' "$val" | gh secret set "$key" --repo "$REPO"
   set_count=$((set_count + 1))
 done < "$ENV_FILE"
 

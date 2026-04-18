@@ -46,11 +46,25 @@ git worktree prune >/dev/null 2>&1
 if [ -d "$WT_DIR" ]; then
   git worktree remove --force "$WT_DIR" >/dev/null 2>&1 || rm -rf "$WT_DIR"
 fi
+# Evict any OTHER worktree that has $BRANCH checked out — otherwise
+# `worktree add -B` refuses to reset a branch held elsewhere.
+CONFLICT_WT=$(git worktree list --porcelain 2>/dev/null | awk -v b="refs/heads/$BRANCH" -v me="$WT_DIR" '
+  /^worktree / { wt=$2 }
+  /^branch / && $2==b && wt!=me { print wt; exit }
+')
+if [ -n "$CONFLICT_WT" ] && [ "$CONFLICT_WT" != "$PRIMARY" ]; then
+  git worktree remove --force "$CONFLICT_WT" >/dev/null 2>&1 || rm -rf "$CONFLICT_WT"
+  git worktree prune >/dev/null 2>&1
+fi
 git branch -D "$BRANCH" >/dev/null 2>&1
-git worktree add -B "$BRANCH" "$WT_DIR" "origin/$BRANCH" >/dev/null 2>&1 || {
+GIT_ERR="/tmp/git-wt-err-$$"
+if ! git worktree add -B "$BRANCH" "$WT_DIR" "origin/$BRANCH" >/dev/null 2>"$GIT_ERR"; then
   echo "ERROR: could not create worktree $WT_DIR for $BRANCH" >&2
+  sed 's/^/  git: /' "$GIT_ERR" >&2
+  rm -f "$GIT_ERR"
   exit 11
-}
+fi
+rm -f "$GIT_ERR"
 
 cd "$WT_DIR" || { cleanup; exit 12; }
 

@@ -49,10 +49,14 @@ git worktree prune >/dev/null 2>&1
 if [ -d "$WT_DIR" ]; then
   git worktree remove --force "$WT_DIR" >/dev/null 2>&1 || rm -rf "$WT_DIR"
 fi
-git worktree add --detach "$WT_DIR" "$SHA" >/dev/null 2>&1 || {
+GIT_ERR="/tmp/git-wt-err-$$"
+if ! git worktree add --detach "$WT_DIR" "$SHA" >/dev/null 2>"$GIT_ERR"; then
   echo "ERROR: could not create worktree $WT_DIR at $SHA" >&2
+  sed 's/^/  git: /' "$GIT_ERR" >&2
+  rm -f "$GIT_ERR"
   exit 11
-}
+fi
+rm -f "$GIT_ERR"
 
 cd "$WT_DIR" || { cleanup; exit 12; }
 

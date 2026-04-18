@@ -61,7 +61,11 @@ async function verifyRound(tier, round) {
     fetchText(artifactUrl(tier, round, 'receipt.txt')),
   ]);
 
-  if (round <= 1) {
+  // Round 0 is the genesis — its receipt has kind=initial and the
+  // initial-contribution proof is the only thing to check. Every later
+  // round carries kind=contribution and must be verified against its
+  // predecessor's SRS via the six-pairing-equation chained check.
+  if (round <= 0) {
     return {
       mode: 'state',
       result: parseResult(verify_state_js(srs, state, receipt)),

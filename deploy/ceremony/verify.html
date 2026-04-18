@@ -165,7 +165,7 @@ function verifier() {
         await window.CeremonyVerifier.load();
         this.stage = 'fetching round metadata…';
         this.roundMeta = await Ceremony.api.get(`/tiers/${this.tier}/rounds/${this.round}`);
-        this.stage = this.round > 1
+        this.stage = this.round > 0
           ? 'running six-pairing contribution check against round #' + (this.round - 1) + '…'
           : 'running state consistency check…';
         const { mode, result } = await window.CeremonyVerifier.verifyRound(this.tier, this.round);

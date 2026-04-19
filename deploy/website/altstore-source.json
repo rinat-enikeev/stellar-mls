@@ -18,6 +18,13 @@
       "screenshots": [],
       "versions": [
         {
+          "version": "1.6.3",
+          "date": "2026-04-19",
+          "localizedDescription": "Release 1.6.3",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
           "version": "1.6.2",
           "date": "2026-04-19",
           "localizedDescription": "Release 1.6.2",

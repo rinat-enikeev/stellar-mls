@@ -14,7 +14,8 @@ struct GroupListView: View {
     /// `createdAt` for chats that haven't received any message yet.
     private var sortedGroups: [ChatGroup] {
         appState.groups.sorted { lhs, rhs in
-            (lhs.lastMessageAt ?? lhs.createdAt) > (rhs.lastMessageAt ?? rhs.createdAt)
+            if lhs.isPinned != rhs.isPinned { return lhs.isPinned }
+            return (lhs.lastMessageAt ?? lhs.createdAt) > (rhs.lastMessageAt ?? rhs.createdAt)
         }
     }
 
@@ -85,6 +86,13 @@ struct GroupListView: View {
                         } label: {
                             Label("Delete", systemImage: "trash")
                         }
+                        Button {
+                            appState.togglePinGroup(id: group.id)
+                        } label: {
+                            Label(group.isPinned ? "Unpin" : "Pin",
+                                  systemImage: group.isPinned ? "pin.slash" : "pin")
+                        }
+                        .tint(.orange)
                     }
                     .swipeActions(edge: .leading) {
                         if appState.isContractConfigured {
@@ -211,7 +219,8 @@ struct GroupRow: View {
         let colors: [Color] = [
             .blue, .purple, .orange, .pink, .teal, .indigo, .mint, .cyan
         ]
-        return colors[abs(hash) % colors.count]
+        let index = ((hash % colors.count) + colors.count) % colors.count
+        return colors[index]
     }
 
     private var avatarInitial: String {
@@ -236,6 +245,11 @@ struct GroupRow: View {
                         .font(.system(size: 14))
                         .foregroundStyle(.green)
                         .background(Circle().fill(.background).padding(-1))
+                } else if isContractConfigured {
+                    Image(systemName: "circle")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .background(Circle().fill(.background).padding(-1))
                 }
             }
 
@@ -247,6 +261,11 @@ struct GroupRow: View {
                             .font(.body)
                             .fontWeight(unreadCount > 0 ? .semibold : .medium)
                             .lineLimit(1)
+                        if group.isPinned {
+                            Image(systemName: "pin.fill")
+                                .foregroundStyle(.orange)
+                                .font(.caption2)
+                        }
                         if group.forkedFromGroupID != nil {
                             Image(systemName: "arrow.triangle.branch")
                                 .foregroundStyle(.purple)
@@ -263,13 +282,15 @@ struct GroupRow: View {
                 // Bottom line: message preview + unread badge
                 HStack(spacing: 0) {
                     if let lastMsg = lastMessage {
-                        if lastMsg.mediaAttachment != nil {
+                        if let attachment = lastMsg.mediaAttachment {
                             HStack(spacing: 3) {
-                                Image(systemName: lastMsg.mediaAttachment!.isVideo ? "video.fill" :
-                                        lastMsg.mediaAttachment!.isAudio ? "waveform" : "photo.fill")
+                                Image(systemName: attachment.isVideo ? "video.fill" :
+                                        attachment.isAudio ? "waveform" :
+                                        attachment.mimeType.hasPrefix("image/") ? "photo.fill" : "doc.fill")
                                     .font(.caption2)
-                                Text(lastMsg.text.isEmpty ? (lastMsg.mediaAttachment!.isVideo ? "Video" :
-                                        lastMsg.mediaAttachment!.isAudio ? "Voice message" : "Photo") : lastMsg.text)
+                                Text(lastMsg.text.isEmpty ? (attachment.isVideo ? "Video" :
+                                        attachment.isAudio ? "Voice message" :
+                                        attachment.mimeType.hasPrefix("image/") ? "Photo" : "File") : lastMsg.text)
                             }
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
@@ -295,7 +316,7 @@ struct GroupRow: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(.accentColor, in: Capsule())
+                            .background(Color.accentColor, in: Capsule())
                     }
                 }
             }

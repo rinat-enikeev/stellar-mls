@@ -65,7 +65,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Calendar
 import java.util.Date
-import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -81,11 +80,13 @@ fun GroupListScreen(
     onJoinGroup: () -> Unit,
     onInvitations: () -> Unit = {},
     onDeleteGroup: (String) -> Unit,
+    onTogglePin: (String) -> Unit = {},
     onRefresh: () -> Unit = {},
     onRestore: (() -> Unit)? = null
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
     var groupToDelete by remember { mutableStateOf<ChatGroup?>(null) }
+    var groupForContextMenu by remember { mutableStateOf<ChatGroup?>(null) }
     var isRefreshing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
@@ -240,7 +241,7 @@ fun GroupListScreen(
                                 lastMessage = lastMessage,
                                 unreadCount = unread,
                                 onClick = { onGroupClick(group) },
-                                onLongClick = { groupToDelete = group }
+                                onLongClick = { groupForContextMenu = group }
                             )
                             if (index < groups.lastIndex) {
                                 HorizontalDivider(
@@ -252,6 +253,49 @@ fun GroupListScreen(
                     }
                 }
             }
+        }
+
+        groupForContextMenu?.let { group ->
+            AlertDialog(
+                onDismissRequest = { groupForContextMenu = null },
+                title = { Text(group.name) },
+                text = {
+                    Column {
+                        TextButton(onClick = {
+                            onTogglePin(group.id)
+                            groupForContextMenu = null
+                        }) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(if (group.isPinned) "\uD83D\uDCCC" else "\uD83D\uDCCC")
+                                Text(if (group.isPinned) "Unpin" else "Pin")
+                            }
+                        }
+                        TextButton(onClick = {
+                            groupForContextMenu = null
+                            groupToDelete = group
+                        }) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text("\uD83D\uDDD1\uFE0F")
+                                Text("Delete", color = Color.Red)
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { groupForContextMenu = null }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
 
         groupToDelete?.let { group ->
@@ -318,7 +362,7 @@ private val avatarColors = listOf(
     Color(0xFFC2185B), // pink
     Color(0xFF00897B), // teal
     Color(0xFF3949AB), // indigo
-    Color(0xFF00897B), // mint
+    Color(0xFF26A69A), // mint
     Color(0xFF0097A7), // cyan
 )
 
@@ -332,7 +376,7 @@ private fun GroupListItem(
     onLongClick: () -> Unit
 ) {
     val avatarColor = remember(group.id) {
-        avatarColors[abs(group.id.hashCode()) % avatarColors.size]
+        avatarColors[(group.id.hashCode() and 0x7fffffff) % avatarColors.size]
     }
     val initial = remember(group.name) {
         group.name.take(1).uppercase()
@@ -395,6 +439,13 @@ private fun GroupListItem(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false)
                 )
+                if (group.isPinned) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "\uD83D\uDCCC",
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
                 if (group.forkedFromGroupID != null) {
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
@@ -421,7 +472,8 @@ private fun GroupListItem(
                         when {
                             lastMessage.mediaAttachment.mimeType.startsWith("video/") -> "\uD83C\uDFA5 Video"
                             lastMessage.mediaAttachment.mimeType.startsWith("audio/") -> "\uD83C\uDF99 Voice message"
-                            else -> "\uD83D\uDCF7 Photo"
+                            lastMessage.mediaAttachment.mimeType.startsWith("image/") -> "\uD83D\uDCF7 Photo"
+                            else -> "\uD83D\uDCC4 File"
                         }
                     } else {
                         lastMessage.text

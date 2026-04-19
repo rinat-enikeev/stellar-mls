@@ -76,8 +76,7 @@ struct GroupListView: View {
                         GroupRow(
                             group: group,
                             lastMessage: appState.chatMessages[group.id]?.last,
-                            unreadCount: appState.unreadCounts[group.id] ?? 0,
-                            isContractConfigured: appState.isContractConfigured
+                            unreadCount: appState.unreadCounts[group.id] ?? 0
                         )
                     }
                     .swipeActions(edge: .trailing) {
@@ -95,7 +94,7 @@ struct GroupListView: View {
                         .tint(.orange)
                     }
                     .swipeActions(edge: .leading) {
-                        if appState.isContractConfigured {
+                        if appState.isContractConfigured && group.isPublishedOnChain {
                             Button {
                                 verifyGroup(group)
                             } label: {
@@ -212,7 +211,6 @@ struct GroupRow: View {
     let group: ChatGroup
     let lastMessage: ChatMessage?
     let unreadCount: Int
-    let isContractConfigured: Bool
 
     private var avatarColor: Color {
         // Use djb2 hash for deterministic color across app launches
@@ -249,11 +247,6 @@ struct GroupRow: View {
                     Image(systemName: "checkmark.seal.fill")
                         .font(.system(size: 14))
                         .foregroundStyle(.green)
-                        .background(Circle().fill(.background).padding(-1))
-                } else if isContractConfigured {
-                    Image(systemName: "circle")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
                         .background(Circle().fill(.background).padding(-1))
                 }
             }

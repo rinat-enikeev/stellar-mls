@@ -181,6 +181,8 @@ struct JoinGroupView: View {
         if let myLeaf = try? appState.keyManager.memberLeaf,
            !group.members.contains(where: { $0.publicKeyCompressed == myLeaf.publicKeyCompressed }) {
             group.members.append(myLeaf)
+            group.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
+            try? group.recomputeCommitment()
         }
         appState.addGroup(group)
         joined = true

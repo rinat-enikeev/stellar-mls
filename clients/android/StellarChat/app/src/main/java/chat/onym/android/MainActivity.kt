@@ -369,6 +369,21 @@ fun StellarChatNavHost(
                         val myLeaf = groupListViewModel.keyManager.memberLeaf()
                         if (group.members.none { it.publicKeyCompressed.contentEquals(myLeaf.publicKeyCompressed) }) {
                             group.members.add(myLeaf)
+                            group.members.sortWith { a, b ->
+                                val aKey = a.publicKeyCompressed
+                                val bKey = b.publicKeyCompressed
+                                var cmp = 0
+                                for (i in 0 until minOf(aKey.size, bKey.size)) {
+                                    cmp = (aKey[i].toInt() and 0xFF) - (bKey[i].toInt() and 0xFF)
+                                    if (cmp != 0) break
+                                }
+                                if (cmp != 0) cmp else aKey.size - bKey.size
+                            }
+                            // Recompute so the joiner's local state matches what the
+                            // creator will publish on SEPMemberJoined (critical for 1v1,
+                            // where the creator publishes at epoch=0 with the two-member
+                            // commitment).
+                            group.recomputeCommitment()
                         }
                         groupListViewModel.addGroup(group)
                         groupListViewModel.announceMemberJoined(group)
@@ -626,6 +641,17 @@ fun StellarChatNavHost(
                         val myLeaf = groupListViewModel.keyManager.memberLeaf()
                         if (group.members.none { it.publicKeyCompressed.contentEquals(myLeaf.publicKeyCompressed) }) {
                             group.members.add(myLeaf)
+                            group.members.sortWith { a, b ->
+                                val aKey = a.publicKeyCompressed
+                                val bKey = b.publicKeyCompressed
+                                var cmp = 0
+                                for (i in 0 until minOf(aKey.size, bKey.size)) {
+                                    cmp = (aKey[i].toInt() and 0xFF) - (bKey[i].toInt() and 0xFF)
+                                    if (cmp != 0) break
+                                }
+                                if (cmp != 0) cmp else aKey.size - bKey.size
+                            }
+                            group.recomputeCommitment()
                         }
                         groupListViewModel.addGroup(group)
                         groupListViewModel.announceMemberJoined(group)

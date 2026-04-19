@@ -120,7 +120,11 @@ pub async fn handle_invoke(
 
 fn success_response(function: &str, output: String) -> Result<Response, String> {
     match function {
-        "create_group" | "update_commitment" | "deactivate_group" => Ok((
+        "create_group"
+        | "create_group_v2"
+        | "create_oligarchy_group"
+        | "update_commitment"
+        | "deactivate_group" => Ok((
             StatusCode::OK,
             Json(RelayerResponse {
                 accepted: true,
@@ -133,10 +137,22 @@ fn success_response(function: &str, output: String) -> Result<Response, String> 
             let valid = parse_bool_output(&output)?;
             Ok((StatusCode::OK, Json(json!({ "valid": valid }))).into_response())
         }
-        "get_state" | "get_history" => {
+        "get_state" | "get_state_v2" | "get_history" => {
             let mut value: Value = serde_json::from_str(&output)
                 .map_err(|e| format!("failed to parse stellar CLI JSON output: {e}; output={output}"))?;
             normalize_commitment_fields(&mut value)?;
+            Ok((StatusCode::OK, Json(value)).into_response())
+        }
+        "get_admin_root" => {
+            // Contract returns `Bytes` (admin_commitment, 32 bytes). Stellar CLI
+            // emits a JSON string literal — e.g. `"<hex>"` or `"<base64>"`.
+            // Normalize to base64 so the Swift/Kotlin `Data` decoders accept it.
+            let mut value: Value = serde_json::from_str(&output)
+                .map_err(|e| format!("failed to parse stellar CLI JSON output: {e}; output={output}"))?;
+            if let Value::String(s) = &value {
+                let normalized = hex_to_base64_if_needed(s)?;
+                value = Value::String(normalized);
+            }
             Ok((StatusCode::OK, Json(value)).into_response())
         }
         other => Err(format!("unsupported function: {other}")),
@@ -220,9 +236,32 @@ async fn invoke_contract(config: &Config, request: &RelayerRequest) -> Result<St
         "create_group" => {
             // Replace caller with relayer's own address (contract requires caller.require_auth())
             cmd.arg("--caller").arg(&config.public_address);
-            add_hex_arg(&mut cmd, "--group-id", payload, "groupID")?;
-            add_hex_arg(&mut cmd, "--commitment", payload, "commitment")?;
-            add_int_arg(&mut cmd, "--tier", payload, "tier")?;
+            add_hex_arg(&mut cmd, "--group-id", payload, &["groupID", "group_id"])?;
+            add_hex_arg(&mut cmd, "--commitment", payload, &["commitment"])?;
+            add_int_arg(&mut cmd, "--tier", payload, &["tier"])?;
+            add_proof_arg(&mut cmd, payload)?;
+            add_membership_public_inputs_arg(&mut cmd, payload)?;
+        }
+        "create_group_v2" => {
+            // Governance-aware creation (Anarchy / 1v1 / Democracy). Oligarchy
+            // uses `create_oligarchy_group` instead because it also seeds an
+            // admin root.
+            cmd.arg("--caller").arg(&config.public_address);
+            add_hex_arg(&mut cmd, "--group-id", payload, &["group_id", "groupID"])?;
+            add_hex_arg(&mut cmd, "--commitment", payload, &["commitment"])?;
+            add_int_arg(&mut cmd, "--tier", payload, &["tier"])?;
+            add_int_arg(&mut cmd, "--group-type", payload, &["group_type", "groupType"])?;
+            add_int_arg(&mut cmd, "--member-count", payload, &["member_count", "memberCount"])?;
+            add_proof_arg(&mut cmd, payload)?;
+            add_membership_public_inputs_arg(&mut cmd, payload)?;
+        }
+        "create_oligarchy_group" => {
+            cmd.arg("--caller").arg(&config.public_address);
+            add_hex_arg(&mut cmd, "--group-id", payload, &["group_id", "groupID"])?;
+            add_hex_arg(&mut cmd, "--commitment", payload, &["commitment"])?;
+            add_int_arg(&mut cmd, "--tier", payload, &["tier"])?;
+            add_int_arg(&mut cmd, "--member-count", payload, &["member_count", "memberCount"])?;
+            add_hex_arg(&mut cmd, "--admin-root", payload, &["admin_root", "adminRoot"])?;
             add_proof_arg(&mut cmd, payload)?;
             add_membership_public_inputs_arg(&mut cmd, payload)?;
         }
@@ -231,27 +270,28 @@ async fn invoke_contract(config: &Config, request: &RelayerRequest) -> Result<St
             // longer forwards client-supplied `new_commitment` or `new_epoch`;
             // c_new comes from the UpdatePublicInputs payload and the contract
             // derives new_epoch on-chain as stored_epoch + 1.
-            add_hex_arg(&mut cmd, "--group-id", payload, "groupID")?;
+            add_hex_arg(&mut cmd, "--group-id", payload, &["groupID", "group_id"])?;
             add_proof_arg(&mut cmd, payload)?;
             add_update_public_inputs_arg(&mut cmd, payload)?;
         }
         "verify_membership" => {
-            add_hex_arg(&mut cmd, "--group-id", payload, "groupID")?;
+            add_hex_arg(&mut cmd, "--group-id", payload, &["groupID", "group_id"])?;
             add_proof_arg(&mut cmd, payload)?;
             add_membership_public_inputs_arg(&mut cmd, payload)?;
         }
         "deactivate_group" => {
-            add_hex_arg(&mut cmd, "--group-id", payload, "groupID")?;
+            add_hex_arg(&mut cmd, "--group-id", payload, &["groupID", "group_id"])?;
             add_proof_arg(&mut cmd, payload)?;
             add_membership_public_inputs_arg(&mut cmd, payload)?;
         }
-        "get_state" => {
-            add_hex_arg(&mut cmd, "--group-id", payload, "groupID")?;
+        "get_state" | "get_state_v2" | "get_admin_root" => {
+            add_hex_arg(&mut cmd, "--group-id", payload, &["groupID", "group_id"])?;
         }
         "get_history" => {
-            add_hex_arg(&mut cmd, "--group-id", payload, "groupID")?;
+            add_hex_arg(&mut cmd, "--group-id", payload, &["groupID", "group_id"])?;
             let max_entries = payload
                 .get("maxEntries")
+                .or_else(|| payload.get("max_entries"))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(64);
             cmd.arg("--max-entries").arg(max_entries.to_string());
@@ -275,35 +315,40 @@ async fn invoke_contract(config: &Config, request: &RelayerRequest) -> Result<St
     }
 }
 
-/// Decode a base64 payload field and add as a hex argument.
+/// Look up a value under the first matching key (supports camelCase/snake_case
+/// payload variants emitted by different client SDKs).
+fn field_value<'a>(payload: &'a Value, keys: &[&str]) -> Option<&'a Value> {
+    keys.iter().find_map(|k| payload.get(*k))
+}
+
+/// Decode a base64 payload field (by any of its accepted names) and add as a
+/// hex argument.
 fn add_hex_arg(
     cmd: &mut Command,
     flag: &str,
     payload: &Value,
-    field: &str,
+    keys: &[&str],
 ) -> Result<(), String> {
-    let b64 = payload
-        .get(field)
+    let b64 = field_value(payload, keys)
         .and_then(|v| v.as_str())
-        .ok_or_else(|| format!("missing field: {field}"))?;
+        .ok_or_else(|| format!("missing field: {}", keys.join("/")))?;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(b64)
-        .map_err(|e| format!("invalid base64 for {field}: {e}"))?;
+        .map_err(|e| format!("invalid base64 for {}: {e}", keys.join("/")))?;
     cmd.arg(flag).arg(hex_encode(&bytes));
     Ok(())
 }
 
-/// Add an integer argument from the payload.
+/// Add an integer argument from the payload (by any of its accepted names).
 fn add_int_arg(
     cmd: &mut Command,
     flag: &str,
     payload: &Value,
-    field: &str,
+    keys: &[&str],
 ) -> Result<(), String> {
-    let val = payload
-        .get(field)
+    let val = field_value(payload, keys)
         .and_then(|v| v.as_u64())
-        .ok_or_else(|| format!("missing or invalid field: {field}"))?;
+        .ok_or_else(|| format!("missing or invalid field: {}", keys.join("/")))?;
     cmd.arg(flag).arg(val.to_string());
     Ok(())
 }
@@ -348,8 +393,7 @@ fn add_proof_arg(cmd: &mut Command, payload: &Value) -> Result<(), String> {
 /// Used by create_group, verify_membership, and deactivate_group.
 /// Expects `payload.publicInputs = { commitment: base64, epoch: u64 }`.
 fn add_membership_public_inputs_arg(cmd: &mut Command, payload: &Value) -> Result<(), String> {
-    let pi = payload
-        .get("publicInputs")
+    let pi = field_value(payload, &["publicInputs", "public_inputs"])
         .ok_or("missing publicInputs field")?;
     let commitment_b64 = pi
         .get("commitment")
@@ -385,8 +429,7 @@ fn add_membership_public_inputs_arg(cmd: &mut Command, payload: &Value) -> Resul
 /// the relayer no longer propagates a client-supplied `new_commitment` / `new_epoch`
 /// pair (#59 fix).
 fn add_update_public_inputs_arg(cmd: &mut Command, payload: &Value) -> Result<(), String> {
-    let pi = payload
-        .get("publicInputs")
+    let pi = field_value(payload, &["publicInputs", "public_inputs"])
         .ok_or("missing publicInputs field")?;
     let c_old_b64 = pi
         .get("c_old")

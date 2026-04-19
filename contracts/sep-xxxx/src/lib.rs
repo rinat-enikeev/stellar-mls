@@ -686,14 +686,15 @@ impl SepXxxxContract {
             2 => {
                 // Democracy: ≥50% quorum on kick/invite. The quorum check
                 // is enforced inside the `DemocracyUpdateCircuit`
-                // (ceremony-gated — not active in this build). We require
-                // member_count ≥ 2 at creation so a single-member
-                // "democracy" can't exist, and bound it by the tier's leaf
-                // capacity so later updates can't silently overflow the
-                // Merkle tree.
-                if member_count < 2 {
-                    return Err(Error::MemberCountOutOfRange);
-                }
+                // (ceremony-gated — not active in this build).
+                //
+                // `member_count` is advisory at creation — the contract
+                // does not cross-check it against the Merkle commitment.
+                // Clients routinely create groups solo and grow via
+                // off-chain MLS joins, so we accept any `member_count` in
+                // [0, tier_capacity]. Quorum semantics only bind once a
+                // DemocracyUpdate proof lands, at which point member_count
+                // is bound by the update circuit.
                 if member_count > tier_capacity(tier) {
                     return Err(Error::MemberCountOutOfRange);
                 }
@@ -813,10 +814,10 @@ impl SepXxxxContract {
         if tier > 2 {
             return Err(Error::InvalidTier);
         }
-        // V-C3: Validate member_count bounds (parity with Democracy path).
-        if member_count < 2 {
-            return Err(Error::MemberCountOutOfRange);
-        }
+        // `member_count` is advisory at creation (see create_group_v2
+        // Democracy arm). Clients typically start Oligarchy groups solo
+        // and promote later admins via ceremony-gated rotation, so
+        // member_count < 2 is permitted here.
         if member_count > tier_capacity(tier) {
             return Err(Error::MemberCountOutOfRange);
         }
@@ -3630,52 +3631,10 @@ mod test {
     // Democracy Group Type Tests (governance-types Phase 3)
     // ================================================================
 
-    #[test]
-    #[should_panic(expected = "Error(Contract, #25)")]
-    fn test_create_democracy_rejects_member_count_zero() {
-        let (env, client, _admin, _cid) = setup_initialized();
-        let caller = Address::generate(&env);
-        let group_id = BytesN::from_array(&env, &[60u8; 32]);
-        let commitment = BytesN::from_array(&env, &[61u8; 32]);
-        let pi = PublicInputs {
-            commitment: commitment.clone(),
-            epoch: 0,
-        };
-        client.create_group_v2(
-            &caller,
-            &group_id,
-            &commitment,
-            &0u32,
-            &2u32, // Democracy
-            &0u32, // member_count = 0 — invalid
-            &mock_proof(&env),
-            &pi,
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "Error(Contract, #25)")]
-    fn test_create_democracy_rejects_member_count_one() {
-        // "Democracy of one" collapses to unilateral control — forbidden.
-        let (env, client, _admin, _cid) = setup_initialized();
-        let caller = Address::generate(&env);
-        let group_id = BytesN::from_array(&env, &[62u8; 32]);
-        let commitment = BytesN::from_array(&env, &[63u8; 32]);
-        let pi = PublicInputs {
-            commitment: commitment.clone(),
-            epoch: 0,
-        };
-        client.create_group_v2(
-            &caller,
-            &group_id,
-            &commitment,
-            &0u32,
-            &2u32,
-            &1u32, // member_count = 1 — invalid
-            &mock_proof(&env),
-            &pi,
-        );
-    }
+    // Note: `member_count ∈ {0, 1}` is accepted at creation for Democracy
+    // (and Oligarchy) so clients can start solo and grow via off-chain MLS
+    // joins. The `m_new < 2` invariant is enforced later by
+    // `democracy_update_commitment` once quorum actually matters.
 
     #[test]
     #[should_panic(expected = "Error(Contract, #25)")]

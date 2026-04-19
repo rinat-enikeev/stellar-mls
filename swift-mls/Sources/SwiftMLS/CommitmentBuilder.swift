@@ -40,4 +40,14 @@ public enum SEPCommitmentBuilder {
     public static func computePoseidonCommitment(poseidonRoot: Data, epoch: UInt64, salt: Data) throws -> Data {
         try RustBridge.computePoseidonCommitment(poseidonRoot: poseidonRoot, epoch: epoch, salt: salt)
     }
+
+    /// Seed for the Oligarchy admin tree at creation (§6.2.2):
+    ///   admin_commitment = Poseidon( Poseidon(admin_root, admin_epoch), admin_salt )
+    /// where `admin_root` is the Merkle root over the admin leaves and
+    /// `admin_epoch = 0` at group birth. The admin tree is capped at 32
+    /// entries (small tier depth = 5).
+    public static func computeAdminCommitment(admins: [SEPGroupMemberLeaf], salt: Data) throws -> Data {
+        let adminRoot = try RustBridge.computeMerkleRoot(members: admins, depth: SEPTier.small.depth)
+        return try RustBridge.computePoseidonCommitment(poseidonRoot: adminRoot, epoch: 0, salt: salt)
+    }
 }

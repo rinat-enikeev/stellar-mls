@@ -5,6 +5,7 @@ import android.util.Log
 import chat.onym.android.BuildConfig
 import com.stellarmls.mls.SEPCommitmentBuilder
 import com.stellarmls.mls.SEPGroupMemberLeaf
+import com.stellarmls.mls.SEPGroupType
 import com.stellarmls.mls.SEPMembershipProofBundle
 import com.stellarmls.mls.SEPProofGenerator
 import com.stellarmls.mls.SEPTier
@@ -191,7 +192,13 @@ class OnChainService(private val context: Context, contractID: String, transport
      *
      * 1. Generates a membership proof at the initial state.
      * 2. Decompresses the proof to uncompressed BLS12-381 points (384 bytes).
-     * 3. Submits create_group to the Soroban contract.
+     * 3. Submits the correct creation entrypoint for the requested governance
+     *    type:
+     *     - [SEPGroupType.ANARCHY]    → `create_group` (V1)
+     *     - [SEPGroupType.ONE_ON_ONE],
+     *       [SEPGroupType.DEMOCRACY]  → `create_group_v2`
+     *     - [SEPGroupType.OLIGARCHY]  → `create_oligarchy_group` (requires
+     *       [adminLeaves] + [adminSalt] to seed the admin tree)
      */
     fun publishGroupCreation(
         groupIDData: ByteArray,
@@ -200,16 +207,22 @@ class OnChainService(private val context: Context, contractID: String, transport
         epoch: Long,
         salt: ByteArray,
         tier: SEPTier,
-        callerAddress: String
+        callerAddress: String,
+        groupType: SEPGroupType = SEPGroupType.ANARCHY,
+        memberCount: Int? = null,
+        adminLeaves: List<SEPGroupMemberLeaf>? = null,
+        adminSalt: ByteArray? = null
     ): SEPSubmissionResponse {
         val proofBundle = generateProof(members, blsSecretKey, epoch, salt, tier)
         val uncompressedProof = proofForContract(proofBundle.proof)
         val firstMember = members.firstOrNull()
+        val effectiveMemberCount = memberCount ?: members.size
 
         if (BuildConfig.DEBUG) {
             Log.d(
                 TAG,
                 "publishGroupCreation group=${groupIDData.debugHexPrefix()} epoch=$epoch tier=${tier.id} " +
+                    "groupType=${groupType.id} memberCount=$effectiveMemberCount " +
                     "members=${members.size} salt=${salt.debugHexPrefix(12)} " +
                     "proofCommitment=${proofBundle.publicInputs.commitment.debugHexPrefix(12)} " +
                     "firstPk=${firstMember?.publicKeyCompressed?.debugHexPrefix(12) ?: "none"} " +
@@ -217,16 +230,52 @@ class OnChainService(private val context: Context, contractID: String, transport
             )
         }
 
-        return withRetry {
-            contractClient.createGroup(
-                caller = callerAddress,
-                groupID = groupIDData,
-                commitment = proofBundle.publicInputs.commitment,
-                proof = uncompressedProof,
-                publicInputsCommitment = proofBundle.publicInputs.commitment,
-                epoch = epoch,
-                tier = tier.id
-            )
+        return when (groupType) {
+            SEPGroupType.ANARCHY -> withRetry {
+                contractClient.createGroup(
+                    caller = callerAddress,
+                    groupID = groupIDData,
+                    commitment = proofBundle.publicInputs.commitment,
+                    proof = uncompressedProof,
+                    publicInputsCommitment = proofBundle.publicInputs.commitment,
+                    epoch = epoch,
+                    tier = tier.id
+                )
+            }
+
+            SEPGroupType.ONE_ON_ONE, SEPGroupType.DEMOCRACY -> withRetry {
+                contractClient.createGroupV2(
+                    caller = callerAddress,
+                    groupID = groupIDData,
+                    commitment = proofBundle.publicInputs.commitment,
+                    tier = tier.id,
+                    groupType = groupType.id,
+                    memberCount = effectiveMemberCount,
+                    proof = uncompressedProof,
+                    publicInputsCommitment = proofBundle.publicInputs.commitment,
+                    epoch = epoch
+                )
+            }
+
+            SEPGroupType.OLIGARCHY -> {
+                require(!adminLeaves.isNullOrEmpty() && adminSalt != null) {
+                    "Oligarchy creation requires adminLeaves + adminSalt to seed the admin tree"
+                }
+                val adminCommitment = SEPCommitmentBuilder.computeAdminCommitment(adminLeaves!!, adminSalt!!)
+                withRetry {
+                    contractClient.createOligarchyGroup(
+                        caller = callerAddress,
+                        groupID = groupIDData,
+                        commitment = proofBundle.publicInputs.commitment,
+                        tier = tier.id,
+                        memberCount = effectiveMemberCount,
+                        adminRoot = adminCommitment,
+                        proof = uncompressedProof,
+                        publicInputsCommitment = proofBundle.publicInputs.commitment,
+                        epoch = epoch
+                    )
+                }
+            }
         }
     }
 

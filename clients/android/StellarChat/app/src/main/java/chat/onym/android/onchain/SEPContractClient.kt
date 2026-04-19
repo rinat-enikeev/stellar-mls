@@ -65,6 +65,56 @@ class SEPContractClient(
         return SEPSubmissionResponse.fromJson(json)
     }
 
+    /**
+     * Create a group via the governance-aware V2 entrypoint. Accepts
+     * Anarchy, 1v1, and Democracy group types. Oligarchy MUST use
+     * [createOligarchyGroup] because it seeds an extra admin root.
+     * Non-Anarchy types currently reject later `update_commitment` calls
+     * until the per-type VK ceremonies land.
+     */
+    fun createGroupV2(
+        caller: String,
+        groupID: ByteArray,
+        commitment: ByteArray,
+        tier: Int,
+        groupType: Int,
+        memberCount: Int,
+        proof: ByteArray,
+        publicInputsCommitment: ByteArray,
+        epoch: Long
+    ): SEPSubmissionResponse {
+        val payload = buildCreateGroupV2Payload(
+            caller, groupID, commitment, tier, groupType, memberCount,
+            proof, publicInputsCommitment, epoch
+        )
+        val json = transport.invoke(contractID, "create_group_v2", payload)
+        return SEPSubmissionResponse.fromJson(json)
+    }
+
+    /**
+     * Create an Oligarchy group and seed its admin-tree commitment.
+     * `adminRoot` should be computed with
+     * `SEPCommitmentBuilder.computeAdminCommitment`.
+     */
+    fun createOligarchyGroup(
+        caller: String,
+        groupID: ByteArray,
+        commitment: ByteArray,
+        tier: Int,
+        memberCount: Int,
+        adminRoot: ByteArray,
+        proof: ByteArray,
+        publicInputsCommitment: ByteArray,
+        epoch: Long
+    ): SEPSubmissionResponse {
+        val payload = buildCreateOligarchyGroupPayload(
+            caller, groupID, commitment, tier, memberCount, adminRoot,
+            proof, publicInputsCommitment, epoch
+        )
+        val json = transport.invoke(contractID, "create_oligarchy_group", payload)
+        return SEPSubmissionResponse.fromJson(json)
+    }
+
     fun updateCommitment(
         groupID: ByteArray,
         proof: ByteArray,

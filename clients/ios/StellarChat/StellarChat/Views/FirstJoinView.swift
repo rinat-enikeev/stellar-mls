@@ -234,6 +234,12 @@ struct FirstJoinView: View {
         if let myLeaf = try? appState.keyManager.memberLeaf,
            !group.members.contains(where: { $0.publicKeyCompressed == myLeaf.publicKeyCompressed }) {
             group.members.append(myLeaf)
+            group.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
+            // Recompute commitment so the joiner's local state matches what the
+            // creator will publish once they observe the SEPMemberJoined
+            // announcement (critical for 1v1, where the creator publishes at
+            // epoch=0 with the full two-member commitment).
+            try? group.recomputeCommitment()
         }
         appState.addGroup(group)
         joined = true

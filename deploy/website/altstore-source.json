@@ -26,27 +26,6 @@
           "minOSVersion": "18.0"
         },
         {
-          "version": "1.6.3",
-          "date": "2026-04-19",
-          "localizedDescription": "Release 1.6.3",
-          "downloadURL": "",
-          "size": 0
-        },
-        {
-          "version": "1.6.2",
-          "date": "2026-04-19",
-          "localizedDescription": "Release 1.6.2",
-          "downloadURL": "",
-          "size": 0
-        },
-        {
-          "version": "1.6.1",
-          "date": "2026-04-19",
-          "localizedDescription": "Release 1.6.1",
-          "downloadURL": "",
-          "size": 0
-        },
-        {
           "version": "1.6.0",
           "date": "2026-04-18",
           "localizedDescription": "Release 1.6.0",
@@ -82,25 +61,11 @@
           "size": 11572631
         },
         {
-          "version": "1.2.14",
-          "date": "2026-04-16",
-          "localizedDescription": "Release 1.2.14",
-          "downloadURL": "",
-          "size": 0
-        },
-        {
           "version": ".1.2.13",
           "date": "2026-04-15",
           "localizedDescription": "Release .1.2.13",
           "downloadURL": "https://github.com/rinat-enikeev/stellar-mls/releases/download/v.1.2.13/StellarChat-.1.2.13.ipa",
           "size": 11556653
-        },
-        {
-          "version": "1.2.13",
-          "date": "2026-04-15",
-          "localizedDescription": "Release 1.2.13",
-          "downloadURL": "",
-          "size": 0
         },
         {
           "version": "1.2.12",

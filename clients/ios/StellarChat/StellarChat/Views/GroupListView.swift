@@ -14,7 +14,8 @@ struct GroupListView: View {
     /// `createdAt` for chats that haven't received any message yet.
     private var sortedGroups: [ChatGroup] {
         appState.groups.sorted { lhs, rhs in
-            (lhs.lastMessageAt ?? lhs.createdAt) > (rhs.lastMessageAt ?? rhs.createdAt)
+            if lhs.isPinned != rhs.isPinned { return lhs.isPinned }
+            return (lhs.lastMessageAt ?? lhs.createdAt) > (rhs.lastMessageAt ?? rhs.createdAt)
         }
     }
 
@@ -85,6 +86,13 @@ struct GroupListView: View {
                         } label: {
                             Label("Delete", systemImage: "trash")
                         }
+                        Button {
+                            appState.togglePinGroup(id: group.id)
+                        } label: {
+                            Label(group.isPinned ? "Unpin" : "Pin",
+                                  systemImage: group.isPinned ? "pin.slash" : "pin")
+                        }
+                        .tint(.orange)
                     }
                     .swipeActions(edge: .leading) {
                         if appState.isContractConfigured {
@@ -206,29 +214,102 @@ struct GroupRow: View {
     let unreadCount: Int
     let isContractConfigured: Bool
 
+    private var avatarColor: Color {
+        // Use djb2 hash for deterministic color across app launches
+        // (Swift's hashValue is randomized per process since Swift 4.2)
+        var hash: UInt64 = 5381
+        for byte in group.id.utf8 {
+            hash = hash &* 33 &+ UInt64(byte)
+        }
+        let colors: [Color] = [
+            .blue, .purple, .orange, .pink, .teal, .indigo, .mint, .cyan
+        ]
+        let index = Int(hash % UInt64(colors.count))
+        return colors[index]
+    }
+
+    private var avatarInitial: String {
+        String(group.name.prefix(1)).uppercased()
+    }
+
     var body: some View {
-        HStack {
+        HStack(spacing: 12) {
+            // Avatar
+            ZStack {
+                Circle()
+                    .fill(avatarColor.gradient)
+                    .frame(width: 48, height: 48)
+                Text(avatarInitial)
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.white)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if group.isPublishedOnChain {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.green)
+                        .background(Circle().fill(.background).padding(-1))
+                } else if isContractConfigured {
+                    Image(systemName: "circle")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .background(Circle().fill(.background).padding(-1))
+                }
+            }
+
             VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(group.name)
-                        .font(.headline)
+                // Top line: name + timestamp
+                HStack(alignment: .firstTextBaseline) {
+                    HStack(spacing: 4) {
+                        Text(group.name)
+                            .font(.body)
+                            .fontWeight(unreadCount > 0 ? .semibold : .medium)
+                            .lineLimit(1)
+                        if group.isPinned {
+                            Image(systemName: "pin.fill")
+                                .foregroundStyle(.orange)
+                                .font(.caption2)
+                        }
+                        if group.forkedFromGroupID != nil {
+                            Image(systemName: "arrow.triangle.branch")
+                                .foregroundStyle(.purple)
+                                .font(.caption2)
+                        }
+                    }
                     Spacer()
                     if let lastMsg = lastMessage {
                         Text(relativeTimestamp(lastMsg.timestamp))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                            .foregroundStyle(unreadCount > 0 ? Color.accentColor : .secondary)
                     }
                 }
-                HStack {
-                    Text("\(group.members.count) members")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
+                // Bottom line: message preview + unread badge
+                HStack(spacing: 0) {
                     if let lastMsg = lastMessage {
-                        Text("· \(lastMsg.text)")
-                            .font(.caption)
+                        if let attachment = lastMsg.mediaAttachment {
+                            HStack(spacing: 3) {
+                                Image(systemName: attachment.isVideo ? "video.fill" :
+                                        attachment.isAudio ? "waveform" :
+                                        attachment.mimeType.hasPrefix("image/") ? "photo.fill" : "doc.fill")
+                                    .font(.caption2)
+                                Text(lastMsg.text.isEmpty ? (attachment.isVideo ? "Video" :
+                                        attachment.isAudio ? "Voice message" :
+                                        attachment.mimeType.hasPrefix("image/") ? "Photo" : "File") : lastMsg.text)
+                            }
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
+                        } else {
+                            Text(lastMsg.text)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    } else {
+                        Text("\(group.members.count) members")
+                            .font(.subheadline)
+                            .foregroundStyle(.tertiary)
                     }
 
                     Spacer()
@@ -240,24 +321,9 @@ struct GroupRow: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(.red, in: Capsule())
+                            .background(Color.accentColor, in: Capsule())
                     }
                 }
-            }
-
-            if group.forkedFromGroupID != nil {
-                Image(systemName: "arrow.triangle.branch")
-                    .foregroundStyle(.purple)
-                    .font(.caption)
-            }
-            if group.isPublishedOnChain {
-                Image(systemName: "checkmark.seal.fill")
-                    .foregroundStyle(.green)
-                    .font(.caption)
-            } else if isContractConfigured {
-                Image(systemName: "circle")
-                    .foregroundStyle(.secondary)
-                    .font(.caption2)
             }
         }
         .padding(.vertical, 4)

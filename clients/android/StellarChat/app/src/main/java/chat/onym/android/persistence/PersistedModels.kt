@@ -24,7 +24,9 @@ data class PersistedGroup(
     @ColumnInfo(defaultValue = "0")
     val pushNotificationsEnabled: Boolean = false,
     @ColumnInfo(defaultValue = "0")
-    val lastMessageAt: Long = 0
+    val lastMessageAt: Long = 0,
+    @ColumnInfo(defaultValue = "0")
+    val isPinned: Boolean = false
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

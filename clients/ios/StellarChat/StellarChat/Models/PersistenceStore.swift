@@ -531,7 +531,8 @@ final class PersistenceStore {
             forkedAtEpoch: group.forkedAtEpoch.map { Int($0) },
             removedByPubkeyHex: group.removedByPubkeyHex,
             pushNotificationsEnabled: group.pushNotificationsEnabled,
-            lastMessageAt: group.lastMessageAt
+            lastMessageAt: group.lastMessageAt,
+            isPinned: group.isPinned
         )
     }
 
@@ -573,6 +574,7 @@ final class PersistenceStore {
         group.removedByPubkeyHex = persisted.removedByPubkeyHex
         group.pushNotificationsEnabled = persisted.pushNotificationsEnabled
         group.lastMessageAt = persisted.lastMessageAt
+        group.isPinned = persisted.isPinned
         return group
     }
 

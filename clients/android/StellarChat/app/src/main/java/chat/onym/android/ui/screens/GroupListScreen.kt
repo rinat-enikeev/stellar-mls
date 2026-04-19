@@ -33,6 +33,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -79,11 +80,13 @@ fun GroupListScreen(
     onJoinGroup: () -> Unit,
     onInvitations: () -> Unit = {},
     onDeleteGroup: (String) -> Unit,
+    onTogglePin: (String) -> Unit = {},
     onRefresh: () -> Unit = {},
     onRestore: (() -> Unit)? = null
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
     var groupToDelete by remember { mutableStateOf<ChatGroup?>(null) }
+    var groupForContextMenu by remember { mutableStateOf<ChatGroup?>(null) }
     var isRefreshing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
@@ -229,106 +232,70 @@ fun GroupListScreen(
                     LazyColumn(
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        itemsIndexed(groups, key = { _, g -> g.id }) { _, group ->
+                        itemsIndexed(groups, key = { _, g -> g.id }) { index, group ->
                             val lastMessage = chatMessages[group.id]?.lastOrNull()
                             val unread = unreadCounts[group.id] ?: 0
 
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 4.dp)
-                                    .combinedClickable(
-                                        onClick = { onGroupClick(group) },
-                                        onLongClick = { groupToDelete = group }
-                                    )
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(16.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    // On-chain status indicator
-                                    if (group.isPublishedOnChain) {
-                                        Text(
-                                            text = "\u2713",
-                                            color = Color(0xFF4CAF50),
-                                            style = MaterialTheme.typography.titleMedium
-                                        )
-                                    } else {
-                                        Text(
-                                            text = "\u25CB",
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            style = MaterialTheme.typography.titleMedium
-                                        )
-                                    }
-                                    // Fork badge
-                                    if (group.forkedFromGroupID != null) {
-                                        Text(
-                                            text = "\u2442",
-                                            color = Color(0xFF7B1FA2),
-                                            style = MaterialTheme.typography.titleMedium
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(
-                                                group.name,
-                                                style = MaterialTheme.typography.titleMedium,
-                                                modifier = Modifier.weight(1f)
-                                            )
-                                            if (lastMessage != null) {
-                                                Text(
-                                                    text = relativeTimestamp(lastMessage.timestamp),
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
-                                        }
-                                        Spacer(modifier = Modifier.height(2.dp))
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(
-                                                "${group.members.size} members",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                            if (lastMessage != null) {
-                                                Text(
-                                                    text = " · ${lastMessage.text}",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis,
-                                                    modifier = Modifier.weight(1f)
-                                                )
-                                            } else {
-                                                Spacer(modifier = Modifier.weight(1f))
-                                            }
-                                            if (unread > 0) {
-                                                Surface(
-                                                    shape = CircleShape,
-                                                    color = Color.Red,
-                                                    modifier = Modifier.padding(start = 8.dp)
-                                                ) {
-                                                    Text(
-                                                        text = "$unread",
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = Color.White,
-                                                        modifier = Modifier.padding(
-                                                            horizontal = 6.dp,
-                                                            vertical = 2.dp
-                                                        )
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                            GroupListItem(
+                                group = group,
+                                lastMessage = lastMessage,
+                                unreadCount = unread,
+                                onClick = { onGroupClick(group) },
+                                onLongClick = { groupForContextMenu = group }
+                            )
+                            if (index < groups.lastIndex) {
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(start = 76.dp),
+                                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                )
                             }
                         }
                     }
                 }
             }
+        }
+
+        groupForContextMenu?.let { group ->
+            AlertDialog(
+                onDismissRequest = { groupForContextMenu = null },
+                title = { Text(group.name) },
+                text = {
+                    Column {
+                        TextButton(onClick = {
+                            onTogglePin(group.id)
+                            groupForContextMenu = null
+                        }) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(if (group.isPinned) "\u274C" else "\uD83D\uDCCC")
+                                Text(if (group.isPinned) "Unpin" else "Pin")
+                            }
+                        }
+                        TextButton(onClick = {
+                            groupForContextMenu = null
+                            groupToDelete = group
+                        }) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text("\uD83D\uDDD1\uFE0F")
+                                Text("Delete", color = Color.Red)
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { groupForContextMenu = null }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
 
         groupToDelete?.let { group ->
@@ -384,6 +351,168 @@ fun GroupListScreen(
                 },
                 onRestore = onRestore
             )
+        }
+    }
+}
+
+private val avatarColors = listOf(
+    Color(0xFF1A73E8), // blue
+    Color(0xFF7B1FA2), // purple
+    Color(0xFFE65100), // orange
+    Color(0xFFC2185B), // pink
+    Color(0xFF00897B), // teal
+    Color(0xFF3949AB), // indigo
+    Color(0xFF26A69A), // mint
+    Color(0xFF0097A7), // cyan
+)
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun GroupListItem(
+    group: ChatGroup,
+    lastMessage: ChatMessage?,
+    unreadCount: Int,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    val avatarColor = remember(group.id) {
+        avatarColors[(group.id.hashCode() and 0x7fffffff) % avatarColors.size]
+    }
+    val initial = remember(group.name) {
+        group.name.take(1).uppercase()
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Avatar with on-chain badge overlay
+        Box(modifier = Modifier.size(48.dp)) {
+            Surface(
+                shape = CircleShape,
+                color = avatarColor,
+                modifier = Modifier.size(48.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = initial,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                }
+            }
+            if (group.isPublishedOnChain) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier
+                        .size(18.dp)
+                        .align(Alignment.BottomEnd)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "\u2713",
+                            color = Color(0xFF4CAF50),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            // Top line: name + fork badge + timestamp
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    group.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (unreadCount > 0) FontWeight.SemiBold else FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (group.isPinned) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "\uD83D\uDCCC",
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+                if (group.forkedFromGroupID != null) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "\u2442",
+                        color = Color(0xFF7B1FA2),
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                if (lastMessage != null) {
+                    Text(
+                        text = relativeTimestamp(lastMessage.timestamp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (unreadCount > 0) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(3.dp))
+            // Bottom line: message preview + unread badge
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (lastMessage != null) {
+                    val previewText = if (lastMessage.mediaAttachment != null) {
+                        when {
+                            lastMessage.mediaAttachment.mimeType.startsWith("video/") -> "\uD83C\uDFA5 Video"
+                            lastMessage.mediaAttachment.mimeType.startsWith("audio/") -> "\uD83C\uDF99 Voice message"
+                            lastMessage.mediaAttachment.mimeType.startsWith("image/") -> "\uD83D\uDCF7 Photo"
+                            else -> "\uD83D\uDCC4 File"
+                        }
+                    } else {
+                        lastMessage.text
+                    }
+                    Text(
+                        text = previewText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                } else {
+                    Text(
+                        "${group.members.size} members",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+                if (unreadCount > 0) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary
+                    ) {
+                        Text(
+                            text = "$unreadCount",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.padding(
+                                horizontal = 6.dp,
+                                vertical = 2.dp
+                            )
+                        )
+                    }
+                }
+            }
         }
     }
 }

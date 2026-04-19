@@ -257,7 +257,7 @@ struct GroupRow: View {
                     if let lastMsg = lastMessage {
                         Text(relativeTimestamp(lastMsg.timestamp))
                             .font(.caption)
-                            .foregroundStyle(unreadCount > 0 ? .accentColor : .secondary)
+                            .foregroundStyle(unreadCount > 0 ? Color.accentColor : .secondary)
                     }
                 }
                 // Bottom line: message preview + unread badge

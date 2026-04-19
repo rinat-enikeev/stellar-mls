@@ -1289,11 +1289,7 @@ impl SepXxxxContract {
     ) -> Result<bool, Error> {
         Self::require_initialized(&env)?;
 
-        let state: CommitmentEntry = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Group(group_id.clone()))
-            .ok_or(Error::GroupNotFound)?;
+        let state = Self::load_group_v2(&env, &group_id)?;
 
         if public_inputs.commitment != state.commitment
             || public_inputs.epoch != state.epoch
@@ -2564,6 +2560,28 @@ mod test {
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
         inject_group(&env, &contract_id, &group_id, &commitment, 3, 0);
+
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 99, // doesn't match stored epoch 3
+        };
+        client.verify_membership(&group_id, &mock_proof(&env), &pi);
+    }
+
+    /// Regression: `verify_membership` must resolve V2-native groups (those
+    /// created by `create_group_v2` with no legacy `DataKey::Group` entry).
+    /// Previously it read `DataKey::Group` directly and returned
+    /// `GroupNotFound` for every V2-native group. After the fix it reads via
+    /// `load_group_v2`, so mismatched inputs surface as `PublicInputsMismatch`
+    /// (#10) rather than `GroupNotFound` (#5).
+    #[test]
+    #[should_panic(expected = "Error(Contract, #10)")]
+    fn test_verify_membership_resolves_v2_native_group() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        let commitment = BytesN::from_array(&env, &[2u8; 32]);
+        // Write ONLY the V2 record — no legacy DataKey::Group entry.
+        inject_group_v2(&env, &contract_id, &group_id, &commitment, 3, 0, 0, 0);
 
         let pi = PublicInputs {
             commitment: commitment.clone(),

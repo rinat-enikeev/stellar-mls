@@ -683,12 +683,23 @@ struct VoteProposalCard: View {
 
     private var myChoice: Bool? {
         guard let parsed else { return nil }
-        let prefix = "VOTE_CAST::v1::\(parsed.ballotID)::"
+        let prefixV1 = "VOTE_CAST::v1::\(parsed.ballotID)::"
+        let prefixV2 = "VOTE_CAST::v2::\(parsed.ballotID)::"
         let mine = (appState.chatMessages[groupID] ?? [])
-            .filter { $0.text.hasPrefix(prefix) && $0.senderPubkey == myBlsHex }
+            .filter { msg in
+                guard msg.senderPubkey == myBlsHex else { return false }
+                return msg.text.hasPrefix(prefixV1) || msg.text.hasPrefix(prefixV2)
+            }
             .last
         guard let mine else { return nil }
-        let choice = String(mine.text.dropFirst(prefix.count))
+        let choice: String
+        if mine.text.hasPrefix(prefixV2) {
+            // v2: VOTE_CAST::v2::<id>::<choice>::<sigHex>
+            choice = String(mine.text.dropFirst(prefixV2.count)).split(separator: "::").first.map(String.init) ?? ""
+        } else {
+            // v1: VOTE_CAST::v1::<id>::<choice>
+            choice = String(mine.text.dropFirst(prefixV1.count))
+        }
         if choice == "yes" { return true }
         if choice == "no" { return false }
         return nil

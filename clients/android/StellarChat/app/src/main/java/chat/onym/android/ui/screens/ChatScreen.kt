@@ -475,11 +475,22 @@ fun ChatScreen(
                                             val tally = groupListViewModel?.ballotTally(gid, ballotID, expirySeconds) ?: (0 to 0)
                                             val quorum = groupListViewModel?.ballotQuorum(gid) ?: 0
                                             val finalized = groupListViewModel?.ballotFinalized(gid, ballotID) ?: false
-                                            val myCast = viewModel.messages
+                                            val prefixV1 = "VOTE_CAST::v1::$ballotID::"
+                                            val prefixV2 = "VOTE_CAST::v2::$ballotID::"
+                                            val myCastText = viewModel.messages
                                                 .asSequence()
-                                                .filter { it.senderPubkey == myHex && it.text.startsWith("VOTE_CAST::v1::$ballotID::") }
+                                                .filter {
+                                                    it.senderPubkey == myHex &&
+                                                        (it.text.startsWith(prefixV1) || it.text.startsWith(prefixV2))
+                                                }
                                                 .lastOrNull()
-                                                ?.text?.removePrefix("VOTE_CAST::v1::$ballotID::")
+                                                ?.text
+                                            val myCast = when {
+                                                myCastText == null -> null
+                                                myCastText.startsWith(prefixV2) ->
+                                                    myCastText.removePrefix(prefixV2).substringBefore("::")
+                                                else -> myCastText.removePrefix(prefixV1)
+                                            }
                                             val myChoice = when (myCast) { "yes" -> true; "no" -> false; else -> null }
                                             VoteProposalCard(
                                                 rawPayload = message.text,

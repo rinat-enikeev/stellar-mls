@@ -288,8 +288,8 @@ echo "==> [1/5] get_state_v2 surfaces V2 record for deploy group"
 expect_contains '"group_type"' "get_state_v2 shape" \
     invoke get_state_v2 --group-id "$DEPLOY_GROUP_ID"
 
-echo "==> [2/5] get_admin_root rejects non-Oligarchy group (#22 MissingAdminRoot)"
-expect_contains '#22' "get_admin_root error code" \
+echo "==> [2/5] get_admin_root rejects non-Oligarchy group (#19 MissingAdminRoot)"
+expect_contains '#19' "get_admin_root error code" \
     invoke get_admin_root --group-id "$DEPLOY_GROUP_ID"
 
 # A sentinel group id that does not exist in storage. The V2 entrypoints

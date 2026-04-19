@@ -18,6 +18,13 @@
       "screenshots": [],
       "versions": [
         {
+          "version": "1.7.0",
+          "date": "2026-04-19",
+          "localizedDescription": "Release 1.7.0",
+          "downloadURL": "https://github.com/rinat-enikeev/stellar-mls/releases/download/v1.7.0/StellarChat-1.7.0.ipa",
+          "size": 16874994
+        },
+        {
           "version": "1.6.8",
           "date": "2026-04-19",
           "localizedDescription": "Release 1.6.8",

@@ -34,6 +34,13 @@ NETWORK="${NETWORK:-testnet}"
 ENV_FILE="${ENV_FILE:-$REPO_ROOT/relayer/.env}"
 DRY_RUN="${DRY_RUN:-0}"
 
+# V-D1: Reject mainnet — this script uses dev/testnet VKs.
+# Production VK installation requires a dedicated mainnet script with
+# ceremony-verified keys.
+case "$NETWORK" in
+    mainnet|public) die "this script is for testnet only — refusing to target $NETWORK" ;;
+esac
+
 # AdminUpdate reuses the existing keyset-v2 UpdateCircuit VK. Any tier is
 # fine (AdminUpdate ignores tier); we use the small VK because it is the
 # smallest wire footprint — the three tiers share the same constraint
@@ -56,7 +63,7 @@ require_cmd stellar
 
 [ -f "$ENV_FILE" ] || die "env file not found: $ENV_FILE"
 
-# Source the env file in a subshell-safe way.
+# Source the env file — executes in the current shell (V-D2).
 set -a
 # shellcheck disable=SC1090
 . "$ENV_FILE"

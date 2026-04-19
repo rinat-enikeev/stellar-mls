@@ -813,6 +813,13 @@ impl SepXxxxContract {
         if tier > 2 {
             return Err(Error::InvalidTier);
         }
+        // V-C3: Validate member_count bounds (parity with Democracy path).
+        if member_count < 2 {
+            return Err(Error::MemberCountOutOfRange);
+        }
+        if member_count > tier_capacity(tier) {
+            return Err(Error::MemberCountOutOfRange);
+        }
         if public_inputs.commitment != commitment || public_inputs.epoch != 0 {
             return Err(Error::PublicInputsMismatch);
         }
@@ -1066,14 +1073,13 @@ impl SepXxxxContract {
             return Err(Error::MemberCountMismatch);
         }
 
-        // `member_count_new ∈ {m-1, m, m+1}`. Checked both ways to avoid u32
-        // underflow surprises when member_count_old = 0 (can't happen for
-        // Democracy, but defence-in-depth).
+        // `member_count_new ∈ {m-1, m, m+1}`. Uses saturating arithmetic so
+        // the check is sound even at u32 boundary values (V-C4).
         let m_old = current.member_count;
         let m_new = public_inputs.member_count_new;
         let valid_delta = m_new == m_old
-            || (m_new == m_old + 1)
-            || (m_old > 0 && m_new + 1 == m_old);
+            || (m_new == m_old.saturating_add(1))
+            || (m_old > 0 && m_new.saturating_add(1) == m_old);
         if !valid_delta {
             return Err(Error::MemberCountOutOfRange);
         }
@@ -1313,6 +1319,14 @@ impl SepXxxxContract {
     ///
     /// After deactivation `verify_membership` and `get_state` still work,
     /// but `update_commitment` is rejected. This is irreversible.
+    ///
+    /// **Design decision (V-C1 safety valve):** deactivation is intentionally
+    /// governance-type-agnostic.  Any single member who can produce a valid
+    /// membership proof may deactivate *any* group type — including Democracy
+    /// (which otherwise requires ≥50 % quorum) and Oligarchy (which otherwise
+    /// requires admin authorization).  This asymmetry is deliberate: it
+    /// ensures no group can become un-deactivatable even when the governance
+    /// quorum is unreachable (e.g. enough members have left).
     ///
     /// N-14: Uses proof-based authorization only (same rationale as `update_commitment`).
     pub fn deactivate_group(

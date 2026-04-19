@@ -29,6 +29,13 @@ NETWORK="${NETWORK:-testnet}"
 ENV_FILE="${ENV_FILE:-$REPO_ROOT/relayer/.env}"
 DRY_RUN="${DRY_RUN:-0}"
 
+# V-D1: Reject mainnet — this script uses dev VKs whose proving keys
+# are publicly reproducible.  Production VK installation requires a
+# dedicated mainnet script with ceremony-verified keys.
+case "$NETWORK" in
+    mainnet|public) die "this script installs DEV verification keys — refusing to target $NETWORK" ;;
+esac
+
 VK_DIR="$REPO_ROOT/keyset-democracy-dev"
 VK_TIER_0="$VK_DIR/vk-democracy-DEV-0-32.json"
 VK_TIER_1="$VK_DIR/vk-democracy-DEV-1-256.json"
@@ -49,8 +56,9 @@ require_cmd stellar
 
 [ -f "$ENV_FILE" ] || die "env file not found: $ENV_FILE"
 
-# Source the env file in a subshell-safe way. Only the names we care about
-# are exported back; the rest stay scoped.
+# Source the env file — this executes in the current shell, so a
+# compromised .env can inject arbitrary commands.  Acceptable here
+# because the operator controls the file (V-D2).
 set -a
 # shellcheck disable=SC1090
 . "$ENV_FILE"

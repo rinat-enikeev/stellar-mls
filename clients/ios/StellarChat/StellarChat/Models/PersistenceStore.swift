@@ -639,6 +639,19 @@ final class PersistenceStore {
         let relayStrings = group.relayHints.map(\.absoluteString)
         let relayJSON = (try? JSONEncoder().encode(relayStrings)) ?? Data()
 
+        let encAdmins: Data?
+        if group.adminPubkeys.isEmpty {
+            encAdmins = nil
+        } else {
+            let sorted = Array(group.adminPubkeys).sorted()
+            if let adminJSON = try? JSONEncoder().encode(sorted),
+               let encrypted = try? StorageEncryption.encrypt(adminJSON) {
+                encAdmins = encrypted
+            } else {
+                encAdmins = nil
+            }
+        }
+
         return PersistedGroup(
             id: group.id,
             encryptedName: encName,
@@ -657,7 +670,9 @@ final class PersistenceStore {
             removedByPubkeyHex: group.removedByPubkeyHex,
             pushNotificationsEnabled: group.pushNotificationsEnabled,
             lastMessageAt: group.lastMessageAt,
-            isPinned: group.isPinned
+            isPinned: group.isPinned,
+            groupTypeRawValue: Int(group.groupType.rawValue),
+            encryptedAdminPubkeys: encAdmins
         )
     }
 
@@ -700,6 +715,14 @@ final class PersistenceStore {
         group.pushNotificationsEnabled = persisted.pushNotificationsEnabled
         group.lastMessageAt = persisted.lastMessageAt
         group.isPinned = persisted.isPinned
+        if let raw = persisted.groupTypeRawValue, let parsed = SEPGroupType(rawValue: UInt32(raw)) {
+            group.groupType = parsed
+        }
+        if let encAdmins = persisted.encryptedAdminPubkeys,
+           let adminJSON = try? StorageEncryption.decrypt(encAdmins),
+           let admins = try? JSONDecoder().decode([String].self, from: adminJSON) {
+            group.adminPubkeys = Set(admins)
+        }
         return group
     }
 

@@ -96,9 +96,12 @@ deploy/certbot/webroot/
 /clients/google.env
 /clients/fastlane/.google_play_service_account.json
 
-# Keyset proving keys (large binaries, already copied to app assets)
-keyset-v*/*/proving_key.bin
-keyset-v*/*/update_proving_key.bin
+# Keyset proving keys (private by construction — anyone holding one can
+# forge proofs for its VK). Verifying keys in the same directories are
+# committed. Pattern covers keyset-v1/, keyset-v2/, keyset-democracy-dev/,
+# and any future keyset-* directory.
+keyset-*/*/proving_key.bin
+keyset-*/*/update_proving_key.bin
 
 # AltStore PAL Alternative Distribution Packages (large notarized binaries, scp'd to onym.chat)
 /deploy/website/adp/

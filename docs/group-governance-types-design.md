@@ -475,6 +475,27 @@ uncompressed. Verification cost remains 3 BLS12-381 pairings per proof.
   5. `c_new = Poseidon(Poseidon(root_new, epoch_old + 1), salt_new)`.
 - **Storage:** `DataKey::UpdateVKByType(tier, 3)`. Compiled per tier.
 
+**v1 rollout status (PR #77).** `OligarchyUpdateCircuit` is **not shipped in
+PR #77**. In v1 the member-rekey path is intentionally frozen for Oligarchy
+groups: `update_commitment` rejects `group_type == 3` with `UnknownGroupType`,
+and no `update_commitment_oligarchy` dispatcher is registered. This is the
+fail-closed posture — better than routing Oligarchy through the shared
+`UpdateCircuit` VK (which would let any member rekey, silently degrading
+Oligarchy to Anarchy for member ops). What v1 *does* support for Oligarchy:
+
+| Op | Status in v1 | Path |
+|---|---|---|
+| Create group with admin set | ✓ ships | `create_oligarchy_group` |
+| Rotate admin set | ✓ ships | `update_admin_commitment` (uses new `AdminUpdate` VK) |
+| Rekey member set (add/remove/replace a member) | ✗ frozen | Returns `UnknownGroupType` until §6.4.3 ships |
+
+The practical consequence: Oligarchy groups created on v1 have a **fixed
+member roster** but a **rotatable admin set**. Admin churn works; member
+churn requires a follow-up release carrying `OligarchyUpdateCircuit` + the
+contract dispatcher that routes `group_type == 3` through it. Clients
+that expose Oligarchy must gate the "remove member"/"invite" UI behind a
+feature flag tied to the circuit's availability.
+
 #### 6.4.4 `AdminUpdateCircuit`
 
 Shape-identical to the existing `UpdateCircuit`, but over the admin tree:
@@ -782,6 +803,24 @@ admin circuit. A follow-up revision **MAY** introduce threshold-admin rules insi
 **T5 — Proof replay.** All new proofs participate in existing `UsedProof` tracking
 (`contracts/sep-xxxx/src/lib.rs:824,836-838`); replay is prevented identically to
 today's `UpdateCircuit`.
+
+*Storage-cost side effect.* Each successful `update_commitment*` or
+`update_admin_commitment` writes a `UsedProof(proof_digest)` ledger entry
+with a 30-day TTL (`LEDGER_BUMP = 518_400` ledgers, ≈5 s/ledger). At
+sustained steady state with `G` active groups averaging `r` Commits/day,
+the concurrent `UsedProof` footprint is `30·G·r` entries; with Soroban's
+per-entry overhead of ~100 bytes (key + metadata) that's `3·G·r` KB of
+persistent state. Sample points: 1 000 groups × 1 Commit/day → ~3 MB;
+10 000 groups × 10 Commits/day → ~90 MB. The 30-day TTL amortises cost
+because nobody has any incentive to bump `UsedProof` entries (they are
+useful only as anti-replay and become inert once the caller could no
+longer replay anyway — the contract already re-derives `c_old` from
+storage, so a 30+ day old proof binds to a state the caller cannot
+produce), so entries expire naturally. Soroban rent is charged per
+ledger-entry per ledger, so the contract's steady-state rent cost scales
+linearly with `G·r`; the contract admin pays this unless a future
+revision passes the cost through to the submitter. No protocol-soundness
+bearing — documented for operational planning.
 
 **T6 — Member-count integrity (Democracy, quorum-bypass class).** If the value of
 `n` used by the Democracy circuit were caller-supplied and unverified, a single

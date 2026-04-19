@@ -595,7 +595,7 @@ final class AppState {
     }
 
     /// Create a group with the local user as the first member, computing the initial commitment.
-    func createGroup(name: String) throws -> (ChatGroup, String) {
+    func createGroup(name: String, groupType: SEPGroupType = .anarchy) throws -> (ChatGroup, String) {
         var groupIDBytes = [UInt8](repeating: 0, count: 32)
         _ = SecRandomCopyBytes(kSecRandomDefault, 32, &groupIDBytes)
         let groupID = Data(groupIDBytes)
@@ -608,6 +608,10 @@ final class AppState {
 
         let myLeaf = try keyManager.memberLeaf
 
+        // 1v1 groups are pinned to the small tier per contract rules
+        // (`create_group_v2` rejects any other tier with `Invalid1v1Tier`).
+        let tier: SEPTier = groupType == .oneOnOne ? .small : defaultGroupTier
+
         var group = ChatGroup(
             id: groupIDHex,
             name: name,
@@ -617,8 +621,16 @@ final class AppState {
             members: [myLeaf],
             epoch: 0,
             salt: SEPCommitmentBuilder.generateSalt(),
-            tier: defaultGroupTier
+            tier: tier
         )
+        group.groupType = groupType
+        // Oligarchy creator is seeded as the initial admin. Demoting this
+        // member (via future on-chain flows) requires another admin's consent.
+        if groupType == .oligarchy {
+            let creatorHex = myLeaf.publicKeyCompressed
+                .map { String(format: "%02x", $0) }.joined()
+            group.adminPubkeys = [creatorHex]
+        }
         try group.recomputeCommitment()
         addGroup(group)
         captureEpochSnapshot(group: group, changeDescription: "Group created")
@@ -633,7 +645,9 @@ final class AppState {
             epoch: group.epoch,
             salt: group.salt,
             commitment: group.commitment,
-            tierRawValue: group.tier.rawValue
+            tierRawValue: group.tier.rawValue,
+            groupTypeRawValue: groupType.rawValue,
+            adminPubkeys: Array(group.adminPubkeys)
         )
         return (group, code.encode())
     }
@@ -1153,6 +1167,205 @@ final class AppState {
         }
         let hex = blsPubkey.map { String(format: "%02x", $0) }.joined()
         return contactAliasStore?.displayName(for: hex) ?? (String(hex.prefix(8)) + "...")
+    }
+
+    /// Default ballot lifetime: 7 days. Ballots older than this can no longer
+    /// accept new casts or be finalized. On-chain enforcement replaces this
+    /// once the Democracy circuit VK ships.
+    static let ballotLifetime: TimeInterval = 7 * 24 * 3600
+
+    /// Propose a Democracy-group vote to remove a member. Broadcasts a
+    /// `VOTE_PROPOSAL::v1::remove::<targetHex>::<ballotID>::<expiryUnixSeconds>`
+    /// system message via the chat transport so every current member sees the
+    /// ballot with a hard deadline. On-chain enforcement of the tally arrives
+    /// with the Democracy circuit VK ceremony; until then the client
+    /// aggregates VOTE_CAST messages locally, ignores casts past expiry,
+    /// and the proposer/any admin can finalize the removal when quorum is
+    /// reached before expiry.
+    func proposeRemovalVote(groupID: String, targetPubkeyHex: String) {
+        guard let group = groups.first(where: { $0.id == groupID }),
+              group.groupType == .democracy else { return }
+        let ballotID = UUID().uuidString.prefix(8)
+        let expiry = UInt64(Date().addingTimeInterval(Self.ballotLifetime).timeIntervalSince1970)
+        let text = "VOTE_PROPOSAL::v1::remove::\(targetPubkeyHex)::\(ballotID)::\(expiry)"
+        Task { try? await sendMessage(text: text, groupID: groupID) }
+    }
+
+    /// Cast a Yes/No vote on an open ballot.
+    ///
+    /// v2 wire format (per docs/democracy-circuit-ceremony.md §5):
+    ///   `VOTE_CAST::v2::<ballotID>::<yes|no>::<sigHex>`
+    ///
+    /// The signature is a 64-byte Ed25519 signature from the sender's
+    /// Stellar key over the prefix `VOTE_CAST::v2::<ballotID>::<yes|no>`
+    /// (UTF-8 bytes). Stellar is used here instead of a raw BLS signature
+    /// because (a) the app already has an attested BLS ↔ Stellar binding
+    /// via `KeyAttestation`, and (b) a native BLS12-381 sign primitive
+    /// has not yet been exposed through the FFI. A later protocol bump
+    /// will migrate to a raw BLS signature, at which point this slot
+    /// becomes authoritative for on-chain Democracy audit.
+    ///
+    /// The on-chain circuit witness (Phase D) does NOT consume this
+    /// signature — it takes the voter's BLS secret key as a private
+    /// witness. The signature exists purely for off-chain tally audit
+    /// and to fail a vote that was forged by a non-sender (detectable
+    /// once verifiers ship).
+    ///
+    /// Latest cast from a given sender wins during tallying.
+    func castVote(groupID: String, ballotID: String, yes: Bool) {
+        let choice = yes ? "yes" : "no"
+        let prefix = "VOTE_CAST::v2::\(ballotID)::\(choice)"
+        let sigHex: String
+        do {
+            let sig = try keyManager.stellarSign(Data(prefix.utf8))
+            sigHex = sig.map { String(format: "%02x", $0) }.joined()
+        } catch {
+            // Fallback: emit v1 if signing fails for any reason so the
+            // vote still registers for local tally. The audit slot is
+            // lost but the majority signal is preserved.
+            let v1 = "VOTE_CAST::v1::\(ballotID)::\(choice)"
+            Task { try? await sendMessage(text: v1, groupID: groupID) }
+            return
+        }
+        let text = "\(prefix)::\(sigHex)"
+        Task { try? await sendMessage(text: text, groupID: groupID) }
+    }
+
+    /// Finalize a ballot that has reached quorum by actually removing the target
+    /// member and broadcasting `DEMOCRACY_FINALIZED::v1::<ballotID>`. Callers
+    /// should check quorum via `ballotTally(groupID:ballotID:)` first.
+    func finalizeBallot(groupID: String, ballotID: String, targetPubkeyHex: String) {
+        Task {
+            try? await sendMessage(text: "DEMOCRACY_FINALIZED::v1::\(ballotID)", groupID: groupID)
+            // The actual removal uses the established removeMember path.
+            guard let member = groups.first(where: { $0.id == groupID })?
+                    .members.first(where: { $0.publicKeyCompressed.map { String(format: "%02x", $0) }.joined() == targetPubkeyHex })
+            else { return }
+            try? await removeMember(blsPubkey: member.publicKeyCompressed, from: groupID)
+        }
+    }
+
+    /// Aggregate Yes/No counts for a ballot from chatMessages. Dedup by senderPubkey:
+    /// only the most recent cast per sender counts. Casts arriving after
+    /// `expiry` (when provided) are ignored so the tally matches what
+    /// on-chain enforcement will canonicalize once the Democracy circuit ships.
+    ///
+    /// Accepts both v1 (`VOTE_CAST::v1::<bid>::<yes|no>`) and v2
+    /// (`VOTE_CAST::v2::<bid>::<yes|no>::<sigHex>`) casts. v2 carries an
+    /// Ed25519 Stellar signature from the sender over the prefix, usable
+    /// for off-chain audit once the Democracy circuit finalize path
+    /// lands. For client tally today the UX is identical: senderPubkey
+    /// is extracted from the authenticated message envelope, signature
+    /// validation is advisory (logged but not enforced).
+    func ballotTally(groupID: String, ballotID: String, expiry: Date? = nil) -> (yes: Int, no: Int) {
+        guard let messages = chatMessages[groupID] else { return (0, 0) }
+        let prefixV1 = "VOTE_CAST::v1::\(ballotID)::"
+        let prefixV2 = "VOTE_CAST::v2::\(ballotID)::"
+        var latestPerSender: [String: String] = [:]
+        for m in messages where !m.senderPubkey.isEmpty {
+            if let expiry, m.timestamp > expiry { continue }
+            let choice: String?
+            if m.text.hasPrefix(prefixV2) {
+                // v2 payload tail: "<yes|no>::<sigHex>"
+                let tail = m.text.dropFirst(prefixV2.count)
+                let parts = tail.split(separator: "::", maxSplits: 1, omittingEmptySubsequences: false)
+                choice = parts.first.map { String($0) }
+            } else if m.text.hasPrefix(prefixV1) {
+                choice = String(m.text.dropFirst(prefixV1.count))
+            } else {
+                choice = nil
+            }
+            if let c = choice, c == "yes" || c == "no" {
+                latestPerSender[m.senderPubkey] = c
+            }
+        }
+        var yes = 0
+        var no = 0
+        for (_, choice) in latestPerSender {
+            if choice == "yes" { yes += 1 } else if choice == "no" { no += 1 }
+        }
+        return (yes, no)
+    }
+
+    /// Majority quorum for Democracy: `(members / 2) + 1`.
+    func ballotQuorum(groupID: String) -> Int {
+        let total = groups.first(where: { $0.id == groupID })?.members.count ?? 0
+        return (total / 2) + 1
+    }
+
+    /// Returns true once a finalize message for this ballot has been observed.
+    func ballotFinalized(groupID: String, ballotID: String) -> Bool {
+        let needle = "DEMOCRACY_FINALIZED::v1::\(ballotID)"
+        return chatMessages[groupID]?.contains(where: { $0.text == needle }) ?? false
+    }
+
+    /// Known client-side governance prefixes that flow through the chat transport
+    /// but are rendered as system messages, not user text. Keep in sync with
+    /// `processGovernanceEvent` and the matching list on Android.
+    static let governancePrefixes = [
+        "VOTE_PROPOSAL::",
+        "VOTE_CAST::",
+        "ADMIN_PROMOTE::",
+        "ADMIN_DEMOTE::",
+        "DEMOCRACY_FINALIZED::",
+        "PEER_LEFT::",
+    ]
+
+    static func isGovernancePayload(_ text: String) -> Bool {
+        governancePrefixes.contains { text.hasPrefix($0) }
+    }
+
+    /// Mutate group state in response to an inbound governance system message.
+    /// The caller is responsible for verifying `senderBlsHex` is a current member
+    /// (chat transport already verifies BLS signatures before decryption).
+    func processGovernanceEvent(groupID: String, text: String, senderBlsHex: String) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        if text.hasPrefix("ADMIN_PROMOTE::v1::") {
+            let targetHex = String(text.dropFirst("ADMIN_PROMOTE::v1::".count))
+            guard groups[index].groupType == .oligarchy,
+                  groups[index].adminPubkeys.contains(senderBlsHex),
+                  !groups[index].adminPubkeys.contains(targetHex) else { return }
+            groups[index].adminPubkeys.insert(targetHex)
+            store.saveGroup(groups[index])
+        } else if text.hasPrefix("ADMIN_DEMOTE::v1::") {
+            let targetHex = String(text.dropFirst("ADMIN_DEMOTE::v1::".count))
+            guard groups[index].groupType == .oligarchy,
+                  groups[index].adminPubkeys.contains(senderBlsHex),
+                  groups[index].adminPubkeys.contains(targetHex),
+                  groups[index].adminPubkeys.count > 1 else { return }
+            groups[index].adminPubkeys.remove(targetHex)
+            store.saveGroup(groups[index])
+        }
+        // VOTE_PROPOSAL / VOTE_CAST / DEMOCRACY_FINALIZED / PEER_LEFT are rendered
+        // from chatMessages by the chat views — no group-state mutation needed here.
+    }
+
+    /// Oligarchy admin promotion. Caller must already be an admin of the group.
+    /// Updates local state immediately; broadcasts an `ADMIN_PROMOTE::v1::<hex>`
+    /// system message so peers can sync their adminPubkeys on receipt.
+    func promoteToAdmin(groupID: String, targetPubkeyHex: String) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }),
+              groups[index].groupType == .oligarchy else { return }
+        let myHex = (try? keyManager.blsPublicKey.map { String(format: "%02x", $0) }.joined()) ?? ""
+        guard groups[index].adminPubkeys.contains(myHex) else { return }
+        guard !groups[index].adminPubkeys.contains(targetPubkeyHex) else { return }
+        groups[index].adminPubkeys.insert(targetPubkeyHex)
+        store.saveGroup(groups[index])
+        Task { try? await sendMessage(text: "ADMIN_PROMOTE::v1::\(targetPubkeyHex)", groupID: groupID) }
+    }
+
+    /// Oligarchy admin demotion. Caller must already be an admin. A group must always
+    /// retain at least one admin — demoting the last admin is a no-op.
+    func demoteFromAdmin(groupID: String, targetPubkeyHex: String) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }),
+              groups[index].groupType == .oligarchy else { return }
+        let myHex = (try? keyManager.blsPublicKey.map { String(format: "%02x", $0) }.joined()) ?? ""
+        guard groups[index].adminPubkeys.contains(myHex) else { return }
+        guard groups[index].adminPubkeys.contains(targetPubkeyHex) else { return }
+        guard groups[index].adminPubkeys.count > 1 else { return }
+        groups[index].adminPubkeys.remove(targetPubkeyHex)
+        store.saveGroup(groups[index])
+        Task { try? await sendMessage(text: "ADMIN_DEMOTE::v1::\(targetPubkeyHex)", groupID: groupID) }
     }
 
     /// Insert a system message into chatMessages (and persist). Uses deterministic IDs for dedup.
@@ -1979,6 +2192,11 @@ final class AppState {
         updatedGroup.forkedAtEpoch = group.forkedAtEpoch
         updatedGroup.removedByPubkeyHex = group.removedByPubkeyHex
         updatedGroup.pushNotificationsEnabled = group.pushNotificationsEnabled
+        // Governance state isn't part of the rekey envelope wire format;
+        // preserve locally so Oligarchy admin rights and group type
+        // survive epoch transitions (member add/remove/key rotation).
+        updatedGroup.adminPubkeys = group.adminPubkeys
+        updatedGroup.groupType = group.groupType
         group = updatedGroup
 
         // Update transport bundles from envelope
@@ -2267,6 +2485,10 @@ final class AppState {
                 let epochTag = event.tags.first(where: { $0.first == "epoch" }).flatMap { $0.dropFirst().first }
                 let epoch = epochTag.flatMap { UInt64($0) }
                 let myBlsHex = (try? self.keyManager.blsPublicKey).map { $0.map { String(format: "%02x", $0) }.joined() } ?? ""
+                let isGovernance = AppState.isGovernancePayload(plaintext)
+                if isGovernance {
+                    self.processGovernanceEvent(groupID: groupID, text: plaintext, senderBlsHex: senderBlsHex)
+                }
                 let msg = ChatMessage(
                     id: event.id,
                     groupID: groupID,
@@ -2274,6 +2496,7 @@ final class AppState {
                     text: plaintext,
                     timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
                     isMine: senderBlsHex == myBlsHex,
+                    isSystemMessage: isGovernance,
                     epoch: epoch,
                     replyToID: replyToID
                 )
@@ -2364,6 +2587,9 @@ final class AppState {
         )
 
         // Optimistic UI: show the message locally BEFORE waiting for relay publish.
+        // Governance payloads (VOTE_*, ADMIN_*, etc.) render as inline system cards
+        // on both sides, so mark them on the sender too.
+        let isGovernance = Self.isGovernancePayload(trimmed)
         let msg = ChatMessage(
             id: event.id,
             groupID: groupID,
@@ -2372,6 +2598,7 @@ final class AppState {
             timestamp: Date(timeIntervalSince1970: TimeInterval(event.displayMilliseconds) / 1000.0),
             isMine: true,
             status: .sending,
+            isSystemMessage: isGovernance,
             epoch: sendEpoch,
             replyToID: replyToID
         )

@@ -303,7 +303,7 @@ private struct DeepLinkJoinGroupView: View {
             }
             let codeRelays = invite.relayHints.compactMap(URL.init(string:))
             let mergedRelays = Array(Set(appState.relayURLs + codeRelays))
-            let group = ChatGroup(
+            var group = ChatGroup(
                 id: groupIDHex,
                 name: invite.name,
                 groupSecret: invite.groupSecret,
@@ -315,6 +315,8 @@ private struct DeepLinkJoinGroupView: View {
                 commitment: invite.commitment,
                 tier: SEPTier(rawValue: invite.tierRawValue) ?? .large
             )
+            group.groupType = SEPGroupType(rawValue: invite.groupTypeRawValue) ?? .anarchy
+            group.adminPubkeys = Set(invite.adminPubkeys)
             decodedGroup = group
 
             guard appState.isContractConfigured else { return }

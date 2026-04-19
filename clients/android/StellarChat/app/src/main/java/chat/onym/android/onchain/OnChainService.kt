@@ -276,6 +276,41 @@ class OnChainService(private val context: Context, contractID: String, transport
         return withRetry { contractClient.getState(groupIDData) }
     }
 
+    // -- Democracy (#26) --
+
+    /**
+     * Delta kind for a Democracy update (add/remove/kick), matching the
+     * DemocracyUpdateCircuit witness encoding (§6.4.2).
+     */
+    enum class DemocracyDeltaKind(val id: Int) { ADD(0), REMOVE(1), KICK(2) }
+
+    /**
+     * Generate a Groth16 proof for a quorum-signed Democracy update.
+     *
+     * Status: stub. The witness requires K signer BLS secret keys plus
+     * per-signer Merkle paths into the member tree. Voters hold those keys
+     * locally; no coordinator protocol currently exists to assemble them at
+     * the finalizer. Throws [DemocracyProofNotImplementedException] until
+     * that design is resolved. See §6.4.2 and the #26 tracking note.
+     */
+    fun generateDemocracyUpdateProof(
+        ballotID: String,
+        oldMembers: List<SEPGroupMemberLeaf>,
+        newMembers: List<SEPGroupMemberLeaf>,
+        deltaKind: DemocracyDeltaKind,
+        signerSecretKeys: List<ByteArray>,
+        signerPublicKeys: List<ByteArray>,
+        saltOld: ByteArray,
+        saltNew: ByteArray,
+        epochOld: Long,
+        tier: SEPTier
+    ): Nothing {
+        throw DemocracyProofNotImplementedException(
+            "Democracy coordinator protocol not yet implemented: K voters' BLS " +
+                "secret keys must reach the finalizer to assemble the witness (§6.4.2)."
+        )
+    }
+
     // -- Verification --
 
     /**
@@ -389,3 +424,6 @@ class OnChainService(private val context: Context, contractID: String, transport
         return response.valid
     }
 }
+
+/** Thrown by [OnChainService.generateDemocracyUpdateProof] until the #26 coordinator protocol lands. */
+class DemocracyProofNotImplementedException(message: String) : RuntimeException(message)

@@ -4,6 +4,7 @@ import chat.onym.android.BuildConfig
 import chat.onym.android.crypto.GroupCrypto
 import com.stellarmls.mls.SEPCommitmentBuilder
 import com.stellarmls.mls.SEPGroupMemberLeaf
+import com.stellarmls.mls.SEPGroupType
 import com.stellarmls.mls.SEPTier
 import org.json.JSONArray
 import org.json.JSONObject
@@ -30,6 +31,13 @@ data class ChatGroup(
     var salt: ByteArray = SEPCommitmentBuilder.generateSalt(),
     var commitment: ByteArray? = null,
     var tier: SEPTier = SEPTier.LARGE,
+    /** Governance type selected at creation. Existing persisted groups
+     *  default to [SEPGroupType.ANARCHY] (the historical behavior). */
+    var groupType: SEPGroupType = SEPGroupType.ANARCHY,
+    /** Hex-encoded BLS pubkeys (lowercase) of members with admin privileges.
+     *  Only meaningful for [SEPGroupType.OLIGARCHY] groups; seeded with the creator
+     *  at group creation. Existing persisted groups decode this as empty. */
+    var adminPubkeys: MutableSet<String> = mutableSetOf(),
     var isPublishedOnChain: Boolean = false,
     /** Unix timestamp of the last received event, used for offline catch-up. */
     var lastEventTimestamp: Long = 0,
@@ -163,7 +171,12 @@ data class InviteCode(
     val epoch: Long,
     val salt: ByteArray,
     val commitment: ByteArray?,
-    val tierRawValue: Int = SEPTier.LARGE.id
+    val tierRawValue: Int = SEPTier.LARGE.id,
+    /** Governance type of the invited group. Defaults to Anarchy (0) for
+     *  backward compatibility with older invite codes. */
+    val groupTypeRawValue: Int = SEPGroupType.ANARCHY.id,
+    /** Hex BLS pubkeys of group admins at invite time (Oligarchy). Empty on older codes. */
+    val adminPubkeys: List<String> = emptyList()
 ) {
     /** Encode to a Base64 string using the canonical JSON format (base64 for binary fields).
      *  Compatible with iOS Codable serialization of Data fields. */
@@ -190,6 +203,8 @@ data class InviteCode(
                 put("commitment", android.util.Base64.encodeToString(commitment, android.util.Base64.NO_WRAP))
             }
             put("tierRawValue", tierRawValue)
+            put("groupTypeRawValue", groupTypeRawValue)
+            put("adminPubkeys", JSONArray(adminPubkeys))
         }
         return android.util.Base64.encodeToString(
             json.toString().toByteArray(),
@@ -235,7 +250,11 @@ data class InviteCode(
                        else SEPCommitmentBuilder.generateSalt(),
                 commitment = if (commitmentStr.isNotEmpty()) android.util.Base64.decode(commitmentStr, android.util.Base64.NO_WRAP)
                             else null,
-                tierRawValue = json.optInt("tierRawValue", SEPTier.LARGE.id)
+                tierRawValue = json.optInt("tierRawValue", SEPTier.LARGE.id),
+                groupTypeRawValue = json.optInt("groupTypeRawValue", SEPGroupType.ANARCHY.id),
+                adminPubkeys = json.optJSONArray("adminPubkeys")?.let { arr ->
+                    (0 until arr.length()).map { arr.getString(it) }
+                } ?: emptyList()
             )
         }
 

@@ -8,6 +8,7 @@ import chat.onym.android.model.EpochSnapshot
 import chat.onym.android.model.MessageStatus
 import chat.onym.android.model.toHex
 import com.stellarmls.mls.SEPGroupMemberLeaf
+import com.stellarmls.mls.SEPGroupType
 import com.stellarmls.mls.SEPTier
 import org.json.JSONArray
 import org.json.JSONObject
@@ -147,6 +148,13 @@ class PersistenceStore(context: Context) {
 
     private fun encryptGroup(group: ChatGroup): PersistedGroup {
         val membersJson = serializeMembers(group.members)
+        val encAdmins = if (group.adminPubkeys.isEmpty()) {
+            null
+        } else {
+            val arr = JSONArray()
+            for (hex in group.adminPubkeys.sorted()) arr.put(hex)
+            StorageEncryption.encrypt(arr.toString().toByteArray())
+        }
         return PersistedGroup(
             id = group.id,
             encryptedName = StorageEncryption.encrypt(group.name),
@@ -158,6 +166,7 @@ class PersistenceStore(context: Context) {
             encryptedSalt = StorageEncryption.encrypt(group.salt),
             encryptedCommitment = group.commitment?.let { StorageEncryption.encrypt(it) },
             tierRawValue = group.tier.id,
+            groupTypeRawValue = group.groupType.id,
             isPublishedOnChain = group.isPublishedOnChain,
             pinnedEpoch = group.pinnedEpoch?.toInt(),
             forkedFromGroupID = group.forkedFromGroupID,
@@ -165,7 +174,8 @@ class PersistenceStore(context: Context) {
             removedByPubkeyHex = group.removedByPubkeyHex,
             pushNotificationsEnabled = group.pushNotificationsEnabled,
             lastMessageAt = group.lastMessageAt,
-            isPinned = group.isPinned
+            isPinned = group.isPinned,
+            encryptedAdminPubkeys = encAdmins
         )
     }
 
@@ -180,6 +190,18 @@ class PersistenceStore(context: Context) {
         }
         val members = deserializeMembers(membersJson)
         val tier = SEPTier.entries.find { it.id == persisted.tierRawValue } ?: SEPTier.LARGE
+        val groupType = try {
+            SEPGroupType.fromId(persisted.groupTypeRawValue)
+        } catch (_: IllegalArgumentException) {
+            SEPGroupType.ANARCHY
+        }
+
+        val adminPubkeys: MutableSet<String> = persisted.encryptedAdminPubkeys?.let { enc ->
+            try {
+                val arr = JSONArray(String(StorageEncryption.decrypt(enc)))
+                (0 until arr.length()).map { arr.getString(it) }.toMutableSet()
+            } catch (_: Exception) { mutableSetOf() }
+        } ?: mutableSetOf()
 
         return ChatGroup(
             id = persisted.id,
@@ -192,6 +214,8 @@ class PersistenceStore(context: Context) {
             salt = salt,
             commitment = commitment,
             tier = tier,
+            groupType = groupType,
+            adminPubkeys = adminPubkeys,
             isPublishedOnChain = persisted.isPublishedOnChain,
             pinnedEpoch = persisted.pinnedEpoch?.toLong(),
             forkedFromGroupID = persisted.forkedFromGroupID,

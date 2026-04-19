@@ -63,7 +63,9 @@ struct GroupInfoView: View {
             epoch: currentGroup.epoch,
             salt: currentGroup.salt,
             commitment: currentGroup.commitment,
-            tierRawValue: currentGroup.tier.rawValue
+            tierRawValue: currentGroup.tier.rawValue,
+            groupTypeRawValue: currentGroup.groupType.rawValue,
+            adminPubkeys: Array(currentGroup.adminPubkeys)
         )
         return "https://onym.chat/join?code=\(code.encode())"
     }
@@ -266,7 +268,7 @@ struct GroupInfoView: View {
     @ViewBuilder
     private var membersSection: some View {
         Section {
-            if isMember {
+            if isMember && currentGroup.groupType != .oneOnOne && canInviteMembers {
                 addPeopleRow
             }
             ForEach(currentGroup.members, id: \.publicKeyCompressed) { member in
@@ -301,10 +303,12 @@ struct GroupInfoView: View {
 
     @ViewBuilder
     private func memberListRow(for member: SEPGroupMemberLeaf) -> some View {
+        let isOligarchyAdmin = currentGroup.groupType == .oligarchy &&
+            currentGroup.adminPubkeys.contains(hexKey(member))
         MemberRow(
             member: member,
             isMe: isMyKey(member),
-            isAdmin: isCreator(member),
+            isAdmin: isOligarchyAdmin,
             alias: appState.contactAliasStore.displayName(for: hexKey(member))
         )
         .contentShape(Rectangle())
@@ -315,15 +319,69 @@ struct GroupInfoView: View {
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if isMember && !isMyKey(member) {
-                Button(role: .destructive) {
-                    memberToRemove = member
-                    showRemoveConfirmation = true
-                } label: {
-                    Label("Remove", systemImage: "person.crop.circle.badge.minus")
+                if currentGroup.groupType == .democracy {
+                    Button {
+                        appState.proposeRemovalVote(
+                            groupID: currentGroup.id,
+                            targetPubkeyHex: hexKey(member)
+                        )
+                    } label: {
+                        Label("Propose vote", systemImage: "hand.raised")
+                    }
+                    .tint(.purple)
+                } else if currentGroup.groupType == .oligarchy {
+                    // Only existing admins can kick in Oligarchy groups.
+                    if iAmOligarchyAdmin {
+                        Button(role: .destructive) {
+                            memberToRemove = member
+                            showRemoveConfirmation = true
+                        } label: {
+                            Label("Remove", systemImage: "person.crop.circle.badge.minus")
+                        }
+                        .disabled(isRemovingMember)
+                        if isOligarchyAdmin {
+                            Button {
+                                appState.demoteFromAdmin(groupID: currentGroup.id, targetPubkeyHex: hexKey(member))
+                            } label: {
+                                Label("Demote", systemImage: "shield.slash")
+                            }
+                            .tint(.orange)
+                        } else {
+                            Button {
+                                appState.promoteToAdmin(groupID: currentGroup.id, targetPubkeyHex: hexKey(member))
+                            } label: {
+                                Label("Promote", systemImage: "shield.lefthalf.filled")
+                            }
+                            .tint(.blue)
+                        }
+                    }
+                } else if currentGroup.groupType != .oneOnOne {
+                    Button(role: .destructive) {
+                        memberToRemove = member
+                        showRemoveConfirmation = true
+                    } label: {
+                        Label("Remove", systemImage: "person.crop.circle.badge.minus")
+                    }
+                    .disabled(isRemovingMember)
                 }
-                .disabled(isRemovingMember)
             }
         }
+    }
+
+    private var iAmOligarchyAdmin: Bool {
+        guard currentGroup.groupType == .oligarchy,
+              let myLeaf = try? appState.keyManager.memberLeaf else { return false }
+        let myHex = myLeaf.publicKeyCompressed.map { String(format: "%02x", $0) }.joined()
+        return currentGroup.adminPubkeys.contains(myHex)
+    }
+
+    /// In Oligarchy groups, only admins can invite. Other governance types allow any member.
+    private var canInviteMembers: Bool {
+        guard isMember else { return false }
+        if currentGroup.groupType == .oligarchy {
+            return iAmOligarchyAdmin
+        }
+        return true
     }
 
     @ViewBuilder
@@ -567,13 +625,22 @@ struct GroupInfoView: View {
 
     private var quickActions: some View {
         HStack(spacing: 10) {
-            QuickActionTile(
-                icon: "square.and.arrow.up",
-                label: "Share",
-                subtitle: "Invite link",
-                tint: .accentColor
-            ) {
-                showInviteSheet = true
+            if currentGroup.groupType == .oneOnOne {
+                QuickActionTile(
+                    icon: "lock.fill",
+                    label: "Sealed",
+                    subtitle: "1v1",
+                    tint: .gray
+                ) {}
+            } else {
+                QuickActionTile(
+                    icon: "square.and.arrow.up",
+                    label: "Share",
+                    subtitle: "Invite link",
+                    tint: .accentColor
+                ) {
+                    showInviteSheet = true
+                }
             }
             QuickActionTile(
                 icon: currentGroup.pushNotificationsEnabled ? "bell.fill" : "bell.slash.fill",

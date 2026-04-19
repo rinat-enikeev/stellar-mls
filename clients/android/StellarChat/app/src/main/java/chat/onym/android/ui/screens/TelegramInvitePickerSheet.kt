@@ -209,7 +209,9 @@ private fun buildGroupInvite(group: ChatGroup): InvitePayload {
         epoch = group.epoch,
         salt = group.salt,
         commitment = group.commitment,
-        tierRawValue = group.tier.id
+        tierRawValue = group.tier.id,
+        groupTypeRawValue = group.groupType.id,
+        adminPubkeys = group.adminPubkeys.toList()
     )
     val url = "https://onym.chat/join?code=${invite.encode()}"
     return InvitePayload(url, InvitedContactKind.GROUP, null, group.id)

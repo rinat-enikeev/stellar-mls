@@ -15,6 +15,7 @@ import chat.onym.android.model.hexToBytes
 import chat.onym.android.model.toHex
 import chat.onym.android.nostr.InvitationTransport
 import com.stellarmls.mls.SEPCommitmentBuilder
+import com.stellarmls.mls.SEPGroupType
 import com.stellarmls.mls.SEPTier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -41,6 +42,7 @@ sealed class InvitationStatus {
 
 class CreateGroupViewModel : ViewModel() {
     var groupName by mutableStateOf("")
+    var groupType by mutableStateOf(SEPGroupType.ANARCHY)
     var inviteCode by mutableStateOf<String?>(null)
     var createdGroup by mutableStateOf<ChatGroup?>(null)
     var errorMessage by mutableStateOf<String?>(null)
@@ -53,6 +55,16 @@ class CreateGroupViewModel : ViewModel() {
     var onChainStatus by mutableStateOf<OnChainPublishStatus>(OnChainPublishStatus.Idle)
     val invitationStatuses = mutableStateMapOf<String, InvitationStatus>()
 
+    fun selectGroupType(type: SEPGroupType) {
+        groupType = type
+        // 1v1 caps at exactly one other participant; drop extras.
+        if (type == SEPGroupType.ONE_ON_ONE && participantKeys.size > 1) {
+            val kept = participantKeys.first()
+            participantKeys.clear()
+            participantKeys.add(kept)
+        }
+    }
+
     fun createGroup(keyManager: KeyManager, tier: SEPTier = SEPTier.LARGE) {
         val name = groupName.trim()
         if (name.isEmpty()) return
@@ -64,6 +76,9 @@ class CreateGroupViewModel : ViewModel() {
 
             val myLeaf = keyManager.memberLeaf()
 
+            // 1v1 groups are pinned to the small tier per contract rules.
+            val effectiveTier = if (groupType == SEPGroupType.ONE_ON_ONE) SEPTier.SMALL else tier
+
             val group = ChatGroup(
                 id = groupID.toHex(),
                 name = name,
@@ -71,8 +86,14 @@ class CreateGroupViewModel : ViewModel() {
                 members = mutableListOf(myLeaf),
                 epoch = 0,
                 salt = SEPCommitmentBuilder.generateSalt(),
-                tier = tier
+                tier = effectiveTier,
+                groupType = groupType
             )
+            // Oligarchy creator is seeded as the initial admin. Demoting this
+            // member (via future on-chain flows) requires another admin's consent.
+            if (groupType == SEPGroupType.OLIGARCHY) {
+                group.adminPubkeys.add(myLeaf.publicKeyCompressed.toHex())
+            }
             group.recomputeCommitment()
 
             val invite = InviteCode(
@@ -84,7 +105,9 @@ class CreateGroupViewModel : ViewModel() {
                 epoch = group.epoch,
                 salt = group.salt,
                 commitment = group.commitment,
-                tierRawValue = group.tier.id
+                tierRawValue = group.tier.id,
+                groupTypeRawValue = group.groupType.id,
+                adminPubkeys = group.adminPubkeys.toList()
             )
 
             createdGroup = group

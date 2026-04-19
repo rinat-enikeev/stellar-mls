@@ -8,6 +8,7 @@ struct CreateGroupView: View {
     // Identity (Step 1)
     @State private var groupName = ""
     @State private var accent: GroupAccent = .blue
+    @State private var groupType: SEPGroupType = .anarchy
 
     // Participants (Step 2)
     @State private var participantKeys: [String] = []
@@ -46,6 +47,15 @@ struct CreateGroupView: View {
 
     private var nameIsValid: Bool {
         !groupName.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private var governanceHelpText: String {
+        switch groupType {
+        case .anarchy:    return "Any member can add or remove anyone. Default behavior."
+        case .oneOnOne:   return "Sealed 2-person chat. Membership cannot change."
+        case .democracy:  return "Membership changes require a majority ballot."
+        case .oligarchy:  return "Only admins can add or remove members. Creator is the first admin."
+        }
     }
 
     var body: some View {
@@ -166,6 +176,34 @@ struct CreateGroupView: View {
                         }
                         Spacer()
                     }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
+
+                // Governance picker
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("GOVERNANCE")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.secondary)
+                        .kerning(0.4)
+                        .padding(.horizontal, 4)
+                    Picker("Governance", selection: $groupType) {
+                        Text("Anarchy").tag(SEPGroupType.anarchy)
+                        Text("1v1").tag(SEPGroupType.oneOnOne)
+                        Text("Democracy").tag(SEPGroupType.democracy)
+                        Text("Oligarchy").tag(SEPGroupType.oligarchy)
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: groupType) { _, newValue in
+                        if newValue == .oneOnOne, participantKeys.count > 1 {
+                            participantKeys = Array(participantKeys.prefix(1))
+                        }
+                    }
+                    Text(governanceHelpText)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 20)
@@ -469,6 +507,10 @@ struct CreateGroupView: View {
             return
         }
         if participantKeys.contains(trimmed) { return }
+        if groupType == .oneOnOne && !participantKeys.isEmpty {
+            errorMessage = "1v1 groups allow only one other participant."
+            return
+        }
         errorMessage = nil
         participantKeys.append(trimmed)
     }
@@ -864,7 +906,7 @@ struct CreateGroupView: View {
 
         Task {
             do {
-                let (group, code) = try appState.createGroup(name: sanitizedName)
+                let (group, code) = try appState.createGroup(name: sanitizedName, groupType: groupType)
                 createdGroup = group
                 inviteCode = code
                 GroupAccentStore.set(accent, for: group.id)

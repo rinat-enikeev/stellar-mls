@@ -15,6 +15,13 @@ struct ChatGroup: Identifiable, Codable {
     var salt: Data = SEPCommitmentBuilder.generateSalt()
     var commitment: Data?   // latest verified commitment (Poseidon variant)
     var tier: SEPTier = .large
+    /// Governance type selected at creation. Existing persisted groups
+    /// decode this as `.anarchy` (the historical default).
+    var groupType: SEPGroupType = .anarchy
+    /// Hex-encoded BLS pubkeys (lowercase) of members with admin privileges.
+    /// Only meaningful for `.oligarchy` groups; seeded with the creator at
+    /// group creation. Existing persisted groups decode this as empty.
+    var adminPubkeys: Set<String> = []
     var isPublishedOnChain: Bool = false
     /// Unix timestamp of the last received event, used for offline catch-up.
     var lastEventTimestamp: Int64 = 0
@@ -161,8 +168,12 @@ struct InviteCode: Codable {
     let salt: Data
     let commitment: Data?
     let tierRawValue: Int
+    /// Governance type of the invited group. Missing/0 on older codes.
+    let groupTypeRawValue: UInt32
+    /// Hex BLS pubkeys of group admins at invite time (Oligarchy). Missing/empty on older codes.
+    let adminPubkeys: [String]
 
-    init(groupID: Data, groupSecret: Data, name: String, relayHints: [String], members: [SEPGroupMemberLeaf], epoch: UInt64, salt: Data, commitment: Data?, tierRawValue: Int = SEPTier.large.rawValue) {
+    init(groupID: Data, groupSecret: Data, name: String, relayHints: [String], members: [SEPGroupMemberLeaf], epoch: UInt64, salt: Data, commitment: Data?, tierRawValue: Int = SEPTier.large.rawValue, groupTypeRawValue: UInt32 = SEPGroupType.anarchy.rawValue, adminPubkeys: [String] = []) {
         self.groupID = groupID
         self.groupSecret = groupSecret
         self.name = name
@@ -172,6 +183,8 @@ struct InviteCode: Codable {
         self.salt = salt
         self.commitment = commitment
         self.tierRawValue = tierRawValue
+        self.groupTypeRawValue = groupTypeRawValue
+        self.adminPubkeys = adminPubkeys
     }
 
     init(from decoder: Decoder) throws {
@@ -185,6 +198,8 @@ struct InviteCode: Codable {
         salt = try container.decode(Data.self, forKey: .salt)
         commitment = try container.decodeIfPresent(Data.self, forKey: .commitment)
         tierRawValue = try container.decodeIfPresent(Int.self, forKey: .tierRawValue) ?? SEPTier.large.rawValue
+        groupTypeRawValue = try container.decodeIfPresent(UInt32.self, forKey: .groupTypeRawValue) ?? SEPGroupType.anarchy.rawValue
+        adminPubkeys = try container.decodeIfPresent([String].self, forKey: .adminPubkeys) ?? []
     }
 
     func encode() -> String {

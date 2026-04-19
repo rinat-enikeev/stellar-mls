@@ -209,11 +209,16 @@ def assemble_bundle(asc: ASC, version: str, adp_version_id: str,
     return bundle, total
 
 
-def update_source_json(version: str, size: int, min_os: str, dry_run: bool) -> bool:
+def update_source_json(version: str, build_version: str, size: int, min_os: str,
+                       dry_run: bool) -> bool:
     src = json.loads(SOURCE_JSON.read_text())
     versions = src["apps"][0]["versions"]
+    # AltStore's parser rejects the entire source if any notarized (PAL)
+    # entry is missing buildVersion, so it is always populated from the
+    # manifest's bundleVersion.
     entry = {
         "version": version,
+        "buildVersion": build_version,
         "date": time.strftime("%Y-%m-%d"),
         "localizedDescription": f"Release {version}",
         "downloadURL": f"{ADP_URL_BASE}/{version}/manifest.json",
@@ -224,8 +229,6 @@ def update_source_json(version: str, size: int, min_os: str, dry_run: bool) -> b
     if idx is None:
         versions.insert(0, entry)
     else:
-        if versions[idx].get("buildVersion"):
-            entry["buildVersion"] = versions[idx]["buildVersion"]
         versions[idx] = entry
     new = json.dumps(src, indent=2) + "\n"
     if new == SOURCE_JSON.read_text():
@@ -320,7 +323,11 @@ def main() -> int:
         bundle, total = assemble_bundle(asc, version, adp_version_id, adp_zip_url, workdir)
         manifest = json.loads((bundle / "manifest.json").read_text())
         min_os = manifest.get("minimumSystemVersions", {}).get("ios", "18.0")
-        ok(f"Bundle assembled: {total:,} bytes ({len(list((bundle/'variant').iterdir()))} variants)")
+        build_version = str(manifest.get("bundleVersion", ""))
+        if not build_version:
+            err("manifest.json has no bundleVersion; cannot build a valid PAL source entry")
+            return 3
+        ok(f"Bundle assembled: {total:,} bytes ({len(list((bundle/'variant').iterdir()))} variants, buildVersion={build_version})")
 
         if args.skip_server:
             warn(f"--skip-server: bundle remains at {bundle} (temp dir cleaned on exit)")
@@ -346,7 +353,7 @@ def main() -> int:
             except Exception as e:
                 warn(f"Could not verify served manifest: {e}")
 
-        changed = update_source_json(version, total, min_os, False)
+        changed = update_source_json(version, build_version, total, min_os, False)
 
     if not args.skip_server and changed:
         info("Committing altstore-source.json...")

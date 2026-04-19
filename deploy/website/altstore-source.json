@@ -23,7 +23,8 @@
           "localizedDescription": "Release 1.6.6",
           "downloadURL": "https://onym.chat/adp/1.6.6/manifest.json",
           "size": 32891142,
-          "minOSVersion": "18.0"
+          "minOSVersion": "18.0",
+          "buildVersion": "39"
         },
         {
           "version": "1.6.0",

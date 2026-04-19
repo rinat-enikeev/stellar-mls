@@ -113,6 +113,60 @@ Coordinator checklist:
 - The final transcript is re-verified by `ceremony-tool verify` by at least
   two independent verifiers before VK export.
 
+### 3.1 VK domain separation — non-negotiable
+
+Two independent Phase 2 ceremonies are run (one per `(tier, K_max)` pair).
+The two VKs **must not** be byte-equal and **must not** share any Phase 2
+contribution material, even though they descend from the same
+`phase1-final.ptau`. Groth16 soundness for circuit X binds proofs to
+circuit X's R1CS via `IC[0..=n]`; if the tier-0 and tier-1 VKs were
+accidentally generated from a single transcript (e.g. an operator
+copy-paste), a tier-0 proof could verify against the tier-1 slot and
+vice versa, collapsing the whole tier gating.
+
+Domain separation is enforced at three layers — the ceremony only
+controls layer 1:
+
+1. **R1CS shape.** The constraint counts differ between tiers:
+   tier 0 (depth 5, K_max 32) and tier 1 (depth 8, K_max 256) produce
+   materially different R1CS matrices. A correctly-run ceremony that
+   compiles the circuit for each pair separately cannot produce
+   byte-identical VKs — the α·β·γ·δ pairings hash over different
+   R1CS transcripts.
+2. **Contract storage key.** The contract stores each VK under
+   `DataKey::UpdateVKByType(tier, 2)`, so tier-0 and tier-1 slots are
+   distinct ledger entries. Even if two VKs *were* byte-equal, a
+   proof submitted with `tier = 0` is still dispatched against the
+   tier-0 slot only.
+3. **Public-input schedule.** Democracy proofs carry `member_count_old`
+   and `member_count_new` in the public-input vector, and the contract
+   rejects `member_count_new > 2^depth` before verification. A tier-0
+   VK verifying a tier-1-sized proof would still require the caller to
+   lie about `member_count`; the contract-side range check catches this.
+
+Operator verification steps (before announcing the VKs):
+
+```
+sha256sum keyset-democracy/tier0-k32/verifying_key.bin
+sha256sum keyset-democracy/tier1-k256/verifying_key.bin
+# The two digests MUST differ. If they match, one of the ceremony runs
+# reused transcripts and the entire ceremony MUST be re-run.
+
+ceremony-tool inspect-vk keyset-democracy/tier0-k32/verifying_key.bin \
+  | grep 'num_inputs\|num_constraints'
+ceremony-tool inspect-vk keyset-democracy/tier1-k256/verifying_key.bin \
+  | grep 'num_inputs\|num_constraints'
+# num_inputs must be 5 for both (same public-input schedule).
+# num_constraints must differ materially (tier 0 ≪ tier 1).
+```
+
+Cross-kind separation (Membership VK vs Update VK vs UpdateByType vs
+AdminUpdate) is enforced by the `VkKind` dispatcher in the contract; no
+ceremony-side action is needed, but the coordinator SHOULD still publish
+the four digests (Membership small/medium/large, UpdateByType tier0/tier1,
+AdminUpdate) in a single artefact bundle so clients can verify the full
+set at once.
+
 ---
 
 ## 4. On-chain rollout

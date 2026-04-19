@@ -20,6 +20,10 @@
 //!   `is_insert`, `is_remove` — the single-leaf change witness.
 //!
 //! ## Constraints (§6.4.2)
+//! 0. `K ≥ 1` — enforced as `active_bits[0] = 1`. Combined with the prefix
+//!    constraint (#2), this is equivalent to `K = Σ active_i ≥ 1`. Closes
+//!    the zero-opening-Commit attack surface independent of any
+//!    contract-side `member_count_old` check.
 //! 1. Each active signer slot: `Poseidon(sk_i)` opens to `root_old` at
 //!    `leaf_idx_i`. Inactive slots are vacuous.
 //! 2. Active slots are a strict prefix: `active_i ⇒ active_{i-1}`.
@@ -381,6 +385,22 @@ impl ConstraintSynthesizer<Fr> for DemocracyUpdateCircuit<Fr> {
         //     so it can't inflate the quorum count anyway.
         //     When active_i = 1 the bit sum pins diff_i ∈ [0, 2^depth), which
         //     on the count ≤ 2^depth roster implies leaf_idx_i > leaf_idx_{i-1}.
+        //
+        //     ── Why `depth` bits suffices for a field-element difference ──
+        //     `diff` is computed in the full scalar field `Fr` of BLS12-381,
+        //     where `r ≈ 2^254.86` (prime order). A prover trying to cheat
+        //     with a descending pair `leaf_idx_i < leaf_idx_{i-1}` produces
+        //         diff ≡ (small positive value) mod r
+        //     wrapped around: concretely, diff ≡ r − ε for some small
+        //     ε ≥ 1. For `diff_from_bits ∈ [0, 2^depth)` to equal that
+        //     value we'd need `r − ε < 2^depth`, i.e. `r < 2^depth + ε`.
+        //     With `depth ≤ 11` (tier 2 ceiling) and `r ≈ 2^254.86`, the
+        //     inequality is violated by more than 240 orders of magnitude —
+        //     there is no field-level collision path. The range check
+        //     therefore soundly rejects every descending ordering whenever
+        //     `active_i = 1`. A larger `depth` (e.g. `depth = 240`) would
+        //     narrow this margin and require a stronger argument, but for
+        //     any tier we will ever ship on BLS12-381 it is trivially safe.
         // ============================================================
         for i in 1..self.k_max {
             let diff = &leaf_index_vars[i] - &leaf_index_vars[i - 1] - FpVar::one();
@@ -416,13 +436,33 @@ impl ConstraintSynthesizer<Fr> for DemocracyUpdateCircuit<Fr> {
         }
 
         // ============================================================
-        // (H) Quorum threshold — constraint #4.
-        //     2·K ≥ member_count_old
-        //     where K = Σ active_i.
+        // (H) Quorum — constraints #0 and #4.
+        //     #0 K ≥ 1: no zero-opening Commit is ever accepted.
+        //     #4 2·K ≥ member_count_old: the ≥50% threshold.
+        //     K = Σ active_i.
         //
-        //     Enforced via: witness non-negative bit decomposition of
-        //     (2·K − member_count_old) in (depth + 1) bits.
+        //     K ≥ 1 is enforced as `active_bits[0] = 1`. The prefix
+        //     structure from (F) makes this equivalent to K ≥ 1 — if
+        //     slot 0 is inactive, (F) forces every later slot inactive
+        //     too, so K collapses to 0.
+        //
+        //     Design doc §6.4.2 lists K ≥ 1 as the first Democracy
+        //     constraint; it was originally left implicit (the contract
+        //     pre-check `member_count ≥ 2` combined with `2·K ≥ n`
+        //     happens to block K = 0 in the current code path). Pinning
+        //     it in-circuit is defence-in-depth against any future
+        //     contract-side regression that could surface
+        //     `member_count_old = 0` (e.g. a lazy-migration bug): with
+        //     K ≥ 1 enforced here, a zero-opening Commit cannot be
+        //     accepted even if the caller and contract agree on a
+        //     bogus `member_count_old`.
+        //
+        //     The 2·K ≥ member_count_old bound is enforced via a
+        //     (depth + 1)-bit non-negative bit decomposition of
+        //     (2·K − member_count_old).
         // ============================================================
+        active_bits[0].enforce_equal(&Boolean::TRUE)?;
+
         let mut k_sum = FpVar::zero();
         for bit in &active_bits {
             k_sum += FpVar::from(bit.clone());

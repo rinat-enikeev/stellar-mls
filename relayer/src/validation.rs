@@ -8,19 +8,31 @@ use crate::config::Config;
 /// Allowed contract functions.
 const ALLOWED_FUNCTIONS: &[&str] = &[
     "create_group",
+    "create_group_v2",
+    "create_oligarchy_group",
     "update_commitment",
     "verify_membership",
     "deactivate_group",
     "get_state",
+    "get_state_v2",
+    "get_admin_root",
     "get_history",
 ];
 
 /// Functions that are read-only (use `--send no`).
-pub const READ_ONLY_FUNCTIONS: &[&str] = &["verify_membership", "get_state", "get_history"];
+pub const READ_ONLY_FUNCTIONS: &[&str] = &[
+    "verify_membership",
+    "get_state",
+    "get_state_v2",
+    "get_admin_root",
+    "get_history",
+];
 
 /// Functions that include a proof field in the payload.
 const PROOF_FUNCTIONS: &[&str] = &[
     "create_group",
+    "create_group_v2",
+    "create_oligarchy_group",
     "update_commitment",
     "verify_membership",
     "deactivate_group",

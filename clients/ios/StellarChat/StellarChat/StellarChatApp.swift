@@ -148,6 +148,19 @@ struct StellarChatApp: App {
 @MainActor
 @Observable
 final class AppState {
+    /// Deterministic 32-byte admin salt derived from the group ID. The
+    /// admin_commitment is computed as
+    /// `Poseidon(Poseidon(admin_root, 0), admin_salt)` (§6.2.2); using a
+    /// group-ID-derived salt means any client can recompute it without
+    /// needing extra persisted state. Future ceremonies that rotate the
+    /// admin set will bind a fresh salt via `update_admin_commitment`.
+    static func deriveAdminSalt(groupID: Data) -> Data {
+        var input = Data()
+        input.append(contentsOf: Array("sep-admin-salt-v1".utf8))
+        input.append(groupID)
+        return Data(SHA256.hash(data: input))
+    }
+
     var keyManager: KeyManager
     var groups: [ChatGroup] = []
     let store: PersistenceStore
@@ -655,6 +668,12 @@ final class AppState {
     // MARK: - On-Chain Operations
 
     /// Publish a newly created group's commitment on-chain.
+    ///
+    /// 1v1 creation is deferred until the second member joins: the contract
+    /// hard-rejects `create_group_v2(group_type=1)` unless `member_count == 2`,
+    /// and we want the on-chain creator-address binding to reflect the
+    /// two-party state anyway (the creator publishes only once the peer has
+    /// accepted, at local epoch 0 with the full two-member commitment).
     func publishGroupOnChain(_ group: ChatGroup) async throws {
         guard let service = onChainService else {
             #if DEBUG
@@ -663,9 +682,29 @@ final class AppState {
             throw ChatError.contractNotConfigured
         }
 
+        if group.groupType == .oneOnOne && group.members.count < 2 {
+            #if DEBUG
+            print("[OnChain] publishGroupOnChain deferred: 1v1 group waiting for second member")
+            #endif
+            return
+        }
+
         #if DEBUG
-        print("[OnChain] publishGroupOnChain start group=\(group.id.prefix(8)) epoch=\(group.epoch) members=\(group.members.count)")
+        print("[OnChain] publishGroupOnChain start group=\(group.id.prefix(8)) epoch=\(group.epoch) members=\(group.members.count) type=\(group.groupType.rawValue)")
         #endif
+
+        var adminLeaves: [SEPGroupMemberLeaf]? = nil
+        var adminSalt: Data? = nil
+        if group.groupType == .oligarchy {
+            // Bootstrap: creator is the sole admin at creation. Future admin
+            // rotations are ceremony-gated (§6.4.3) and will rebind the
+            // admin_commitment via `update_admin_commitment`. The admin salt
+            // is derived deterministically from the group ID so clients can
+            // recompute it without extra persisted state.
+            let creatorLeaf = try keyManager.memberLeaf
+            adminLeaves = [creatorLeaf]
+            adminSalt = Self.deriveAdminSalt(groupID: group.groupIDData)
+        }
 
         let response = try await service.publishGroupCreation(
             groupIDData: group.groupIDData,
@@ -674,7 +713,11 @@ final class AppState {
             epoch: group.epoch,
             salt: group.salt,
             tier: group.tier,
-            callerAddress: keyManager.stellarAccountID
+            callerAddress: keyManager.stellarAccountID,
+            groupType: group.groupType,
+            memberCount: UInt32(group.members.count),
+            adminLeaves: adminLeaves,
+            adminSalt: adminSalt
         )
 
         if response.accepted {
@@ -822,6 +865,7 @@ final class AppState {
         var candidate = currentGroup
         var addedMembers: [SEPGroupMemberLeaf] = []
         var removedMemberKeys: [Data] = []
+        var isOneOnOneFinalize = false
 
         switch kind {
         case .memberAdd(let member):
@@ -834,10 +878,19 @@ final class AppState {
             guard candidate.members.count < candidate.tier.maxMembers else {
                 return .chainRejected(reason: "Group is full")
             }
+            // 1v1 finalization: contract requires epoch=0 + member_count=2 at create.
+            // Creator publishes only once the peer joins; the local state stays at
+            // epoch 0 with the invite-era salt so both sides compute the same
+            // commitment the contract will see.
+            isOneOnOneFinalize = currentGroup.groupType == .oneOnOne
+                && !currentGroup.isPublishedOnChain
+                && currentGroup.members.count == 1
             candidate.members.append(member)
             candidate.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
-            candidate.epoch += 1
-            candidate.salt = SEPCommitmentBuilder.deriveSalt(previousSalt: candidate.salt, memberKey: member.publicKeyCompressed)
+            if !isOneOnOneFinalize {
+                candidate.epoch += 1
+                candidate.salt = SEPCommitmentBuilder.deriveSalt(previousSalt: candidate.salt, memberKey: member.publicKeyCompressed)
+            }
             addedMembers = [member]
 
         case .memberRemove(let blsPubkey):
@@ -926,7 +979,28 @@ final class AppState {
         #if DEBUG
         print("[EpochTransition] Chain sync check: isPublishedOnChain=\(currentGroup.isPublishedOnChain) onChainService=\(onChainService != nil) group=\(groupID.prefix(8)) newEpoch=\(candidate.epoch)")
         #endif
-        if currentGroup.isPublishedOnChain, onChainService != nil {
+        if isOneOnOneFinalize, onChainService != nil {
+            chainPublishTasks[groupID]?.cancel()
+            let chainCandidate = candidate
+            chainPublishTasks[groupID] = Task {
+                defer {
+                    if self.chainPublishTasks[groupID]?.isCancelled != false {
+                        self.chainPublishTasks[groupID] = nil
+                    }
+                }
+                do {
+                    try await self.publishGroupOnChain(chainCandidate)
+                } catch is CancellationError {
+                    #if DEBUG
+                    print("[EpochTransition] 1v1 finalize CANCELLED group=\(groupID.prefix(8))")
+                    #endif
+                } catch {
+                    #if DEBUG
+                    print("[EpochTransition] 1v1 finalize FAILED group=\(groupID.prefix(8)) error=\(error)")
+                    #endif
+                }
+            }
+        } else if currentGroup.isPublishedOnChain, onChainService != nil {
             chainPublishTasks[groupID]?.cancel()
             let targetEpoch = candidate.epoch
             pendingTransitions[groupID] = .awaitingChainConfirmation(targetEpoch: targetEpoch)

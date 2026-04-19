@@ -369,6 +369,12 @@ fun StellarChatNavHost(
                         val myLeaf = groupListViewModel.keyManager.memberLeaf()
                         if (group.members.none { it.publicKeyCompressed.contentEquals(myLeaf.publicKeyCompressed) }) {
                             group.members.add(myLeaf)
+                            group.members.sortWith(GroupListViewModel.memberLeafComparator)
+                            // Recompute so the joiner's local state matches what the
+                            // creator will publish on SEPMemberJoined (critical for 1v1,
+                            // where the creator publishes at epoch=0 with the two-member
+                            // commitment).
+                            group.recomputeCommitment()
                         }
                         groupListViewModel.addGroup(group)
                         groupListViewModel.announceMemberJoined(group)
@@ -626,6 +632,8 @@ fun StellarChatNavHost(
                         val myLeaf = groupListViewModel.keyManager.memberLeaf()
                         if (group.members.none { it.publicKeyCompressed.contentEquals(myLeaf.publicKeyCompressed) }) {
                             group.members.add(myLeaf)
+                            group.members.sortWith(GroupListViewModel.memberLeafComparator)
+                            group.recomputeCommitment()
                         }
                         groupListViewModel.addGroup(group)
                         groupListViewModel.announceMemberJoined(group)

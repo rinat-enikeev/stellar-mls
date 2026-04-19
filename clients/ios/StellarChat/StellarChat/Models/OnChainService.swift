@@ -253,7 +253,12 @@ actor OnChainService {
     ///
     /// 1. Generates a membership proof at the initial state (epoch 0).
     /// 2. Decompresses the proof to uncompressed BLS12-381 points (384 bytes).
-    /// 3. Submits `create_group` to the Soroban contract.
+    /// 3. Submits the correct creation entrypoint for the requested
+    ///    governance type:
+    ///     - `.anarchy` → `create_group` (V1)
+    ///     - `.oneOnOne`, `.democracy` → `create_group_v2`
+    ///     - `.oligarchy` → `create_oligarchy_group` (requires `adminLeaves`
+    ///       and `adminSalt` to seed the admin tree)
     func publishGroupCreation(
         groupIDData: Data,
         members: [SEPGroupMemberLeaf],
@@ -261,10 +266,14 @@ actor OnChainService {
         epoch: UInt64,
         salt: Data,
         tier: SEPTier,
-        callerAddress: String
+        callerAddress: String,
+        groupType: SEPGroupType = .anarchy,
+        memberCount: UInt32? = nil,
+        adminLeaves: [SEPGroupMemberLeaf]? = nil,
+        adminSalt: Data? = nil
     ) async throws -> SEPSubmissionResponse {
         #if DEBUG
-        print("[OnChainService] publishGroupCreation start")
+        print("[OnChainService] publishGroupCreation start groupType=\(groupType.rawValue)")
         #endif
         let proofBundle = try generateProof(
             members: members,
@@ -275,27 +284,68 @@ actor OnChainService {
         )
 
         let uncompressedProof = try proofForContract(proofBundle.proof)
+        let effectiveMemberCount = memberCount ?? UInt32(members.count)
 
-        let request = SEPCreateGroupRequest(
-            caller: callerAddress,
-            groupID: groupIDData,
-            commitment: proofBundle.publicInputs.commitment,
-            proof: uncompressedProof,
-            publicInputs: proofBundle.publicInputs,
-            tier: UInt32(tier.rawValue)
-        )
         #if DEBUG
         let firstMember = members.first
         print(
             "[OnChainService] publishGroupCreation invoke caller=\(callerAddress.prefix(8)) " +
             "group=\(groupIDData.debugHexPrefix(12)) epoch=\(epoch) tier=\(tier.rawValue) " +
+            "groupType=\(groupType.rawValue) memberCount=\(effectiveMemberCount) " +
             "members=\(members.count) salt=\(salt.debugHexPrefix(12)) " +
             "proofCommitment=\(proofBundle.publicInputs.commitment.debugHexPrefix(12)) " +
             "firstPk=\(firstMember?.publicKeyCompressed.debugHexPrefix(12) ?? "none") " +
             "firstLeaf=\(firstMember?.leafHash.debugHexPrefix(12) ?? "none")"
         )
         #endif
-        return try await withRetry { try await self.contractClient.createGroup(request) }
+
+        switch groupType {
+        case .anarchy:
+            let request = SEPCreateGroupRequest(
+                caller: callerAddress,
+                groupID: groupIDData,
+                commitment: proofBundle.publicInputs.commitment,
+                proof: uncompressedProof,
+                publicInputs: proofBundle.publicInputs,
+                tier: UInt32(tier.rawValue)
+            )
+            return try await withRetry { try await self.contractClient.createGroup(request) }
+
+        case .oneOnOne, .democracy:
+            let request = SEPCreateGroupV2Request(
+                caller: callerAddress,
+                groupID: groupIDData,
+                commitment: proofBundle.publicInputs.commitment,
+                tier: UInt32(tier.rawValue),
+                groupType: groupType,
+                memberCount: effectiveMemberCount,
+                proof: uncompressedProof,
+                publicInputs: proofBundle.publicInputs
+            )
+            return try await withRetry { try await self.contractClient.createGroupV2(request) }
+
+        case .oligarchy:
+            guard let adminLeaves, !adminLeaves.isEmpty, let adminSalt else {
+                throw ChatError.onChainPublishFailed(
+                    "Oligarchy creation requires adminLeaves + adminSalt to seed the admin tree"
+                )
+            }
+            let adminCommitment = try SEPCommitmentBuilder.computeAdminCommitment(
+                admins: adminLeaves,
+                salt: adminSalt
+            )
+            let request = SEPCreateOligarchyGroupRequest(
+                caller: callerAddress,
+                groupID: groupIDData,
+                commitment: proofBundle.publicInputs.commitment,
+                tier: UInt32(tier.rawValue),
+                memberCount: effectiveMemberCount,
+                adminRoot: adminCommitment,
+                proof: uncompressedProof,
+                publicInputs: proofBundle.publicInputs
+            )
+            return try await withRetry { try await self.contractClient.createOligarchyGroup(request) }
+        }
     }
 
     /// Publish a commitment update after a membership change.

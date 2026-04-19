@@ -234,6 +234,19 @@ struct FirstJoinView: View {
         if let myLeaf = try? appState.keyManager.memberLeaf,
            !group.members.contains(where: { $0.publicKeyCompressed == myLeaf.publicKeyCompressed }) {
             group.members.append(myLeaf)
+            group.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
+            // Recompute commitment so the joiner's local state matches what the
+            // creator will publish once they observe the SEPMemberJoined
+            // announcement (critical for 1v1, where the creator publishes at
+            // epoch=0 with the full two-member commitment). A failure here
+            // would leave the joiner with a stale commitment the creator's
+            // on-chain publish cannot match — abort the join instead.
+            do {
+                try group.recomputeCommitment()
+            } catch {
+                errorMessage = "Failed to derive group commitment: \(error.localizedDescription)"
+                return
+            }
         }
         appState.addGroup(group)
         joined = true

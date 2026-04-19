@@ -1020,6 +1020,23 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         private const val EPOCH_SNAPSHOT_WINDOW = 64
         /** N-8: Max entries for dedup sets to prevent unbounded memory growth. */
         private const val MAX_DEDUP_SET_SIZE = 10_000
+
+        /**
+         * Canonical byte-wise lexicographic ordering on compressed BLS public
+         * keys. Must match `ChatGroup.addMember` and every join/admin path
+         * that reconstructs the Merkle commitment locally — any divergence
+         * yields a different Poseidon root.
+         */
+        val memberLeafComparator: Comparator<com.stellarmls.mls.SEPGroupMemberLeaf> =
+            Comparator { a, b ->
+                val aKey = a.publicKeyCompressed
+                val bKey = b.publicKeyCompressed
+                for (i in 0 until minOf(aKey.size, bKey.size)) {
+                    val cmp = (aKey[i].toInt() and 0xFF) - (bKey[i].toInt() and 0xFF)
+                    if (cmp != 0) return@Comparator cmp
+                }
+                aKey.size - bKey.size
+            }
     }
 
     /** Reconfigure the on-chain service when contract settings change. */
@@ -1040,16 +1057,42 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    /** Publish a group on-chain (runs on IO dispatcher). */
+    /**
+     * Publish a group on-chain (runs on IO dispatcher).
+     *
+     * 1v1 creation is deferred until the second member joins: the contract
+     * hard-rejects `create_group_v2(group_type=1)` unless `member_count == 2`.
+     * The creator publishes only once the peer has accepted, still at local
+     * epoch 0 with the full two-member commitment.
+     */
     fun publishGroupOnChain(group: ChatGroup, onResult: (Result<Unit>) -> Unit) {
         val service = onChainService
         if (service == null) {
             onResult(Result.failure(ChatError.ContractNotConfigured))
             return
         }
+        if (group.groupType == com.stellarmls.mls.SEPGroupType.ONE_ON_ONE && group.members.size < 2) {
+            onResult(Result.success(Unit))
+            return
+        }
         viewModelScope.launch {
             try {
                 val response = withContext(Dispatchers.IO) {
+                    val adminLeaves: List<com.stellarmls.mls.SEPGroupMemberLeaf>?
+                    val adminSalt: ByteArray?
+                    if (group.groupType == com.stellarmls.mls.SEPGroupType.OLIGARCHY) {
+                        // Bootstrap: creator is the sole admin at creation.
+                        // Future admin rotations are ceremony-gated (§6.4.3)
+                        // and will rebind admin_commitment through
+                        // `update_admin_commitment`. The admin salt is
+                        // deterministic per groupID so any client can
+                        // recompute it without extra persisted state.
+                        adminLeaves = listOf(keyManager.memberLeaf())
+                        adminSalt = deriveAdminSalt(group.groupIDData)
+                    } else {
+                        adminLeaves = null
+                        adminSalt = null
+                    }
                     service.publishGroupCreation(
                         groupIDData = group.groupIDData,
                         members = group.members,
@@ -1057,7 +1100,11 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                         epoch = group.epoch,
                         salt = group.salt,
                         tier = group.tier,
-                        callerAddress = keyManager.stellarAccountID
+                        callerAddress = keyManager.stellarAccountID,
+                        groupType = group.groupType,
+                        memberCount = group.members.size,
+                        adminLeaves = adminLeaves,
+                        adminSalt = adminSalt
                     )
                 }
                 if (response.accepted) {
@@ -1077,6 +1124,19 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 ))
             }
         }
+    }
+
+    /**
+     * 32-byte admin salt derived from the group ID. See §6.2.2: the
+     * admin_commitment = Poseidon(Poseidon(admin_root, 0), admin_salt).
+     * Matches the iOS [AppState.deriveAdminSalt] so cross-platform clients
+     * agree on the seed.
+     */
+    private fun deriveAdminSalt(groupID: ByteArray): ByteArray {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        digest.update("sep-admin-salt-v1".toByteArray(Charsets.UTF_8))
+        digest.update(groupID)
+        return digest.digest()
     }
 
     /** Verify a group's on-chain state (runs on IO dispatcher). */
@@ -1347,6 +1407,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         var candidate = cloneGroup(currentGroup)
         val addedMembers = mutableListOf<SEPGroupMemberLeaf>()
         val removedMemberKeys = mutableListOf<ByteArray>()
+        var isOneOnOneFinalize = false
 
         when (kind) {
             is EpochTransitionKind.MemberAdd -> {
@@ -1360,10 +1421,19 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 if (candidate.members.size >= candidate.tier.maxMembers) {
                     return EpochTransitionResult.CHAIN_REJECTED
                 }
+                // 1v1 finalization: contract requires epoch=0 + member_count=2 at create.
+                // Creator publishes only once the peer joins; the local state stays at
+                // epoch 0 with the invite-era salt so both sides compute the same
+                // commitment the contract will see.
+                isOneOnOneFinalize = currentGroup.groupType == com.stellarmls.mls.SEPGroupType.ONE_ON_ONE &&
+                    !currentGroup.isPublishedOnChain &&
+                    currentGroup.members.size == 1
                 candidate.members.add(member)
                 sortMembers(candidate)
-                candidate.epoch++
-                candidate.salt = SEPCommitmentBuilder.deriveSalt(candidate.salt, member.publicKeyCompressed)
+                if (!isOneOnOneFinalize) {
+                    candidate.epoch++
+                    candidate.salt = SEPCommitmentBuilder.deriveSalt(candidate.salt, member.publicKeyCompressed)
+                }
                 addedMembers.add(member)
             }
             is EpochTransitionKind.MemberRemove -> {
@@ -1412,8 +1482,17 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         // --- Async chain sync (non-blocking, coalesced) ---
         // Launch BEFORE the Nostr broadcast so the chain publish isn't gated
         // by relay round-trips.
-        if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain sync check: isPublishedOnChain=${currentGroup.isPublishedOnChain} onChainService=${onChainService != null} group=${groupID.take(8)} newEpoch=${candidate.epoch}")
-        if (currentGroup.isPublishedOnChain && onChainService != null) {
+        if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain sync check: isPublishedOnChain=${currentGroup.isPublishedOnChain} onChainService=${onChainService != null} group=${groupID.take(8)} newEpoch=${candidate.epoch} oneOnOneFinalize=$isOneOnOneFinalize")
+        if (isOneOnOneFinalize && onChainService != null) {
+            chainPublishJobs[groupID]?.cancel()
+            val chainCandidate = cloneGroup(candidate)
+            publishGroupOnChain(chainCandidate) { result ->
+                if (BuildConfig.DEBUG) {
+                    if (result.isSuccess) Log.d("GroupListVM", "1v1 finalize SUCCEEDED group=${groupID.take(8)}")
+                    else Log.e("GroupListVM", "1v1 finalize FAILED group=${groupID.take(8)} error=${result.exceptionOrNull()?.message}")
+                }
+            }
+        } else if (currentGroup.isPublishedOnChain && onChainService != null) {
             chainPublishJobs[groupID]?.cancel()
             val targetEpoch = candidate.epoch
             pendingTransitions[groupID] = PendingTransitionState.AwaitingChainConfirmation(targetEpoch)
@@ -2328,15 +2407,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun sortMembers(group: ChatGroup) {
-        group.members.sortWith { a, b ->
-            val aKey = a.publicKeyCompressed
-            val bKey = b.publicKeyCompressed
-            for (i in 0 until minOf(aKey.size, bKey.size)) {
-                val cmp = (aKey[i].toInt() and 0xFF) - (bKey[i].toInt() and 0xFF)
-                if (cmp != 0) return@sortWith cmp
-            }
-            aKey.size - bKey.size
-        }
+        group.members.sortWith(memberLeafComparator)
     }
 
     private fun lexCompare(a: ByteArray, b: ByteArray): Int {

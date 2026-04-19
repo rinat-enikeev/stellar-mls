@@ -48,6 +48,33 @@ data class SEPVerifyMembershipResponse(
     }
 }
 
+/**
+ * On-chain state for governance-aware groups (returned by `get_state_v2`).
+ * Legacy V1 groups are projected by the contract as `groupType = 0` (Anarchy)
+ * with `memberCount = 0`.
+ */
+data class SEPCommitmentEntryV2(
+    val commitment: ByteArray,
+    val epoch: Long,
+    val timestamp: Long,
+    val tier: Int,
+    val active: Boolean,
+    val groupType: Int,
+    val memberCount: Int
+) {
+    companion object {
+        fun fromJson(json: JSONObject) = SEPCommitmentEntryV2(
+            commitment = Base64.decode(json.getString("commitment"), Base64.NO_WRAP),
+            epoch = json.getLong("epoch"),
+            timestamp = json.getLong("timestamp"),
+            tier = json.getInt("tier"),
+            active = json.getBoolean("active"),
+            groupType = json.getInt("group_type"),
+            memberCount = json.getInt("member_count")
+        )
+    }
+}
+
 /** JSON builder for create_group request payload. */
 fun buildCreateGroupPayload(
     caller: String,
@@ -126,6 +153,66 @@ fun buildDeactivateGroupPayload(
 /** JSON builder for get_state request payload. */
 fun buildGetStatePayload(groupID: ByteArray): JSONObject = JSONObject().apply {
     put("groupID", groupID.toBase64())
+}
+
+/**
+ * JSON builder for `create_group_v2` — the governance-aware creation
+ * entrypoint. Supports Anarchy (`groupType = 0`), 1v1 (`groupType = 1`), and
+ * Democracy (`groupType = 2`). Oligarchy uses `buildCreateOligarchyGroupPayload`
+ * because it also seeds the admin root. JSON keys are snake_case to match
+ * the relayer's V2 payload schema.
+ */
+fun buildCreateGroupV2Payload(
+    caller: String,
+    groupID: ByteArray,
+    commitment: ByteArray,
+    tier: Int,
+    groupType: Int,
+    memberCount: Int,
+    proof: ByteArray,
+    commitmentForInputs: ByteArray,
+    epoch: Long
+): JSONObject = JSONObject().apply {
+    put("caller", caller)
+    put("group_id", groupID.toBase64())
+    put("commitment", commitment.toBase64())
+    put("tier", tier)
+    put("group_type", groupType)
+    put("member_count", memberCount)
+    put("proof", proof.toBase64())
+    put("public_inputs", JSONObject().apply {
+        put("commitment", commitmentForInputs.toBase64())
+        put("epoch", epoch)
+    })
+}
+
+/**
+ * JSON builder for `create_oligarchy_group`. `adminRoot` is the Poseidon-
+ * hashed admin_commitment (see SEPCommitmentBuilder.computeAdminCommitment)
+ * and is pinned at creation; later admin rotations are ceremony-gated.
+ */
+fun buildCreateOligarchyGroupPayload(
+    caller: String,
+    groupID: ByteArray,
+    commitment: ByteArray,
+    tier: Int,
+    memberCount: Int,
+    adminRoot: ByteArray,
+    proof: ByteArray,
+    commitmentForInputs: ByteArray,
+    epoch: Long
+): JSONObject = JSONObject().apply {
+    put("caller", caller)
+    put("group_id", groupID.toBase64())
+    put("commitment", commitment.toBase64())
+    put("tier", tier)
+    put("member_count", memberCount)
+    put("admin_root", adminRoot.toBase64())
+    put("proof", proof.toBase64())
+    put("public_inputs", JSONObject().apply {
+        put("commitment", commitmentForInputs.toBase64())
+        put("epoch", epoch)
+    })
 }
 
 private fun ByteArray.toBase64(): String = Base64.encodeToString(this, Base64.NO_WRAP)

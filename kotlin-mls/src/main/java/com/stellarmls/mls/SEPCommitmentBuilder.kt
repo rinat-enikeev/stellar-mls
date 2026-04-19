@@ -54,6 +54,18 @@ object SEPCommitmentBuilder {
         return RustBridge.computePoseidonCommitment(poseidonRoot, epoch, salt)
     }
 
+    /**
+     * Seed for the Oligarchy admin tree at creation (§6.2.2):
+     *   admin_commitment = Poseidon( Poseidon(admin_root, admin_epoch), admin_salt )
+     * where `admin_root` is the Poseidon Merkle root over the admin leaves
+     * and `admin_epoch = 0` at group birth. The admin tree is capped at 32
+     * entries (small tier, depth = 5).
+     */
+    fun computeAdminCommitment(admins: List<SEPGroupMemberLeaf>, salt: ByteArray): ByteArray {
+        val adminRoot = computeMerkleRoot(admins, SEPTier.SMALL)
+        return computePoseidonCommitment(adminRoot, 0L, salt)
+    }
+
     /** Flatten member list into concatenated byte buffers for FFI. */
     internal fun flattenMembers(members: List<SEPGroupMemberLeaf>): Pair<ByteArray, ByteArray> {
         val pkBuf = ByteArray(members.size * 48)

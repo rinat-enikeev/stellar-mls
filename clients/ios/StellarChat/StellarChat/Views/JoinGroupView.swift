@@ -181,6 +181,17 @@ struct JoinGroupView: View {
         if let myLeaf = try? appState.keyManager.memberLeaf,
            !group.members.contains(where: { $0.publicKeyCompressed == myLeaf.publicKeyCompressed }) {
             group.members.append(myLeaf)
+            group.members.sort { $0.publicKeyCompressed.lexicographicallyPrecedes($1.publicKeyCompressed) }
+            // A stale commitment here would prevent the joiner from verifying
+            // the creator's on-chain publish (esp. 1v1, where the creator
+            // publishes the full two-member commitment at epoch=0). Surface
+            // the failure instead of silently proceeding.
+            do {
+                try group.recomputeCommitment()
+            } catch {
+                errorMessage = "Failed to derive group commitment: \(error.localizedDescription)"
+                return
+            }
         }
         appState.addGroup(group)
         joined = true

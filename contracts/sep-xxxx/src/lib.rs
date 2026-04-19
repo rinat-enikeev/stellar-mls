@@ -686,14 +686,15 @@ impl SepXxxxContract {
             2 => {
                 // Democracy: ≥50% quorum on kick/invite. The quorum check
                 // is enforced inside the `DemocracyUpdateCircuit`
-                // (ceremony-gated — not active in this build). We require
-                // member_count ≥ 2 at creation so a single-member
-                // "democracy" can't exist, and bound it by the tier's leaf
-                // capacity so later updates can't silently overflow the
-                // Merkle tree.
-                if member_count < 2 {
-                    return Err(Error::MemberCountOutOfRange);
-                }
+                // (ceremony-gated — not active in this build).
+                //
+                // `member_count` is advisory at creation — the contract
+                // does not cross-check it against the Merkle commitment.
+                // Clients routinely create groups solo and grow via
+                // off-chain MLS joins, so we accept any `member_count` in
+                // [0, tier_capacity]. Quorum semantics only bind once a
+                // DemocracyUpdate proof lands, at which point member_count
+                // is bound by the update circuit.
                 if member_count > tier_capacity(tier) {
                     return Err(Error::MemberCountOutOfRange);
                 }
@@ -813,10 +814,10 @@ impl SepXxxxContract {
         if tier > 2 {
             return Err(Error::InvalidTier);
         }
-        // V-C3: Validate member_count bounds (parity with Democracy path).
-        if member_count < 2 {
-            return Err(Error::MemberCountOutOfRange);
-        }
+        // `member_count` is advisory at creation (see create_group_v2
+        // Democracy arm). Clients typically start Oligarchy groups solo
+        // and promote later admins via ceremony-gated rotation, so
+        // member_count < 2 is permitted here.
         if member_count > tier_capacity(tier) {
             return Err(Error::MemberCountOutOfRange);
         }
@@ -3630,9 +3631,24 @@ mod test {
     // Democracy Group Type Tests (governance-types Phase 3)
     // ================================================================
 
+    // Note: `member_count ∈ {0, 1}` is accepted at creation for Democracy
+    // (and Oligarchy) so clients can start solo and grow via off-chain MLS
+    // joins. The `m_new < 2` invariant is enforced later by
+    // `democracy_update_commitment` once quorum actually matters.
+    //
+    // The two tests below replace the deleted
+    // `test_create_democracy_rejects_member_count_{zero,one}` cases
+    // (PR #84 relaxed the floor — see review on pullrequestreview-4136498592).
+    // They lock in the relaxation by asserting the validation path now
+    // *accepts* 0/1 and defers to the Groth16 verifier; the verifier
+    // abort (`Err(Err(_))`) is the signal that every validation check
+    // passed.
+
     #[test]
-    #[should_panic(expected = "Error(Contract, #25)")]
-    fn test_create_democracy_rejects_member_count_zero() {
+    fn test_create_democracy_accepts_member_count_zero() {
+        // Bootstrap case: a group creator publishing on-chain before any
+        // member has joined off-chain. Must no longer be rejected at
+        // create time — quorum binding is a later-epoch concern.
         let (env, client, _admin, _cid) = setup_initialized();
         let caller = Address::generate(&env);
         let group_id = BytesN::from_array(&env, &[60u8; 32]);
@@ -3641,22 +3657,26 @@ mod test {
             commitment: commitment.clone(),
             epoch: 0,
         };
-        client.create_group_v2(
+        let result = client.try_create_group_v2(
             &caller,
             &group_id,
             &commitment,
-            &0u32,
+            &0u32, // Small tier
             &2u32, // Democracy
-            &0u32, // member_count = 0 — invalid
+            &0u32, // member_count = 0 — previously rejected, now accepted
             &mock_proof(&env),
             &pi,
         );
+        match result {
+            Err(Err(_)) => { /* reached Groth16 verifier — validation passed */ }
+            other => panic!("expected verifier abort, got {:?}", other),
+        }
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #25)")]
-    fn test_create_democracy_rejects_member_count_one() {
-        // "Democracy of one" collapses to unilateral control — forbidden.
+    fn test_create_democracy_accepts_member_count_one() {
+        // Solo-creator case: the caller is the sole initial member and
+        // will grow the group via invites. Must reach the verifier.
         let (env, client, _admin, _cid) = setup_initialized();
         let caller = Address::generate(&env);
         let group_id = BytesN::from_array(&env, &[62u8; 32]);
@@ -3665,16 +3685,78 @@ mod test {
             commitment: commitment.clone(),
             epoch: 0,
         };
-        client.create_group_v2(
+        let result = client.try_create_group_v2(
             &caller,
             &group_id,
             &commitment,
             &0u32,
-            &2u32,
-            &1u32, // member_count = 1 — invalid
+            &2u32, // Democracy
+            &1u32, // member_count = 1 — previously rejected, now accepted
             &mock_proof(&env),
             &pi,
         );
+        match result {
+            Err(Err(_)) => { /* reached Groth16 verifier — validation passed */ }
+            other => panic!("expected verifier abort, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_create_oligarchy_accepts_member_count_zero() {
+        // Oligarchy mirrors Democracy: `member_count ∈ {0, 1}` is accepted
+        // at creation (bootstrap / solo-admin case). The admin tree is
+        // seeded independently, so zero group members is still meaningful.
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[72u8; 32]);
+        let commitment = BytesN::from_array(&env, &[73u8; 32]);
+        // Any canonical Fr encoding works as an admin_root for this test.
+        let admin_root = BytesN::from_array(&env, &[0u8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        let result = client.try_create_oligarchy_group(
+            &caller,
+            &group_id,
+            &commitment,
+            &0u32,
+            &0u32, // member_count = 0
+            &admin_root,
+            &mock_proof(&env),
+            &pi,
+        );
+        match result {
+            Err(Err(_)) => { /* reached Groth16 verifier — validation passed */ }
+            other => panic!("expected verifier abort, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_create_oligarchy_accepts_member_count_one() {
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[74u8; 32]);
+        let commitment = BytesN::from_array(&env, &[75u8; 32]);
+        let admin_root = BytesN::from_array(&env, &[0u8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        let result = client.try_create_oligarchy_group(
+            &caller,
+            &group_id,
+            &commitment,
+            &0u32,
+            &1u32, // member_count = 1
+            &admin_root,
+            &mock_proof(&env),
+            &pi,
+        );
+        match result {
+            Err(Err(_)) => { /* reached Groth16 verifier — validation passed */ }
+            other => panic!("expected verifier abort, got {:?}", other),
+        }
     }
 
     #[test]

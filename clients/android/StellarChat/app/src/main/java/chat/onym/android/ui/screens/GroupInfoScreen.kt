@@ -1,45 +1,76 @@
 package chat.onym.android.ui.screens
 
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Circle
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CallSplit
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.PersonRemove
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.VpnKey
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,16 +79,23 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import chat.onym.android.model.ChatGroup
 import chat.onym.android.model.EpochSnapshot
 import chat.onym.android.model.toHex
 import chat.onym.android.persistence.ContactAliasStore
 import chat.onym.android.persistence.StellarChatDao
+import chat.onym.android.ui.components.GroupAccent
 import chat.onym.android.ui.components.QRScannerView
+import chat.onym.android.ui.components.SettingsIconBox
 import com.stellarmls.mls.SEPGroupMemberLeaf
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -78,6 +116,7 @@ fun GroupInfoScreen(
     onSendInvitation: ((recipientKeyHex: String, onResult: (Result<Unit>) -> Unit) -> Unit)? = null,
     inviteLink: String? = null,
     onTogglePushNotifications: ((Boolean) -> Unit)? = null,
+    onSearchMessages: () -> Unit = {},
     contactAliasStore: ContactAliasStore? = null,
     dao: StellarChatDao? = null,
     onBack: () -> Unit
@@ -85,21 +124,26 @@ fun GroupInfoScreen(
     val isMember = group.members.any { it.publicKeyCompressed.contentEquals(myBlsPubkey) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
     var memberToRemove by remember { mutableStateOf<SEPGroupMemberLeaf?>(null) }
     var removalStatus by remember { mutableStateOf<String?>(null) }
     var removalStatusIsError by remember { mutableStateOf(false) }
     var isRemovingMember by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var showRotateKeyDialog by remember { mutableStateOf(false) }
+    var showLeaveDialog by remember { mutableStateOf(false) }
+    var isLeaving by remember { mutableStateOf(false) }
     var newGroupName by remember { mutableStateOf(group.name) }
-    // Invite member state
     var recipientKey by remember { mutableStateOf("") }
     var inviteStatus by remember { mutableStateOf<String?>(null) }
-    var inviteLinkCopied by remember { mutableStateOf(false) }
     var showScanner by remember { mutableStateOf(false) }
-    // Member alias
     var aliasTarget by remember { mutableStateOf<String?>(null) }
     var aliasText by remember { mutableStateOf("") }
+    var showInviteSheet by remember { mutableStateOf(false) }
+    var showEpochHistory by remember { mutableStateOf(false) }
+    var epochToPin by remember { mutableStateOf<Long?>(null) }
+
+    val accent = remember(group.id) { GroupAccent.fromSeed(group.id) }
 
     if (showScanner) {
         Box(modifier = Modifier.fillMaxSize()) {
@@ -109,6 +153,7 @@ fun GroupInfoScreen(
                     recipientKey = trimmed
                 }
                 showScanner = false
+                showInviteSheet = true
             }
         }
         return
@@ -117,10 +162,20 @@ fun GroupInfoScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Group Info") },
+                title = { Text("") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    if (isMember) {
+                        TextButton(onClick = {
+                            newGroupName = group.name
+                            showRenameDialog = true
+                        }) {
+                            Text("Edit", fontWeight = FontWeight.SemiBold)
+                        }
                     }
                 }
             )
@@ -130,360 +185,231 @@ fun GroupInfoScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp)
                 .verticalScroll(rememberScrollState())
         ) {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Group", style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                newGroupName = group.name
-                                showRenameDialog = true
-                            },
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        InfoRow("Name", group.name)
-                        Icon(
-                            Icons.Filled.Edit,
-                            contentDescription = "Rename",
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+            Hero(
+                group = group,
+                accent = accent,
+                isMember = isMember,
+                onEditName = {
+                    if (isMember) {
+                        newGroupName = group.name
+                        showRenameDialog = true
+                    }
+                }
+            )
+
+            if (isMember) {
+                QuickActionsRow(
+                    pushEnabled = group.pushNotificationsEnabled,
+                    onShare = { showInviteSheet = true },
+                    onToggleMute = {
+                        onTogglePushNotifications?.invoke(!group.pushNotificationsEnabled)
+                    },
+                    onSearch = onSearchMessages,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                )
+            } else {
+                DivergedBanner(
+                    epoch = group.epoch,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                )
+            }
+
+            SectionCard(
+                title = "Members",
+                trailing = "${group.members.size} of ${group.tier.memberCap}",
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                if (isMember) {
+                    AddPeopleRow(onClick = { showInviteSheet = true })
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+                }
+                val adminKeyHex = remember(epochSnapshots) {
+                    epochSnapshots[0L]?.members?.firstOrNull()?.publicKeyCompressed?.toHex()
+                }
+                group.members.forEachIndexed { idx, member ->
+                    val hex = member.publicKeyCompressed.toHex()
+                    val isMe = member.publicKeyCompressed.contentEquals(myBlsPubkey)
+                    val isAdmin = adminKeyHex != null && adminKeyHex == hex
+                    val alias = contactAliasStore?.displayName(hex)
+                    MemberRow(
+                        hex = hex,
+                        alias = alias,
+                        isMe = isMe,
+                        isAdmin = isAdmin,
+                        canRemove = isMember && !isMe,
+                        removing = isRemovingMember,
+                        onTap = {
+                            if (contactAliasStore != null && dao != null) {
+                                aliasText = alias ?: ""
+                                aliasTarget = hex
+                            }
+                        },
+                        onRemove = { memberToRemove = member }
+                    )
+                    if (idx < group.members.lastIndex) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = 64.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
                         )
                     }
-                    InfoRow("Epoch", group.epoch.toString())
-                    InfoRow("Members", group.members.size.toString())
-                    InfoRow("Tier", group.tier.displayName)
-                    if (group.isPublishedOnChain) {
-                        val removed = group.members.none { it.publicKeyCompressed.contentEquals(myBlsPubkey) }
-                        if (removed) {
-                            InfoRow("On-Chain", "Diverged \u26A0\uFE0F")
-                        } else {
-                            InfoRow("On-Chain", "Verified")
-                        }
-                    }
-                    if (onTogglePushNotifications != null) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 2.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Push Notifications", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+            SectionFooter(
+                text = if (isMember) "Tap a member to set a nickname. Use the remove button to kick someone."
+                       else "Members at epoch ${group.epoch}. You won't see members added after you were removed."
+            )
+
+            if (isMember && onTogglePushNotifications != null) {
+                SectionCard(
+                    title = "Notifications",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    IconRow(
+                        icon = {
+                            SettingsIconBox(
+                                icon = if (group.pushNotificationsEnabled) Icons.Filled.Notifications else Icons.Filled.NotificationsOff,
+                                background = Color(0xFFFF9500)
+                            )
+                        },
+                        title = "Push notifications",
+                        subtitle = "New messages and key events",
+                        trailing = {
                             Switch(
                                 checked = group.pushNotificationsEnabled,
                                 onCheckedChange = { onTogglePushNotifications(it) }
                             )
                         }
-                    }
+                    )
                 }
             }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Members", style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    for (member in group.members) {
-                        val isMe = member.publicKeyCompressed.contentEquals(myBlsPubkey)
-                        val hex = member.publicKeyCompressed.toHex()
-                        val alias = contactAliasStore?.displayName(hex)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    aliasText = alias ?: ""
-                                    aliasTarget = hex
-                                }
-                                .padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                if (alias != null) {
-                                    Text(
-                                        alias,
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                }
-                                Text(
-                                    hex.take(16) + "...",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (alias != null) MaterialTheme.colorScheme.onSurfaceVariant
-                                        else MaterialTheme.colorScheme.onSurface
-                                )
-                                if (isMe) {
-                                    Text(
-                                        "You",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                            }
-                            if (!isMe && isMember) {
-                                IconButton(
-                                    onClick = { memberToRemove = member },
-                                    enabled = !isRemovingMember
-                                ) {
-                                    Icon(
-                                        Icons.Filled.PersonRemove,
-                                        contentDescription = "Remove",
-                                        tint = if (isRemovingMember) MaterialTheme.colorScheme.onSurfaceVariant
-                                            else MaterialTheme.colorScheme.error
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Invite Member section
-            if (isMember && onSendInvitation != null) {
-                Spacer(modifier = Modifier.height(16.dp))
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Invite Member", style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = recipientKey,
-                            onValueChange = { recipientKey = it; inviteStatus = null },
-                            label = { Text("X25519 inbox key (64 hex chars)") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodySmall
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(
-                                onClick = {
-                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                    val clip = clipboard.primaryClip
-                                    if (clip != null && clip.itemCount > 0) {
-                                        recipientKey = clip.getItemAt(0).text?.toString()?.trim() ?: ""
-                                    }
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("Paste")
-                            }
-                            OutlinedButton(
-                                onClick = { showScanner = true },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("Scan QR")
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(
-                            onClick = {
-                                inviteStatus = null
-                                onSendInvitation(recipientKey.trim()) { result ->
-                                    result.onSuccess { inviteStatus = "Invitation sent!" }
-                                    result.onFailure { inviteStatus = "Error: ${it.message}" }
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = recipientKey.trim().length == 64
-                        ) {
-                            Text("Send Invitation")
-                        }
-                        inviteStatus?.let { status ->
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                status,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (status.startsWith("Error")) MaterialTheme.colorScheme.error
-                                    else MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        Text(
-                            "Enter the recipient's inbox key. They can find it in Settings.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 4.dp)
-                        )
-                    }
-                }
-            }
-
-            // Copy Invite Link section
-            if (isMember && inviteLink != null) {
-                Spacer(modifier = Modifier.height(16.dp))
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Invite Link", style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(
-                            onClick = {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Invite Link", inviteLink))
-                                inviteLinkCopied = true
-                                scope.launch {
-                                    delay(2000)
-                                    inviteLinkCopied = false
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(if (inviteLinkCopied) "Link Copied!" else "Copy Invite Link")
-                        }
-                        Text(
-                            "Share this link with someone who has the app installed.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 4.dp)
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
 
             if (isMember) {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Key Rotation", style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        androidx.compose.material3.Button(
-                            onClick = { showRotateKeyDialog = true },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Rotate Group Key")
-                        }
-                        Text(
-                            "Generate a new encryption key without changing membership. Provides forward secrecy.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 4.dp)
-                        )
-                    }
-                }
-            }
-
-            // Fork section for removed members
-            if (!isMember && canForkGroup) {
-                Spacer(modifier = Modifier.height(16.dp))
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Fork", style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            "Create a new group from a past epoch, excluding members you choose.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(
-                            onClick = onForkGroup,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Fork This Group")
-                        }
-                    }
-                }
-            }
-
-            // Epoch History section
-            if (epochSnapshots.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Epoch History", style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        if (group.pinnedEpoch != null) {
-                            Button(
-                                onClick = { onUnpinEpoch() },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Follow Latest Epoch")
-                            }
-                            Spacer(modifier = Modifier.height(8.dp))
-                        }
-
-                        val sortedSnapshots = epochSnapshots.entries.sortedByDescending { it.key }
-                        for ((epoch, snapshot) in sortedSnapshots) {
-                            val isPinned = group.pinnedEpoch == epoch
-                            val isRekeyBoundary = !snapshot.groupSecret.contentEquals(group.groupSecret)
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(
-                                        if (isPinned) MaterialTheme.colorScheme.primaryContainer
-                                        else Color.Transparent
-                                    )
-                                    .clickable {
-                                        if (isPinned) onUnpinEpoch() else onPinEpoch(epoch)
-                                    }
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    if (isRekeyBoundary) Icons.Filled.Lock else Icons.Filled.Circle,
-                                    contentDescription = null,
-                                    tint = if (isRekeyBoundary) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                                    modifier = Modifier.size(16.dp)
+                SectionCard(
+                    title = "Security",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    if (group.isPublishedOnChain) {
+                        IconRow(
+                            icon = {
+                                SettingsIconBox(
+                                    icon = Icons.Filled.VerifiedUser,
+                                    background = Color(0xFF34C759)
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        "Epoch $epoch",
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                    Text(
-                                        snapshot.changeDescription,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        "${snapshot.members.size} members" +
-                                            if (isRekeyBoundary) " \u2022 private branch" else "",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = if (isRekeyBoundary) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                if (isPinned) {
-                                    Icon(
-                                        Icons.Filled.Check,
-                                        contentDescription = "Pinned",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            }
+                            },
+                            title = "Anchored on Stellar",
+                            subtitle = "Verified · epoch ${group.epoch}"
+                        )
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = 64.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+                        )
+                    }
+                    IconRow(
+                        icon = {
+                            SettingsIconBox(
+                                icon = Icons.Filled.VpnKey,
+                                background = Color(0xFF0A84FF)
+                            )
+                        },
+                        title = "Rotate encryption key",
+                        subtitle = "Forward secrecy · keeps all members",
+                        onClick = { showRotateKeyDialog = true },
+                        trailing = {
+                            Icon(
+                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
                         }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            "Switch to a previous epoch to communicate with members who were present at that point. " +
-                                "Epochs marked with \uD83D\uDD12 use a different encryption key \u2014 only members from that epoch can read messages there.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (epochSnapshots.isNotEmpty()) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = 64.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+                        )
+                        EpochHistoryDisclosure(
+                            group = group,
+                            snapshots = epochSnapshots,
+                            expanded = showEpochHistory,
+                            onToggle = { showEpochHistory = !showEpochHistory },
+                            onPinRequested = { epoch -> epochToPin = epoch },
+                            onUnpin = onUnpinEpoch
                         )
                     }
                 }
+                SectionFooter(
+                    text = "Each key change creates a new epoch. You can time-travel to read messages from a past epoch."
+                )
+            }
+
+            if (isMember) {
+                SectionCard(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    DangerRow(
+                        icon = Icons.AutoMirrored.Filled.Logout,
+                        title = "Leave Group",
+                        busy = isLeaving,
+                        onClick = { showLeaveDialog = true }
+                    )
+                }
+            }
+
+            if (!isMember && canForkGroup) {
+                SectionCard(
+                    title = "Options",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    IconRow(
+                        icon = {
+                            SettingsIconBox(
+                                icon = Icons.Filled.CallSplit,
+                                background = Color(0xFF5E5CE6)
+                            )
+                        },
+                        title = "Fork this group",
+                        subtitle = "Start fresh with members you choose",
+                        onClick = onForkGroup,
+                        trailing = {
+                            Icon(
+                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                        }
+                    )
+                    if (epochSnapshots.isNotEmpty()) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = 64.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+                        )
+                        EpochHistoryDisclosure(
+                            group = group,
+                            snapshots = epochSnapshots,
+                            expanded = showEpochHistory,
+                            onToggle = { showEpochHistory = !showEpochHistory },
+                            onPinRequested = { epoch -> epochToPin = epoch },
+                            onUnpin = onUnpinEpoch
+                        )
+                    }
+                }
+                SectionFooter(text = "Create a new group from a past epoch, excluding members you choose.")
             }
 
             if (isRemovingMember) {
-                Spacer(modifier = Modifier.height(16.dp))
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    Spacer(modifier = Modifier.size(8.dp))
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        "Removing member and updating on-chain state...",
+                        "Removing member…",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -491,17 +417,15 @@ fun GroupInfoScreen(
             }
 
             removalStatus?.let { status ->
-                Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     status,
-                    color = if (removalStatusIsError) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.primary
-                    },
-                    style = MaterialTheme.typography.bodySmall
+                    color = if (removalStatusIsError) MaterialTheme.colorScheme.error else Color(0xFF2E7D32),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
                 )
             }
+
+            Spacer(modifier = Modifier.height(32.dp))
         }
     }
 
@@ -530,9 +454,7 @@ fun GroupInfoScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { memberToRemove = null }) {
-                    Text("Cancel")
-                }
+                TextButton(onClick = { memberToRemove = null }) { Text("Cancel") }
             }
         )
     }
@@ -542,7 +464,7 @@ fun GroupInfoScreen(
             onDismissRequest = { showRenameDialog = false },
             title = { Text("Rename Group") },
             text = {
-                androidx.compose.material3.OutlinedTextField(
+                OutlinedTextField(
                     value = newGroupName,
                     onValueChange = { newGroupName = it },
                     label = { Text("Group name") },
@@ -552,17 +474,11 @@ fun GroupInfoScreen(
             confirmButton = {
                 TextButton(onClick = {
                     onRenameGroup(newGroupName)
-                    removalStatus = "Group renamed."
-                    removalStatusIsError = false
                     showRenameDialog = false
-                }) {
-                    Text("Rename")
-                }
+                }) { Text("Rename") }
             },
             dismissButton = {
-                TextButton(onClick = { showRenameDialog = false }) {
-                    Text("Cancel")
-                }
+                TextButton(onClick = { showRenameDialog = false }) { Text("Cancel") }
             }
         )
     }
@@ -571,21 +487,61 @@ fun GroupInfoScreen(
         AlertDialog(
             onDismissRequest = { showRotateKeyDialog = false },
             title = { Text("Rotate Group Key?") },
-            text = { Text("A new encryption key will be generated for all members. Previous messages remain readable but future messages will use the new key.") },
+            text = { Text("A new encryption key will be generated for all members. Previous messages remain readable.") },
             confirmButton = {
                 TextButton(onClick = {
                     onRotateKey()
-                    removalStatus = "Key rotated."
-                    removalStatusIsError = false
                     showRotateKeyDialog = false
+                }) { Text("Rotate Key") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRotateKeyDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showLeaveDialog) {
+        AlertDialog(
+            onDismissRequest = { showLeaveDialog = false },
+            title = { Text("Leave Group?") },
+            text = { Text("You'll no longer receive messages. The group key will be rotated so future messages stay private from you.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showLeaveDialog = false
+                    isLeaving = true
+                    onRemoveMember(myBlsPubkey) { result ->
+                        isLeaving = false
+                        if (result.isSuccess) {
+                            onBack()
+                        } else {
+                            removalStatus = result.exceptionOrNull()?.message ?: "Failed to leave group."
+                            removalStatusIsError = true
+                        }
+                    }
                 }) {
-                    Text("Rotate Key")
+                    Text("Leave Group", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showRotateKeyDialog = false }) {
-                    Text("Cancel")
-                }
+                TextButton(onClick = { showLeaveDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    epochToPin?.let { epoch ->
+        AlertDialog(
+            onDismissRequest = { epochToPin = null },
+            title = { Text("Pin to Epoch $epoch?") },
+            text = { Text("You will switch to viewing this epoch. Other members at the current epoch won't see your messages here.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onPinEpoch(epoch)
+                    epochToPin = null
+                    onBack()
+                }) { Text("Pin Epoch") }
+            },
+            dismissButton = {
+                TextButton(onClick = { epochToPin = null }) { Text("Cancel") }
             }
         )
     }
@@ -614,34 +570,898 @@ fun GroupInfoScreen(
             confirmButton = {
                 TextButton(onClick = {
                     val pubkey = aliasTarget ?: return@TextButton
-                    scope.launch {
-                        contactAliasStore.setAlias(pubkey, aliasText, dao)
-                    }
+                    scope.launch { contactAliasStore.setAlias(pubkey, aliasText, dao) }
                     aliasTarget = null
-                }) {
-                    Text("Save")
-                }
+                }) { Text("Save") }
             },
             dismissButton = {
-                TextButton(onClick = { aliasTarget = null }) {
-                    Text("Cancel")
+                Row {
+                    val current = aliasTarget?.let { contactAliasStore.displayName(it) }
+                    if (!current.isNullOrEmpty()) {
+                        TextButton(onClick = {
+                            val pubkey = aliasTarget ?: return@TextButton
+                            scope.launch { contactAliasStore.removeAlias(pubkey, dao) }
+                            aliasTarget = null
+                        }) {
+                            Text("Remove", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                    TextButton(onClick = { aliasTarget = null }) { Text("Cancel") }
                 }
             }
+        )
+    }
+
+    if (showInviteSheet) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { showInviteSheet = false },
+            sheetState = sheetState
+        ) {
+            InviteSheetContent(
+                groupName = group.name,
+                inviteLink = inviteLink,
+                recipientKey = recipientKey,
+                onRecipientKeyChange = { recipientKey = it; inviteStatus = null },
+                inviteStatus = inviteStatus,
+                onCopyLink = {
+                    inviteLink?.let {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Invite Link", it))
+                    }
+                },
+                onShareLink = {
+                    inviteLink?.let {
+                        val sendIntent = Intent().apply {
+                            action = Intent.ACTION_SEND
+                            putExtra(Intent.EXTRA_TEXT, it)
+                            type = "text/plain"
+                        }
+                        context.startActivity(Intent.createChooser(sendIntent, null))
+                    }
+                },
+                onPasteKey = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    val clip = clipboard.primaryClip
+                    if (clip != null && clip.itemCount > 0) {
+                        recipientKey = clip.getItemAt(0).text?.toString()?.trim() ?: ""
+                    }
+                },
+                onScanQR = {
+                    showInviteSheet = false
+                    showScanner = true
+                },
+                onSendInvite = {
+                    onSendInvitation?.invoke(recipientKey.trim()) { result ->
+                        result.onSuccess { inviteStatus = "Invitation sent!" }
+                        result.onFailure { inviteStatus = "Error: ${it.message}" }
+                    }
+                }
+            )
+        }
+    }
+}
+
+// MARK: - Hero
+
+@Composable
+private fun Hero(
+    group: ChatGroup,
+    accent: GroupAccent,
+    isMember: Boolean,
+    onEditName: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Box(
+                modifier = Modifier
+                    .size(220.dp)
+                    .blur(48.dp)
+                    .background(accent.primary.copy(alpha = 0.18f), CircleShape)
+            )
+            Box(
+                modifier = Modifier
+                    .size(96.dp)
+                    .clip(CircleShape)
+                    .background(accent.brush())
+                    .clickable(enabled = isMember, onClick = onEditName),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    initialsForGroup(group.name),
+                    color = Color.White,
+                    fontSize = 36.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            if (isMember) {
+                Box(
+                    modifier = Modifier
+                        .offset(x = 34.dp, y = 34.dp)
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surface)
+                        .border(3.dp, MaterialTheme.colorScheme.background, CircleShape)
+                        .clickable(onClick = onEditName),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Filled.Edit,
+                        contentDescription = "Edit",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+
+        Text(
+            group.name,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        )
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(horizontal = 16.dp)
+        ) {
+            Chip(
+                icon = Icons.Filled.People,
+                text = "${group.members.size} members",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                bgAlpha = 0.08f
+            )
+            Chip(
+                icon = Icons.Filled.Lock,
+                text = "End-to-end encrypted",
+                tint = Color(0xFF2E7D32),
+                bgAlpha = 0.12f
+            )
+            if (group.isPublishedOnChain && isMember) {
+                Chip(
+                    icon = Icons.Filled.VerifiedUser,
+                    text = "Anchored",
+                    tint = Color(0xFF2E7D32),
+                    bgAlpha = 0.12f
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun Chip(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    text: String,
+    tint: Color,
+    bgAlpha: Float
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(tint.copy(alpha = bgAlpha))
+            .padding(horizontal = 10.dp, vertical = 5.dp)
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(11.dp))
+        Text(
+            text,
+            color = tint,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+// MARK: - Quick actions
+
+@Composable
+private fun QuickActionsRow(
+    pushEnabled: Boolean,
+    onShare: () -> Unit,
+    onToggleMute: () -> Unit,
+    onSearch: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        QuickActionTile(
+            icon = Icons.Filled.Share,
+            label = "Share",
+            subtitle = "Invite link",
+            tint = MaterialTheme.colorScheme.primary,
+            onClick = onShare,
+            modifier = Modifier.weight(1f)
+        )
+        QuickActionTile(
+            icon = if (pushEnabled) Icons.Filled.Notifications else Icons.Filled.NotificationsOff,
+            label = if (pushEnabled) "Muted" else "Unmute",
+            subtitle = if (pushEnabled) "On" else "Off",
+            tint = if (pushEnabled) Color(0xFFFF9500) else Color.Gray,
+            onClick = onToggleMute,
+            modifier = Modifier.weight(1f)
+        )
+        QuickActionTile(
+            icon = Icons.Filled.Search,
+            label = "Search",
+            subtitle = "Messages",
+            tint = Color.Gray,
+            onClick = onSearch,
+            modifier = Modifier.weight(1f)
         )
     }
 }
 
 @Composable
-private fun InfoRow(label: String, value: String) {
-    Row(modifier = Modifier.padding(vertical = 2.dp)) {
-        Text(label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-        Text(value, style = MaterialTheme.typography.bodyMedium)
+private fun QuickActionTile(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    subtitle: String,
+    tint: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp, horizontal = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(tint),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+        }
+        Text(label, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Text(
+            subtitle,
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
-private val com.stellarmls.mls.SEPTier.displayName: String
+// MARK: - Diverged banner
+
+@Composable
+private fun DivergedBanner(epoch: Long, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xFFFF9500).copy(alpha = 0.12f))
+            .padding(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(
+            Icons.Filled.Warning,
+            contentDescription = null,
+            tint = Color(0xFFFF9500),
+            modifier = Modifier.size(22.dp)
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                "You were removed from this group",
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFFC77700),
+                fontSize = 14.sp
+            )
+            Text(
+                "You can still read messages from epoch $epoch, but won't see anything posted after that. Fork this epoch to continue with the members you choose.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+// MARK: - Section primitives
+
+@Composable
+private fun SectionCard(
+    title: String? = null,
+    trailing: String? = null,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    Column(modifier = modifier) {
+        if (title != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, bottom = 6.dp, top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    title.uppercase(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                if (trailing != null) {
+                    Text(
+                        trailing,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+        ) {
+            Column { content() }
+        }
+    }
+}
+
+@Composable
+private fun SectionFooter(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 4.dp, top = 2.dp)
+    )
+}
+
+@Composable
+private fun IconRow(
+    icon: @Composable () -> Unit,
+    title: String,
+    subtitle: String? = null,
+    onClick: (() -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        icon()
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontSize = 15.sp)
+            if (subtitle != null) {
+                Text(
+                    subtitle,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        if (trailing != null) trailing()
+    }
+}
+
+@Composable
+private fun DangerRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    busy: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = !busy, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(22.dp))
+        Text(title, color = MaterialTheme.colorScheme.error, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        if (busy) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+    }
+}
+
+// MARK: - Members
+
+@Composable
+private fun AddPeopleRow(onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Filled.Add,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+        Text(
+            "Add people",
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Medium,
+            fontSize = 15.sp,
+            modifier = Modifier.weight(1f)
+        )
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+        )
+    }
+}
+
+@Composable
+private fun MemberRow(
+    hex: String,
+    alias: String?,
+    isMe: Boolean,
+    isAdmin: Boolean,
+    canRemove: Boolean,
+    removing: Boolean,
+    onTap: () -> Unit,
+    onRemove: () -> Unit
+) {
+    val displayName = when {
+        !alias.isNullOrEmpty() -> alias
+        isMe -> "You"
+        else -> hex.take(8) + "…" + hex.takeLast(4)
+    }
+    val subtitle = hex.take(10) + "…" + if (isMe) " · You" else ""
+    val accent = remember(hex) { GroupAccent.fromSeed(hex) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onTap)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(accent.brush()),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                initialsForGroup(displayName),
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    displayName,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (isAdmin) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0xFFFF9500).copy(alpha = 0.14f))
+                            .padding(horizontal = 6.dp, vertical = 1.dp)
+                    ) {
+                        Icon(
+                            Icons.Filled.Shield,
+                            contentDescription = null,
+                            tint = Color(0xFFFF9500),
+                            modifier = Modifier.size(9.dp)
+                        )
+                        Text(
+                            "ADMIN",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFFFF9500)
+                        )
+                    }
+                }
+            }
+            Text(
+                subtitle,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (canRemove) {
+            IconButton(
+                onClick = onRemove,
+                enabled = !removing
+            ) {
+                Icon(
+                    Icons.Filled.PersonRemove,
+                    contentDescription = "Remove",
+                    tint = if (removing) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                           else MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
+
+// MARK: - Epoch history
+
+@Composable
+private fun EpochHistoryDisclosure(
+    group: ChatGroup,
+    snapshots: Map<Long, EpochSnapshot>,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onPinRequested: (Long) -> Unit,
+    onUnpin: () -> Unit
+) {
+    val sorted = remember(snapshots) { snapshots.entries.sortedByDescending { it.key } }
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onToggle)
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            SettingsIconBox(
+                icon = Icons.Filled.History,
+                background = Color(0xFF5E5CE6)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Epoch history", fontSize = 15.sp)
+                Text(
+                    "${sorted.size} ${if (sorted.size == 1) "epoch" else "epochs"} · current is epoch ${group.epoch}",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        AnimatedVisibility(visible = expanded) {
+            Column(modifier = Modifier.padding(start = 20.dp, end = 14.dp, bottom = 8.dp)) {
+                if (group.pinnedEpoch != null) {
+                    TextButton(onClick = onUnpin) {
+                        Text("Follow Latest Epoch")
+                    }
+                }
+                sorted.forEachIndexed { idx, (epoch, snapshot) ->
+                    val isCurrent = epoch == group.epoch
+                    val isPinned = group.pinnedEpoch == epoch
+                    val isRekey = !snapshot.groupSecret.contentEquals(group.groupSecret)
+                    EpochTimelineRow(
+                        epoch = epoch,
+                        isCurrent = isCurrent,
+                        isPinned = isPinned,
+                        isRekey = isRekey,
+                        description = snapshot.changeDescription,
+                        memberCount = snapshot.members.size,
+                        isLast = idx == sorted.lastIndex,
+                        onTap = {
+                            if (isPinned) onUnpin() else onPinRequested(epoch)
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EpochTimelineRow(
+    epoch: Long,
+    isCurrent: Boolean,
+    isPinned: Boolean,
+    isRekey: Boolean,
+    description: String,
+    memberCount: Int,
+    isLast: Boolean,
+    onTap: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onTap)
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Column(
+            modifier = Modifier.width(18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(16.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (isCurrent) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                )
+            }
+            if (!isLast) {
+                Box(
+                    modifier = Modifier
+                        .width(1.5.dp)
+                        .height(36.dp)
+                        .background(MaterialTheme.colorScheme.outlineVariant)
+                )
+            }
+        }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(bottom = if (isLast) 0.dp else 12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text("Epoch $epoch", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                if (isCurrent) {
+                    Text(
+                        "CURRENT",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                if (isPinned) {
+                    Icon(
+                        Icons.Filled.PushPin,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(11.dp)
+                    )
+                }
+                if (isRekey) {
+                    Icon(
+                        Icons.Filled.Lock,
+                        contentDescription = null,
+                        tint = Color(0xFF2E7D32),
+                        modifier = Modifier.size(11.dp)
+                    )
+                }
+            }
+            Text(description, fontSize = 12.sp)
+            Text(
+                "$memberCount ${if (memberCount == 1) "member" else "members"}",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+// MARK: - Invite bottom sheet
+
+@Composable
+private fun InviteSheetContent(
+    groupName: String,
+    inviteLink: String?,
+    recipientKey: String,
+    onRecipientKeyChange: (String) -> Unit,
+    inviteStatus: String?,
+    onCopyLink: () -> Unit,
+    onShareLink: () -> Unit,
+    onPasteKey: () -> Unit,
+    onScanQR: () -> Unit,
+    onSendInvite: () -> Unit
+) {
+    var linkCopied by remember { mutableStateOf(false) }
+    var showAdvanced by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Invite to $groupName", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "Anyone with this link can join. It's safe — messages stay end-to-end encrypted.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        if (inviteLink != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(
+                    Icons.Filled.Link,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    if (inviteLink.length > 40) inviteLink.take(28) + "…" else inviteLink,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Button(
+                    onClick = {
+                        onCopyLink()
+                        linkCopied = true
+                        scope.launch {
+                            delay(2000)
+                            linkCopied = false
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                ) {
+                    Text(if (linkCopied) "Copied" else "Copy", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            Button(
+                onClick = onShareLink,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                contentPadding = PaddingValues(vertical = 14.dp)
+            ) {
+                Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Share link…", fontWeight = FontWeight.SemiBold)
+            }
+        }
+
+        // Advanced: inbox key
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showAdvanced = !showAdvanced }
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "OR INVITE BY INBOX KEY",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    if (showAdvanced) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            AnimatedVisibility(visible = showAdvanced) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedButton(
+                            onClick = onPasteKey,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Paste")
+                        }
+                        OutlinedButton(
+                            onClick = onScanQR,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Filled.QrCodeScanner, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Scan QR")
+                        }
+                    }
+                    OutlinedTextField(
+                        value = recipientKey,
+                        onValueChange = onRecipientKeyChange,
+                        label = { Text("X25519 inbox key (64 hex chars)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                    )
+                    Button(
+                        onClick = onSendInvite,
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = recipientKey.trim().length == 64,
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(vertical = 12.dp)
+                    ) {
+                        Text("Send invitation", fontWeight = FontWeight.SemiBold)
+                    }
+                    inviteStatus?.let { status ->
+                        Text(
+                            status,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (status.startsWith("Error")) MaterialTheme.colorScheme.error
+                                    else Color(0xFF2E7D32)
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+
+// MARK: - Helpers
+
+private fun initialsForGroup(name: String): String {
+    val parts = name.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    if (parts.isEmpty()) return "?"
+    if (parts.size == 1) return parts[0].take(2).uppercase()
+    val first = parts[0].firstOrNull()?.toString() ?: ""
+    val second = parts[1].firstOrNull()?.toString() ?: ""
+    return (first + second).uppercase()
+}
+
+private val com.stellarmls.mls.SEPTier.memberCap: String
     get() = when (this) {
-        com.stellarmls.mls.SEPTier.SMALL -> "Small (up to 32)"
-        com.stellarmls.mls.SEPTier.MEDIUM -> "Medium (up to 256)"
-        com.stellarmls.mls.SEPTier.LARGE -> "Large (up to 2,048)"
+        com.stellarmls.mls.SEPTier.SMALL -> "32"
+        com.stellarmls.mls.SEPTier.MEDIUM -> "256"
+        com.stellarmls.mls.SEPTier.LARGE -> "2,048"
     }

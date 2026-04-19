@@ -2145,6 +2145,23 @@ enum Bip39 {
         entropyFromMnemonic(mnemonic) != nil
     }
 
+    /// Prefix-match BIP39 words. Empty prefix returns `[]`.
+    static func suggestions(prefix: String, limit: Int = 4) -> [String] {
+        let p = prefix.lowercased()
+        guard !p.isEmpty else { return [] }
+        var out: [String] = []
+        for word in wordlist where word.hasPrefix(p) {
+            out.append(word)
+            if out.count >= limit { break }
+        }
+        return out
+    }
+
+    /// Whether a word exists in the BIP39 English wordlist.
+    static func isKnownWord(_ word: String) -> Bool {
+        wordlist.contains(word.lowercased())
+    }
+
     /// Derive a 64-byte seed from a BIP39 mnemonic using PBKDF2-HMAC-SHA512.
     /// This is the standard BIP39 seed derivation (2048 iterations, "mnemonic" salt).
     static func seedFromMnemonic(_ mnemonic: String, passphrase: String = "") -> Data {

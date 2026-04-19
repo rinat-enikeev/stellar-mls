@@ -12,6 +12,7 @@
 		062CEEDA662A11DE74EEB83B /* vk-small.json in Resources */ = {isa = PBXBuildFile; fileRef = 387869FA0926B4F57B27BBA0 /* vk-small.json */; };
 		08EF0A9E890B87680DE253A9 /* GroupCryptoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F33C8AAAF9A2C4EA161050D8 /* GroupCryptoTests.swift */; };
 		09EC25786F839A9A840E509A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E292A37C859D6BE12BE2376 /* ContentView.swift */; };
+		1217C3E28A0511F81BA95FB5 /* Bip39Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26D7E8F6C119C6A9C6A3BD8D /* Bip39Tests.swift */; };
 		1567BD34990CE37FB89521DF /* VideoCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1FB5F184FBA9633C01BDFBC /* VideoCache.swift */; };
 		16ADABAE1C78B394179DD74B /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76C1E6E24CEC0349F3C9A60A /* ChatViewModel.swift */; };
 		1AA0059A3C3D6B195FB5615C /* SecurityLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C987955167382BF0E0E251C /* SecurityLog.swift */; };
@@ -28,6 +29,7 @@
 		40C619A3144D30891F999B0F /* update-large.bin in Resources */ = {isa = PBXBuildFile; fileRef = 3E5BE0783C802E2A5B127D05 /* update-large.bin */; };
 		44A9F373DB7EA116813B3038 /* vk-update-small.json in Resources */ = {isa = PBXBuildFile; fileRef = EE55F7CB9B9CC14306944040 /* vk-update-small.json */; };
 		459BB52914DCD2B789CA689C /* MediaCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBAE6FF501ED7880C298C7FC /* MediaCrypto.swift */; };
+		49DB172FED51E3D2386EF8B1 /* RestoreIdentityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEE3980ECE18C9681DFD1A24 /* RestoreIdentityView.swift */; };
 		4B45989EA613CA80A4D8FFCB /* ContactsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A14AE9A1C9F0583137C7797 /* ContactsView.swift */; };
 		4CF5F8CBF1B249B01EC14D1C /* PersistenceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E25D14293AC1BC6E3FB1E28 /* PersistenceStore.swift */; };
 		4E0468C0A25E658173F4E628 /* ChatGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8FD22552EBCF23A89DB7700 /* ChatGroup.swift */; };
@@ -62,6 +64,7 @@
 		B57581CDF2F61EB03840FB63 /* TurnServersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E13EEDDB632D725889E1869 /* TurnServersView.swift */; };
 		B5836D3E7760359CFB8C42AC /* GroupCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8210CED65D67082D16673F07 /* GroupCrypto.swift */; };
 		C551E3710EC9BA8ACFC5A9C0 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0734DFA865A663F2138CD236 /* NotificationService.swift */; };
+		C5CAEF720E408DC99AAA19EE /* Bip39.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCBFA293E16FE5CE0F53A15C /* Bip39.swift */; };
 		C78434B5880A2483C3DAF9E9 /* CallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E005C90D6C91D9810C11364 /* CallView.swift */; };
 		C7C75384DD857AC9ABA5DF86 /* NostrEventTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE1DB9EAD5AE4BE3069DD5EF /* NostrEventTests.swift */; };
 		C9FEBB1D7F88D7C80D131E20 /* CrossPlatformVectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF0E72244FC0BE4C56CDFB4F /* CrossPlatformVectorTests.swift */; };
@@ -73,6 +76,7 @@
 		D6C3C9E90F39CCA80D2DD029 /* GroupListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C2B0F0A2A137DC1BE419CC3 /* GroupListView.swift */; };
 		D80AA787557EC39AC88FF3F3 /* KeyAttestation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37304476C52093C0D34ECB92 /* KeyAttestation.swift */; };
 		D8CE0C737C0C3FE425C2F8B4 /* PushSubscriptionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9C563AA269E4B62C095C93E /* PushSubscriptionStore.swift */; };
+		DB3B44D5743218AE5F34F2E9 /* RecoveryPhraseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 955C0B70B70469EAFE1DF3B6 /* RecoveryPhraseView.swift */; };
 		DDD383111230FCE8E4653FDD /* vk-medium.json in Resources */ = {isa = PBXBuildFile; fileRef = 09B5C46349E19FFD0B8AEF53 /* vk-medium.json */; };
 		DE27AFEBF0D1B09DBD63FEED /* StellarContractView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF58215B65A3C55A54778D8D /* StellarContractView.swift */; };
 		E08D58B1C48D389D86BF80F6 /* SettingsIconBox.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6F02E498BC2C9FAA6780F2F /* SettingsIconBox.swift */; };
@@ -136,6 +140,7 @@
 		1C987955167382BF0E0E251C /* SecurityLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityLog.swift; sourceTree = "<group>"; };
 		1E76AF13A26CCEC2E75C8310 /* VoiceRecordButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceRecordButton.swift; sourceTree = "<group>"; };
 		211AE30EB5115E4BB85D9084 /* swift-mls */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "swift-mls"; path = "../../../swift-mls"; sourceTree = SOURCE_ROOT; };
+		26D7E8F6C119C6A9C6A3BD8D /* Bip39Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bip39Tests.swift; sourceTree = "<group>"; };
 		28FB2F8640C54066D58B3FA9 /* FirstGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstGroupView.swift; sourceTree = "<group>"; };
 		2CB66BD4710970306321664D /* RelayerDefaults.generated.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayerDefaults.generated.swift; sourceTree = "<group>"; };
 		30F3176E6A6E2A7C75F9CB47 /* Phase3Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Phase3Tests.swift; sourceTree = "<group>"; };
@@ -168,12 +173,14 @@
 		8210CED65D67082D16673F07 /* GroupCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupCrypto.swift; sourceTree = "<group>"; };
 		8ACE473C3096412015326C52 /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCache.swift; sourceTree = "<group>"; };
 		8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		955C0B70B70469EAFE1DF3B6 /* RecoveryPhraseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryPhraseView.swift; sourceTree = "<group>"; };
 		A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A4A3E005A9C5AF2DE5743188 /* CallKitProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallKitProvider.swift; sourceTree = "<group>"; };
 		A6F02E498BC2C9FAA6780F2F /* SettingsIconBox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsIconBox.swift; sourceTree = "<group>"; };
 		B0884F32E9A807B2566DD234 /* NostrRelayConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrRelayConnection.swift; sourceTree = "<group>"; };
 		B0EA74F19D71BB7C486F8B09 /* vk-update-medium.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "vk-update-medium.json"; sourceTree = "<group>"; };
 		BA643A0E8E9EAA763609E1EA /* StellarChat.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StellarChat.entitlements; sourceTree = "<group>"; };
+		BCBFA293E16FE5CE0F53A15C /* Bip39.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bip39.swift; sourceTree = "<group>"; };
 		BF781055530F3AF0953DE842 /* CreateGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateGroupView.swift; sourceTree = "<group>"; };
 		C1FB5F184FBA9633C01BDFBC /* VideoCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCache.swift; sourceTree = "<group>"; };
 		C3437AAAE11597FA39EA2B67 /* keyset-v2 */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "keyset-v2"; path = "StellarChat/Resources/keyset-v2"; sourceTree = SOURCE_ROOT; };
@@ -183,6 +190,7 @@
 		CA247CDB4DE5023BE0A6BF52 /* PNRelayClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PNRelayClient.swift; sourceTree = "<group>"; };
 		CE1DB9EAD5AE4BE3069DD5EF /* NostrEventTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrEventTests.swift; sourceTree = "<group>"; };
 		CE90686ED5EF142D49635B5B /* update-small.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = "update-small.bin"; sourceTree = "<group>"; };
+		CEE3980ECE18C9681DFD1A24 /* RestoreIdentityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreIdentityView.swift; sourceTree = "<group>"; };
 		CEE93134C2D32A03E89226B8 /* NostrMessageTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrMessageTransport.swift; sourceTree = "<group>"; };
 		CF58215B65A3C55A54778D8D /* StellarContractView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StellarContractView.swift; sourceTree = "<group>"; };
 		D598C68B195A10B97A59B334 /* large.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = large.bin; sourceTree = "<group>"; };
@@ -258,7 +266,9 @@
 				C6867C765FBB9480D9E0D9FC /* PendingInvitationsView.swift */,
 				F0C2E0A174CC0B050D6BADB3 /* QRCodeView.swift */,
 				68F22F3B02C2C003269BA135 /* QRScannerView.swift */,
+				955C0B70B70469EAFE1DF3B6 /* RecoveryPhraseView.swift */,
 				E890E8AADCCF100079402796 /* RelaysView.swift */,
+				CEE3980ECE18C9681DFD1A24 /* RestoreIdentityView.swift */,
 				FD4DD514A884BAD2FC5B2D73 /* SearchView.swift */,
 				A6F02E498BC2C9FAA6780F2F /* SettingsIconBox.swift */,
 				A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */,
@@ -287,6 +297,7 @@
 			isa = PBXGroup;
 			children = (
 				57DB304E93E815412ABA6010 /* AudioCache.swift */,
+				BCBFA293E16FE5CE0F53A15C /* Bip39.swift */,
 				4FCDBA22391412C6D05BB99E /* BlossomClient.swift */,
 				FA96977038D2F9F4EC31EF3D /* BootstrapPayload.swift */,
 				F8FD22552EBCF23A89DB7700 /* ChatGroup.swift */,
@@ -386,6 +397,7 @@
 		C1AFFA22C05C5C880CC15516 /* StellarChatTests */ = {
 			isa = PBXGroup;
 			children = (
+				26D7E8F6C119C6A9C6A3BD8D /* Bip39Tests.swift */,
 				EF0E72244FC0BE4C56CDFB4F /* CrossPlatformVectorTests.swift */,
 				F33C8AAAF9A2C4EA161050D8 /* GroupCryptoTests.swift */,
 				E81687A278F166A5B7E5F557 /* ModelsTests.swift */,
@@ -580,6 +592,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1217C3E28A0511F81BA95FB5 /* Bip39Tests.swift in Sources */,
 				C9FEBB1D7F88D7C80D131E20 /* CrossPlatformVectorTests.swift in Sources */,
 				08EF0A9E890B87680DE253A9 /* GroupCryptoTests.swift in Sources */,
 				9CEA673CD2010A812F5C7FA2 /* ModelsTests.swift in Sources */,
@@ -595,6 +608,7 @@
 			files = (
 				3B481A4C5494564BC10F20F1 /* AdvancedSettingsView.swift in Sources */,
 				33D3690E63750E20852336EE /* AudioCache.swift in Sources */,
+				C5CAEF720E408DC99AAA19EE /* Bip39.swift in Sources */,
 				E10FD8A2E1B0D8169A2BEB15 /* BlossomClient.swift in Sources */,
 				5678B53B267146B968D55513 /* BlossomServersView.swift in Sources */,
 				0029F253BA68E6B4CA11E864 /* BootstrapPayload.swift in Sources */,
@@ -633,8 +647,10 @@
 				D8CE0C737C0C3FE425C2F8B4 /* PushSubscriptionStore.swift in Sources */,
 				A49A5C6B2401EEB1847229DE /* QRCodeView.swift in Sources */,
 				3EC81E8DA76069452870626F /* QRScannerView.swift in Sources */,
+				DB3B44D5743218AE5F34F2E9 /* RecoveryPhraseView.swift in Sources */,
 				538C339B8E0F50F72DCB8F72 /* RelayerDefaults.generated.swift in Sources */,
 				5A8B12072B88D47A872A611D /* RelaysView.swift in Sources */,
+				49DB172FED51E3D2386EF8B1 /* RestoreIdentityView.swift in Sources */,
 				9EABBA75189DA35E0BA71054 /* SearchView.swift in Sources */,
 				1AA0059A3C3D6B195FB5615C /* SecurityLog.swift in Sources */,
 				E08D58B1C48D389D86BF80F6 /* SettingsIconBox.swift in Sources */,

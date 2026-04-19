@@ -6,6 +6,7 @@ mod handlers;
 mod model;
 mod nostr;
 mod queue;
+mod reaper;
 mod seed;
 mod sse;
 mod store;
@@ -90,6 +91,8 @@ async fn main() -> anyhow::Result<()> {
         queues,
         status_tx,
     });
+
+    reaper::spawn(state.clone());
 
     let app = Router::new()
         .route("/api/v1/healthz", get(healthz))

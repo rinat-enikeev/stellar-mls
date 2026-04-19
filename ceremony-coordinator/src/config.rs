@@ -13,6 +13,8 @@ pub struct Config {
     pub admin_pubkeys: Vec<String>,
     pub coordinator_nsec: Option<String>,
     pub slot_deadline_secs: i64,
+    pub queue_idle_secs: i64,
+    pub reaper_interval_secs: u64,
     pub pow_bits: u32,
     pub allow_browser_contribute: bool,
     pub rate_limit_rpm: u32,
@@ -52,6 +54,16 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(7200);
 
+        let queue_idle_secs = env::var("CEREMONY_QUEUE_IDLE_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(7200);
+
+        let reaper_interval_secs = env::var("CEREMONY_REAPER_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(60);
+
         let pow_bits = env::var("CEREMONY_POW_BITS")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -82,6 +94,8 @@ impl Config {
             admin_pubkeys,
             coordinator_nsec,
             slot_deadline_secs,
+            queue_idle_secs,
+            reaper_interval_secs,
             pow_bits,
             allow_browser_contribute,
             rate_limit_rpm,

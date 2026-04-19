@@ -3635,6 +3635,129 @@ mod test {
     // (and Oligarchy) so clients can start solo and grow via off-chain MLS
     // joins. The `m_new < 2` invariant is enforced later by
     // `democracy_update_commitment` once quorum actually matters.
+    //
+    // The two tests below replace the deleted
+    // `test_create_democracy_rejects_member_count_{zero,one}` cases
+    // (PR #84 relaxed the floor — see review on pullrequestreview-4136498592).
+    // They lock in the relaxation by asserting the validation path now
+    // *accepts* 0/1 and defers to the Groth16 verifier; the verifier
+    // abort (`Err(Err(_))`) is the signal that every validation check
+    // passed.
+
+    #[test]
+    fn test_create_democracy_accepts_member_count_zero() {
+        // Bootstrap case: a group creator publishing on-chain before any
+        // member has joined off-chain. Must no longer be rejected at
+        // create time — quorum binding is a later-epoch concern.
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[60u8; 32]);
+        let commitment = BytesN::from_array(&env, &[61u8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        let result = client.try_create_group_v2(
+            &caller,
+            &group_id,
+            &commitment,
+            &0u32, // Small tier
+            &2u32, // Democracy
+            &0u32, // member_count = 0 — previously rejected, now accepted
+            &mock_proof(&env),
+            &pi,
+        );
+        match result {
+            Err(Err(_)) => { /* reached Groth16 verifier — validation passed */ }
+            other => panic!("expected verifier abort, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_create_democracy_accepts_member_count_one() {
+        // Solo-creator case: the caller is the sole initial member and
+        // will grow the group via invites. Must reach the verifier.
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[62u8; 32]);
+        let commitment = BytesN::from_array(&env, &[63u8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        let result = client.try_create_group_v2(
+            &caller,
+            &group_id,
+            &commitment,
+            &0u32,
+            &2u32, // Democracy
+            &1u32, // member_count = 1 — previously rejected, now accepted
+            &mock_proof(&env),
+            &pi,
+        );
+        match result {
+            Err(Err(_)) => { /* reached Groth16 verifier — validation passed */ }
+            other => panic!("expected verifier abort, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_create_oligarchy_accepts_member_count_zero() {
+        // Oligarchy mirrors Democracy: `member_count ∈ {0, 1}` is accepted
+        // at creation (bootstrap / solo-admin case). The admin tree is
+        // seeded independently, so zero group members is still meaningful.
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[72u8; 32]);
+        let commitment = BytesN::from_array(&env, &[73u8; 32]);
+        // Any canonical Fr encoding works as an admin_root for this test.
+        let admin_root = BytesN::from_array(&env, &[0u8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        let result = client.try_create_oligarchy_group(
+            &caller,
+            &group_id,
+            &commitment,
+            &0u32,
+            &0u32, // member_count = 0
+            &admin_root,
+            &mock_proof(&env),
+            &pi,
+        );
+        match result {
+            Err(Err(_)) => { /* reached Groth16 verifier — validation passed */ }
+            other => panic!("expected verifier abort, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_create_oligarchy_accepts_member_count_one() {
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[74u8; 32]);
+        let commitment = BytesN::from_array(&env, &[75u8; 32]);
+        let admin_root = BytesN::from_array(&env, &[0u8; 32]);
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 0,
+        };
+        let result = client.try_create_oligarchy_group(
+            &caller,
+            &group_id,
+            &commitment,
+            &0u32,
+            &1u32, // member_count = 1
+            &admin_root,
+            &mock_proof(&env),
+            &pi,
+        );
+        match result {
+            Err(Err(_)) => { /* reached Groth16 verifier — validation passed */ }
+            other => panic!("expected verifier abort, got {:?}", other),
+        }
+    }
 
     #[test]
     #[should_panic(expected = "Error(Contract, #25)")]

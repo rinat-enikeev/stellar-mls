@@ -231,12 +231,20 @@ async fn invoke_contract(config: &Config, request: &RelayerRequest) -> Result<St
     cmd.arg("--");
     cmd.arg(function);
 
-    // Build function-specific arguments
+    // Build function-specific arguments.
+    //
+    // Every `field_value` lookup uses the canonical ordering declared in
+    // `GROUP_ID_KEYS`, `GROUP_TYPE_KEYS`, etc. — snake_case first (Soroban
+    // ABI convention, what the contract ships today), camelCase as a
+    // legacy fallback for older client payloads. Keep the constants as the
+    // single source of truth: a malicious client that sends *both* keys
+    // with divergent values will always resolve to the snake_case value,
+    // regardless of which endpoint is hit.
     match function.as_str() {
         "create_group" => {
             // Replace caller with relayer's own address (contract requires caller.require_auth())
             cmd.arg("--caller").arg(&config.public_address);
-            add_hex_arg(&mut cmd, "--group-id", payload, &["groupID", "group_id"])?;
+            add_hex_arg(&mut cmd, "--group-id", payload, GROUP_ID_KEYS)?;
             add_hex_arg(&mut cmd, "--commitment", payload, &["commitment"])?;
             add_int_arg(&mut cmd, "--tier", payload, &["tier"])?;
             add_proof_arg(&mut cmd, payload)?;
@@ -247,21 +255,21 @@ async fn invoke_contract(config: &Config, request: &RelayerRequest) -> Result<St
             // uses `create_oligarchy_group` instead because it also seeds an
             // admin root.
             cmd.arg("--caller").arg(&config.public_address);
-            add_hex_arg(&mut cmd, "--group-id", payload, &["group_id", "groupID"])?;
+            add_hex_arg(&mut cmd, "--group-id", payload, GROUP_ID_KEYS)?;
             add_hex_arg(&mut cmd, "--commitment", payload, &["commitment"])?;
             add_int_arg(&mut cmd, "--tier", payload, &["tier"])?;
-            add_int_arg(&mut cmd, "--group-type", payload, &["group_type", "groupType"])?;
-            add_int_arg(&mut cmd, "--member-count", payload, &["member_count", "memberCount"])?;
+            add_int_arg(&mut cmd, "--group-type", payload, GROUP_TYPE_KEYS)?;
+            add_int_arg(&mut cmd, "--member-count", payload, MEMBER_COUNT_KEYS)?;
             add_proof_arg(&mut cmd, payload)?;
             add_membership_public_inputs_arg(&mut cmd, payload)?;
         }
         "create_oligarchy_group" => {
             cmd.arg("--caller").arg(&config.public_address);
-            add_hex_arg(&mut cmd, "--group-id", payload, &["group_id", "groupID"])?;
+            add_hex_arg(&mut cmd, "--group-id", payload, GROUP_ID_KEYS)?;
             add_hex_arg(&mut cmd, "--commitment", payload, &["commitment"])?;
             add_int_arg(&mut cmd, "--tier", payload, &["tier"])?;
-            add_int_arg(&mut cmd, "--member-count", payload, &["member_count", "memberCount"])?;
-            add_hex_arg(&mut cmd, "--admin-root", payload, &["admin_root", "adminRoot"])?;
+            add_int_arg(&mut cmd, "--member-count", payload, MEMBER_COUNT_KEYS)?;
+            add_hex_arg(&mut cmd, "--admin-root", payload, ADMIN_ROOT_KEYS)?;
             add_proof_arg(&mut cmd, payload)?;
             add_membership_public_inputs_arg(&mut cmd, payload)?;
         }
@@ -270,28 +278,26 @@ async fn invoke_contract(config: &Config, request: &RelayerRequest) -> Result<St
             // longer forwards client-supplied `new_commitment` or `new_epoch`;
             // c_new comes from the UpdatePublicInputs payload and the contract
             // derives new_epoch on-chain as stored_epoch + 1.
-            add_hex_arg(&mut cmd, "--group-id", payload, &["groupID", "group_id"])?;
+            add_hex_arg(&mut cmd, "--group-id", payload, GROUP_ID_KEYS)?;
             add_proof_arg(&mut cmd, payload)?;
             add_update_public_inputs_arg(&mut cmd, payload)?;
         }
         "verify_membership" => {
-            add_hex_arg(&mut cmd, "--group-id", payload, &["groupID", "group_id"])?;
+            add_hex_arg(&mut cmd, "--group-id", payload, GROUP_ID_KEYS)?;
             add_proof_arg(&mut cmd, payload)?;
             add_membership_public_inputs_arg(&mut cmd, payload)?;
         }
         "deactivate_group" => {
-            add_hex_arg(&mut cmd, "--group-id", payload, &["groupID", "group_id"])?;
+            add_hex_arg(&mut cmd, "--group-id", payload, GROUP_ID_KEYS)?;
             add_proof_arg(&mut cmd, payload)?;
             add_membership_public_inputs_arg(&mut cmd, payload)?;
         }
         "get_state" | "get_state_v2" | "get_admin_root" => {
-            add_hex_arg(&mut cmd, "--group-id", payload, &["groupID", "group_id"])?;
+            add_hex_arg(&mut cmd, "--group-id", payload, GROUP_ID_KEYS)?;
         }
         "get_history" => {
-            add_hex_arg(&mut cmd, "--group-id", payload, &["groupID", "group_id"])?;
-            let max_entries = payload
-                .get("maxEntries")
-                .or_else(|| payload.get("max_entries"))
+            add_hex_arg(&mut cmd, "--group-id", payload, GROUP_ID_KEYS)?;
+            let max_entries = field_value(payload, MAX_ENTRIES_KEYS)
                 .and_then(|v| v.as_u64())
                 .unwrap_or(64);
             cmd.arg("--max-entries").arg(max_entries.to_string());
@@ -314,6 +320,20 @@ async fn invoke_contract(config: &Config, request: &RelayerRequest) -> Result<St
         Err(format!("{stderr} {stdout}").trim().to_string())
     }
 }
+
+/// Canonical key-lookup orders for payload fields.
+///
+/// Snake_case comes first (Soroban ABI convention, what V2 clients emit),
+/// camelCase second (legacy iOS/Android client payloads still in the wild).
+/// Keep these as the single source of truth so every `field_value` call
+/// site resolves conflicts the same way: if a payload contains *both*
+/// variants with different values, the snake_case value always wins.
+pub(crate) const GROUP_ID_KEYS: &[&str] = &["group_id", "groupID"];
+pub(crate) const GROUP_TYPE_KEYS: &[&str] = &["group_type", "groupType"];
+pub(crate) const MEMBER_COUNT_KEYS: &[&str] = &["member_count", "memberCount"];
+pub(crate) const ADMIN_ROOT_KEYS: &[&str] = &["admin_root", "adminRoot"];
+pub(crate) const PUBLIC_INPUTS_KEYS: &[&str] = &["public_inputs", "publicInputs"];
+pub(crate) const MAX_ENTRIES_KEYS: &[&str] = &["max_entries", "maxEntries"];
 
 /// Look up a value under the first matching key (supports camelCase/snake_case
 /// payload variants emitted by different client SDKs).
@@ -393,7 +413,7 @@ fn add_proof_arg(cmd: &mut Command, payload: &Value) -> Result<(), String> {
 /// Used by create_group, verify_membership, and deactivate_group.
 /// Expects `payload.publicInputs = { commitment: base64, epoch: u64 }`.
 fn add_membership_public_inputs_arg(cmd: &mut Command, payload: &Value) -> Result<(), String> {
-    let pi = field_value(payload, &["publicInputs", "public_inputs"])
+    let pi = field_value(payload, PUBLIC_INPUTS_KEYS)
         .ok_or("missing publicInputs field")?;
     let commitment_b64 = pi
         .get("commitment")
@@ -429,7 +449,7 @@ fn add_membership_public_inputs_arg(cmd: &mut Command, payload: &Value) -> Resul
 /// the relayer no longer propagates a client-supplied `new_commitment` / `new_epoch`
 /// pair (#59 fix).
 fn add_update_public_inputs_arg(cmd: &mut Command, payload: &Value) -> Result<(), String> {
-    let pi = field_value(payload, &["publicInputs", "public_inputs"])
+    let pi = field_value(payload, PUBLIC_INPUTS_KEYS)
         .ok_or("missing publicInputs field")?;
     let c_old_b64 = pi
         .get("c_old")
@@ -596,5 +616,194 @@ mod tests {
         // Other fields should be untouched
         assert_eq!(value[0]["name"], "group1");
         assert_eq!(value[1]["name"], "group2");
+    }
+
+    // ---- field_value / dual-key lookup tests (#84 review) ----
+
+    #[test]
+    fn test_field_value_snake_case_wins_over_camelcase() {
+        // Invariant relied on by every V1 and V2 handler: when a payload
+        // contains *both* snake_case and camelCase variants with
+        // different values, the snake_case variant always wins because
+        // the canonical key-order constants list it first. This closes
+        // the divergence flagged in PR #84 review where legacy handlers
+        // preferred camelCase and V2 handlers preferred snake_case.
+        let payload = serde_json::json!({
+            "group_id": "snake-wins",
+            "groupID": "camel-loses"
+        });
+        assert_eq!(
+            field_value(&payload, GROUP_ID_KEYS).and_then(|v| v.as_str()),
+            Some("snake-wins")
+        );
+    }
+
+    #[test]
+    fn test_field_value_camelcase_fallback_when_only_legacy_key_present() {
+        // Legacy clients (pre-V2) still send camelCase. The canonical
+        // order must fall back to camelCase so old payloads keep working.
+        let payload = serde_json::json!({ "groupID": "legacy-only" });
+        assert_eq!(
+            field_value(&payload, GROUP_ID_KEYS).and_then(|v| v.as_str()),
+            Some("legacy-only")
+        );
+    }
+
+    #[test]
+    fn test_field_value_returns_none_when_no_key_matches() {
+        let payload = serde_json::json!({ "unrelated": 1 });
+        assert!(field_value(&payload, GROUP_ID_KEYS).is_none());
+    }
+
+    #[test]
+    fn test_canonical_key_orders_are_snake_first() {
+        // Locks the snake_case-first invariant across every field that
+        // has a dual spelling. Adding a new dual-spelled field without
+        // the same ordering should fail this test.
+        for keys in [
+            GROUP_ID_KEYS,
+            GROUP_TYPE_KEYS,
+            MEMBER_COUNT_KEYS,
+            ADMIN_ROOT_KEYS,
+            PUBLIC_INPUTS_KEYS,
+            MAX_ENTRIES_KEYS,
+        ] {
+            assert_eq!(keys.len(), 2, "dual-key list must have exactly two entries");
+            assert!(
+                keys[0].contains('_') || keys[0].chars().all(|c| c.is_lowercase()),
+                "first key must be snake_case or all-lowercase: {}",
+                keys[0]
+            );
+            assert!(
+                keys[1].chars().any(|c| c.is_uppercase()),
+                "second key must be camelCase (legacy fallback): {}",
+                keys[1]
+            );
+        }
+    }
+
+    #[test]
+    fn test_add_hex_arg_accepts_snake_case_payload() {
+        let payload = serde_json::json!({ "group_id": "AAAA" }); // base64("\x00\x00\x00")
+        let mut cmd = Command::new("true");
+        add_hex_arg(&mut cmd, "--group-id", &payload, GROUP_ID_KEYS)
+            .expect("snake_case payload must decode");
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+        assert_eq!(args, vec!["--group-id", "000000"]);
+    }
+
+    #[test]
+    fn test_add_hex_arg_accepts_camel_case_payload() {
+        let payload = serde_json::json!({ "groupID": "AAAA" });
+        let mut cmd = Command::new("true");
+        add_hex_arg(&mut cmd, "--group-id", &payload, GROUP_ID_KEYS)
+            .expect("camelCase payload must decode");
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+        assert_eq!(args, vec!["--group-id", "000000"]);
+    }
+
+    #[test]
+    fn test_add_hex_arg_prefers_snake_case_when_both_present() {
+        // Different base64 payloads under each key — verify we decode
+        // the snake_case one (bytes 0x01 0x02 0x03 = base64 "AQID").
+        let payload = serde_json::json!({
+            "group_id": "AQID",
+            "groupID":  "AAAA"
+        });
+        let mut cmd = Command::new("true");
+        add_hex_arg(&mut cmd, "--group-id", &payload, GROUP_ID_KEYS)
+            .expect("conflicting-keys payload must decode the snake_case variant");
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+        assert_eq!(args, vec!["--group-id", "010203"]);
+    }
+
+    #[test]
+    fn test_add_int_arg_accepts_both_spellings() {
+        let snake = serde_json::json!({ "member_count": 7 });
+        let camel = serde_json::json!({ "memberCount": 7 });
+
+        for payload in [&snake, &camel] {
+            let mut cmd = Command::new("true");
+            add_int_arg(&mut cmd, "--member-count", payload, MEMBER_COUNT_KEYS)
+                .expect("both key spellings must parse");
+            let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+            assert_eq!(args, vec!["--member-count", "7"]);
+        }
+    }
+
+    // ---- new V2/oligarchy entrypoint payload shape tests ----
+    //
+    // Full invocation of create_group_v2 / create_oligarchy_group /
+    // get_state_v2 / get_admin_root requires an actual stellar CLI and
+    // a deployed contract, which belongs in the testnet smoke script
+    // (`scripts/deploy-pr84-testnet.sh`). Unit tests here cover the
+    // payload-shape contract the relayer enforces before shelling out:
+    // every required field must be resolvable under either spelling.
+
+    #[test]
+    fn test_create_group_v2_payload_resolves_every_required_field() {
+        // Mixed-spelling payload: some fields snake_case, some camelCase.
+        // Every one must still resolve under the canonical order.
+        let payload = serde_json::json!({
+            "group_id": "AAAA",
+            "commitment": "AAAA",
+            "tier": 0,
+            "groupType": 2,          // camelCase fallback path
+            "member_count": 1,
+            "publicInputs": {        // camelCase fallback path
+                "commitment": "AAAA",
+                "epoch": 0
+            }
+        });
+
+        assert!(field_value(&payload, GROUP_ID_KEYS).is_some(), "group_id");
+        assert!(field_value(&payload, GROUP_TYPE_KEYS).is_some(), "group_type");
+        assert!(field_value(&payload, MEMBER_COUNT_KEYS).is_some(), "member_count");
+        assert!(field_value(&payload, PUBLIC_INPUTS_KEYS).is_some(), "public_inputs");
+        assert!(payload.get("commitment").is_some(), "commitment");
+        assert!(payload.get("tier").is_some(), "tier");
+    }
+
+    #[test]
+    fn test_create_oligarchy_group_payload_resolves_admin_root() {
+        // admin_root is unique to create_oligarchy_group; verify the
+        // dual-key lookup works for both spellings.
+        let snake = serde_json::json!({ "admin_root": "AAAA" });
+        let camel = serde_json::json!({ "adminRoot":  "AAAA" });
+
+        assert!(field_value(&snake, ADMIN_ROOT_KEYS).is_some());
+        assert!(field_value(&camel, ADMIN_ROOT_KEYS).is_some());
+    }
+
+    #[test]
+    fn test_get_state_and_get_admin_root_payload_shape() {
+        // These read-only entrypoints take only `group_id`. Verify a
+        // minimum-viable payload is accepted.
+        let payload = serde_json::json!({ "group_id": "AAAA" });
+        assert!(field_value(&payload, GROUP_ID_KEYS).is_some());
+
+        // Missing group_id must surface as None (the handler turns it
+        // into a `missing field` error).
+        let empty = serde_json::json!({});
+        assert!(field_value(&empty, GROUP_ID_KEYS).is_none());
+    }
+
+    #[test]
+    fn test_get_history_max_entries_dual_spelling() {
+        // `get_history` takes an optional `max_entries` / `maxEntries`;
+        // both spellings must resolve, and missing defaults elsewhere.
+        let snake = serde_json::json!({ "max_entries": 10 });
+        let camel = serde_json::json!({ "maxEntries":  10 });
+        let neither = serde_json::json!({});
+
+        assert_eq!(
+            field_value(&snake, MAX_ENTRIES_KEYS).and_then(|v| v.as_u64()),
+            Some(10)
+        );
+        assert_eq!(
+            field_value(&camel, MAX_ENTRIES_KEYS).and_then(|v| v.as_u64()),
+            Some(10)
+        );
+        assert!(field_value(&neither, MAX_ENTRIES_KEYS).is_none());
     }
 }

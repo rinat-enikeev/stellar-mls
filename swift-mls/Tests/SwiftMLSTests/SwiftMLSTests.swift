@@ -260,6 +260,45 @@ struct SwiftMLSTests {
     }
 
     @Test
+    func adminCommitmentBindsRosterAndSalt() throws {
+        let admins = try [fieldBytes(1), fieldBytes(2)].map { secretKey in
+            SEPGroupMemberLeaf(
+                publicKeyCompressed: try SEPCommitmentBuilder.computePublicKey(secretKey: secretKey),
+                leafHash: try SEPCommitmentBuilder.computeLeafHash(secretKey: secretKey)
+            )
+        }
+        let salt = Data(repeating: 0x5A, count: 32)
+
+        let adminCommitment = try SEPCommitmentBuilder.computeAdminCommitment(admins: admins, salt: salt)
+        #expect(adminCommitment.count == 32)
+
+        // §6.2.2: admin_commitment = Poseidon(Poseidon(admin_root, 0), salt).
+        // admin_epoch is pinned to 0 at group birth.
+        let adminRoot = try SEPCommitmentBuilder.computeMerkleRoot(members: admins, tier: .small)
+        let expected = try SEPCommitmentBuilder.computePoseidonCommitment(
+            poseidonRoot: adminRoot, epoch: 0, salt: salt
+        )
+        #expect(adminCommitment == expected)
+
+        // Non-zero epoch must produce a different commitment — guards against
+        // regressions that drop the epoch=0 binding.
+        let wrongEpoch = try SEPCommitmentBuilder.computePoseidonCommitment(
+            poseidonRoot: adminRoot, epoch: 1, salt: salt
+        )
+        #expect(adminCommitment != wrongEpoch)
+
+        // Roster change → different commitment.
+        let smaller = Array(admins.prefix(1))
+        let smallerCommitment = try SEPCommitmentBuilder.computeAdminCommitment(admins: smaller, salt: salt)
+        #expect(adminCommitment != smallerCommitment)
+
+        // Salt change → different commitment.
+        let otherSalt = Data(repeating: 0xA5, count: 32)
+        let otherSaltCommitment = try SEPCommitmentBuilder.computeAdminCommitment(admins: admins, salt: otherSalt)
+        #expect(adminCommitment != otherSaltCommitment)
+    }
+
+    @Test
     func ephemeralNostrSignersAreUniqueAndProduceValidKeys() throws {
         let a = try RustBackedNostrSigner.ephemeral()
         let b = try RustBackedNostrSigner.ephemeral()

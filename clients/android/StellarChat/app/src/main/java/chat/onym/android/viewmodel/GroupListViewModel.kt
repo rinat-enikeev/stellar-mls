@@ -1070,7 +1070,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                         // `update_admin_commitment`. The admin salt is
                         // deterministic per groupID so any client can
                         // recompute it without extra persisted state.
-                        adminLeaves = listOf(keyManager.memberLeaf)
+                        adminLeaves = listOf(keyManager.memberLeaf())
                         adminSalt = deriveAdminSalt(group.groupIDData)
                     } else {
                         adminLeaves = null
@@ -2390,15 +2390,26 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun sortMembers(group: ChatGroup) {
-        group.members.sortWith { a, b ->
-            val aKey = a.publicKeyCompressed
-            val bKey = b.publicKeyCompressed
-            for (i in 0 until minOf(aKey.size, bKey.size)) {
-                val cmp = (aKey[i].toInt() and 0xFF) - (bKey[i].toInt() and 0xFF)
-                if (cmp != 0) return@sortWith cmp
+        group.members.sortWith(memberLeafComparator)
+    }
+
+    companion object {
+        /**
+         * Canonical byte-wise lexicographic ordering on compressed BLS public
+         * keys. Must match `ChatGroup.addMember` and every join/admin path
+         * that reconstructs the Merkle commitment locally — any divergence
+         * yields a different Poseidon root.
+         */
+        val memberLeafComparator: Comparator<com.stellarmls.mls.SEPGroupMemberLeaf> =
+            Comparator { a, b ->
+                val aKey = a.publicKeyCompressed
+                val bKey = b.publicKeyCompressed
+                for (i in 0 until minOf(aKey.size, bKey.size)) {
+                    val cmp = (aKey[i].toInt() and 0xFF) - (bKey[i].toInt() and 0xFF)
+                    if (cmp != 0) return@Comparator cmp
+                }
+                aKey.size - bKey.size
             }
-            aKey.size - bKey.size
-        }
     }
 
     private fun lexCompare(a: ByteArray, b: ByteArray): Int {

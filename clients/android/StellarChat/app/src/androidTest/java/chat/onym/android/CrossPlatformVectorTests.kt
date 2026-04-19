@@ -177,6 +177,43 @@ class CrossPlatformVectorTests {
     }
 
     // -----------------------------------------------------------------------
+    // Admin Commitment (§6.2.2) — Poseidon(Poseidon(admin_root, 0), salt)
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun adminCommitment_bindsRosterAndSalt() {
+        val admins = listOf(
+            makeLeaf("0101010101010101010101010101010101010101010101010101010101010101"),
+            makeLeaf("0202020202020202020202020202020202020202020202020202020202020202")
+        )
+        val salt = ByteArray(32) { 0x5A }
+
+        val adminCommitment = SEPCommitmentBuilder.computeAdminCommitment(admins, salt)
+        assertEquals(32, adminCommitment.size)
+
+        // §6.2.2: admin_commitment = Poseidon(Poseidon(admin_root, 0), salt).
+        // admin_epoch is pinned to 0 at group birth.
+        val adminRoot = SEPCommitmentBuilder.computeMerkleRoot(admins, SEPTier.SMALL)
+        val expected = SEPCommitmentBuilder.computePoseidonCommitment(adminRoot, 0L, salt)
+        assertArrayEquals(adminCommitment, expected)
+
+        // Non-zero epoch must produce a different commitment — guards against
+        // regressions that drop the epoch=0 binding.
+        val wrongEpoch = SEPCommitmentBuilder.computePoseidonCommitment(adminRoot, 1L, salt)
+        assertFalse(adminCommitment.contentEquals(wrongEpoch))
+
+        // Roster change → different commitment.
+        val smaller = admins.take(1)
+        val smallerCommitment = SEPCommitmentBuilder.computeAdminCommitment(smaller, salt)
+        assertFalse(adminCommitment.contentEquals(smallerCommitment))
+
+        // Salt change → different commitment.
+        val otherSalt = ByteArray(32) { 0xA5.toByte() }
+        val otherSaltCommitment = SEPCommitmentBuilder.computeAdminCommitment(admins, otherSalt)
+        assertFalse(adminCommitment.contentEquals(otherSaltCommitment))
+    }
+
+    // -----------------------------------------------------------------------
     // End-to-End Pipeline with Vectors
     // -----------------------------------------------------------------------
 

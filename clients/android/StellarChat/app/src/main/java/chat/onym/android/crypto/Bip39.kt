@@ -2140,6 +2140,34 @@ object Bip39 {
     /** Validate a BIP39 mnemonic (word count, known words, checksum). */
     fun isValidMnemonic(mnemonic: String): Boolean = entropyFromMnemonic(mnemonic) != null
 
+    /** Prefix-match suggestions from the BIP39 wordlist. Empty prefix returns empty list. */
+    fun suggestions(prefix: String, limit: Int = 4): List<String> {
+        val p = prefix.lowercase()
+        if (p.isEmpty()) return emptyList()
+        val out = mutableListOf<String>()
+        for (word in wordlist) {
+            if (word.startsWith(p)) {
+                out.add(word)
+                if (out.size >= limit) break
+            }
+        }
+        return out
+    }
+
+    /** True if [word] (case-insensitive) appears in the BIP39 wordlist. */
+    fun isKnownWord(word: String): Boolean = wordlist.contains(word.lowercase())
+
+    /** Random word from the BIP39 wordlist (used for verification distractors). */
+    fun randomWord(exclude: Set<String> = emptySet()): String {
+        val rng = SecureRandom()
+        while (true) {
+            val w = wordlist[rng.nextInt(wordlist.size)]
+            if (w !in exclude) return w
+        }
+        @Suppress("UNREACHABLE_CODE")
+        return ""
+    }
+
     /**
      * Derive a 64-byte seed from a BIP39 mnemonic using PBKDF2-HMAC-SHA512.
      * Standard BIP39: 2048 iterations, "mnemonic" + passphrase as salt.

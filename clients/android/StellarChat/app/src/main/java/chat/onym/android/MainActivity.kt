@@ -52,6 +52,11 @@ import chat.onym.android.ui.screens.PendingInvitationsScreen
 import chat.onym.android.ui.screens.RecoveryPhraseScreen
 import chat.onym.android.ui.screens.RestoreIdentityScreen
 import chat.onym.android.ui.screens.SettingsScreen
+import chat.onym.android.ui.screens.AdvancedSettingsScreen
+import chat.onym.android.ui.screens.BlossomServersScreen
+import chat.onym.android.ui.screens.RelaysScreen
+import chat.onym.android.ui.screens.StellarContractScreen
+import chat.onym.android.ui.screens.TurnServersScreen
 import chat.onym.android.ui.theme.StellarChatTheme
 import chat.onym.android.viewmodel.ChatViewModel
 import chat.onym.android.viewmodel.CreateGroupViewModel
@@ -354,9 +359,48 @@ fun StellarChatNavHost(
             composable("settings") {
                 SettingsScreen(
                     viewModel = groupListViewModel,
-                    onBackupRecoveryPhrase = {
-                        navController.navigate("recovery_phrase")
-                    }
+                    onBackupRecoveryPhrase = { navController.navigate("recovery_phrase") },
+                    onOpenRelays = { navController.navigate("relays") },
+                    onOpenBlossom = { navController.navigate("blossom_servers") },
+                    onOpenTurn = { navController.navigate("turn_servers") },
+                    onOpenStellarContract = { navController.navigate("stellar_contract") },
+                    onOpenAdvanced = { navController.navigate("advanced_settings") },
+                    onJoinGroup = { navController.navigate("join") }
+                )
+            }
+
+            composable("relays") {
+                RelaysScreen(
+                    viewModel = groupListViewModel,
+                    onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable("blossom_servers") {
+                BlossomServersScreen(
+                    viewModel = groupListViewModel,
+                    onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable("turn_servers") {
+                TurnServersScreen(
+                    viewModel = groupListViewModel,
+                    onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable("stellar_contract") {
+                StellarContractScreen(
+                    viewModel = groupListViewModel,
+                    onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable("advanced_settings") {
+                AdvancedSettingsScreen(
+                    viewModel = groupListViewModel,
+                    onBack = { navController.popBackStack() }
                 )
             }
 

@@ -13,10 +13,11 @@ This directory contains an end-to-end pass at producing a submission-ready featu
 | [`04-revision-notes.md`](04-revision-notes.md) | Item-by-item map from each critique point to the change that addresses it in the revised draft. |
 | [`05-venue-strategy.md`](05-venue-strategy.md) | Venue comparison matrices and coordinated submission timeline. |
 | [`06-hard-critique.md`](06-hard-critique.md) | Adversarial external critique targeting motivation, severity framing, and unresolved dependencies. |
+| [`07-rewrite.md`](07-rewrite.md) | From-scratch rewrite addressing `06-hard-critique.md`. Reframes motivation around the metadata-observability problem for online communication; presents the solution both informally ("for non-cryptographers") and formally; expands the narrative to four postmortems, including the single-machine trusted setup as a named current limitation. Supersedes `03-revised.md` as the submission candidate. |
 
 ## Submission status
 
-`03-revised.md` is the article intended for submission. The remaining steps before actual submission to IEEE S&P magazine are:
+`07-rewrite.md` is the article intended for submission. The remaining steps before actual submission to IEEE S&P magazine are:
 
 1. Re-typeset in the IEEE Computer Society magazine LaTeX or Word template (the file is currently markdown for review-readability).
 2. Produce a rendered Figure 1 from the textual caption in Sec. 3.

@@ -179,11 +179,11 @@
     <template x-if="queuePosition !== 1">
       <p class="text-dim mt-2">When you reach the head of the queue, the coordinator opens a 2-hour slot. Refresh this page to claim it.</p>
     </template>
-    <p class="mt-2">
-      <button class="btn btn-ghost btn-small" @click="withdraw()" :disabled="busy">
-        <span x-text="busy ? 'Cancelling…' : 'Cancel my signup'"></span>
-      </button>
-    </p>
+    <hr style="margin: 24px 0; border: 0; border-top: 1px solid var(--border);" />
+    <p class="text-dim mb-2" style="font-size: 0.9rem;">Don't want to contribute anymore? This releases your spot immediately.</p>
+    <button class="btn btn-danger" @click="withdraw()" :disabled="busy">
+      <span x-text="busy ? 'Cancelling…' : 'Leave the queue'"></span>
+    </button>
   </div>
 
   <!-- Status: claimed -->
@@ -192,13 +192,6 @@
     <div class="alert alert-warn">
       <strong>Your slot is open.</strong> Deadline: <span x-text="deadlineCountdown"></span>.
     </div>
-    <p class="mt-2 text-dim" style="font-size:0.9rem;">
-      Can't contribute right now?
-      <button class="btn btn-ghost btn-small" @click="withdraw()" :disabled="busy">
-        <span x-text="busy ? 'Releasing…' : 'Give up this slot'"></span>
-      </button>
-      — the next person in line takes over.
-    </p>
     <p>Run the native binary on an <em>air-gapped or ephemeral</em> machine. Don't paste secrets, don't let the scalar touch persistent storage.</p>
     <ol class="mt-2">
       <li>
@@ -327,6 +320,11 @@
         <p class="text-red mt-2" x-show="error" x-text="error"></p>
       </li>
     </ol>
+    <hr style="margin: 24px 0; border: 0; border-top: 1px solid var(--border);" />
+    <p class="text-dim mb-2" style="font-size: 0.9rem;">Can't contribute right now? Release the slot so the next person in line can take over.</p>
+    <button class="btn btn-danger" @click="withdraw()" :disabled="busy">
+      <span x-text="busy ? 'Releasing…' : 'Give up this slot'"></span>
+    </button>
   </div>
 
   <!-- Status: committed -->

@@ -194,9 +194,10 @@
     return `${h}h ${m}m`;
   }
 
-  // Pessimistic wait for a hypothetical new joiner of this tier:
-  // the active claim's remaining time (or a full slot if none) plus one
-  // full slot per already-queued participant plus one for the new joiner.
+  // Worst-case wait *until it becomes your turn* for a hypothetical new
+  // joiner. Does NOT include your own contribution time — the user cares
+  // about when they can start, not when they finish.
+  //   wait = remaining of current claim (if any) + queue_depth × slot budget
   // `limits.slot_deadline_secs` comes from /status.
   function worstCaseWaitSecsForNewJoiner(tier, limits) {
     const slot = limits && limits.slot_deadline_secs ? limits.slot_deadline_secs : 7200;
@@ -205,13 +206,12 @@
     if (tier.current_slot && tier.current_slot.deadline) {
       total += Math.max(0, tier.current_slot.deadline - now);
     }
-    // queue_depth people ahead + yourself
-    total += (Math.max(0, tier.queue_depth) + 1) * slot;
+    total += Math.max(0, tier.queue_depth) * slot;
     return total;
   }
 
-  // Pessimistic wait for a participant already queued at `position`
-  // (1-indexed; head = 1).
+  // Worst-case wait *until it becomes your turn* for a participant already
+  // queued at `position` (1-indexed; head = 1).
   function worstCaseWaitSecsForQueued(position, tier, limits) {
     const slot = limits && limits.slot_deadline_secs ? limits.slot_deadline_secs : 7200;
     const now = Math.floor(Date.now() / 1000);

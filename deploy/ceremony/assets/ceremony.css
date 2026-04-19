@@ -229,6 +229,12 @@ body.mode-math .for-math { display: block; }
 }
 .btn-ghost:hover { color: var(--accent-glow); border-color: var(--accent-glow); border-style: solid; }
 .btn-small { padding: 8px 14px; font-size: 0.85rem; }
+.btn-danger {
+  background: var(--red);
+  color: #fff;
+}
+.btn-danger:hover { background: #ff8585; }
+.btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Tier cards */
 .tier-grid {

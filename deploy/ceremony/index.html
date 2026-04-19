@@ -481,7 +481,8 @@
         ? `<a class="btn btn-ghost btn-small mt-2" href="/verify.html?tier=${t.tier}&round=${t.head_round}">Verify head in browser →</a>`
         : '';
       const waitSecs = Ceremony.wait.newJoiner(t, limits);
-      const waitLine = `<div class="sub text-dim" data-wait-tier="${t.tier}">If you join now: up to ~${Ceremony.fmt.duration(waitSecs)} wait</div>`;
+      const waitText = waitSecs <= 0 ? 'No wait — claim immediately' : `Up to ~${Ceremony.fmt.duration(waitSecs)} until your turn`;
+      const waitLine = `<div class="sub text-dim" data-wait-tier="${t.tier}">${waitText}</div>`;
       return `
         <div class="tier-card">
           <h3>Tier: ${t.tier}<span class="pill">depth ${depthFor(t.tier)}</span></h3>
@@ -506,7 +507,9 @@
       const el = document.querySelector(`[data-wait-tier="${t.tier}"]`);
       if (el) {
         const secs = Ceremony.wait.newJoiner(t, limits);
-        el.textContent = `If you join now: up to ~${Ceremony.fmt.duration(secs)} wait`;
+        el.textContent = secs <= 0
+          ? 'No wait — claim immediately'
+          : `Up to ~${Ceremony.fmt.duration(secs)} until your turn`;
       }
     });
   }, 1000);

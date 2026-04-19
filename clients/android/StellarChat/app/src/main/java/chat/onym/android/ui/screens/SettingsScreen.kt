@@ -3,9 +3,12 @@ package chat.onym.android.ui.screens
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.widget.Toast
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,26 +16,42 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Switch
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -42,33 +61,38 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import chat.onym.android.crypto.KeyAttestation
-import chat.onym.android.crypto.KeyManager
-import chat.onym.android.model.toHex
+import chat.onym.android.BuildConfig
 import chat.onym.android.ui.components.QRCodeImage
+import chat.onym.android.ui.components.SettingsIconBox
+import chat.onym.android.ui.components.SettingsIconColors
 import chat.onym.android.viewmodel.GroupListViewModel
 import com.stellarmls.mls.SEPTier
+
+private enum class SettingsTab { Invite, Preferences }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     viewModel: GroupListViewModel,
-    onBack: (() -> Unit)? = null
+    onBack: (() -> Unit)? = null,
+    onBackupRecoveryPhrase: (() -> Unit)? = null,
+    onRegenerateAndBackup: ((onError: (String) -> Unit) -> Unit)? = null,
+    onOpenRelays: () -> Unit = {},
+    onOpenBlossom: () -> Unit = {},
+    onOpenTurn: () -> Unit = {},
+    onOpenStellarContract: () -> Unit = {},
+    onOpenAdvanced: () -> Unit = {},
+    onJoinGroup: () -> Unit = {},
 ) {
-    val context = LocalContext.current
-    val km = viewModel.keyManager
-    var newRelayUrl by remember { mutableStateOf("") }
-    var contractEndpointInput by remember(viewModel.contractEndpoint) { mutableStateOf(viewModel.contractEndpoint) }
-    var contractIDInput by remember(viewModel.contractID) { mutableStateOf(viewModel.contractID) }
-    var relayerURLInput by remember(viewModel.relayerURL) { mutableStateOf(viewModel.relayerURL) }
-    var relayerAuthTokenInput by remember(viewModel.relayerAuthToken) { mutableStateOf(viewModel.relayerAuthToken) }
-    var contractSaveStatus by remember { mutableStateOf<String?>(null) }
-    var attestationStatus by remember { mutableStateOf<String?>(null) }
-    var advancedExpanded by remember { mutableStateOf(false) }
+    var tab by remember { mutableStateOf(SettingsTab.Invite) }
     var showAbout by remember { mutableStateOf(false) }
+    var showRegenerateConfirm by remember { mutableStateOf(false) }
+    var regenerateError by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         topBar = {
@@ -82,469 +106,452 @@ fun SettingsScreen(
                     }
                 }
             )
-        }
+        },
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
     ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState())
         ) {
-            // Invite Key QR (X25519 inbox key)
-            SettingsCard("Your Invite Key") {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    QRCodeImage(text = km.keyAgreementPublicKeyHex, size = 180.dp)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        km.keyAgreementPublicKeyHex,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 2
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    CopyableField("Invite Key", km.keyAgreementPublicKeyHex, context)
-                }
-                Text(
-                    "Share this QR code so others can invite you to groups.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Relay Management
-            SettingsCard("Relays") {
-                viewModel.relayURLs.forEachIndexed { index, url ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(url, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                        IconButton(onClick = { viewModel.removeRelay(index) }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Remove", tint = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = newRelayUrl,
-                        onValueChange = { newRelayUrl = it },
-                        label = { Text("wss://...") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(
-                        onClick = {
-                            if (viewModel.addRelay(newRelayUrl)) {
-                                newRelayUrl = ""
-                            }
-                        },
-                        enabled = newRelayUrl.isNotBlank()
-                    ) {
-                        Text("Add")
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Blossom Servers
-            SettingsCard("Blossom Servers") {
-                var newBlossomUrl by remember { mutableStateOf("") }
-
-                viewModel.blossomServerURLs.forEachIndexed { index, url ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(url, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                        IconButton(onClick = { viewModel.removeBlossomServer(index) }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Remove", tint = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = newBlossomUrl,
-                        onValueChange = { newBlossomUrl = it },
-                        label = { Text("https://...") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(
-                        onClick = {
-                            if (viewModel.addBlossomServer(newBlossomUrl)) {
-                                newBlossomUrl = ""
-                            }
-                        },
-                        enabled = newBlossomUrl.isNotBlank()
-                    ) {
-                        Text("Add")
-                    }
-                }
-                Text(
-                    "Encrypted images are stored on Blossom servers. The server never sees plaintext.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Stellar Contract
-            SettingsCard("Stellar Contract") {
-                Text(
-                    if (viewModel.isContractConfigured) "Connected" else "Not configured",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (viewModel.isContractConfigured) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = contractEndpointInput,
-                    onValueChange = { contractEndpointInput = it },
-                    label = { Text("Endpoint URL") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                OutlinedTextField(
-                    value = contractIDInput,
-                    onValueChange = { contractIDInput = it },
-                    label = { Text("Contract ID") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                OutlinedTextField(
-                    value = relayerURLInput,
-                    onValueChange = { relayerURLInput = it },
-                    label = { Text("Relayer URL (optional)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                OutlinedTextField(
-                    value = relayerAuthTokenInput,
-                    onValueChange = { relayerAuthTokenInput = it },
-                    label = { Text("Relayer Auth Token (optional)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Button(
-                    onClick = {
-                        viewModel.saveContractConfig(contractEndpointInput, contractIDInput)
-                        viewModel.saveRelayerConfig(relayerURLInput, relayerAuthTokenInput)
-                        contractSaveStatus = "Saved"
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Save")
-                }
-                contractSaveStatus?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                }
-                Text(
-                    "Set a Soroban HTTPS endpoint and contract ID. If a relayer URL is provided, contract calls are routed through the relayer instead of direct RPC.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Default Group Capacity
-            SettingsCard("Default Group Capacity") {
-                val tiers = listOf(SEPTier.SMALL to "32 members", SEPTier.MEDIUM to "256 members", SEPTier.LARGE to "2,048 members")
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    tiers.forEach { (tier, label) ->
-                        OutlinedButton(
-                            onClick = { viewModel.saveDefaultGroupTier(tier) },
-                            modifier = Modifier.weight(1f).padding(horizontal = 2.dp),
-                            colors = if (viewModel.defaultGroupTier == tier)
-                                androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
-                                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                                )
-                            else androidx.compose.material3.ButtonDefaults.outlinedButtonColors()
-                        ) {
-                            Text(label, style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    "New groups will use this tier. Larger tiers support more members but use bigger ZK circuits.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // TURN Servers
-            SettingsCard("TURN Servers") {
-                var newTurnUrl by remember { mutableStateOf("") }
-                var turnUsernameInput by remember { mutableStateOf(viewModel.turnUsername) }
-                var turnPasswordInput by remember { mutableStateOf(viewModel.turnPassword) }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Enable custom TURN", modifier = Modifier.weight(1f))
-                    Switch(
-                        checked = viewModel.turnEnabled,
-                        onCheckedChange = { viewModel.updateTurnEnabled(it) }
-                    )
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-
-                viewModel.turnURLs.forEachIndexed { index, url ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(url, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                        IconButton(onClick = { viewModel.removeTurnURL(index) }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Remove", tint = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = newTurnUrl,
-                        onValueChange = { newTurnUrl = it },
-                        label = { Text("turn:host:443?transport=tcp") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(
-                        onClick = {
-                            if (viewModel.addTurnURL(newTurnUrl)) {
-                                newTurnUrl = ""
-                            }
-                        },
-                        enabled = newTurnUrl.isNotBlank()
-                    ) {
-                        Text("Add")
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = turnUsernameInput,
-                    onValueChange = { turnUsernameInput = it },
-                    label = { Text("Username") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                OutlinedTextField(
-                    value = turnPasswordInput,
-                    onValueChange = { turnPasswordInput = it },
-                    label = { Text("Password") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation()
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Button(
-                    onClick = { viewModel.saveTurnCredentials(turnUsernameInput, turnPasswordInput) },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Save Credentials")
-                }
-                Text(
-                    "Optional custom TURN servers for restrictive networks. Built-in EU TURN servers are always included. Use turn: or turns: URL schemes.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Collapsible Advanced section
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { advancedExpanded = !advancedExpanded },
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "Advanced",
-                            style = MaterialTheme.typography.titleMedium,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Icon(
-                            imageVector = if (advancedExpanded) Icons.Default.KeyboardArrowUp
-                                else Icons.Default.KeyboardArrowDown,
-                            contentDescription = if (advancedExpanded) "Collapse" else "Expand"
-                        )
-                    }
-
-                    AnimatedVisibility(visible = advancedExpanded) {
-                        Column {
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Nostr Identity
-                            Text("Nostr Identity (secp256k1)", style = MaterialTheme.typography.titleSmall)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            CopyableField("Public Key", km.publicKeyHex, context)
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Inbox Key
-                            Text("Inbox Key (X25519)", style = MaterialTheme.typography.titleSmall)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            CopyableField("Inbox Key", km.keyAgreementPublicKeyHex, context)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            QRCodeImage(text = km.keyAgreementPublicKeyHex, size = 160.dp)
-                            Text(
-                                "Share this QR code so others can scan it to send you invitations",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 4.dp)
-                            )
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Stellar Identity
-                            Text("Stellar Identity (Ed25519)", style = MaterialTheme.typography.titleSmall)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            CopyableField("Account ID", km.stellarAccountID, context)
-                            Text(
-                                "Derived from Nostr key via HKDF",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 4.dp)
-                            )
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // BLS Membership
-                            Text("Group Membership (BLS12-381)", style = MaterialTheme.typography.titleSmall)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text("BLS Public Key", style = MaterialTheme.typography.labelMedium)
-                            Text(
-                                km.blsPublicKey().toHex(),
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 2
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            OutlinedButton(onClick = {
-                                try {
-                                    val attestation = km.createAttestation()
-                                    val valid = KeyAttestation.verify(attestation)
-                                    attestationStatus = if (valid) "Attestation created and verified" else "Verification failed"
-                                } catch (e: Exception) {
-                                    attestationStatus = "Error: ${e.message}"
-                                }
-                            }) {
-                                Text("Create Key Attestation")
-                            }
-                            attestationStatus?.let {
-                                Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Protocol Info
-                            Text("Protocol", style = MaterialTheme.typography.titleSmall)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            SettingsRow("Transport", "Nostr (NIP-01)")
-                            SettingsRow("Invitation Kind", "34113")
-                            SettingsRow("Message Kind", "24114")
-                            SettingsRow("Encryption", "AES-256-GCM")
-                            SettingsRow("Invitation Encryption", "X25519 ECDH + AES-256-GCM")
-                            SettingsRow("Key Derivation", "HKDF-SHA256")
-                            SettingsRow("Signing", "secp256k1 Schnorr")
-                            SettingsRow("Stellar Signing", "Ed25519")
-                            SettingsRow("ZK Backend", "Groth16 / BLS12-381")
-                            SettingsRow("Commitment", "Poseidon-only")
-                        }
-                    }
-                }
-            }
-
-            // About
-            Card(
-                onClick = { showAbout = true },
-                modifier = Modifier.fillMaxWidth()
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "About Stellar Chat",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Icon(
-                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                SegmentedButton(
+                    selected = tab == SettingsTab.Invite,
+                    onClick = { tab = SettingsTab.Invite },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                ) { Text("Invite Key") }
+                SegmentedButton(
+                    selected = tab == SettingsTab.Preferences,
+                    onClick = { tab = SettingsTab.Preferences },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                ) { Text("Preferences") }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            when (tab) {
+                SettingsTab.Invite -> InviteKeyTab(
+                    viewModel = viewModel,
+                    onScan = onJoinGroup,
+                    onPaste = onJoinGroup
+                )
+                SettingsTab.Preferences -> PreferencesTab(
+                    viewModel = viewModel,
+                    onOpenRelays = onOpenRelays,
+                    onOpenBlossom = onOpenBlossom,
+                    onOpenTurn = onOpenTurn,
+                    onOpenStellarContract = onOpenStellarContract,
+                    onOpenAdvanced = onOpenAdvanced,
+                    onBackupRecoveryPhrase = onBackupRecoveryPhrase,
+                    onRequestRegenerate = { showRegenerateConfirm = true },
+                    onShowAbout = { showAbout = true }
+                )
+            }
         }
     }
 
     if (showAbout) {
         OnboardingSheet(onDismiss = { showAbout = false }, isRevisit = true)
     }
+
+    if (showRegenerateConfirm) {
+        AlertDialog(
+            onDismissRequest = { showRegenerateConfirm = false },
+            title = { Text("Generate new identity?") },
+            text = {
+                Text(
+                    "This replaces your current keys with a new BIP39-backed identity. " +
+                    "Existing groups will become read-only since other members won't recognize " +
+                    "your new keys — they'll need to re-invite you. You'll see the new recovery " +
+                    "phrase right after."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showRegenerateConfirm = false
+                    onRegenerateAndBackup?.invoke { err -> regenerateError = err }
+                }) {
+                    Text("Generate", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRegenerateConfirm = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    regenerateError?.let { err ->
+        AlertDialog(
+            onDismissRequest = { regenerateError = null },
+            title = { Text("Regeneration failed") },
+            text = { Text(err) },
+            confirmButton = {
+                TextButton(onClick = { regenerateError = null }) { Text("OK") }
+            }
+        )
+    }
+}
+
+// MARK: - Invite Key Tab
+
+@Composable
+private fun InviteKeyTab(
+    viewModel: GroupListViewModel,
+    onScan: () -> Unit,
+    onPaste: () -> Unit,
+) {
+    val context = LocalContext.current
+    val inviteKey = viewModel.keyManager.keyAgreementPublicKeyHex
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        // QR hero card
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(22.dp))
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(
+                modifier = Modifier
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
+                    .padding(14.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                QRCodeImage(text = inviteKey, size = 240.dp)
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = { shareText(context, inviteKey) },
+                    modifier = Modifier.weight(1f).height(46.dp),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Share link", fontWeight = FontWeight.SemiBold)
+                }
+                Button(
+                    onClick = {
+                        val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cb.setPrimaryClip(ClipData.newPlainText("Invite Key", inviteKey))
+                        Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.weight(1f).height(46.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        contentColor = MaterialTheme.colorScheme.primary
+                    )
+                ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Copy", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        SectionHeaderSm("FIND FRIENDS")
+        GroupedCard {
+            NavRow(
+                icon = Icons.Default.QrCodeScanner,
+                iconBg = SettingsIconColors.Green,
+                title = "Scan invite QR",
+                onClick = onScan
+            )
+            RowSeparator(start = 58.dp)
+            NavRow(
+                icon = Icons.Default.Key,
+                iconBg = SettingsIconColors.Purple,
+                title = "Paste invite key",
+                onClick = onPaste
+            )
+        }
+        FooterNote("Share this QR code so others can find you. Your invite key is your X25519 inbox key.")
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+// MARK: - Preferences Tab
+
+@Composable
+private fun PreferencesTab(
+    viewModel: GroupListViewModel,
+    onOpenRelays: () -> Unit,
+    onOpenBlossom: () -> Unit,
+    onOpenTurn: () -> Unit,
+    onOpenStellarContract: () -> Unit,
+    onOpenAdvanced: () -> Unit,
+    onBackupRecoveryPhrase: (() -> Unit)?,
+    onRequestRegenerate: () -> Unit,
+    onShowAbout: () -> Unit,
+) {
+    val km = viewModel.keyManager
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        SectionHeaderSm("NETWORK")
+        GroupedCard {
+            NavRow(
+                icon = Icons.Default.Router,
+                iconBg = SettingsIconColors.Orange,
+                title = "Relays",
+                detail = "${viewModel.relayURLs.size}",
+                onClick = onOpenRelays
+            )
+            RowSeparator(start = 58.dp)
+            NavRow(
+                icon = Icons.Default.Image,
+                iconBg = SettingsIconColors.Purple,
+                title = "Blossom Servers",
+                detail = "${viewModel.blossomServerURLs.size}",
+                onClick = onOpenBlossom
+            )
+            RowSeparator(start = 58.dp)
+            NavRow(
+                icon = Icons.Default.Public,
+                iconBg = SettingsIconColors.Cyan,
+                title = "TURN Servers",
+                detail = if (viewModel.turnEnabled) "Custom" else "EU default",
+                onClick = onOpenTurn
+            )
+        }
+        FooterNote("Relays carry encrypted messages. Blossom servers store encrypted media. TURN aids calls behind restrictive networks.")
+
+        Spacer(Modifier.height(16.dp))
+        SectionHeaderSm("PROTOCOL")
+        GroupedCard {
+            StellarContractRow(isConfigured = viewModel.isContractConfigured, onClick = onOpenStellarContract)
+            RowSeparator(start = 58.dp)
+            DefaultGroupTierRow(
+                current = viewModel.defaultGroupTier,
+                onSelect = { viewModel.saveDefaultGroupTier(it) }
+            )
+        }
+        FooterNote("New groups will use this tier. Larger tiers support more members but use bigger ZK circuits.")
+
+        Spacer(Modifier.height(16.dp))
+        SectionHeaderSm("SECURITY")
+        GroupedCard {
+            NavRow(
+                icon = Icons.Default.Key,
+                iconBg = SettingsIconColors.Orange,
+                title = "Backup Recovery Phrase",
+                detail = if (km.isBip39Backed) null else "Upgrade required",
+                onClick = {
+                    if (km.isBip39Backed) {
+                        onBackupRecoveryPhrase?.invoke()
+                    } else {
+                        onRequestRegenerate()
+                    }
+                }
+            )
+        }
+        FooterNote(
+            if (km.isBip39Backed)
+                "View your 12-word recovery phrase. You will need it to restore your identity on a new device."
+            else
+                "Your identity predates backup support. Generate a new BIP39-backed identity to enable backup. Your existing groups will become read-only since other members won't recognize your new keys."
+        )
+
+        Spacer(Modifier.height(16.dp))
+        SectionHeaderSm("ADVANCED")
+        GroupedCard {
+            NavRow(
+                icon = Icons.Default.Settings,
+                iconBg = SettingsIconColors.Gray,
+                title = "Advanced",
+                onClick = onOpenAdvanced
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
+        SectionHeaderSm("ABOUT")
+        GroupedCard {
+            DetailRow(
+                icon = Icons.Default.Info,
+                iconBg = SettingsIconColors.Gray,
+                title = "Version",
+                detail = BuildConfig.VERSION_NAME
+            )
+            RowSeparator(start = 58.dp)
+            DetailRow(
+                icon = Icons.Default.Lock,
+                iconBg = SettingsIconColors.Blue,
+                title = "End-to-end encryption",
+                detail = null
+            )
+            RowSeparator(start = 58.dp)
+            NavRow(
+                icon = Icons.Default.AutoAwesome,
+                iconBg = SettingsIconColors.Pink,
+                title = "About Stellar Chat",
+                titleColor = MaterialTheme.colorScheme.primary,
+                onClick = onShowAbout
+            )
+        }
+        FooterNote("Messages are encrypted end-to-end. Relays see only opaque ciphertext and hidden topic tags. Group IDs never appear in cleartext on the wire.")
+        Spacer(Modifier.height(32.dp))
+    }
+}
+
+// MARK: - Nav rows
+
+@Composable
+private fun NavRow(
+    icon: ImageVector,
+    iconBg: Color,
+    title: String,
+    detail: String? = null,
+    titleColor: Color = MaterialTheme.colorScheme.onSurface,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        SettingsIconBox(icon = icon, background = iconBg)
+        Spacer(Modifier.width(12.dp))
+        Text(title, style = MaterialTheme.typography.bodyLarge, color = titleColor, modifier = Modifier.weight(1f))
+        if (detail != null) {
+            Text(detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(4.dp))
+        }
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            modifier = Modifier.size(18.dp)
+        )
+    }
 }
 
 @Composable
-private fun SettingsCard(title: String, content: @Composable () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Spacer(modifier = Modifier.height(8.dp))
-            content()
+private fun DetailRow(
+    icon: ImageVector,
+    iconBg: Color,
+    title: String,
+    detail: String?,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        SettingsIconBox(icon = icon, background = iconBg)
+        Spacer(Modifier.width(12.dp))
+        Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        if (detail != null) {
+            Text(detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
 
 @Composable
-private fun CopyableField(label: String, value: String, context: Context) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(label, style = MaterialTheme.typography.labelMedium)
-            Text(value, style = MaterialTheme.typography.bodySmall, maxLines = 2)
-        }
-        IconButton(onClick = {
-            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            clipboard.setPrimaryClip(ClipData.newPlainText(label, value))
-            Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
-        }) {
-            Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
-        }
+private fun StellarContractRow(isConfigured: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        SettingsIconBox(icon = Icons.Default.Star, background = SettingsIconColors.Yellow)
+        Spacer(Modifier.width(12.dp))
+        Text("Stellar Contract", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .background(if (isConfigured) SettingsIconColors.Green else SettingsIconColors.Gray, CircleShape)
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(
+            if (isConfigured) "Connected" else "Not configured",
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (isConfigured) SettingsIconColors.Green else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.width(4.dp))
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            modifier = Modifier.size(18.dp)
+        )
     }
 }
 
 @Composable
-private fun SettingsRow(label: String, value: String) {
-    Column(modifier = Modifier.padding(vertical = 2.dp)) {
-        Text(label, style = MaterialTheme.typography.labelMedium)
-        Text(value, style = MaterialTheme.typography.bodyMedium)
+private fun DefaultGroupTierRow(current: SEPTier, onSelect: (SEPTier) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val label = when (current) {
+        SEPTier.SMALL -> "32 members"
+        SEPTier.MEDIUM -> "256 members"
+        SEPTier.LARGE -> "2,048 members"
     }
+
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = true }
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SettingsIconBox(icon = Icons.Default.Groups, background = SettingsIconColors.Green)
+            Spacer(Modifier.width(12.dp))
+            Text("Default Group Capacity", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.size(18.dp)
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            listOf(
+                SEPTier.SMALL to "32 members",
+                SEPTier.MEDIUM to "256 members",
+                SEPTier.LARGE to "2,048 members"
+            ).forEach { (tier, text) ->
+                DropdownMenuItem(
+                    text = { Text(text, fontWeight = if (tier == current) FontWeight.SemiBold else FontWeight.Normal) },
+                    onClick = {
+                        onSelect(tier)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+private fun shareText(context: Context, text: String) {
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    context.startActivity(Intent.createChooser(intent, "Share invite key"))
 }

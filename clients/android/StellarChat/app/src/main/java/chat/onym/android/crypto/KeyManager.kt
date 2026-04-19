@@ -13,6 +13,7 @@ import org.bouncycastle.crypto.signers.Ed25519Signer
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import java.security.SecureRandom
+import java.util.Arrays
 
 class KeyManagerException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
 
@@ -26,23 +27,94 @@ class KeyManager private constructor(private val prefs: android.content.SharedPr
         private const val NOSTR_SECRET_KEY = "nostr_secret_key"
         private const val BLS_SECRET_KEY = "bls_secret_key"
         private const val IDENTITY_INITIALIZED = "identity_initialized"
+        private const val BIP39_ENTROPY = "bip39_entropy"
+
         suspend fun createAsync(context: Context): KeyManager =
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 create(context)
             }
 
         fun create(context: Context): KeyManager {
+            val prefs = encryptedPrefs(context)
+            return KeyManager(prefs)
+        }
+
+        /** Restore identity from a BIP39 recovery phrase. Replaces any existing keys. */
+        fun restoreFromMnemonic(context: Context, mnemonic: String): KeyManager {
+            require(Bip39.isValidMnemonic(mnemonic)) { "Invalid recovery phrase" }
+            val entropy = Bip39.entropyFromMnemonic(mnemonic)!!
+            val seed = Bip39.seedFromMnemonic(mnemonic)
+            val nostrKey = Bip39.deriveNostrKey(seed)
+            val blsKey = Bip39.deriveBlsKey(seed)
+
+            val prefs = encryptedPrefs(context)
+            val saved = prefs.edit()
+                .putString(NOSTR_SECRET_KEY, nostrKey.toHex())
+                .putString(BLS_SECRET_KEY, blsKey.toHex())
+                .putString(BIP39_ENTROPY, entropy.toHex())
+                .putBoolean(IDENTITY_INITIALIZED, true)
+                .commit()
+
+            if (!saved) {
+                // Zeroize before throwing
+                Arrays.fill(seed, 0)
+                Arrays.fill(nostrKey, 0)
+                Arrays.fill(blsKey, 0)
+                Arrays.fill(entropy, 0)
+                throw KeyManagerException("Failed to persist restored identity keys")
+            }
+
+            // Zeroize sensitive intermediates
+            Arrays.fill(seed, 0)
+            Arrays.fill(nostrKey, 0)
+            Arrays.fill(blsKey, 0)
+            Arrays.fill(entropy, 0)
+
+            return KeyManager(prefs)
+        }
+
+        /**
+         * Generate a fresh BIP39-backed identity, replacing any existing keys.
+         * Used by legacy (pre-BIP39) installs to enable backup — existing groups
+         * become read-only since other members won't recognize the new leaf keys.
+         */
+        fun regenerateWithBip39(context: Context): KeyManager {
+            val mnemonic = Bip39.generateMnemonic()
+            val entropy = Bip39.entropyFromMnemonic(mnemonic)!!
+            val seed = Bip39.seedFromMnemonic(mnemonic)
+            val nostrKey = Bip39.deriveNostrKey(seed)
+            val blsKey = Bip39.deriveBlsKey(seed)
+
+            val prefs = encryptedPrefs(context)
+            val saved = prefs.edit()
+                .putString(NOSTR_SECRET_KEY, nostrKey.toHex())
+                .putString(BLS_SECRET_KEY, blsKey.toHex())
+                .putString(BIP39_ENTROPY, entropy.toHex())
+                .putBoolean(IDENTITY_INITIALIZED, true)
+                .commit()
+
+            Arrays.fill(seed, 0)
+            Arrays.fill(nostrKey, 0)
+            Arrays.fill(blsKey, 0)
+            Arrays.fill(entropy, 0)
+
+            if (!saved) {
+                throw KeyManagerException("Failed to persist regenerated identity keys")
+            }
+            return KeyManager(prefs)
+        }
+
+        private fun encryptedPrefs(context: Context): android.content.SharedPreferences {
             val masterKey = MasterKey.Builder(context)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                 .build()
-            val prefs = EncryptedSharedPreferences.create(
+            return EncryptedSharedPreferences.create(
                 context,
                 "stellar_keys_encrypted",
                 masterKey,
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
-            return KeyManager(prefs)
         }
 
         /** Verify an Ed25519 signature against a public key. */
@@ -84,21 +156,48 @@ class KeyManager private constructor(private val prefs: android.content.SharedPr
     /** Hidden inbox tag derived from X25519 public key. */
     val inboxTag: String
 
+    /** Whether this identity is backed by a BIP39 mnemonic. */
+    val isBip39Backed: Boolean
+
+    /**
+     * The BIP39 recovery phrase, or null for legacy (pre-BIP39) identities.
+     *
+     * SECURITY NOTE: Reconstructed from stored entropy on each access. The returned String
+     * is an immutable JVM object that cannot be zeroized — it will persist in memory until
+     * GC'd. This is an accepted trade-off: the phrase is only retrieved when the user
+     * explicitly views the backup screen (behind biometric auth). Using CharArray would not
+     * help since Compose text rendering requires String.
+     */
+    val recoveryPhrase: String?
+        get() {
+            val entropyHex = prefs.getString(BIP39_ENTROPY, null) ?: return null
+            val entropy = entropyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+            return Bip39.mnemonicFromEntropy(entropy)
+        }
+
     init {
         val storedNostr = prefs.getString(NOSTR_SECRET_KEY, null)
         val storedBls = prefs.getString(BLS_SECRET_KEY, null)
         val initialized = prefs.getBoolean(IDENTITY_INITIALIZED, false)
 
         if (storedNostr == null && storedBls == null && !initialized) {
-            val key = ByteArray(32)
-            SecureRandom().nextBytes(key)
-            val blsKey = ByteArray(32)
-            SecureRandom().nextBytes(blsKey)
+            // Fresh install — generate BIP39-backed identity
+            val mnemonic = Bip39.generateMnemonic()
+            val entropy = Bip39.entropyFromMnemonic(mnemonic)!!
+            val seed = Bip39.seedFromMnemonic(mnemonic)
+            val key = Bip39.deriveNostrKey(seed)
+            val blsKey = Bip39.deriveBlsKey(seed)
             val saved = prefs.edit()
                 .putString(NOSTR_SECRET_KEY, key.toHex())
                 .putString(BLS_SECRET_KEY, blsKey.toHex())
+                .putString(BIP39_ENTROPY, entropy.toHex())
                 .putBoolean(IDENTITY_INITIALIZED, true)
                 .commit()
+            // Zeroize sensitive intermediates
+            Arrays.fill(seed, 0)
+            Arrays.fill(key, 0)
+            Arrays.fill(blsKey, 0)
+            Arrays.fill(entropy, 0)
             if (!saved) {
                 throw KeyManagerException("Failed to persist newly generated identity keys")
             }
@@ -114,6 +213,8 @@ class KeyManager private constructor(private val prefs: android.content.SharedPr
                 "Identity storage is inconsistent: initialized=$initialized nostrPresent=${storedNostr != null} blsPresent=${storedBls != null}"
             )
         }
+
+        isBip39Backed = prefs.getString(BIP39_ENTROPY, null) != null
 
         val nostrHex = prefs.getString(NOSTR_SECRET_KEY, null)
             ?: throw KeyManagerException("Missing persisted Nostr secret key")

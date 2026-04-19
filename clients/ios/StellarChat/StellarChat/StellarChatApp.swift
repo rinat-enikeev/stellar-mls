@@ -374,6 +374,13 @@ final class AppState {
         Task { await connectAndSubscribeAllGroups() }
     }
 
+    /// Replace the active key manager after a BIP39 restore.
+    /// Reconnects relays so the inbox subscription uses the new identity's keys.
+    func replaceKeyManager(_ newKeyManager: KeyManager) {
+        self.keyManager = newKeyManager
+        Task { await reconnectRelays() }
+    }
+
     func addGroup(_ group: ChatGroup) {
         groups.append(group)
         store.saveGroup(group)

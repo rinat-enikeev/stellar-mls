@@ -74,6 +74,7 @@ struct OnboardingView: View {
     var isRevisit: Bool = false
     @Environment(\.dismiss) private var dismiss
     @State private var currentPage = 0
+    @State private var showRestore = false
 
     private let pages: [(icon: String, title: String, subtitle: String)] = [
         ("eye.trianglebadge.exclamationmark", "Now your messages and\nmetadata are encrypted", "Most messengers encrypt your messages but still collect who you talk to, when, and how often. That metadata tells a complete story about you."),
@@ -142,7 +143,21 @@ struct OnboardingView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .padding(.horizontal, 32)
-            .padding(.bottom, 32)
+
+            if !isRevisit {
+                Button("Restore from Recovery Phrase") {
+                    showRestore = true
+                }
+                .font(.footnote)
+                .padding(.top, 8)
+            }
+
+            Spacer().frame(height: 32)
+        }
+        .sheet(isPresented: $showRestore) {
+            RestoreIdentityView(onRestoreComplete: {
+                hasSeenOnboarding = true
+            })
         }
     }
 }

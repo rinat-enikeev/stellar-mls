@@ -22,6 +22,7 @@
 		2AEA33F14364C4EE65AB090D /* FirstGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28FB2F8640C54066D58B3FA9 /* FirstGroupView.swift */; };
 		2DAB2E5F09CA9490F5C7CDF8 /* CallManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 485C53049C1128D91F1CA2DB /* CallManager.swift */; };
 		33D3690E63750E20852336EE /* AudioCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57DB304E93E815412ABA6010 /* AudioCache.swift */; };
+		3B481A4C5494564BC10F20F1 /* AdvancedSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 146F81F47FBDCF2001026CA4 /* AdvancedSettingsView.swift */; };
 		3B5518BB5C6DB07F6628E7BD /* ForkGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC5B1B630CCFBA76B3C56C87 /* ForkGroupView.swift */; };
 		3EC81E8DA76069452870626F /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68F22F3B02C2C003269BA135 /* QRScannerView.swift */; };
 		40C619A3144D30891F999B0F /* update-large.bin in Resources */ = {isa = PBXBuildFile; fileRef = 3E5BE0783C802E2A5B127D05 /* update-large.bin */; };
@@ -32,6 +33,8 @@
 		4E0468C0A25E658173F4E628 /* ChatGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8FD22552EBCF23A89DB7700 /* ChatGroup.swift */; };
 		4FC9AB234CCA9BFAA0B112F1 /* StellarChatApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62FB83C87F9348F97EEDE0C8 /* StellarChatApp.swift */; };
 		538C339B8E0F50F72DCB8F72 /* RelayerDefaults.generated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CB66BD4710970306321664D /* RelayerDefaults.generated.swift */; };
+		5678B53B267146B968D55513 /* BlossomServersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CFA38D683FF100CF2F9D2D2 /* BlossomServersView.swift */; };
+		5A8B12072B88D47A872A611D /* RelaysView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E890E8AADCCF100079402796 /* RelaysView.swift */; };
 		661B24EC80C52FD32C0DB020 /* PersistedModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4705F8234AA6022CD782348E /* PersistedModels.swift */; };
 		69502F4BED8DAE5BB7CDC5A6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */; };
 		6E9556647327EEFAD671A479 /* FirstJoinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F578D34CACAEC0D640025618 /* FirstJoinView.swift */; };
@@ -56,6 +59,7 @@
 		A49A5C6B2401EEB1847229DE /* QRCodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C2E0A174CC0B050D6BADB3 /* QRCodeView.swift */; };
 		A59B1DBBCD75C4882A4A7EF6 /* CallKitProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4A3E005A9C5AF2DE5743188 /* CallKitProvider.swift */; };
 		AE25761903B1EA84D9AFADD2 /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8ACE473C3096412015326C52 /* ImageCache.swift */; };
+		B57581CDF2F61EB03840FB63 /* TurnServersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E13EEDDB632D725889E1869 /* TurnServersView.swift */; };
 		B5836D3E7760359CFB8C42AC /* GroupCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8210CED65D67082D16673F07 /* GroupCrypto.swift */; };
 		C551E3710EC9BA8ACFC5A9C0 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0734DFA865A663F2138CD236 /* NotificationService.swift */; };
 		C78434B5880A2483C3DAF9E9 /* CallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E005C90D6C91D9810C11364 /* CallView.swift */; };
@@ -70,6 +74,8 @@
 		D80AA787557EC39AC88FF3F3 /* KeyAttestation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37304476C52093C0D34ECB92 /* KeyAttestation.swift */; };
 		D8CE0C737C0C3FE425C2F8B4 /* PushSubscriptionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9C563AA269E4B62C095C93E /* PushSubscriptionStore.swift */; };
 		DDD383111230FCE8E4653FDD /* vk-medium.json in Resources */ = {isa = PBXBuildFile; fileRef = 09B5C46349E19FFD0B8AEF53 /* vk-medium.json */; };
+		DE27AFEBF0D1B09DBD63FEED /* StellarContractView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF58215B65A3C55A54778D8D /* StellarContractView.swift */; };
+		E08D58B1C48D389D86BF80F6 /* SettingsIconBox.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6F02E498BC2C9FAA6780F2F /* SettingsIconBox.swift */; };
 		E10FD8A2E1B0D8169A2BEB15 /* BlossomClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FCDBA22391412C6D05BB99E /* BlossomClient.swift */; };
 		E54951E56532C7FBD90317DE /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70C111DF10AF94B4F95C4742 /* ChatView.swift */; };
 		EBC0BEE01D60D74615750B15 /* PushSubscriptionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9C563AA269E4B62C095C93E /* PushSubscriptionStore.swift */; };
@@ -125,6 +131,7 @@
 		09B5C46349E19FFD0B8AEF53 /* vk-medium.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "vk-medium.json"; sourceTree = "<group>"; };
 		0AB5BDD8C1704CEBD3F2D879 /* StorageEncryptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageEncryptionTests.swift; sourceTree = "<group>"; };
 		0E25D14293AC1BC6E3FB1E28 /* PersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStore.swift; sourceTree = "<group>"; };
+		146F81F47FBDCF2001026CA4 /* AdvancedSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvancedSettingsView.swift; sourceTree = "<group>"; };
 		16CACD19E9FF995FA27F087E /* medium.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = medium.bin; sourceTree = "<group>"; };
 		1C987955167382BF0E0E251C /* SecurityLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityLog.swift; sourceTree = "<group>"; };
 		1E76AF13A26CCEC2E75C8310 /* VoiceRecordButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceRecordButton.swift; sourceTree = "<group>"; };
@@ -140,6 +147,7 @@
 		485C53049C1128D91F1CA2DB /* CallManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallManager.swift; sourceTree = "<group>"; };
 		4FCDBA22391412C6D05BB99E /* BlossomClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlossomClient.swift; sourceTree = "<group>"; };
 		57DB304E93E815412ABA6010 /* AudioCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioCache.swift; sourceTree = "<group>"; };
+		5E13EEDDB632D725889E1869 /* TurnServersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnServersView.swift; sourceTree = "<group>"; };
 		62FB83C87F9348F97EEDE0C8 /* StellarChatApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StellarChatApp.swift; sourceTree = "<group>"; };
 		68F22F3B02C2C003269BA135 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
 		6E292A37C859D6BE12BE2376 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -155,12 +163,14 @@
 		7AB3927E9D56D699C794C301 /* small.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = small.bin; sourceTree = "<group>"; };
 		7B64379BF75810BB45AB9838 /* ShareInviteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareInviteView.swift; sourceTree = "<group>"; };
 		7C2B0F0A2A137DC1BE419CC3 /* GroupListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupListView.swift; sourceTree = "<group>"; };
+		7CFA38D683FF100CF2F9D2D2 /* BlossomServersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlossomServersView.swift; sourceTree = "<group>"; };
 		7E005C90D6C91D9810C11364 /* CallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallView.swift; sourceTree = "<group>"; };
 		8210CED65D67082D16673F07 /* GroupCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupCrypto.swift; sourceTree = "<group>"; };
 		8ACE473C3096412015326C52 /* ImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCache.swift; sourceTree = "<group>"; };
 		8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A4A3E005A9C5AF2DE5743188 /* CallKitProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallKitProvider.swift; sourceTree = "<group>"; };
+		A6F02E498BC2C9FAA6780F2F /* SettingsIconBox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsIconBox.swift; sourceTree = "<group>"; };
 		B0884F32E9A807B2566DD234 /* NostrRelayConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrRelayConnection.swift; sourceTree = "<group>"; };
 		B0EA74F19D71BB7C486F8B09 /* vk-update-medium.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "vk-update-medium.json"; sourceTree = "<group>"; };
 		BA643A0E8E9EAA763609E1EA /* StellarChat.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StellarChat.entitlements; sourceTree = "<group>"; };
@@ -174,10 +184,12 @@
 		CE1DB9EAD5AE4BE3069DD5EF /* NostrEventTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrEventTests.swift; sourceTree = "<group>"; };
 		CE90686ED5EF142D49635B5B /* update-small.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = "update-small.bin"; sourceTree = "<group>"; };
 		CEE93134C2D32A03E89226B8 /* NostrMessageTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrMessageTransport.swift; sourceTree = "<group>"; };
+		CF58215B65A3C55A54778D8D /* StellarContractView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StellarContractView.swift; sourceTree = "<group>"; };
 		D598C68B195A10B97A59B334 /* large.bin */ = {isa = PBXFileReference; lastKnownFileType = archive.macbinary; path = large.bin; sourceTree = "<group>"; };
 		D8C92D1E1F59A902BCED5859 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		D93193C84699A94AF7090C64 /* StellarChatNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = StellarChatNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		E81687A278F166A5B7E5F557 /* ModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsTests.swift; sourceTree = "<group>"; };
+		E890E8AADCCF100079402796 /* RelaysView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelaysView.swift; sourceTree = "<group>"; };
 		E8D38B6A8AA5A166074EA951 /* InviteMemberView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InviteMemberView.swift; sourceTree = "<group>"; };
 		EC5B1B630CCFBA76B3C56C87 /* ForkGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForkGroupView.swift; sourceTree = "<group>"; };
 		EE55F7CB9B9CC14306944040 /* vk-update-small.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "vk-update-small.json"; sourceTree = "<group>"; };
@@ -230,6 +242,8 @@
 		156F9CE2E835AC03BD150D68 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				146F81F47FBDCF2001026CA4 /* AdvancedSettingsView.swift */,
+				7CFA38D683FF100CF2F9D2D2 /* BlossomServersView.swift */,
 				70C111DF10AF94B4F95C4742 /* ChatView.swift */,
 				7A14AE9A1C9F0583137C7797 /* ContactsView.swift */,
 				6E292A37C859D6BE12BE2376 /* ContentView.swift */,
@@ -244,9 +258,13 @@
 				C6867C765FBB9480D9E0D9FC /* PendingInvitationsView.swift */,
 				F0C2E0A174CC0B050D6BADB3 /* QRCodeView.swift */,
 				68F22F3B02C2C003269BA135 /* QRScannerView.swift */,
+				E890E8AADCCF100079402796 /* RelaysView.swift */,
 				FD4DD514A884BAD2FC5B2D73 /* SearchView.swift */,
+				A6F02E498BC2C9FAA6780F2F /* SettingsIconBox.swift */,
 				A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */,
 				7B64379BF75810BB45AB9838 /* ShareInviteView.swift */,
+				CF58215B65A3C55A54778D8D /* StellarContractView.swift */,
+				5E13EEDDB632D725889E1869 /* TurnServersView.swift */,
 				F1F7647C522D0F7D1F86CE17 /* VerificationBadgeView.swift */,
 				1E76AF13A26CCEC2E75C8310 /* VoiceRecordButton.swift */,
 			);
@@ -575,8 +593,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3B481A4C5494564BC10F20F1 /* AdvancedSettingsView.swift in Sources */,
 				33D3690E63750E20852336EE /* AudioCache.swift in Sources */,
 				E10FD8A2E1B0D8169A2BEB15 /* BlossomClient.swift in Sources */,
+				5678B53B267146B968D55513 /* BlossomServersView.swift in Sources */,
 				0029F253BA68E6B4CA11E864 /* BootstrapPayload.swift in Sources */,
 				A59B1DBBCD75C4882A4A7EF6 /* CallKitProvider.swift in Sources */,
 				2DAB2E5F09CA9490F5C7CDF8 /* CallManager.swift in Sources */,
@@ -614,13 +634,17 @@
 				A49A5C6B2401EEB1847229DE /* QRCodeView.swift in Sources */,
 				3EC81E8DA76069452870626F /* QRScannerView.swift in Sources */,
 				538C339B8E0F50F72DCB8F72 /* RelayerDefaults.generated.swift in Sources */,
+				5A8B12072B88D47A872A611D /* RelaysView.swift in Sources */,
 				9EABBA75189DA35E0BA71054 /* SearchView.swift in Sources */,
 				1AA0059A3C3D6B195FB5615C /* SecurityLog.swift in Sources */,
+				E08D58B1C48D389D86BF80F6 /* SettingsIconBox.swift in Sources */,
 				69502F4BED8DAE5BB7CDC5A6 /* SettingsView.swift in Sources */,
 				79801A2E3794EC90D770BED1 /* ShareInviteView.swift in Sources */,
 				4FC9AB234CCA9BFAA0B112F1 /* StellarChatApp.swift in Sources */,
+				DE27AFEBF0D1B09DBD63FEED /* StellarContractView.swift in Sources */,
 				95489626E5CAD02D3CDB0207 /* StellarStrKey.swift in Sources */,
 				D6847B5213B8820FA30819D7 /* StorageEncryption.swift in Sources */,
+				B57581CDF2F61EB03840FB63 /* TurnServersView.swift in Sources */,
 				CFC4BB79BE2BD8A37F35D9D2 /* VerificationBadgeView.swift in Sources */,
 				1567BD34990CE37FB89521DF /* VideoCache.swift in Sources */,
 				90B7D2930C07431EB75DBFB3 /* VoiceRecordButton.swift in Sources */,
@@ -661,7 +685,7 @@
 				CODE_SIGN_ENTITLEMENTS = StellarChat/StellarChat.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 31;
+				CURRENT_PROJECT_VERSION = 34;
 				DEVELOPMENT_TEAM = "${DEVELOPMENT_TEAM}";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = StellarChat/Info.plist;
@@ -676,7 +700,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.3.0;
+				MARKETING_VERSION = 1.6.1;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
@@ -774,7 +798,7 @@
 				CODE_SIGN_ENTITLEMENTS = StellarChat/StellarChat.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 31;
+				CURRENT_PROJECT_VERSION = 34;
 				DEVELOPMENT_TEAM = "${DEVELOPMENT_TEAM}";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = StellarChat/Info.plist;
@@ -789,7 +813,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.3.0;
+				MARKETING_VERSION = 1.6.1;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
@@ -802,7 +826,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = StellarChatNotificationService/StellarChatNotificationService.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 31;
+				CURRENT_PROJECT_VERSION = 34;
 				DEVELOPMENT_TEAM = "${DEVELOPMENT_TEAM}";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = StellarChatNotificationService/Info.plist;
@@ -811,7 +835,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.3.0;
+				MARKETING_VERSION = 1.6.1;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios.NotificationService;
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = NOTIFICATION_SERVICE_EXTENSION;
@@ -845,7 +869,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = StellarChatNotificationService/StellarChatNotificationService.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 31;
+				CURRENT_PROJECT_VERSION = 34;
 				DEVELOPMENT_TEAM = "${DEVELOPMENT_TEAM}";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = StellarChatNotificationService/Info.plist;
@@ -854,7 +878,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.3.0;
+				MARKETING_VERSION = 1.6.1;
 				PRODUCT_BUNDLE_IDENTIFIER = chat.onym.ios.NotificationService;
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = NOTIFICATION_SERVICE_EXTENSION;

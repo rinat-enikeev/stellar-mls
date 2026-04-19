@@ -26,7 +26,10 @@ data class BootstrapPayload(
     val commitment: ByteArray?,
     val senderNostrPubkey: String,
     val senderAttestation: KeyAttestation? = null,
-    val senderTransportBundle: SEPMemberTransportBundle? = null
+    val senderTransportBundle: SEPMemberTransportBundle? = null,
+    /** Echoes the nonce from an onym://onboard invite so the inviter can reconcile
+     *  a pending `InvitedContact` row when this invitation arrives. Null for regular invites. */
+    val onboardReplyNonce: String? = null
 ) {
     /** Convert to a ChatGroup for local storage.
      *  Members are re-sorted by compressed G1 key per SEP-XXXX §2.1
@@ -88,6 +91,9 @@ data class BootstrapPayload(
         if (senderTransportBundle != null) {
             obj.put("senderTransportBundle", serializeTransportBundle(senderTransportBundle))
         }
+        if (onboardReplyNonce != null) {
+            obj.put("onboardReplyNonce", onboardReplyNonce)
+        }
         return obj.toString()
     }
 
@@ -97,7 +103,8 @@ data class BootstrapPayload(
             group: ChatGroup,
             senderPubkey: String,
             attestation: KeyAttestation? = null,
-            transportBundle: SEPMemberTransportBundle? = null
+            transportBundle: SEPMemberTransportBundle? = null,
+            onboardReplyNonce: String? = null
         ): BootstrapPayload {
             return BootstrapPayload(
                 groupID = group.groupIDData,
@@ -111,7 +118,8 @@ data class BootstrapPayload(
                 commitment = group.commitment,
                 senderNostrPubkey = senderPubkey,
                 senderAttestation = attestation,
-                senderTransportBundle = transportBundle
+                senderTransportBundle = transportBundle,
+                onboardReplyNonce = onboardReplyNonce
             )
         }
 
@@ -165,6 +173,8 @@ data class BootstrapPayload(
                 deserializeTransportBundle(obj.getJSONObject("senderTransportBundle"))
             } else null
 
+            val onboardReplyNonce = obj.optString("onboardReplyNonce", "").takeIf { it.isNotEmpty() }
+
             return BootstrapPayload(
                 groupID = android.util.Base64.decode(obj.getString("groupID"), android.util.Base64.NO_WRAP),
                 groupSecret = android.util.Base64.decode(obj.getString("groupSecret"), android.util.Base64.NO_WRAP),
@@ -177,7 +187,8 @@ data class BootstrapPayload(
                 commitment = commitment,
                 senderNostrPubkey = obj.getString("senderNostrPubkey"),
                 senderAttestation = attestation,
-                senderTransportBundle = transportBundle
+                senderTransportBundle = transportBundle,
+                onboardReplyNonce = onboardReplyNonce
             )
         }
     }

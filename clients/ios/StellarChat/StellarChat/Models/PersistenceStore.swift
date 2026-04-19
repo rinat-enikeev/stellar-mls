@@ -17,7 +17,7 @@ final class PersistenceStore {
         let schema = Schema([
             PersistedGroup.self, PersistedMessage.self, PersistedContactAlias.self,
             PersistedTransportBundle.self, PersistedPendingRekey.self,
-            PersistedEpochSnapshot.self
+            PersistedEpochSnapshot.self, PersistedInvitedContact.self
         ])
 
         // Store in a directory with complete file protection
@@ -47,7 +47,7 @@ final class PersistenceStore {
         let schema = Schema([
             PersistedGroup.self, PersistedMessage.self, PersistedContactAlias.self,
             PersistedTransportBundle.self, PersistedPendingRekey.self,
-            PersistedEpochSnapshot.self
+            PersistedEpochSnapshot.self, PersistedInvitedContact.self
         ])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try! ModelContainer(for: schema, configurations: [config])
@@ -286,6 +286,131 @@ final class PersistenceStore {
                 writer.deleteContactAlias(pubkey: pubkey)
             }
         }
+    }
+
+    // MARK: - Invited Contacts
+
+    struct InvitedContactRecord {
+        var phone: String
+        var displayName: String
+        var inviteKind: String
+        var inviteURL: String
+        var handshakeNonce: String?
+        var groupID: String?
+        var invitedAt: Date
+        var status: String
+        var resolvedPubkey: String?
+    }
+
+    func loadInvitedContacts() -> [InvitedContactRecord] {
+        let descriptor = FetchDescriptor<PersistedInvitedContact>(
+            sortBy: [SortDescriptor(\.invitedAt, order: .reverse)]
+        )
+        guard let persisted = try? context.fetch(descriptor) else { return [] }
+        return persisted.compactMap { p in
+            guard let name = try? StorageEncryption.decryptString(p.encryptedDisplayName),
+                  let url = try? StorageEncryption.decryptString(p.encryptedInviteURL)
+            else { return nil }
+            return InvitedContactRecord(
+                phone: p.phone,
+                displayName: name,
+                inviteKind: p.inviteKind,
+                inviteURL: url,
+                handshakeNonce: p.handshakeNonce,
+                groupID: p.groupID,
+                invitedAt: p.invitedAt,
+                status: p.status,
+                resolvedPubkey: p.resolvedPubkey
+            )
+        }
+    }
+
+    func saveInvitedContact(_ record: InvitedContactRecord) {
+        guard let encName = try? StorageEncryption.encrypt(record.displayName),
+              let encURL = try? StorageEncryption.encrypt(record.inviteURL)
+        else { return }
+        let phone = record.phone
+        let descriptor = FetchDescriptor<PersistedInvitedContact>(
+            predicate: #Predicate { $0.phone == phone }
+        )
+        if let existing = try? context.fetch(descriptor) {
+            for item in existing { context.delete(item) }
+        }
+        context.insert(PersistedInvitedContact(
+            phone: record.phone,
+            encryptedDisplayName: encName,
+            inviteKind: record.inviteKind,
+            encryptedInviteURL: encURL,
+            handshakeNonce: record.handshakeNonce,
+            groupID: record.groupID,
+            invitedAt: record.invitedAt,
+            status: record.status,
+            resolvedPubkey: record.resolvedPubkey
+        ))
+        try? context.save()
+    }
+
+    func saveInvitedContactAsync(_ record: InvitedContactRecord) {
+        Self.writeQueue.async {
+            autoreleasepool {
+                guard let writer = try? PersistenceStore() else { return }
+                writer.saveInvitedContact(record)
+            }
+        }
+    }
+
+    func updateInvitedContactStatus(phone: String, status: String) {
+        let descriptor = FetchDescriptor<PersistedInvitedContact>(
+            predicate: #Predicate { $0.phone == phone }
+        )
+        guard let existing = try? context.fetch(descriptor) else { return }
+        for item in existing { item.status = status }
+        try? context.save()
+    }
+
+    func updateInvitedContactStatusAsync(phone: String, status: String) {
+        Self.writeQueue.async {
+            autoreleasepool {
+                guard let writer = try? PersistenceStore() else { return }
+                writer.updateInvitedContactStatus(phone: phone, status: status)
+            }
+        }
+    }
+
+    func reconcileInvitedContact(nonce: String, resolvedPubkey: String) -> InvitedContactRecord? {
+        let descriptor = FetchDescriptor<PersistedInvitedContact>(
+            predicate: #Predicate { $0.handshakeNonce == nonce }
+        )
+        guard let existing = try? context.fetch(descriptor), let record = existing.first else {
+            return nil
+        }
+        record.status = "joined"
+        record.resolvedPubkey = resolvedPubkey
+        try? context.save()
+        guard let name = try? StorageEncryption.decryptString(record.encryptedDisplayName),
+              let url = try? StorageEncryption.decryptString(record.encryptedInviteURL)
+        else { return nil }
+        return InvitedContactRecord(
+            phone: record.phone,
+            displayName: name,
+            inviteKind: record.inviteKind,
+            inviteURL: url,
+            handshakeNonce: record.handshakeNonce,
+            groupID: record.groupID,
+            invitedAt: record.invitedAt,
+            status: record.status,
+            resolvedPubkey: record.resolvedPubkey
+        )
+    }
+
+    func deleteInvitedContact(phone: String) {
+        let descriptor = FetchDescriptor<PersistedInvitedContact>(
+            predicate: #Predicate { $0.phone == phone }
+        )
+        if let existing = try? context.fetch(descriptor) {
+            for item in existing { context.delete(item) }
+        }
+        try? context.save()
     }
 
     // MARK: - Transport Bundles

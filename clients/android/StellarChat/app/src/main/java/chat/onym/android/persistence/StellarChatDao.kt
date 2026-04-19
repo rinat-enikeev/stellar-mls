@@ -82,6 +82,22 @@ interface StellarChatDao {
     @Query("SELECT COUNT(*) FROM pending_rekeys WHERE groupID = :groupID AND epoch = :epoch AND isRemovalEpoch = 1")
     suspend fun isRemovalEpoch(groupID: String, epoch: Int): Int
 
+    // Invited contacts
+    @Query("SELECT * FROM invited_contacts ORDER BY invitedAt DESC")
+    suspend fun loadAllInvitedContacts(): List<PersistedInvitedContact>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveInvitedContact(contact: PersistedInvitedContact)
+
+    @Query("UPDATE invited_contacts SET status = :status WHERE phone = :phone")
+    suspend fun updateInvitedContactStatus(phone: String, status: String)
+
+    @Query("UPDATE invited_contacts SET status = 'joined', resolvedPubkey = :resolvedPubkey WHERE handshakeNonce = :nonce")
+    suspend fun reconcileInvitedContact(nonce: String, resolvedPubkey: String): Int
+
+    @Query("DELETE FROM invited_contacts WHERE phone = :phone")
+    suspend fun deleteInvitedContact(phone: String)
+
     // Epoch snapshots
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun saveEpochSnapshot(snapshot: PersistedEpochSnapshot)

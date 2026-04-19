@@ -48,6 +48,7 @@ import chat.onym.android.ui.screens.InviteMemberScreen
 import chat.onym.android.ui.screens.SearchScreen
 import chat.onym.android.ui.screens.JoinGroupScreen
 import chat.onym.android.ui.screens.LegacyIdentityScreen
+import chat.onym.android.ui.screens.OnboardLandingScreen
 import chat.onym.android.ui.screens.PendingInvitationsScreen
 import chat.onym.android.ui.screens.RecoveryPhraseScreen
 import chat.onym.android.ui.screens.RestoreIdentityScreen
@@ -75,6 +76,12 @@ class MainActivity : ComponentActivity() {
 
         // Handle deep link: stellarchat://join?code=<base64>
         val deepLinkCode = intent?.data?.getQueryParameter("code")
+        // Handle deep link: onym://onboard?inviter=<hex>&nonce=<hex>
+        val onboardInviter = intent?.data?.getQueryParameter("inviter")
+        val onboardNonce = intent?.data?.getQueryParameter("nonce")
+        val onboardPayload = if (onboardInviter != null && onboardNonce != null) {
+            OnboardDeepLink(onboardInviter, onboardNonce)
+        } else null
         // Handle notification tap: navigate to specific chat
         val notificationGroupId = intent?.getStringExtra("navigate_group_id")
 
@@ -89,12 +96,15 @@ class MainActivity : ComponentActivity() {
                 StellarChatNavHost(
                     groupListViewModel,
                     deepLinkInviteCode = deepLinkCode,
+                    deepLinkOnboard = onboardPayload,
                     notificationGroupId = notificationGroupId
                 )
             }
         }
     }
 }
+
+data class OnboardDeepLink(val inviter: String, val nonce: String)
 
 private enum class Tab(val route: String, val label: String, val icon: ImageVector) {
     Contacts("contacts", "Contacts", Icons.Default.Person),
@@ -111,6 +121,7 @@ private val tabRoutes = tabs.map { it.route }.toSet()
 fun StellarChatNavHost(
     groupListViewModel: GroupListViewModel,
     deepLinkInviteCode: String? = null,
+    deepLinkOnboard: OnboardDeepLink? = null,
     notificationGroupId: String? = null
 ) {
     val navController = rememberNavController()
@@ -119,6 +130,13 @@ fun StellarChatNavHost(
     androidx.compose.runtime.LaunchedEffect(deepLinkInviteCode) {
         if (deepLinkInviteCode != null) {
             navController.navigate("join")
+        }
+    }
+
+    // Navigate to onboard landing if deep link contains inviter + nonce
+    androidx.compose.runtime.LaunchedEffect(deepLinkOnboard) {
+        if (deepLinkOnboard != null) {
+            navController.navigate("onboard/${deepLinkOnboard.inviter}/${deepLinkOnboard.nonce}")
         }
     }
 
@@ -207,6 +225,8 @@ fun StellarChatNavHost(
                     groups = groupListViewModel.groups,
                     chatMessages = groupListViewModel.chatMessages,
                     contactAliasStore = groupListViewModel.contactAliasStore,
+                    invitedContactStore = groupListViewModel.invitedContactStore,
+                    myKeyAgreementPublicKeyHex = groupListViewModel.keyManager.keyAgreementPublicKeyHex,
                     dao = groupListViewModel.store.dao
                 )
             }
@@ -560,6 +580,23 @@ fun StellarChatNavHost(
                     },
                     contactAliasStore = groupListViewModel.contactAliasStore,
                     onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable(
+                "onboard/{inviter}/{nonce}",
+                arguments = listOf(
+                    navArgument("inviter") { type = NavType.StringType },
+                    navArgument("nonce") { type = NavType.StringType }
+                )
+            ) { backStackEntry ->
+                val inviter = backStackEntry.arguments?.getString("inviter") ?: return@composable
+                val nonce = backStackEntry.arguments?.getString("nonce") ?: return@composable
+                OnboardLandingScreen(
+                    inviterX25519Hex = inviter,
+                    nonceHex = nonce,
+                    groupListViewModel = groupListViewModel,
+                    onDone = { navController.popBackStack() }
                 )
             }
 

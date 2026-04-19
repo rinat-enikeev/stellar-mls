@@ -17,13 +17,19 @@ struct BootstrapPayload: Codable, Equatable {
     let senderNostrPubkey: String
     let senderAttestation: KeyAttestation?
     let senderTransportBundle: SEPMemberTransportBundle?
+    /// When an invitee replies to a personal-onboarding URL, this carries
+    /// the original inviter's 8-byte hex nonce so the inviter can match the
+    /// incoming invitation to their pending InvitedContact row. Absent for
+    /// regular group invites.
+    let onboardReplyNonce: String?
 
     /// Build a bootstrap payload from a ChatGroup, including the sender's key attestation and transport bundle.
     static func from(
         group: ChatGroup,
         senderPubkey: String,
         attestation: KeyAttestation? = nil,
-        transportBundle: SEPMemberTransportBundle? = nil
+        transportBundle: SEPMemberTransportBundle? = nil,
+        onboardReplyNonce: String? = nil
     ) -> BootstrapPayload {
         BootstrapPayload(
             groupID: Data(hexString: group.id),
@@ -37,7 +43,8 @@ struct BootstrapPayload: Codable, Equatable {
             commitment: group.commitment,
             senderNostrPubkey: senderPubkey,
             senderAttestation: attestation,
-            senderTransportBundle: transportBundle
+            senderTransportBundle: transportBundle,
+            onboardReplyNonce: onboardReplyNonce
         )
     }
 

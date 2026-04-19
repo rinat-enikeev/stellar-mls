@@ -11,6 +11,9 @@ struct ContentView: View {
 
     @Environment(AppState.self) private var appState
     @State private var showDeepLinkJoin = false
+    @State private var showOnboardLanding = false
+    @State private var onboardInviter: String = ""
+    @State private var onboardNonce: String = ""
     @State private var selectedTab: RootTab = .chats
     @State private var chatNavigationPath = NavigationPath()
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
@@ -46,6 +49,13 @@ struct ContentView: View {
                 showDeepLinkJoin = true
             }
         }
+        .onChange(of: appState.deepLinkOnboard?.nonce) { _, _ in
+            if let onboard = appState.deepLinkOnboard {
+                onboardInviter = onboard.inviter
+                onboardNonce = onboard.nonce
+                showOnboardLanding = true
+            }
+        }
         .onChange(of: appState.navigateToGroupID) { _, newValue in
             if let groupID = newValue {
                 selectedTab = .chats
@@ -59,6 +69,14 @@ struct ContentView: View {
             appState.deepLinkInviteCode = nil
         }) {
             DeepLinkJoinGroupView(code: appState.deepLinkInviteCode ?? "")
+        }
+        .sheet(isPresented: $showOnboardLanding, onDismiss: {
+            appState.deepLinkOnboard = nil
+        }) {
+            OnboardLandingView(
+                inviterX25519Hex: onboardInviter,
+                nonceHex: onboardNonce
+            )
         }
         .sheet(isPresented: .constant(!hasSeenOnboarding)) {
             OnboardingView(hasSeenOnboarding: $hasSeenOnboarding)

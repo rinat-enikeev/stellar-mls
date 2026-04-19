@@ -4,7 +4,7 @@
     "details": [
       {
         "appID": "5V5EUT3ZXJ.chat.onym.ios",
-        "paths": ["/join*"]
+        "paths": ["/join*", "/onboard*"]
       }
     ]
   }

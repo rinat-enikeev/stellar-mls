@@ -34,6 +34,7 @@ import chat.onym.android.nostr.NostrMessageTransport
 import chat.onym.android.onchain.OnChainService
 import chat.onym.android.onchain.OnChainVerificationResult
 import chat.onym.android.persistence.ContactAliasStore
+import chat.onym.android.persistence.InvitedContactStore
 import chat.onym.android.persistence.PersistenceStore
 import chat.onym.android.crypto.StorageEncryption
 import chat.onym.android.push.PushNotificationManager
@@ -118,6 +119,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     val store = PersistenceStore(application)
     val contactAliasStore = ContactAliasStore()
+    val invitedContactStore = InvitedContactStore()
 
     // Relay management
     val relayURLs = mutableStateListOf<String>()
@@ -321,6 +323,15 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 contactAliasStore.load(store.dao)
             } catch (e: Exception) {
                 Log.e("GroupListVM", "Failed to load contact aliases", e)
+            }
+        }
+
+        // Load invited contacts (Telegram-invite tracking)
+        viewModelScope.launch {
+            try {
+                invitedContactStore.load(store.dao)
+            } catch (e: Exception) {
+                Log.e("GroupListVM", "Failed to load invited contacts", e)
             }
         }
 
@@ -542,6 +553,34 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 )
             }
             viewModelScope.launch {
+                // Reconcile any pending InvitedContact when an onboard-ack arrives
+                invitation.payload.onboardReplyNonce?.let { nonce ->
+                    try {
+                        val invited = invitedContactStore.contacts
+                            .firstOrNull { it.handshakeNonce == nonce }
+                        invitedContactStore.reconcile(
+                            nonce = nonce,
+                            resolvedPubkey = invitation.payload.senderNostrPubkey,
+                            dao = store.dao
+                        )
+                        // Seed the alias from the phonebook displayName so the
+                        // newly-reconciled contact shows up with a human-readable
+                        // name instead of a raw hex pubkey.
+                        if (invited != null &&
+                            contactAliasStore.displayName(invitation.payload.senderNostrPubkey) == null
+                        ) {
+                            contactAliasStore.setAlias(
+                                pubkey = invitation.payload.senderNostrPubkey,
+                                name = invited.displayName,
+                                dao = store.dao
+                            )
+                        }
+                    } catch (e: Exception) {
+                        if (BuildConfig.DEBUG) {
+                            Log.w("GroupListVM", "Failed to reconcile invited contact: ${e.message}")
+                        }
+                    }
+                }
                 if (pendingInvitations.none { it.id == invitation.id } &&
                     groups.none { it.id == invitation.payload.groupID.toHex() }) {
                     pendingInvitations.add(invitation)
@@ -2298,6 +2337,37 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             onResult(Result.success(Unit))
         } catch (e: Exception) {
             onResult(Result.failure(e))
+        }
+    }
+
+    /** Create a 1:1 onboarding chat seeded with the inviter, and dispatch an onboard-ack
+     *  invitation carrying [nonceHex] so the inviter can reconcile their pending InvitedContact.
+     *  Returns the created group, or null on failure. */
+    suspend fun completeOnboardInvite(
+        inviterKeyAgreementKeyHex: String,
+        nonceHex: String,
+        displayName: String
+    ): ChatGroup? {
+        return try {
+            val inviterKey = inviterKeyAgreementKeyHex.hexToBytes()
+            require(inviterKey.size == 32) { "Inviter key must be 32 bytes" }
+
+            val result = createGroup(displayName) ?: return null
+            val group = result.first
+
+            val payload = BootstrapPayload.from(
+                group = group,
+                senderPubkey = keyManager.publicKeyHex,
+                onboardReplyNonce = nonceHex
+            )
+
+            withContext(Dispatchers.IO) {
+                invitationTransport.sendInvitation(payload, inviterKey, keyManager)
+            }
+            group
+        } catch (e: Exception) {
+            if (BuildConfig.DEBUG) Log.w("GroupListVM", "completeOnboardInvite failed: ${e.message}")
+            null
         }
     }
 

@@ -23,7 +23,7 @@ final class PersistedGroup {
     var removedByPubkeyHex: String?
     var pushNotificationsEnabled: Bool
     var lastMessageAt: Date?
-    var isPinned: Bool
+    var isPinned: Bool = false
 
     init(
         id: String,
@@ -78,6 +78,44 @@ final class PersistedContactAlias {
         self.pubkey = pubkey
         self.encryptedName = encryptedName
         self.updatedAt = updatedAt
+    }
+}
+
+/// Persisted invited contact — tracks people the user has sent a Telegram invite to.
+/// Phone/name/inviteURL are encrypted (the phonebook should never leak to disk in cleartext).
+/// The `handshakeNonce` stays cleartext so reconciliation can query by it.
+@Model
+final class PersistedInvitedContact {
+    @Attribute(.unique) var phone: String       // E.164, cleartext key for upsert
+    var encryptedDisplayName: Data
+    var inviteKind: String                      // "group" | "onboard"
+    var encryptedInviteURL: Data
+    var handshakeNonce: String?
+    var groupID: String?
+    var invitedAt: Date
+    var status: String                          // "pending" | "sent" | "joined"
+    var resolvedPubkey: String?
+
+    init(
+        phone: String,
+        encryptedDisplayName: Data,
+        inviteKind: String,
+        encryptedInviteURL: Data,
+        handshakeNonce: String? = nil,
+        groupID: String? = nil,
+        invitedAt: Date = Date(),
+        status: String = "pending",
+        resolvedPubkey: String? = nil
+    ) {
+        self.phone = phone
+        self.encryptedDisplayName = encryptedDisplayName
+        self.inviteKind = inviteKind
+        self.encryptedInviteURL = encryptedInviteURL
+        self.handshakeNonce = handshakeNonce
+        self.groupID = groupID
+        self.invitedAt = invitedAt
+        self.status = status
+        self.resolvedPubkey = resolvedPubkey
     }
 }
 

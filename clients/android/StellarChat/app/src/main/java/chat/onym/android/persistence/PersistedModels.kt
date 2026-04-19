@@ -113,6 +113,27 @@ data class PersistedPendingRekey(
     override fun hashCode(): Int = id.hashCode()
 }
 
+@Entity(tableName = "invited_contacts")
+data class PersistedInvitedContact(
+    @PrimaryKey val phone: String,                 // E.164, cleartext (local identifier)
+    val encryptedDisplayName: ByteArray,
+    val inviteKind: String,                        // "group" | "onboard"
+    val encryptedInviteURL: ByteArray,
+    val handshakeNonce: String?,                   // cleartext for lookup on reconciliation
+    val groupID: String?,                          // cleartext
+    val invitedAt: Long,
+    val status: String,                            // "pending" | "sent" | "joined"
+    val resolvedPubkey: String?
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is PersistedInvitedContact) return false
+        return phone == other.phone
+    }
+
+    override fun hashCode(): Int = phone.hashCode()
+}
+
 @Entity(tableName = "epoch_snapshots", primaryKeys = ["groupID", "epoch"])
 data class PersistedEpochSnapshot(
     val groupID: String,

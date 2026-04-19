@@ -17,6 +17,12 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Onym needs camera access to scan QR codes for joining groups.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Onym uses your contacts to help you invite friends via Telegram. Your phonebook never leaves the device.</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>tg</string>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

@@ -112,12 +112,24 @@ struct StellarChatApp: App {
                 .onOpenURL { url in
                     // Handle https://onym.chat/join?code=<base64> (Universal Link)
                     // and legacy onym://join?code=<base64> / stellarchat://join?code=<base64>
-                    let isUniversalLink = url.scheme == "https" && url.host == "onym.chat" && url.path.hasPrefix("/join")
-                    let isCustomScheme = (url.scheme == "stellarchat" || url.scheme == "onym") && url.host == "join"
-                    if isUniversalLink || isCustomScheme,
+                    let isJoinUniversal = url.scheme == "https" && url.host == "onym.chat" && url.path.hasPrefix("/join")
+                    let isJoinCustom = (url.scheme == "stellarchat" || url.scheme == "onym") && url.host == "join"
+                    if isJoinUniversal || isJoinCustom,
                        let code = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                         .queryItems?.first(where: { $0.name == "code" })?.value {
                         appState.deepLinkInviteCode = code
+                        return
+                    }
+
+                    // Handle https://onym.chat/onboard?inviter=<x25519hex>&nonce=<8-byte-hex>
+                    // and onym://onboard?inviter=…&nonce=…
+                    let isOnboardUniversal = url.scheme == "https" && url.host == "onym.chat" && url.path.hasPrefix("/onboard")
+                    let isOnboardCustom = (url.scheme == "stellarchat" || url.scheme == "onym") && url.host == "onboard"
+                    if isOnboardUniversal || isOnboardCustom,
+                       let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+                       let inviter = queryItems.first(where: { $0.name == "inviter" })?.value,
+                       let nonce = queryItems.first(where: { $0.name == "nonce" })?.value {
+                        appState.deepLinkOnboard = (inviter: inviter, nonce: nonce)
                     }
                 }
                 .onChange(of: scenePhase) { _, newPhase in
@@ -140,8 +152,11 @@ final class AppState {
     var groups: [ChatGroup] = []
     let store: PersistenceStore
     var contactAliasStore: ContactAliasStore!
+    var invitedContactStore: InvitedContactStore!
     /// Set by deep link handler; consumed by ContentView to navigate to join screen.
     var deepLinkInviteCode: String?
+    /// Set by deep link handler for `/onboard?inviter=…&nonce=…` personal-chat links.
+    var deepLinkOnboard: (inviter: String, nonce: String)?
     /// Set after group creation; consumed by ContentView to navigate to the new chat.
     var navigateToGroupID: String?
     let invitationTransport = InvitationTransport()
@@ -299,6 +314,7 @@ final class AppState {
             self.store = PersistenceStore.inMemory()
         }
         self.contactAliasStore = ContactAliasStore(store: store)
+        self.invitedContactStore = InvitedContactStore(store: store)
         self.groups = store.loadGroups()
         self.relayURLs = Self.loadRelayURLs()
         self.blossomServerURLs = Self.loadBlossomServerURLs()
@@ -3087,6 +3103,26 @@ final class AppState {
         invitationTransport.onInvitation = { [weak self] invitation in
             Task { @MainActor in
                 guard let self else { return }
+                // Reconcile Telegram onboard-ack: if the payload carries a
+                // nonce we issued earlier, flip the matching InvitedContact
+                // row to "joined" so the Contacts screen reflects the
+                // response. Invitation continues through the normal pending
+                // flow so the user can accept it.
+                if let nonce = invitation.payload.onboardReplyNonce,
+                   let resolved = self.invitedContactStore.reconcile(
+                       nonce: nonce,
+                       resolvedPubkey: invitation.payload.senderNostrPubkey
+                   ),
+                   self.contactAliasStore.displayName(for: invitation.payload.senderNostrPubkey) == nil {
+                    // Seed the alias from the phonebook displayName we stored at
+                    // invite time, so the newly-reconciled contact shows up with
+                    // a human-readable name instead of a raw hex pubkey.
+                    self.contactAliasStore.setAlias(
+                        pubkey: invitation.payload.senderNostrPubkey,
+                        name: resolved.displayName
+                    )
+                }
+
                 // Dedup by event ID
                 if !self.pendingInvitations.contains(where: { $0.id == invitation.id }) {
                     // Skip if already in this group or previously declined

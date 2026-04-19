@@ -2,8 +2,9 @@ package chat.onym.android.crypto
 
 import java.security.MessageDigest
 import java.security.SecureRandom
-import javax.crypto.SecretKeyFactory
-import javax.crypto.spec.PBEKeySpec
+import org.bouncycastle.crypto.digests.SHA512Digest
+import org.bouncycastle.crypto.generators.PKCS5S2ParametersGenerator
+import org.bouncycastle.crypto.params.KeyParameter
 
 /**
  * BIP39 mnemonic generation, validation, and seed derivation.
@@ -2173,11 +2174,14 @@ object Bip39 {
      * Standard BIP39: 2048 iterations, "mnemonic" + passphrase as salt.
      */
     fun seedFromMnemonic(mnemonic: String, passphrase: String = ""): ByteArray {
-        val password = java.text.Normalizer.normalize(mnemonic, java.text.Normalizer.Form.NFKD).toCharArray()
+        // BIP39 requires UTF-8 bytes of the NFKD-normalized mnemonic/salt.
+        // Using BouncyCastle directly avoids JCE PBKDF2 implementations that
+        // treat passwords as char[] with platform-dependent encoding.
+        val password = java.text.Normalizer.normalize(mnemonic, java.text.Normalizer.Form.NFKD).toByteArray(Charsets.UTF_8)
         val salt = java.text.Normalizer.normalize("mnemonic$passphrase", java.text.Normalizer.Form.NFKD).toByteArray(Charsets.UTF_8)
-        val spec = PBEKeySpec(password, salt, 2048, 512)
-        val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA512")
-        return factory.generateSecret(spec).encoded
+        val gen = PKCS5S2ParametersGenerator(SHA512Digest())
+        gen.init(password, salt, 2048)
+        return (gen.generateDerivedParameters(512) as KeyParameter).key
     }
 
     /** Derive Nostr secp256k1 secret key (32 bytes) from BIP39 seed via HKDF-SHA256. */

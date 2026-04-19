@@ -161,7 +161,8 @@ struct MemberOrderingTests {
             commitment: nil,
             senderNostrPubkey: "abc123",
             senderAttestation: nil,
-            senderTransportBundle: nil
+            senderTransportBundle: nil,
+            onboardReplyNonce: nil
         )
 
         let group = payload.toChatGroup()
@@ -195,7 +196,8 @@ struct MemberOrderingTests {
             commitment: nil,
             senderNostrPubkey: "abc123",
             senderAttestation: nil,
-            senderTransportBundle: nil
+            senderTransportBundle: nil,
+            onboardReplyNonce: nil
         )
 
         let group = payload.toChatGroup()

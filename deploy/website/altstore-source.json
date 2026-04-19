@@ -25,57 +25,6 @@
           "size": 32891142,
           "minOSVersion": "18.0",
           "buildVersion": "39"
-        },
-        {
-          "version": "1.3.1",
-          "date": "2026-04-18",
-          "localizedDescription": "Release 1.3.1",
-          "downloadURL": "https://github.com/rinat-enikeev/stellar-mls/releases/download/v1.3.1/StellarChat-1.3.1.ipa",
-          "size": 16414010
-        },
-        {
-          "version": "1.3.0",
-          "date": "2026-04-18",
-          "localizedDescription": "Release 1.3.0",
-          "downloadURL": "https://github.com/rinat-enikeev/stellar-mls/releases/download/v1.3.0/StellarChat-1.3.0.ipa",
-          "size": 16410723
-        },
-        {
-          "version": "1.2.20",
-          "date": "2026-04-16",
-          "localizedDescription": "Release 1.2.20",
-          "downloadURL": "https://github.com/rinat-enikeev/stellar-mls/releases/download/v1.2.20/StellarChat-1.2.20.ipa",
-          "size": 11572624
-        },
-        {
-          "version": "1.2.19",
-          "date": "2026-04-16",
-          "localizedDescription": "Release 1.2.19",
-          "downloadURL": "https://github.com/rinat-enikeev/stellar-mls/releases/download/v1.2.19/StellarChat-1.2.19.ipa",
-          "size": 11572631
-        },
-        {
-          "version": "1.2.12",
-          "date": "2026-04-13",
-          "localizedDescription": "Release 1.2.12",
-          "downloadURL": "https://github.com/rinat-enikeev/stellar-mls/releases/download/v1.2.12/StellarChat-1.2.12.ipa",
-          "size": 11556434
-        },
-        {
-          "version": "1.2.11",
-          "date": "2026-04-13",
-          "localizedDescription": "Release 1.2.11",
-          "downloadURL": "https://github.com/rinat-enikeev/stellar-mls/releases/download/v1.2.11/StellarChat-1.2.11.ipa",
-          "size": 11556435
-        },
-        {
-          "version": "1.2.0",
-          "buildVersion": "15",
-          "date": "2026-04-11",
-          "localizedDescription": "Release 1.2.0 \u2014 Reply to messages in chat (Telegram-style). First build distributed via AltStore PAL after Apple notarization.",
-          "downloadURL": "https://onym.chat/adp/1.2.0/manifest.json",
-          "size": 22786156,
-          "minOSVersion": "18.0"
         }
       ],
       "appPermissions": {

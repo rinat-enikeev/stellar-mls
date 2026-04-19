@@ -90,8 +90,6 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-ios,aarch64-apple-ios-sim,aarch64-apple-darwin
 
       - name: Cache Rust build
         uses: actions/cache@v4
@@ -256,8 +254,6 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-ios
 
       - name: Cache Rust build
         uses: actions/cache@v4

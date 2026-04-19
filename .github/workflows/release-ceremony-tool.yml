@@ -70,21 +70,15 @@ jobs:
           EPOCH=$(git log -1 --pretty=%ct)
           echo "SOURCE_DATE_EPOCH=$EPOCH" >> "$GITHUB_ENV"
 
-      - name: Install rust-toolchain.toml components
-        uses: dtolnay/rust-toolchain@master
-        with:
-          # The pinned channel is read from rust-toolchain.toml at checkout.
-          # dtolnay/rust-toolchain honors it when set to "stable" here.
-          toolchain: stable
-          targets: ${{ matrix.target }}
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Ensure pinned toolchain has the matrix target
         shell: bash
         run: |
-          # dtolnay/rust-toolchain installed `stable` + the target, but
-          # rust-toolchain.toml pins a specific channel (e.g. 1.88.0) that
-          # auto-installs on first cargo invocation without the target.
-          # Force-install the target against the pinned channel here.
+          # rust-toolchain.toml lists the standard mobile/musl targets, but
+          # the matrix here may add others (e.g. aarch64-unknown-linux-musl)
+          # that aren't pinned there. Add on demand.
           rustup target add ${{ matrix.target }}
 
       - name: Install musl cross tools (Linux)

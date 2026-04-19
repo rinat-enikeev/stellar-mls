@@ -1208,6 +1208,28 @@ final class AppState {
         }
     }
 
+    /// Build a directory of known contacts: BLS pubkey hex → x25519 inbox pubkey hex.
+    /// Aggregates across all groups the user is part of, excluding the user's own bundle.
+    /// Used by the Create Group flow to let users add existing contacts without pasting inbox keys.
+    func lookupContactInboxKeys() -> [String: String] {
+        let ownBlsHex: String
+        if let myLeaf = try? keyManager.memberLeaf {
+            ownBlsHex = myLeaf.publicKeyCompressed.map { String(format: "%02x", $0) }.joined()
+        } else {
+            ownBlsHex = ""
+        }
+        var result: [String: String] = [:]
+        for (_, bundles) in transportBundles {
+            for (blsHex, bundle) in bundles {
+                if blsHex == ownBlsHex { continue }
+                if result[blsHex] != nil { continue }
+                let inboxHex = bundle.x25519InboxPubkey.map { String(format: "%02x", $0) }.joined()
+                result[blsHex] = inboxHex
+            }
+        }
+        return result
+    }
+
     /// Kind-aware event router. Prevents wrong-transport bugs by routing based on event kind.
     /// - kind 34113 → invitationTransport (inbox, per-recipient)
     /// - kind 44114 → chatTransport (group broadcast)

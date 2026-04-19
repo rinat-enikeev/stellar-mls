@@ -9,14 +9,34 @@ IDENTITY="${IDENTITY:-sep-xxxx-testnet-deployer}"
 ALIAS="${ALIAS:-sep-xxxx-testnet}"
 KEEP_ARTIFACTS="${KEEP_ARTIFACTS:-0}"
 
-CONFIG_DIR="${CONFIG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/sep-xxxx-stellar-config.XXXXXX")}"
+# PERSIST_IDENTITY=1 switches the deployer identity to the user's global
+# stellar keystore (~/.config/stellar by default). In that mode the script
+# reuses an existing IDENTITY alias instead of regenerating it, and never
+# deletes CONFIG_DIR on exit. This is the mode you want when the contract
+# is meant to live past the smoke test and receive later admin-gated calls
+# (update_vk, upgrade, etc.). Default mode remains the self-contained
+# ephemeral smoke test.
+PERSIST_IDENTITY="${PERSIST_IDENTITY:-0}"
+
+if [ "$PERSIST_IDENTITY" = "1" ]; then
+    CONFIG_DIR="${CONFIG_DIR:-${STELLAR_CONFIG_DIR:-$HOME/.config/stellar}}"
+else
+    CONFIG_DIR="${CONFIG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/sep-xxxx-stellar-config.XXXXXX")}"
+fi
 WORK_DIR="${WORK_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/sep-xxxx-testnet.XXXXXX")}"
 ARTIFACT_DIR="$WORK_DIR/artifacts"
 FIXTURE_DIR="$WORK_DIR/fixtures"
 
 cleanup() {
     if [ "$KEEP_ARTIFACTS" != "1" ]; then
-        rm -rf "$WORK_DIR" "$CONFIG_DIR"
+        rm -rf "$WORK_DIR"
+        # Never rm the global keystore. In ephemeral mode CONFIG_DIR is a
+        # /tmp dir we created ourselves, so it's safe to delete; in persist
+        # mode it's the user's ~/.config/stellar (or an override), which is
+        # long-lived state and must survive.
+        if [ "$PERSIST_IDENTITY" != "1" ]; then
+            rm -rf "$CONFIG_DIR"
+        fi
     fi
 }
 trap cleanup EXIT INT TERM
@@ -56,18 +76,31 @@ COMMITMENT_0="$(tr -d '\n' < "$FIXTURE_DIR/commitment-epoch-0.hex")"
 COMMITMENT_1="$(tr -d '\n' < "$FIXTURE_DIR/commitment-epoch-1.hex")"
 TIER="$(tr -d '\n' < "$FIXTURE_DIR/tier.txt")"
 
-echo "==> Creating deployer identity in isolated Stellar config"
-stellar keys generate "$IDENTITY" \
-    --config-dir "$CONFIG_DIR" \
-    --network "$NETWORK" \
-    --overwrite >/dev/null
+if [ "$PERSIST_IDENTITY" = "1" ] && stellar keys public-key "$IDENTITY" --config-dir "$CONFIG_DIR" >/dev/null 2>&1; then
+    echo "==> Reusing existing persistent identity: $IDENTITY (config-dir: $CONFIG_DIR)"
+else
+    echo "==> Creating deployer identity in Stellar config ($CONFIG_DIR)"
+    stellar keys generate "$IDENTITY" \
+        --config-dir "$CONFIG_DIR" \
+        --network "$NETWORK" \
+        --overwrite >/dev/null
+fi
 
 DEPLOYER_ADDRESS="$(stellar keys public-key "$IDENTITY" --config-dir "$CONFIG_DIR" | tr -d '\n')"
 
+# Friendbot is idempotent-ish on testnet: it rejects already-funded accounts
+# with a "createAccountAlreadyExist" error. In persist mode that's the
+# common case, so don't fail the whole deploy when re-funding fails.
 echo "==> Funding deployer via Friendbot-backed testnet funding"
-stellar keys fund "$IDENTITY" \
-    --config-dir "$CONFIG_DIR" \
-    --network "$NETWORK" >/dev/null
+if ! stellar keys fund "$IDENTITY" --config-dir "$CONFIG_DIR" --network "$NETWORK" >/dev/null 2>&1; then
+    if [ "$PERSIST_IDENTITY" = "1" ]; then
+        echo "    (fund skipped — $IDENTITY likely already funded; continuing)"
+    else
+        # In ephemeral mode a freshly-generated key MUST fund; re-run the
+        # fund without suppression so the error surfaces.
+        stellar keys fund "$IDENTITY" --config-dir "$CONFIG_DIR" --network "$NETWORK" >/dev/null
+    fi
+fi
 
 echo "==> Deploying contract to $NETWORK"
 CONTRACT_ID="$(

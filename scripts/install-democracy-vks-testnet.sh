@@ -90,14 +90,15 @@ echo "    VK tier 0:  $VK_TIER_0"
 echo "    VK tier 1:  $VK_TIER_1"
 echo
 
-# Preflight: simulate update_vk(tier=0) to confirm $DEPLOYER matches the
-# stored admin. The contract's update_vk calls admin.require_auth() at
-# lib.rs:524; simulation runs the auth check without submitting state.
-# If the deployer is not the admin, this fails now with a clear message
-# — better than sending a tx and paying fees to a guaranteed-to-revert
-# admin call.
+# Preflight: simulate update_vk(tier=0) to surface spec/ABI problems early
+# (e.g. contract predates PR #77 and has no UpdateByType variant). This
+# does NOT verify admin match — Soroban simulation *reports* the auth
+# requirements rather than rejecting the call, so a simulation that
+# returns `null` only proves "the tx would be valid if the right keys
+# sign", not "this source IS the admin". The actual admin check happens
+# at real submit time and is handled inside install_vk().
 if [ "$DRY_RUN" != "1" ]; then
-    echo "==> Preflight: simulate update_vk(tier=0) to verify admin match"
+    echo "==> Preflight: simulate update_vk(tier=0) to catch ABI/spec errors"
     if preflight_err="$(
         stellar contract invoke \
             --id "$CONTRACT_ID" \
@@ -109,11 +110,13 @@ if [ "$DRY_RUN" != "1" ]; then
             --tier 0 \
             --new-vk-file-path "$VK_TIER_0" 2>&1 >/dev/null
     )"; then
-        echo "    ok — $DEPLOYER is the stored admin"
+        echo "    ok — contract ABI recognises UpdateByType"
     else
-        echo "$preflight_err" | grep -qi 'auth\|Unauthorized\|require_auth' && \
-            die "admin mismatch: $DEPLOYER ($DEPLOYER_ADDR) is not the contract's stored admin. Run the install from whichever identity was passed as --admin during initialize."
-        # Not an auth error — surface the real failure.
+        # Spec-mismatch: contract predates PR #77.
+        if printf '%s' "$preflight_err" | grep -qi 'Unknown case UpdateByType\|Failed to parse argument .*kind'; then
+            printf '%s\n' "$preflight_err" >&2
+            die "contract $CONTRACT_ID does not recognise VkKind::UpdateByType — it predates PR #77. Deploy/upgrade the contract first (see Phase 1 of issue #78)."
+        fi
         printf '%s\n' "$preflight_err" >&2
         die "preflight failed (see above). Cannot proceed."
     fi
@@ -142,7 +145,24 @@ install_vk() {
         return 0
     fi
 
-    "$@"
+    # Capture stderr so we can translate the generic "Missing signing key
+    # for account G…" error into an actionable "admin mismatch" message
+    # that names the required address.
+    if invoke_err="$("$@" 2>&1 >/dev/null)"; then
+        return 0
+    fi
+    printf '%s\n' "$invoke_err" >&2
+    required_admin="$(printf '%s' "$invoke_err" | sed -n 's/.*Missing signing key for account \(G[A-Z0-9]*\).*/\1/p' | head -n1)"
+    if [ -n "$required_admin" ]; then
+        cat >&2 <<EOF
+
+admin mismatch: --source-account $DEPLOYER ($DEPLOYER_ADDR) is NOT the contract's stored admin.
+The contract at $CONTRACT_ID requires signature from $required_admin.
+Re-run with DEPLOYER= set to the stellar keys alias (or raw S-secret) for that address.
+EOF
+        exit 1
+    fi
+    exit 1
 }
 
 install_vk 0 "$VK_TIER_0"

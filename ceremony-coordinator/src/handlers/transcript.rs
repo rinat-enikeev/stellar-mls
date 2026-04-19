@@ -12,7 +12,7 @@ use std::str::FromStr;
 use zip::write::SimpleFileOptions;
 
 use crate::model::{
-    now_unix, CurrentSlot, Round, SignupStatus, StatusSnapshot, Tier, TierStatus,
+    now_unix, CurrentSlot, Round, SignupStatus, StatusLimits, StatusSnapshot, Tier, TierStatus,
 };
 use crate::SharedState;
 
@@ -357,6 +357,10 @@ fn build_snapshot(state: &SharedState) -> StatusSnapshot {
     StatusSnapshot {
         tiers,
         as_of: now_unix(),
+        limits: StatusLimits {
+            slot_deadline_secs: state.config.slot_deadline_secs,
+            queue_idle_secs: state.config.queue_idle_secs,
+        },
     }
 }
 

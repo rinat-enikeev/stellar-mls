@@ -183,6 +183,46 @@
     return `${h}h ${m}m ${s}s`;
   }
 
+  // Coarse "~Xh Ym" / "~Ym" / "<1m" for wait-time estimates.
+  function fmtDuration(seconds) {
+    if (!Number.isFinite(seconds) || seconds <= 0) return '<1m';
+    if (seconds < 60) return '<1m';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (h <= 0) return `${m}m`;
+    if (m === 0) return `${h}h`;
+    return `${h}h ${m}m`;
+  }
+
+  // Pessimistic wait for a hypothetical new joiner of this tier:
+  // the active claim's remaining time (or a full slot if none) plus one
+  // full slot per already-queued participant plus one for the new joiner.
+  // `limits.slot_deadline_secs` comes from /status.
+  function worstCaseWaitSecsForNewJoiner(tier, limits) {
+    const slot = limits && limits.slot_deadline_secs ? limits.slot_deadline_secs : 7200;
+    const now = Math.floor(Date.now() / 1000);
+    let total = 0;
+    if (tier.current_slot && tier.current_slot.deadline) {
+      total += Math.max(0, tier.current_slot.deadline - now);
+    }
+    // queue_depth people ahead + yourself
+    total += (Math.max(0, tier.queue_depth) + 1) * slot;
+    return total;
+  }
+
+  // Pessimistic wait for a participant already queued at `position`
+  // (1-indexed; head = 1).
+  function worstCaseWaitSecsForQueued(position, tier, limits) {
+    const slot = limits && limits.slot_deadline_secs ? limits.slot_deadline_secs : 7200;
+    const now = Math.floor(Date.now() / 1000);
+    const ahead = Math.max(0, (position || 1) - 1);
+    let total = ahead * slot;
+    if (tier && tier.current_slot && tier.current_slot.deadline) {
+      total += Math.max(0, tier.current_slot.deadline - now);
+    }
+    return total;
+  }
+
   window.Ceremony = {
     api: {
       get: apiGet,
@@ -192,7 +232,16 @@
     },
     nostr: { ensure: ensureNostr, getPubkey, nip98Header },
     status: { subscribe: subscribeStatus },
-    fmt: { hash: fmtHash, unix: fmtUnix, countdown: fmtCountdown },
+    fmt: {
+      hash: fmtHash,
+      unix: fmtUnix,
+      countdown: fmtCountdown,
+      duration: fmtDuration,
+    },
+    wait: {
+      newJoiner: worstCaseWaitSecsForNewJoiner,
+      queued: worstCaseWaitSecsForQueued,
+    },
     API_BASE,
   };
 })();

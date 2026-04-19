@@ -112,6 +112,13 @@ pub struct TierStatus {
 pub struct StatusSnapshot {
     pub tiers: Vec<TierStatus>,
     pub as_of: i64,
+    pub limits: StatusLimits,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StatusLimits {
+    pub slot_deadline_secs: i64,
+    pub queue_idle_secs: i64,
 }
 
 #[derive(Debug, Deserialize)]

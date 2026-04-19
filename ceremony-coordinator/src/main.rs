@@ -115,6 +115,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/signup", post(handlers::signup::signup))
         .route("/api/v1/tiers/:tier/claim", post(handlers::slot::claim))
         .route(
+            "/api/v1/tiers/:tier/withdraw",
+            post(handlers::withdraw::withdraw),
+        )
+        .route(
             "/api/v1/tiers/:tier/contribute",
             post(handlers::upload::contribute),
         )

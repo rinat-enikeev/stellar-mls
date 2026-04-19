@@ -296,7 +296,7 @@ fn parse_kv(s: &str) -> BTreeMap<String, String> {
 }
 
 fn build_snapshot_json(state: &SharedState) -> String {
-    use crate::model::{CurrentSlot, StatusSnapshot, TierStatus};
+    use crate::model::{CurrentSlot, StatusLimits, StatusSnapshot, TierStatus};
     let mut tiers = Vec::with_capacity(3);
     for tier in Tier::ALL {
         let head = state.store.head_round(tier).unwrap_or(-1);
@@ -321,6 +321,10 @@ fn build_snapshot_json(state: &SharedState) -> String {
     serde_json::to_string(&StatusSnapshot {
         tiers,
         as_of: now_unix(),
+        limits: StatusLimits {
+            slot_deadline_secs: state.config.slot_deadline_secs,
+            queue_idle_secs: state.config.queue_idle_secs,
+        },
     })
     .unwrap_or_default()
 }

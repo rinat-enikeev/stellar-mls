@@ -165,7 +165,8 @@
   <!-- Status: queued -->
   <div class="step-card" x-show="myStatus === 'queued'">
     <h2>You're in line</h2>
-    <p>You're <strong x-text="queuePosition !== null ? '#' + queuePosition + ' in the ' + tier + ' queue' : 'queued'"></strong>. Average round takes ~15 minutes; come back then.</p>
+    <p>You're <strong x-text="queuePosition !== null ? '#' + queuePosition + ' in the ' + tier + ' queue' : 'queued'"></strong>.
+       Worst-case wait from here: <strong x-text="myWaitEstimate"></strong>. Average round takes ~15 minutes in practice.</p>
     <template x-if="queuePosition === 1">
       <div class="mt-2">
         <p>You're at the head of the queue. Claim your 2-hour slot to receive the current state and start contributing.</p>
@@ -178,6 +179,11 @@
     <template x-if="queuePosition !== 1">
       <p class="text-dim mt-2">When you reach the head of the queue, the coordinator opens a 2-hour slot. Refresh this page to claim it.</p>
     </template>
+    <p class="mt-2">
+      <button class="btn btn-ghost btn-small" @click="withdraw()" :disabled="busy">
+        <span x-text="busy ? 'Cancelling…' : 'Cancel my signup'"></span>
+      </button>
+    </p>
   </div>
 
   <!-- Status: claimed -->
@@ -186,6 +192,13 @@
     <div class="alert alert-warn">
       <strong>Your slot is open.</strong> Deadline: <span x-text="deadlineCountdown"></span>.
     </div>
+    <p class="mt-2 text-dim" style="font-size:0.9rem;">
+      Can't contribute right now?
+      <button class="btn btn-ghost btn-small" @click="withdraw()" :disabled="busy">
+        <span x-text="busy ? 'Releasing…' : 'Give up this slot'"></span>
+      </button>
+      — the next person in line takes over.
+    </p>
     <p>Run the native binary on an <em>air-gapped or ephemeral</em> machine. Don't paste secrets, don't let the scalar touch persistent storage.</p>
     <ol class="mt-2">
       <li>
@@ -351,8 +364,10 @@ function contribute() {
     pubkey: null,
     tier: new URLSearchParams(location.search).get('tier') || '',
     tiers: [],
+    limits: {},
     myStatus: null,
     queuePosition: null,
+    myWaitEstimate: '—',
     prevBlobs: {},
     committedRound: null,
     deadlineCountdown: '',
@@ -371,6 +386,7 @@ function contribute() {
       try {
         const s = await Ceremony.api.get('/status');
         this.tiers = s.tiers || [];
+        this.limits = s.limits || {};
       } catch (e) { /* ignore */ }
       // Try silent sign-in if extension present and user has approved before.
       if (window.nostr && window.nostr.getPublicKey) {
@@ -378,7 +394,14 @@ function contribute() {
       }
       this.detectToolAsset();
       setInterval(() => this.tick(), 1000);
-      Ceremony.status.subscribe(snap => { this.tiers = snap.tiers || []; });
+      Ceremony.status.subscribe(snap => {
+        this.tiers = snap.tiers || [];
+        if (snap.limits) this.limits = snap.limits;
+      });
+    },
+
+    currentTier() {
+      return (this.tiers || []).find(t => t.tier === this.tier) || null;
     },
 
     async detectToolAsset() {
@@ -445,6 +468,10 @@ function contribute() {
       if (this.myStatus === 'claimed' && this.slotDeadline) {
         this.deadlineCountdown = Ceremony.fmt.countdown(this.slotDeadline);
       }
+      if (this.myStatus === 'queued' && this.queuePosition) {
+        const secs = Ceremony.wait.queued(this.queuePosition, this.currentTier(), this.limits);
+        this.myWaitEstimate = '~' + Ceremony.fmt.duration(secs);
+      }
     },
 
     async signIn() {
@@ -499,6 +526,26 @@ function contribute() {
       this.busy = true; this.error = '';
       try {
         await Ceremony.api.postAuthedEmpty(`/tiers/${this.tier}/claim`);
+        await this.refresh();
+      } catch (e) { this.error = e.message; }
+      finally { this.busy = false; }
+    },
+
+    async withdraw() {
+      const wasClaimed = this.myStatus === 'claimed';
+      const msg = wasClaimed
+        ? 'Give up your active slot? The next person in line will be able to claim it.'
+        : 'Leave the queue? You can sign up again later, but you\'ll start from the back.';
+      if (!window.confirm(msg)) return;
+      this.busy = true; this.error = '';
+      try {
+        await Ceremony.api.postAuthedEmpty(`/tiers/${this.tier}/withdraw`);
+        this.myStatus = null;
+        this.queuePosition = null;
+        this.slotDeadline = null;
+        this.deadlineCountdown = '';
+        this.myWaitEstimate = '—';
+        this.prevBlobs = {};
         await this.refresh();
       } catch (e) { this.error = e.message; }
       finally { this.busy = false; }

@@ -4,3 +4,4 @@ pub mod slot;
 pub mod transcript;
 pub mod upload;
 pub mod verify;
+pub mod withdraw;

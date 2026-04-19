@@ -462,32 +462,54 @@
 <script>
 // Live status cards (SSE + initial fetch).
 (function () {
+  let latestSnapshot = null;
   function render(snapshot) {
+    latestSnapshot = snapshot;
     const host = document.getElementById('tier-cards');
     if (!host) return;
     const tiers = snapshot.tiers || [];
+    const limits = snapshot.limits || {};
     const order = { small: 0, medium: 1, large: 2 };
     tiers.sort((a, b) => (order[a.tier] ?? 9) - (order[b.tier] ?? 9));
     host.innerHTML = tiers.map((t) => {
       const slot = t.current_slot;
       const slotRow = slot
         ? `<div class="row"><span>Current contributor</span><code class="hash" title="${slot.participant_pk}">${Ceremony.fmt.hash(slot.participant_pk, 6)}</code></div>
-           <div class="row"><span>Deadline</span><span>${Ceremony.fmt.countdown(slot.deadline)}</span></div>`
+           <div class="row"><span>Deadline</span><span data-countdown="${slot.deadline}">${Ceremony.fmt.countdown(slot.deadline)}</span></div>`
         : `<div class="row"><span>Current contributor</span><span class="text-dim">— (slot open) —</span></div>`;
       const headLink = t.head_round >= 0
         ? `<a class="btn btn-ghost btn-small mt-2" href="/verify.html?tier=${t.tier}&round=${t.head_round}">Verify head in browser →</a>`
         : '';
+      const waitSecs = Ceremony.wait.newJoiner(t, limits);
+      const waitLine = `<div class="sub text-dim" data-wait-tier="${t.tier}">If you join now: up to ~${Ceremony.fmt.duration(waitSecs)} wait</div>`;
       return `
         <div class="tier-card">
           <h3>Tier: ${t.tier}<span class="pill">depth ${depthFor(t.tier)}</span></h3>
           <div class="big">Round ${t.head_round < 0 ? 0 : t.head_round + 1}</div>
           <div class="sub">${t.queue_depth} waiting in queue</div>
+          ${waitLine}
           <div class="mt-2">${slotRow}</div>
           <a class="btn btn-secondary btn-small mt-2" href="/contribute.html?tier=${t.tier}">Take a turn →</a>
           ${headLink}
         </div>`;
     }).join('');
   }
+  // Tick countdowns + wait estimates every second without re-fetching.
+  setInterval(() => {
+    if (!latestSnapshot || !window.Ceremony) return;
+    document.querySelectorAll('[data-countdown]').forEach((el) => {
+      const d = Number(el.getAttribute('data-countdown'));
+      if (d > 0) el.textContent = Ceremony.fmt.countdown(d);
+    });
+    const limits = latestSnapshot.limits || {};
+    (latestSnapshot.tiers || []).forEach((t) => {
+      const el = document.querySelector(`[data-wait-tier="${t.tier}"]`);
+      if (el) {
+        const secs = Ceremony.wait.newJoiner(t, limits);
+        el.textContent = `If you join now: up to ~${Ceremony.fmt.duration(secs)} wait`;
+      }
+    });
+  }, 1000);
   function depthFor(t) {
     return { small: 5, medium: 8, large: 11 }[t] ?? '?';
   }

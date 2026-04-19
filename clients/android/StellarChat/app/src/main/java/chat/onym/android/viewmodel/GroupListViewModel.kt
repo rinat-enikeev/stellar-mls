@@ -450,7 +450,21 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         if (idx < 0) return
         val g = groups[idx].copy(isPinned = !groups[idx].isPinned)
         groups[idx] = g
-        viewModelScope.launch { try { store.saveGroup(g) } catch (_: Exception) { } }
+        // Re-sort so pinned/unpinned chat moves immediately
+        val currentIDs = groups.map { it.id }
+        val sortedIDs = groups.sortedWith(compareByDescending<ChatGroup> { it.isPinned }
+            .thenByDescending { if (it.lastMessageAt > 0) it.lastMessageAt else it.createdAt.time }
+        ).map { it.id }
+        if (sortedIDs != currentIDs) {
+            val byID = groups.associateBy { it.id }
+            groups.clear()
+            sortedIDs.forEach { sid -> byID[sid]?.let { groups.add(it) } }
+        }
+        viewModelScope.launch {
+            try { store.saveGroup(g) } catch (e: Exception) {
+                Log.e("GroupListVM", "Failed to persist pin toggle for group ${id.take(8)}", e)
+            }
+        }
     }
 
     fun removeGroup(id: String) {

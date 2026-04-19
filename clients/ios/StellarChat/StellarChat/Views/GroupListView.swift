@@ -215,11 +215,16 @@ struct GroupRow: View {
     let isContractConfigured: Bool
 
     private var avatarColor: Color {
-        let hash = group.id.hashValue
+        // Use djb2 hash for deterministic color across app launches
+        // (Swift's hashValue is randomized per process since Swift 4.2)
+        var hash: UInt64 = 5381
+        for byte in group.id.utf8 {
+            hash = hash &* 33 &+ UInt64(byte)
+        }
         let colors: [Color] = [
             .blue, .purple, .orange, .pink, .teal, .indigo, .mint, .cyan
         ]
-        let index = ((hash % colors.count) + colors.count) % colors.count
+        let index = Int(hash % UInt64(colors.count))
         return colors[index]
     }
 

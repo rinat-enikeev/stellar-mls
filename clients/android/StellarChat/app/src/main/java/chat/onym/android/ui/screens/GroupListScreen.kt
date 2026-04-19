@@ -270,7 +270,7 @@ fun GroupListScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Text(if (group.isPinned) "\uD83D\uDCCC" else "\uD83D\uDCCC")
+                                Text(if (group.isPinned) "\u274C" else "\uD83D\uDCCC")
                                 Text(if (group.isPinned) "Unpin" else "Pin")
                             }
                         }

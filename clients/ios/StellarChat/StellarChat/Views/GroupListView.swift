@@ -206,29 +206,84 @@ struct GroupRow: View {
     let unreadCount: Int
     let isContractConfigured: Bool
 
+    private var avatarColor: Color {
+        let hash = group.id.hashValue
+        let colors: [Color] = [
+            .blue, .purple, .orange, .pink, .teal, .indigo, .mint, .cyan
+        ]
+        return colors[abs(hash) % colors.count]
+    }
+
+    private var avatarInitial: String {
+        String(group.name.prefix(1)).uppercased()
+    }
+
     var body: some View {
-        HStack {
+        HStack(spacing: 12) {
+            // Avatar
+            ZStack {
+                Circle()
+                    .fill(avatarColor.gradient)
+                    .frame(width: 48, height: 48)
+                Text(avatarInitial)
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.white)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if group.isPublishedOnChain {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.green)
+                        .background(Circle().fill(.background).padding(-1))
+                }
+            }
+
             VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(group.name)
-                        .font(.headline)
+                // Top line: name + timestamp
+                HStack(alignment: .firstTextBaseline) {
+                    HStack(spacing: 4) {
+                        Text(group.name)
+                            .font(.body)
+                            .fontWeight(unreadCount > 0 ? .semibold : .medium)
+                            .lineLimit(1)
+                        if group.forkedFromGroupID != nil {
+                            Image(systemName: "arrow.triangle.branch")
+                                .foregroundStyle(.purple)
+                                .font(.caption2)
+                        }
+                    }
                     Spacer()
                     if let lastMsg = lastMessage {
                         Text(relativeTimestamp(lastMsg.timestamp))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                            .foregroundStyle(unreadCount > 0 ? .accentColor : .secondary)
                     }
                 }
-                HStack {
-                    Text("\(group.members.count) members")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
+                // Bottom line: message preview + unread badge
+                HStack(spacing: 0) {
                     if let lastMsg = lastMessage {
-                        Text("· \(lastMsg.text)")
-                            .font(.caption)
+                        if lastMsg.mediaAttachment != nil {
+                            HStack(spacing: 3) {
+                                Image(systemName: lastMsg.mediaAttachment!.isVideo ? "video.fill" :
+                                        lastMsg.mediaAttachment!.isAudio ? "waveform" : "photo.fill")
+                                    .font(.caption2)
+                                Text(lastMsg.text.isEmpty ? (lastMsg.mediaAttachment!.isVideo ? "Video" :
+                                        lastMsg.mediaAttachment!.isAudio ? "Voice message" : "Photo") : lastMsg.text)
+                            }
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
+                        } else {
+                            Text(lastMsg.text)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    } else {
+                        Text("\(group.members.count) members")
+                            .font(.subheadline)
+                            .foregroundStyle(.tertiary)
                     }
 
                     Spacer()
@@ -240,24 +295,9 @@ struct GroupRow: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(.red, in: Capsule())
+                            .background(.accentColor, in: Capsule())
                     }
                 }
-            }
-
-            if group.forkedFromGroupID != nil {
-                Image(systemName: "arrow.triangle.branch")
-                    .foregroundStyle(.purple)
-                    .font(.caption)
-            }
-            if group.isPublishedOnChain {
-                Image(systemName: "checkmark.seal.fill")
-                    .foregroundStyle(.green)
-                    .font(.caption)
-            } else if isContractConfigured {
-                Image(systemName: "circle")
-                    .foregroundStyle(.secondary)
-                    .font(.caption2)
             }
         }
         .padding(.vertical, 4)

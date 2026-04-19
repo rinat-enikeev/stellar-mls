@@ -39,6 +39,7 @@ use ark_r1cs_std::fields::fp::FpVar;
 
 use crate::poseidon::poseidon_config;
 
+pub mod democracy;
 pub mod update;
 
 /// The SEP-XXXX membership circuit.

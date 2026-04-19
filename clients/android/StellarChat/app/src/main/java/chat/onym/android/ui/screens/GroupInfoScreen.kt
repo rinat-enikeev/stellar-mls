@@ -118,6 +118,8 @@ fun GroupInfoScreen(
     inviteLink: String? = null,
     onTogglePushNotifications: ((Boolean) -> Unit)? = null,
     onProposeRemovalVote: ((targetPubkeyHex: String) -> Unit)? = null,
+    onPromoteToAdmin: ((targetPubkeyHex: String) -> Unit)? = null,
+    onDemoteFromAdmin: ((targetPubkeyHex: String) -> Unit)? = null,
     onSearchMessages: () -> Unit = {},
     contactAliasStore: ContactAliasStore? = null,
     dao: StellarChatDao? = null,
@@ -224,7 +226,14 @@ fun GroupInfoScreen(
                 trailing = "${group.members.size} of ${group.tier.memberCap}",
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
-                if (isMember && group.groupType != com.stellarmls.mls.SEPGroupType.ONE_ON_ONE) {
+                val myHex = myBlsPubkey.toHex()
+                val iAmOligarchyAdmin = group.groupType == com.stellarmls.mls.SEPGroupType.OLIGARCHY &&
+                    group.adminPubkeys.contains(myHex)
+                // Oligarchy: only admins can invite. Anarchy/Democracy: anyone can.
+                val canInvite = isMember &&
+                    group.groupType != com.stellarmls.mls.SEPGroupType.ONE_ON_ONE &&
+                    (group.groupType != com.stellarmls.mls.SEPGroupType.OLIGARCHY || iAmOligarchyAdmin)
+                if (canInvite) {
                     AddPeopleRow(onClick = { showInviteSheet = true })
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
                 }
@@ -233,12 +242,23 @@ fun GroupInfoScreen(
                     val isMe = member.publicKeyCompressed.contentEquals(myBlsPubkey)
                     val isAdmin = group.groupType == com.stellarmls.mls.SEPGroupType.OLIGARCHY &&
                         group.adminPubkeys.contains(hex)
+                    // Oligarchy kicks require the current user to be an admin.
                     val canKick = isMember && !isMe &&
                         group.groupType != com.stellarmls.mls.SEPGroupType.ONE_ON_ONE &&
-                        group.groupType != com.stellarmls.mls.SEPGroupType.DEMOCRACY
+                        group.groupType != com.stellarmls.mls.SEPGroupType.DEMOCRACY &&
+                        (group.groupType != com.stellarmls.mls.SEPGroupType.OLIGARCHY || iAmOligarchyAdmin)
                     val canVote = isMember && !isMe &&
                         group.groupType == com.stellarmls.mls.SEPGroupType.DEMOCRACY &&
                         onProposeRemovalVote != null
+                    // Oligarchy: only admins see promote/demote. Demote disallowed on the
+                    // last remaining admin so the group always retains at least one.
+                    val canPromote = isMember && !isMe &&
+                        group.groupType == com.stellarmls.mls.SEPGroupType.OLIGARCHY &&
+                        iAmOligarchyAdmin && !isAdmin && onPromoteToAdmin != null
+                    val canDemote = isMember && !isMe &&
+                        group.groupType == com.stellarmls.mls.SEPGroupType.OLIGARCHY &&
+                        iAmOligarchyAdmin && isAdmin && group.adminPubkeys.size > 1 &&
+                        onDemoteFromAdmin != null
                     val alias = contactAliasStore?.displayName(hex)
                     MemberRow(
                         hex = hex,
@@ -247,6 +267,8 @@ fun GroupInfoScreen(
                         isAdmin = isAdmin,
                         canRemove = canKick,
                         canVote = canVote,
+                        canPromote = canPromote,
+                        canDemote = canDemote,
                         removing = isRemovingMember,
                         onTap = {
                             if (contactAliasStore != null && dao != null) {
@@ -255,7 +277,9 @@ fun GroupInfoScreen(
                             }
                         },
                         onRemove = { memberToRemove = member },
-                        onVote = { onProposeRemovalVote?.invoke(hex) }
+                        onVote = { onProposeRemovalVote?.invoke(hex) },
+                        onPromote = { onPromoteToAdmin?.invoke(hex) },
+                        onDemote = { onDemoteFromAdmin?.invoke(hex) }
                     )
                     if (idx < group.members.lastIndex) {
                         HorizontalDivider(
@@ -1047,10 +1071,14 @@ private fun MemberRow(
     isAdmin: Boolean,
     canRemove: Boolean,
     canVote: Boolean = false,
+    canPromote: Boolean = false,
+    canDemote: Boolean = false,
     removing: Boolean,
     onTap: () -> Unit,
     onRemove: () -> Unit,
-    onVote: () -> Unit = {}
+    onVote: () -> Unit = {},
+    onPromote: () -> Unit = {},
+    onDemote: () -> Unit = {}
 ) {
     val displayName = when {
         !alias.isNullOrEmpty() -> alias
@@ -1132,6 +1160,24 @@ private fun MemberRow(
                     Icons.Filled.HowToVote,
                     contentDescription = "Propose removal vote",
                     tint = Color(0xFF6A1B9A)
+                )
+            }
+        }
+        if (canPromote) {
+            IconButton(onClick = onPromote) {
+                Icon(
+                    Icons.Filled.Shield,
+                    contentDescription = "Promote to admin",
+                    tint = Color(0xFF007AFF)
+                )
+            }
+        }
+        if (canDemote) {
+            IconButton(onClick = onDemote) {
+                Icon(
+                    Icons.Filled.Shield,
+                    contentDescription = "Demote admin",
+                    tint = Color(0xFFFF9500)
                 )
             }
         }

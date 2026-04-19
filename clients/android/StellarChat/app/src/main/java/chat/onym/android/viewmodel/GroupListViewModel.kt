@@ -518,7 +518,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 members = group.members.toList(),
                 epoch = group.epoch,
                 salt = group.salt,
-                commitment = group.commitment
+                commitment = group.commitment,
+                tierRawValue = group.tier.id,
+                groupTypeRawValue = group.groupType.id,
+                adminPubkeys = group.adminPubkeys.toList()
             )
 
             addGroup(group)
@@ -988,6 +991,21 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             "https://soroban.stellar.org",
             "https://rpc-futurenet.stellar.org",
         )
+
+        /** Chat prefixes that render as system cards and may mutate group state. Keep in
+         *  sync with `processGovernanceEvent` and the matching iOS list. */
+        private val GOVERNANCE_PREFIXES = listOf(
+            "VOTE_PROPOSAL::", "VOTE_CAST::", "ADMIN_PROMOTE::",
+            "ADMIN_DEMOTE::", "DEMOCRACY_FINALIZED::", "PEER_LEFT::"
+        )
+
+        fun isGovernancePayload(text: String): Boolean =
+            GOVERNANCE_PREFIXES.any { text.startsWith(it) }
+
+        /** Default ballot lifetime: 7 days. Ballots past this can no longer
+         *  accept new casts or be finalized. On-chain enforcement replaces this
+         *  once the Democracy circuit VK ships. */
+        const val BALLOT_LIFETIME_SECONDS: Long = 7L * 24 * 3600
 
         /** Check if a Soroban RPC endpoint URL is well-formed and uses HTTPS. */
         fun isValidRPCEndpoint(url: String): Boolean {
@@ -1593,29 +1611,184 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         return contactAliasStore.displayName(hex) ?: (hex.take(8) + "...")
     }
 
-    /** Propose a Democracy-group vote to remove a member. Inserts a locally visible
-     *  ballot system message. On-chain vote submission is gated on the Democracy
-     *  circuit VK ceremony; this method only surfaces the proposal in chat.
+    /** Broadcast a Democracy ballot to remove a member. The proposal is sent via the
+     *  chat transport with a hard expiry timestamp so every current member sees the
+     *  ballot's deadline. On-chain proof enforcement arrives with the Democracy
+     *  circuit ceremony; until then the client aggregates `VOTE_CAST` responses
+     *  locally, ignores casts past expiry, and any member can finalize once quorum
+     *  is met before expiry.
      *
-     *  Text format (parsed by `ChatScreen`): `VOTE_PROPOSAL::v1::remove::<targetHex>::<ballotID>` */
+     *  Wire format: `VOTE_PROPOSAL::v1::remove::<targetHex>::<ballotID>::<expiryUnixSeconds>` */
     fun proposeRemovalVote(groupID: String, targetPubkeyHex: String) {
         val group = groups.firstOrNull { it.id == groupID } ?: return
         if (group.groupType != com.stellarmls.mls.SEPGroupType.DEMOCRACY) return
         val ballotID = java.util.UUID.randomUUID().toString().take(8)
-        val text = "VOTE_PROPOSAL::v1::remove::$targetPubkeyHex::$ballotID"
-        val msg = ChatMessage(
-            id = "vote-${groupID.take(8)}-$ballotID",
-            groupID = groupID,
-            senderPubkey = keyManager.publicKeyHex,
-            text = text,
-            timestamp = java.util.Date(),
-            isMine = true,
-            isSystemMessage = true,
-            epoch = group.epoch
-        )
-        chatMessages[groupID] = (chatMessages[groupID] ?: emptyList()) + msg
-        bumpGroupLastMessage(groupID, msg.timestamp.time)
-        viewModelScope.launch { try { store.saveMessage(msg) } catch (_: Exception) { } }
+        val expiry = (System.currentTimeMillis() / 1000L) + BALLOT_LIFETIME_SECONDS
+        val text = "VOTE_PROPOSAL::v1::remove::$targetPubkeyHex::$ballotID::$expiry"
+        sendMessage(groupID, text)
+    }
+
+    /**
+     * Cast a Yes/No vote on an open ballot.
+     *
+     * v2 wire format (docs/democracy-circuit-ceremony.md §5):
+     *   `VOTE_CAST::v2::<ballotID>::<yes|no>::<sigHex>`
+     *
+     * The signature is a 64-byte Ed25519 signature from the sender's
+     * Stellar key over the prefix `VOTE_CAST::v2::<ballotID>::<yes|no>`
+     * (UTF-8 bytes). Stellar is used rather than a raw BLS signature
+     * because the app already has an attested BLS ↔ Stellar binding
+     * via `KeyAttestation`, and no BLS12-381 sign primitive has been
+     * exposed through the JNI yet. A future protocol bump will migrate
+     * to a raw BLS signature.
+     *
+     * The Democracy circuit witness path (task #26) does NOT consume
+     * this signature — it takes the voter's BLS secret key as a private
+     * witness. The signature exists purely for off-chain audit so a
+     * third party can later confirm the vote came from the claimed
+     * member. Latest cast per sender wins during tallying.
+     */
+    fun castVote(groupID: String, ballotID: String, yes: Boolean) {
+        val choice = if (yes) "yes" else "no"
+        val prefix = "VOTE_CAST::v2::$ballotID::$choice"
+        val sigHex: String? = try {
+            keyManager.stellarSign(prefix.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+        } catch (_: Throwable) {
+            null
+        }
+        val text = if (sigHex != null) {
+            "$prefix::$sigHex"
+        } else {
+            // Fallback: emit v1 if signing fails. Vote still registers
+            // for local tally; the audit slot is lost for this cast.
+            "VOTE_CAST::v1::$ballotID::$choice"
+        }
+        sendMessage(groupID, text)
+    }
+
+    /**
+     * Aggregate Yes/No counts from chatMessages, deduping by senderPubkey (last wins).
+     * Casts arriving after `expiryUnixSeconds` (when non-null) are ignored so the
+     * tally matches what on-chain enforcement will canonicalize post-circuit deployment.
+     *
+     * Accepts both v1 (`VOTE_CAST::v1::<bid>::<yes|no>`) and v2
+     * (`VOTE_CAST::v2::<bid>::<yes|no>::<sigHex>`) formats. v2's signature
+     * is for off-chain audit only; tally does not enforce it today because
+     * senderPubkey is already authenticated by the transport envelope.
+     */
+    fun ballotTally(groupID: String, ballotID: String, expiryUnixSeconds: Long? = null): Pair<Int, Int> {
+        val messages = chatMessages[groupID] ?: return 0 to 0
+        val prefixV1 = "VOTE_CAST::v1::$ballotID::"
+        val prefixV2 = "VOTE_CAST::v2::$ballotID::"
+        val latestPerSender = mutableMapOf<String, String>()
+        for (m in messages) {
+            if (m.senderPubkey.isEmpty()) continue
+            if (expiryUnixSeconds != null && m.timestamp.time / 1000L > expiryUnixSeconds) continue
+            val choice: String? = when {
+                m.text.startsWith(prefixV2) -> {
+                    // v2 payload tail: "<yes|no>::<sigHex>" — split once
+                    m.text.removePrefix(prefixV2).substringBefore("::")
+                }
+                m.text.startsWith(prefixV1) -> m.text.removePrefix(prefixV1)
+                else -> null
+            }
+            if (choice == "yes" || choice == "no") {
+                latestPerSender[m.senderPubkey] = choice
+            }
+        }
+        var yes = 0
+        var no = 0
+        for (choice in latestPerSender.values) {
+            when (choice) {
+                "yes" -> yes++
+                "no" -> no++
+            }
+        }
+        return yes to no
+    }
+
+    /** Majority quorum for Democracy: `(members / 2) + 1`. */
+    fun ballotQuorum(groupID: String): Int {
+        val total = groups.firstOrNull { it.id == groupID }?.members?.size ?: 0
+        return (total / 2) + 1
+    }
+
+    fun ballotFinalized(groupID: String, ballotID: String): Boolean {
+        val needle = "DEMOCRACY_FINALIZED::v1::$ballotID"
+        return chatMessages[groupID]?.any { it.text == needle } == true
+    }
+
+    /** Finalize a ballot that has reached quorum: broadcast the finalize marker and
+     *  execute the actual member removal via the existing rekey pipeline. */
+    fun finalizeBallot(groupID: String, ballotID: String, targetPubkeyHex: String) {
+        sendMessage(groupID, "DEMOCRACY_FINALIZED::v1::$ballotID")
+        val target = groups.firstOrNull { it.id == groupID }
+            ?.members?.firstOrNull { it.publicKeyCompressed.toHex() == targetPubkeyHex }
+            ?: return
+        removeMember(target.publicKeyCompressed, groupID)
+    }
+
+    /** Oligarchy admin promotion. Caller must already be an admin. Updates local state
+     *  immediately and broadcasts `ADMIN_PROMOTE::v1::<hex>` for peer sync. */
+    fun promoteToAdmin(groupID: String, targetPubkeyHex: String) {
+        val idx = groups.indexOfFirst { it.id == groupID }
+        if (idx < 0) return
+        val group = groups[idx]
+        if (group.groupType != com.stellarmls.mls.SEPGroupType.OLIGARCHY) return
+        val myHex = keyManager.blsPublicKey().toHex()
+        if (!group.adminPubkeys.contains(myHex)) return
+        if (group.adminPubkeys.contains(targetPubkeyHex)) return
+        group.adminPubkeys.add(targetPubkeyHex)
+        groups[idx] = group
+        viewModelScope.launch { try { store.saveGroup(group) } catch (_: Exception) { } }
+        sendMessage(groupID, "ADMIN_PROMOTE::v1::$targetPubkeyHex")
+    }
+
+    /** Oligarchy admin demotion. The last admin cannot be demoted. */
+    fun demoteFromAdmin(groupID: String, targetPubkeyHex: String) {
+        val idx = groups.indexOfFirst { it.id == groupID }
+        if (idx < 0) return
+        val group = groups[idx]
+        if (group.groupType != com.stellarmls.mls.SEPGroupType.OLIGARCHY) return
+        val myHex = keyManager.blsPublicKey().toHex()
+        if (!group.adminPubkeys.contains(myHex)) return
+        if (!group.adminPubkeys.contains(targetPubkeyHex)) return
+        if (group.adminPubkeys.size <= 1) return
+        group.adminPubkeys.remove(targetPubkeyHex)
+        groups[idx] = group
+        viewModelScope.launch { try { store.saveGroup(group) } catch (_: Exception) { } }
+        sendMessage(groupID, "ADMIN_DEMOTE::v1::$targetPubkeyHex")
+    }
+
+    /** Mutate group state in response to an inbound governance system message. The chat
+     *  transport already verifies BLS signatures before decryption; membership is
+     *  checked here so that spoofed admin-state changes are rejected. */
+    private fun processGovernanceEvent(groupID: String, text: String, senderBlsHex: String) {
+        val idx = groups.indexOfFirst { it.id == groupID }
+        if (idx < 0) return
+        val group = groups[idx]
+        when {
+            text.startsWith("ADMIN_PROMOTE::v1::") -> {
+                if (group.groupType != com.stellarmls.mls.SEPGroupType.OLIGARCHY) return
+                if (!group.adminPubkeys.contains(senderBlsHex)) return
+                val targetHex = text.removePrefix("ADMIN_PROMOTE::v1::")
+                if (group.adminPubkeys.contains(targetHex)) return
+                group.adminPubkeys.add(targetHex)
+                groups[idx] = group
+                viewModelScope.launch { try { store.saveGroup(group) } catch (_: Exception) { } }
+            }
+            text.startsWith("ADMIN_DEMOTE::v1::") -> {
+                if (group.groupType != com.stellarmls.mls.SEPGroupType.OLIGARCHY) return
+                if (!group.adminPubkeys.contains(senderBlsHex)) return
+                val targetHex = text.removePrefix("ADMIN_DEMOTE::v1::")
+                if (!group.adminPubkeys.contains(targetHex)) return
+                if (group.adminPubkeys.size <= 1) return
+                group.adminPubkeys.remove(targetHex)
+                groups[idx] = group
+                viewModelScope.launch { try { store.saveGroup(group) } catch (_: Exception) { } }
+            }
+        }
     }
 
     /** Insert a system message into chatMessages (and persist). Uses deterministic IDs for dedup. */
@@ -2421,6 +2594,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         transport.onMessage = { groupID, senderPubkey, text, eventID, timestampMs, epoch, replyToID ->
             val seen = seenMessageIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }
             if (seen.add(eventID)) {
+                val isGovernance = isGovernancePayload(text)
+                if (isGovernance) {
+                    processGovernanceEvent(groupID, text, senderPubkey)
+                }
                 val msg = ChatMessage(
                     id = eventID,
                     groupID = groupID,
@@ -2428,6 +2605,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     text = text,
                     timestamp = Date(timestampMs),
                     isMine = senderPubkey == keyManager.blsPublicKey().toHex(),
+                    isSystemMessage = isGovernance,
                     epoch = epoch,
                     replyToID = replyToID
                 )
@@ -2563,6 +2741,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             text = trimmed,
             timestamp = Date(event.displayMilliseconds),
             isMine = true,
+            isSystemMessage = isGovernancePayload(trimmed),
             status = MessageStatus.SENDING,
             epoch = epoch,
             replyToID = replyToID

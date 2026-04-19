@@ -43,6 +43,17 @@ enum OnChainError: LocalizedError {
     }
 }
 
+enum DemocracyProofError: LocalizedError {
+    case coordinatorNotImplemented
+
+    var errorDescription: String? {
+        switch self {
+        case .coordinatorNotImplemented:
+            return "Democracy coordinator protocol not yet implemented: K voters' BLS secret keys must reach the finalizer to assemble the witness (§6.4.2)."
+        }
+    }
+}
+
 /// Orchestrates ZK proof generation and Soroban contract interaction.
 ///
 /// Uses the existing `SEPContractClient` from SwiftMLS for HTTP-based
@@ -327,6 +338,40 @@ actor OnChainService {
     /// Fetch the current on-chain state for a group.
     func fetchOnChainState(groupIDData: Data) async throws -> SEPCommitmentEntry {
         try await withRetry { try await self.contractClient.getState(groupID: groupIDData) }
+    }
+
+    // MARK: - Democracy (#26)
+
+    /// Delta kind for a Democracy update (add/remove/kick), matching the
+    /// DemocracyUpdateCircuit witness encoding (§6.4.2).
+    enum DemocracyDeltaKind: UInt8 {
+        case add = 0
+        case remove = 1
+        case kick = 2
+    }
+
+    /// Generate a Groth16 proof for a quorum-signed Democracy update.
+    ///
+    /// **Status: Stub.** The witness requires K signer BLS secret keys plus
+    /// per-signer Merkle paths into the member tree. Voters hold those keys
+    /// locally; no coordinator protocol currently exists to assemble them at
+    /// the finalizer. Throws `DemocracyProofError.coordinatorNotImplemented`
+    /// until that design is resolved. See §6.4.2 and the #26 tracking note.
+    func generateDemocracyUpdateProof(
+        ballotID: String,
+        oldMembers: [SEPGroupMemberLeaf],
+        newMembers: [SEPGroupMemberLeaf],
+        deltaKind: DemocracyDeltaKind,
+        signerSecretKeys: [Data],
+        signerPublicKeys: [Data],
+        saltOld: Data,
+        saltNew: Data,
+        epochOld: UInt64,
+        tier: SEPTier
+    ) async throws -> Never {
+        _ = (ballotID, oldMembers, newMembers, deltaKind, signerSecretKeys,
+             signerPublicKeys, saltOld, saltNew, epochOld, tier)
+        throw DemocracyProofError.coordinatorNotImplemented
     }
 
     // MARK: - Verification

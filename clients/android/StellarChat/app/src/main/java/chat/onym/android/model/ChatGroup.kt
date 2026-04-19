@@ -174,7 +174,9 @@ data class InviteCode(
     val tierRawValue: Int = SEPTier.LARGE.id,
     /** Governance type of the invited group. Defaults to Anarchy (0) for
      *  backward compatibility with older invite codes. */
-    val groupTypeRawValue: Int = SEPGroupType.ANARCHY.id
+    val groupTypeRawValue: Int = SEPGroupType.ANARCHY.id,
+    /** Hex BLS pubkeys of group admins at invite time (Oligarchy). Empty on older codes. */
+    val adminPubkeys: List<String> = emptyList()
 ) {
     /** Encode to a Base64 string using the canonical JSON format (base64 for binary fields).
      *  Compatible with iOS Codable serialization of Data fields. */
@@ -202,6 +204,7 @@ data class InviteCode(
             }
             put("tierRawValue", tierRawValue)
             put("groupTypeRawValue", groupTypeRawValue)
+            put("adminPubkeys", JSONArray(adminPubkeys))
         }
         return android.util.Base64.encodeToString(
             json.toString().toByteArray(),
@@ -248,7 +251,10 @@ data class InviteCode(
                 commitment = if (commitmentStr.isNotEmpty()) android.util.Base64.decode(commitmentStr, android.util.Base64.NO_WRAP)
                             else null,
                 tierRawValue = json.optInt("tierRawValue", SEPTier.LARGE.id),
-                groupTypeRawValue = json.optInt("groupTypeRawValue", SEPGroupType.ANARCHY.id)
+                groupTypeRawValue = json.optInt("groupTypeRawValue", SEPGroupType.ANARCHY.id),
+                adminPubkeys = json.optJSONArray("adminPubkeys")?.let { arr ->
+                    (0 until arr.length()).map { arr.getString(it) }
+                } ?: emptyList()
             )
         }
 

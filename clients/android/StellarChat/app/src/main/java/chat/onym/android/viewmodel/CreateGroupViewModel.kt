@@ -106,7 +106,8 @@ class CreateGroupViewModel : ViewModel() {
                 salt = group.salt,
                 commitment = group.commitment,
                 tierRawValue = group.tier.id,
-                groupTypeRawValue = group.groupType.id
+                groupTypeRawValue = group.groupType.id,
+                adminPubkeys = group.adminPubkeys.toList()
             )
 
             createdGroup = group

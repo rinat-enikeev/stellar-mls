@@ -56,6 +56,7 @@ import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
@@ -98,6 +99,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.filled.HowToVote
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.PersonRemove
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
 import com.stellarmls.mls.SEPGroupType
@@ -108,6 +110,7 @@ import chat.onym.android.crypto.MediaCrypto
 import chat.onym.android.model.ChatMessage
 import chat.onym.android.model.MediaAttachment
 import chat.onym.android.model.MessageStatus
+import chat.onym.android.model.toHex
 import chat.onym.android.viewmodel.ChatViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -374,6 +377,33 @@ fun ChatScreen(
                 }
             }
 
+            // 1v1 peer-left banner: the other party has left the conversation.
+            val currentGroup = viewModel.group
+            if (currentGroup != null &&
+                currentGroup.groupType == com.stellarmls.mls.SEPGroupType.ONE_ON_ONE &&
+                currentGroup.members.size <= 1) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Filled.PersonRemove,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Your peer left this conversation. New messages cannot be sent.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
             if (viewModel.messages.isEmpty()) {
                 // Empty state — encryption context + invite prompt
                 Column(
@@ -435,14 +465,53 @@ fun ChatScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
-                                    if (message.text.startsWith("VOTE_PROPOSAL::")) {
-                                        VoteProposalCard(
-                                            rawPayload = message.text,
-                                            senderAlias = contactAliasStore?.displayName(message.senderPubkey),
-                                            targetAliasResolver = { hex -> contactAliasStore?.displayName(hex) }
-                                        )
-                                    } else {
-                                        SystemMessage(message.text)
+                                    when {
+                                        message.text.startsWith("VOTE_PROPOSAL::") -> {
+                                            val parts = message.text.split("::")
+                                            val ballotID = parts.getOrNull(4) ?: ""
+                                            val expirySeconds = parts.getOrNull(5)?.toLongOrNull()
+                                            val gid = message.groupID
+                                            val myHex = groupListViewModel?.keyManager?.blsPublicKey()?.toHex() ?: ""
+                                            val tally = groupListViewModel?.ballotTally(gid, ballotID, expirySeconds) ?: (0 to 0)
+                                            val quorum = groupListViewModel?.ballotQuorum(gid) ?: 0
+                                            val finalized = groupListViewModel?.ballotFinalized(gid, ballotID) ?: false
+                                            val myCast = viewModel.messages
+                                                .asSequence()
+                                                .filter { it.senderPubkey == myHex && it.text.startsWith("VOTE_CAST::v1::$ballotID::") }
+                                                .lastOrNull()
+                                                ?.text?.removePrefix("VOTE_CAST::v1::$ballotID::")
+                                            val myChoice = when (myCast) { "yes" -> true; "no" -> false; else -> null }
+                                            VoteProposalCard(
+                                                rawPayload = message.text,
+                                                groupID = gid,
+                                                senderAlias = contactAliasStore?.displayName(message.senderPubkey),
+                                                targetAliasResolver = { hex -> contactAliasStore?.displayName(hex) },
+                                                myBlsHex = myHex,
+                                                tally = tally,
+                                                quorum = quorum,
+                                                finalized = finalized,
+                                                myChoice = myChoice,
+                                                expirySeconds = expirySeconds,
+                                                onCast = { yes -> groupListViewModel?.castVote(gid, ballotID, yes) },
+                                                onFinalize = { targetHex ->
+                                                    groupListViewModel?.finalizeBallot(gid, ballotID, targetHex)
+                                                }
+                                            )
+                                        }
+                                        message.text.startsWith("VOTE_CAST::") -> { /* aggregated into parent card */ }
+                                        message.text.startsWith("DEMOCRACY_FINALIZED::") ->
+                                            SystemMessage("Ballot finalized — majority removed the proposed member.")
+                                        message.text.startsWith("ADMIN_PROMOTE::v1::") -> {
+                                            val hex = message.text.removePrefix("ADMIN_PROMOTE::v1::")
+                                            val alias = contactAliasStore?.displayName(hex) ?: (hex.take(10) + "\u2026")
+                                            SystemMessage("$alias was promoted to admin.")
+                                        }
+                                        message.text.startsWith("ADMIN_DEMOTE::v1::") -> {
+                                            val hex = message.text.removePrefix("ADMIN_DEMOTE::v1::")
+                                            val alias = contactAliasStore?.displayName(hex) ?: (hex.take(10) + "\u2026")
+                                            SystemMessage("$alias was demoted from admin.")
+                                        }
+                                        else -> SystemMessage(message.text)
                                     }
                                     if (message.text.contains("joined the group") &&
                                         (viewModel.group?.members?.size ?: 0) == 2) {
@@ -1696,13 +1765,24 @@ private data class GovernanceBannerSpec(
 )
 
 /** Inline ballot card for a `VOTE_PROPOSAL::v1::...` system message. Yes/No
- *  buttons are stubs — on-chain submission is gated on the Democracy circuit
- *  VK ceremony. The card surfaces who proposed what so members see it. */
+ *  buttons broadcast `VOTE_CAST::v1::<ballotID>::<yes|no>` to the whole group;
+ *  the card aggregates responses to show a live tally and surfaces a
+ *  Finalize action once Yes reaches quorum. On-chain proof enforcement
+ *  arrives with the Democracy circuit ceremony. */
 @Composable
 fun VoteProposalCard(
     rawPayload: String,
+    groupID: String,
     senderAlias: String?,
-    targetAliasResolver: (String) -> String?
+    targetAliasResolver: (String) -> String?,
+    myBlsHex: String,
+    tally: Pair<Int, Int>,
+    quorum: Int,
+    finalized: Boolean,
+    myChoice: Boolean?,
+    expirySeconds: Long?,
+    onCast: (Boolean) -> Unit,
+    onFinalize: (String) -> Unit
 ) {
     val parts = rawPayload.split("::")
     val valid = parts.size >= 5 && parts[0] == "VOTE_PROPOSAL" && parts[1] == "v1" && parts[2] == "remove"
@@ -1714,7 +1794,9 @@ fun VoteProposalCard(
     val ballotID = parts[4]
     val targetLabel = targetAliasResolver(targetHex)
         ?: (targetHex.take(12) + "\u2026" + targetHex.takeLast(6))
-    var choice by remember(ballotID) { mutableStateOf<Boolean?>(null) }
+    val (yesCount, noCount) = tally
+    val passed = yesCount >= quorum
+    val expired = expirySeconds != null && System.currentTimeMillis() / 1000L > expirySeconds
     val tint = Color(0xFF6A1B9A)
     Column(
         modifier = Modifier
@@ -1743,26 +1825,82 @@ fun VoteProposalCard(
         )
         Text(targetLabel, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedButton(
-                onClick = { choice = true },
+                onClick = { onCast(true) },
+                enabled = !finalized && !expired,
                 modifier = Modifier.weight(1f)
             ) {
-                Text(if (choice == true) "\u2713 Yes" else "Yes", style = MaterialTheme.typography.labelSmall)
+                Text(
+                    if (myChoice == true) "\u2713 Yes $yesCount" else "Yes $yesCount",
+                    style = MaterialTheme.typography.labelSmall
+                )
             }
             OutlinedButton(
-                onClick = { choice = false },
+                onClick = { onCast(false) },
+                enabled = !finalized && !expired,
                 modifier = Modifier.weight(1f)
             ) {
-                Text(if (choice == false) "\u2715 No" else "No", style = MaterialTheme.typography.labelSmall)
+                Text(
+                    if (myChoice == false) "\u2715 No $noCount" else "No $noCount",
+                    style = MaterialTheme.typography.labelSmall
+                )
             }
+            Text(
+                "quorum $quorum",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (expirySeconds != null) {
+            Spacer(Modifier.height(4.dp))
+            val nowSec = System.currentTimeMillis() / 1000L
+            val label = if (expired) {
+                "Expired " + formatRelativeSeconds(nowSec - expirySeconds, past = true)
+            } else {
+                "Expires " + formatRelativeSeconds(expirySeconds - nowSec, past = false)
+            }
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (expired) Color(0xFFB00020) else MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
         Spacer(Modifier.height(4.dp))
-        Text(
-            "On-chain voting activates once the Democracy circuit is deployed.",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        when {
+            finalized -> Text(
+                "Ballot finalized \u2014 target removed.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            expired -> Text(
+                "Ballot expired without reaching quorum.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            passed -> Button(
+                onClick = { onFinalize(targetHex) },
+                colors = ButtonDefaults.buttonColors(containerColor = tint)
+            ) {
+                Text("Finalize removal", style = MaterialTheme.typography.labelSmall)
+            }
+            else -> Text(
+                "On-chain voting activates once the Democracy circuit is deployed.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+private fun formatRelativeSeconds(seconds: Long, past: Boolean): String {
+    val abs = kotlin.math.abs(seconds)
+    val suffix = if (past) " ago" else ""
+    return when {
+        abs < 60 -> if (past) "just now" else "in <1 min"
+        abs < 3600 -> "${abs / 60} min$suffix"
+        abs < 86400 -> "${abs / 3600} h$suffix"
+        else -> "${abs / 86400} d$suffix"
     }
 }
 

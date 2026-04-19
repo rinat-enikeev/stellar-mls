@@ -125,6 +125,24 @@ struct ChatView: View {
                 .background(isPrivateBranch ? Color.green.opacity(0.12) : Color.orange.opacity(0.12))
             }
 
+            // 1v1 peer-left banner: when the other party has left the conversation,
+            // surface it above the thread so the user understands why they can't send.
+            if let group = viewModel.group,
+               group.groupType == .oneOnOne,
+               group.members.count <= 1 {
+                HStack(spacing: 8) {
+                    Image(systemName: "person.crop.circle.badge.xmark")
+                        .foregroundStyle(.secondary)
+                    Text("Your peer left this conversation. New messages cannot be sent.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(Color(.systemGray6))
+            }
+
             if viewModel.messages.isEmpty {
                 Spacer()
                 VStack(spacing: 16) {
@@ -167,9 +185,24 @@ struct ChatView: View {
                                             if message.text.hasPrefix("VOTE_PROPOSAL::") {
                                                 VoteProposalCard(
                                                     rawPayload: message.text,
+                                                    groupID: message.groupID,
                                                     senderAlias: appState.contactAliasStore.displayName(for: message.senderPubkey),
                                                     targetAlias: { hex in appState.contactAliasStore.displayName(for: hex) }
                                                 )
+                                            } else if message.text.hasPrefix("VOTE_CAST::") {
+                                                // Individual casts are aggregated into the parent VOTE_PROPOSAL card;
+                                                // no need to render each one as a separate chat entry.
+                                                EmptyView()
+                                            } else if message.text.hasPrefix("DEMOCRACY_FINALIZED::") {
+                                                SystemMessageView(text: "Ballot finalized — majority removed the proposed member.")
+                                            } else if message.text.hasPrefix("ADMIN_PROMOTE::v1::") {
+                                                let hex = String(message.text.dropFirst("ADMIN_PROMOTE::v1::".count))
+                                                let alias = appState.contactAliasStore.displayName(for: hex) ?? (hex.prefix(10) + "…")
+                                                SystemMessageView(text: "\(alias) was promoted to admin.")
+                                            } else if message.text.hasPrefix("ADMIN_DEMOTE::v1::") {
+                                                let hex = String(message.text.dropFirst("ADMIN_DEMOTE::v1::".count))
+                                                let alias = appState.contactAliasStore.displayName(for: hex) ?? (hex.prefix(10) + "…")
+                                                SystemMessageView(text: "\(alias) was demoted from admin.")
                                             } else {
                                                 SystemMessageView(text: message.text)
                                             }
@@ -628,22 +661,46 @@ struct GovernanceBanner: View {
 // MARK: - Democracy Vote Proposal Card
 
 /// Renders an inline ballot card for a `VOTE_PROPOSAL::v1::...` system message.
-/// Yes / No buttons are stubs — actual vote submission is gated on the
-/// Democracy circuit VK ceremony. The card surfaces who proposed what so
-/// members can see the ballot exists.
+/// Yes / No buttons broadcast `VOTE_CAST::v1::<ballotID>::<yes|no>` to the whole
+/// group; the card aggregates responses from chatMessages to show a live tally.
+/// When Yes reaches quorum, any member can Finalize — which removes the target
+/// and emits `DEMOCRACY_FINALIZED::v1::<ballotID>`. On-chain proof enforcement
+/// arrives with the Democracy circuit ceremony.
 struct VoteProposalCard: View {
     let rawPayload: String
+    let groupID: String
     let senderAlias: String?
     let targetAlias: (String) -> String?
-
-    @State private var myChoice: Bool?
+    @Environment(AppState.self) private var appState
 
     private var parsed: VoteProposalPayload? {
         VoteProposalPayload.parse(rawPayload)
     }
 
+    private var myBlsHex: String {
+        (try? appState.keyManager.blsPublicKey.map { String(format: "%02x", $0) }.joined()) ?? ""
+    }
+
+    private var myChoice: Bool? {
+        guard let parsed else { return nil }
+        let prefix = "VOTE_CAST::v1::\(parsed.ballotID)::"
+        let mine = (appState.chatMessages[groupID] ?? [])
+            .filter { $0.text.hasPrefix(prefix) && $0.senderPubkey == myBlsHex }
+            .last
+        guard let mine else { return nil }
+        let choice = String(mine.text.dropFirst(prefix.count))
+        if choice == "yes" { return true }
+        if choice == "no" { return false }
+        return nil
+    }
+
     var body: some View {
         if let parsed {
+            let tally = appState.ballotTally(groupID: groupID, ballotID: parsed.ballotID, expiry: parsed.expiry)
+            let quorum = appState.ballotQuorum(groupID: groupID)
+            let finalized = appState.ballotFinalized(groupID: groupID, ballotID: parsed.ballotID)
+            let expired = parsed.expiry.map { Date() > $0 } ?? false
+            let passed = tally.yes >= quorum
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
                     Image(systemName: "hand.raised.fill")
@@ -668,27 +725,62 @@ struct VoteProposalCard: View {
                 }
                 HStack(spacing: 8) {
                     Button {
-                        myChoice = true
+                        appState.castVote(groupID: groupID, ballotID: parsed.ballotID, yes: true)
                     } label: {
-                        Label("Yes", systemImage: myChoice == true ? "checkmark.circle.fill" : "checkmark.circle")
+                        Label("Yes \(tally.yes)", systemImage: myChoice == true ? "checkmark.circle.fill" : "checkmark.circle")
                             .font(.caption)
                     }
                     .buttonStyle(.bordered)
                     .tint(.green)
+                    .disabled(finalized || expired)
 
                     Button {
-                        myChoice = false
+                        appState.castVote(groupID: groupID, ballotID: parsed.ballotID, yes: false)
                     } label: {
-                        Label("No", systemImage: myChoice == false ? "xmark.circle.fill" : "xmark.circle")
+                        Label("No \(tally.no)", systemImage: myChoice == false ? "xmark.circle.fill" : "xmark.circle")
                             .font(.caption)
                     }
                     .buttonStyle(.bordered)
                     .tint(.red)
+                    .disabled(finalized || expired)
                     Spacer()
+                    Text("quorum \(quorum)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
-                Text("On-chain voting activates once the Democracy circuit is deployed.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                if let expiryDate = parsed.expiry {
+                    Text(expired
+                         ? "Expired \(expiryDate.formatted(.relative(presentation: .named)))"
+                         : "Expires \(expiryDate.formatted(.relative(presentation: .named)))")
+                        .font(.caption2)
+                        .foregroundStyle(expired ? Color.red.opacity(0.85) : .secondary)
+                }
+                if finalized {
+                    Text("Ballot finalized — target removed.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else if expired {
+                    Text("Ballot expired without reaching quorum.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else if passed {
+                    Button {
+                        appState.finalizeBallot(
+                            groupID: groupID,
+                            ballotID: parsed.ballotID,
+                            targetPubkeyHex: parsed.targetPubkeyHex
+                        )
+                    } label: {
+                        Label("Finalize removal", systemImage: "checkmark.seal.fill")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+                } else {
+                    Text("On-chain voting activates once the Democracy circuit is deployed.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding(10)
             .background(Color.purple.opacity(0.08))
@@ -709,17 +801,24 @@ struct VoteProposalCard: View {
 struct VoteProposalPayload {
     let targetPubkeyHex: String
     let ballotID: String
+    /// Ballot expiry as an absolute Date. Older proposals that pre-date the
+    /// expiry field decode with `nil`, and are treated as never-expiring.
+    let expiry: Date?
 
     static func parse(_ raw: String) -> VoteProposalPayload? {
-        // `VOTE_PROPOSAL::v1::remove::<targetHex>::<ballotID>`
+        // `VOTE_PROPOSAL::v1::remove::<targetHex>::<ballotID>[::<expiryUnixSeconds>]`
         let parts = raw.components(separatedBy: "::")
         guard parts.count >= 5,
               parts[0] == "VOTE_PROPOSAL",
               parts[1] == "v1",
               parts[2] == "remove" else { return nil }
+        let expiry: Date? = parts.count >= 6
+            ? UInt64(parts[5]).map { Date(timeIntervalSince1970: TimeInterval($0)) }
+            : nil
         return VoteProposalPayload(
             targetPubkeyHex: parts[3],
-            ballotID: parts[4]
+            ballotID: parts[4],
+            expiry: expiry
         )
     }
 }

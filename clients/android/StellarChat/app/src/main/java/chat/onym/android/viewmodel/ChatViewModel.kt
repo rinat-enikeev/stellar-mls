@@ -48,7 +48,9 @@ class ChatViewModel(
                 epoch = g.epoch,
                 salt = g.salt,
                 commitment = g.commitment,
-                tierRawValue = g.tier.id
+                tierRawValue = g.tier.id,
+                groupTypeRawValue = g.groupType.id,
+                adminPubkeys = g.adminPubkeys.toList()
             )
             return "https://onym.chat/join?code=${code.encode()}"
         }

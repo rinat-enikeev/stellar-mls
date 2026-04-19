@@ -170,8 +170,10 @@ struct InviteCode: Codable {
     let tierRawValue: Int
     /// Governance type of the invited group. Missing/0 on older codes.
     let groupTypeRawValue: UInt32
+    /// Hex BLS pubkeys of group admins at invite time (Oligarchy). Missing/empty on older codes.
+    let adminPubkeys: [String]
 
-    init(groupID: Data, groupSecret: Data, name: String, relayHints: [String], members: [SEPGroupMemberLeaf], epoch: UInt64, salt: Data, commitment: Data?, tierRawValue: Int = SEPTier.large.rawValue, groupTypeRawValue: UInt32 = SEPGroupType.anarchy.rawValue) {
+    init(groupID: Data, groupSecret: Data, name: String, relayHints: [String], members: [SEPGroupMemberLeaf], epoch: UInt64, salt: Data, commitment: Data?, tierRawValue: Int = SEPTier.large.rawValue, groupTypeRawValue: UInt32 = SEPGroupType.anarchy.rawValue, adminPubkeys: [String] = []) {
         self.groupID = groupID
         self.groupSecret = groupSecret
         self.name = name
@@ -182,6 +184,7 @@ struct InviteCode: Codable {
         self.commitment = commitment
         self.tierRawValue = tierRawValue
         self.groupTypeRawValue = groupTypeRawValue
+        self.adminPubkeys = adminPubkeys
     }
 
     init(from decoder: Decoder) throws {
@@ -196,6 +199,7 @@ struct InviteCode: Codable {
         commitment = try container.decodeIfPresent(Data.self, forKey: .commitment)
         tierRawValue = try container.decodeIfPresent(Int.self, forKey: .tierRawValue) ?? SEPTier.large.rawValue
         groupTypeRawValue = try container.decodeIfPresent(UInt32.self, forKey: .groupTypeRawValue) ?? SEPGroupType.anarchy.rawValue
+        adminPubkeys = try container.decodeIfPresent([String].self, forKey: .adminPubkeys) ?? []
     }
 
     func encode() -> String {

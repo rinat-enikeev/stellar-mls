@@ -337,7 +337,9 @@ struct ContactsView: View {
                 epoch: group.epoch,
                 salt: group.salt,
                 commitment: group.commitment,
-                tierRawValue: group.tier.rawValue
+                tierRawValue: group.tier.rawValue,
+                groupTypeRawValue: group.groupType.rawValue,
+                adminPubkeys: Array(group.adminPubkeys)
             ).encode()
             return "https://onym.chat/join?code=\(code)"
         }

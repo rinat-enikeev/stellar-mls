@@ -511,7 +511,9 @@ fun StellarChatNavHost(
                         epoch = group.epoch,
                         salt = group.salt,
                         commitment = group.commitment,
-                        tierRawValue = group.tier.id
+                        tierRawValue = group.tier.id,
+                        groupTypeRawValue = group.groupType.id,
+                        adminPubkeys = group.adminPubkeys.toList()
                     )
                 }
 
@@ -554,6 +556,12 @@ fun StellarChatNavHost(
                     },
                     onProposeRemovalVote = { targetHex ->
                         groupListViewModel.proposeRemovalVote(groupId, targetHex)
+                    },
+                    onPromoteToAdmin = { targetHex ->
+                        groupListViewModel.promoteToAdmin(groupId, targetHex)
+                    },
+                    onDemoteFromAdmin = { targetHex ->
+                        groupListViewModel.demoteFromAdmin(groupId, targetHex)
                     },
                     contactAliasStore = groupListViewModel.contactAliasStore,
                     dao = groupListViewModel.store.dao,

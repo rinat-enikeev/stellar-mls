@@ -141,7 +141,7 @@ struct JoinGroupView: View {
             let codeRelays = code.relayHints.compactMap(URL.init(string:))
             let mergedRelays = Array(Set(appState.relayURLs + codeRelays))
 
-            let group = ChatGroup(
+            var group = ChatGroup(
                 id: groupIDHex,
                 name: code.name,
                 groupSecret: code.groupSecret,
@@ -153,6 +153,8 @@ struct JoinGroupView: View {
                 commitment: code.commitment,
                 tier: SEPTier(rawValue: code.tierRawValue) ?? .large
             )
+            group.groupType = SEPGroupType(rawValue: code.groupTypeRawValue) ?? .anarchy
+            group.adminPubkeys = Set(code.adminPubkeys)
             decodedGroup = group
 
             Task { await verifyGroup() }

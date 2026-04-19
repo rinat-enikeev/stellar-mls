@@ -160,6 +160,19 @@ pub struct CommitmentUpdated {
     pub timestamp: u64,
 }
 
+/// Oligarchy admin-set rotation event. Emitted by
+/// `update_admin_commitment` on success; the `admin_commitment` is the
+/// salted Poseidon commitment over the new admin tree (§6.2.2).
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminCommitmentUpdated {
+    #[topic]
+    pub group_id: BytesN<32>,
+    pub admin_commitment: BytesN<32>,
+    pub admin_epoch: u64,
+    pub timestamp: u64,
+}
+
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GroupDeactivated {
@@ -252,6 +265,43 @@ pub struct UpdatePublicInputs {
     pub c_new: BytesN<32>,
 }
 
+/// Public inputs for the Democracy update circuit — see
+/// `src/circuit/democracy.rs` and `docs/group-governance-types-design.md
+/// §6.4.2`. Five fields in a fixed order that MUST match the circuit's
+/// allocation order: c_old, epoch_old, c_new, member_count_old,
+/// member_count_new.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DemocracyUpdatePublicInputs {
+    /// Pre-transition commitment. MUST equal the current on-chain commitment.
+    pub c_old: BytesN<32>,
+    /// Pre-transition epoch. MUST equal the current on-chain epoch.
+    pub epoch_old: u64,
+    /// Post-transition commitment. Persisted on success.
+    pub c_new: BytesN<32>,
+    /// Pre-transition member count. MUST equal the stored `member_count` —
+    /// the authoritative quorum-denominator binding (§6.4.2).
+    pub member_count_old: u32,
+    /// Post-transition member count. Must be in `{m-1, m, m+1}` relative to
+    /// `member_count_old`; persisted on success.
+    pub member_count_new: u32,
+}
+
+/// Public inputs for the Oligarchy admin-rotation circuit (§6.4.4). Shape
+/// is identical to `UpdatePublicInputs` — the circuit is `UpdateCircuit`
+/// rebound to the admin tree, so the three salted-commitment fields fix
+/// the transition over the admin commitment, not the member commitment.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminUpdatePublicInputs {
+    /// Pre-transition admin commitment. MUST equal the stored `AdminSet`.
+    pub admin_c_old: BytesN<32>,
+    /// Pre-transition admin epoch. MUST equal the stored `AdminEpoch`.
+    pub admin_epoch_old: u64,
+    /// Post-transition admin commitment; persisted on success.
+    pub admin_c_new: BytesN<32>,
+}
+
 /// Selector for which verification-key family is being set or rotated.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -260,6 +310,19 @@ pub enum VkKind {
     Membership,
     /// Update-transition circuit VK (4 IC points: IC[0], IC[1]=c_old, IC[2]=epoch_old, IC[3]=c_new).
     Update,
+    /// Per-group-type update VK (6 IC points for Democracy:
+    /// IC[0], IC[1]=c_old, IC[2]=epoch_old, IC[3]=c_new,
+    /// IC[4]=member_count_old, IC[5]=member_count_new).
+    ///
+    /// Installed by the admin after the per-type Phase 2 ceremony concludes
+    /// (see `docs/democracy-circuit-ceremony.md §3`). `group_type = 2`
+    /// routes `update_commitment_democracy` through this VK family.
+    UpdateByType(u32),
+    /// Admin-rotation circuit VK for Oligarchy groups (4 IC points, same
+    /// shape as `Update`). Routed by `update_admin_commitment` via
+    /// `DataKey::AdminUpdateVK`. The `tier` argument to `update_vk` is
+    /// ignored for this variant — admin trees are single-tier per §6.4.4.
+    AdminUpdate,
 }
 
 /// Groth16 verification key stored as raw bytes (contract-storage friendly).
@@ -322,6 +385,11 @@ pub enum DataKey {
     /// Introduced with the #59 UpdateCircuit binding fix. Separate from `VK`
     /// so the two key families can rotate independently.
     UpdateVK(u32),
+    /// Per-group-type update VK (persistent storage). Installed by the admin
+    /// after the governance-specific Phase 2 ceremony concludes. `group_type =
+    /// 2` (Democracy) uses 6 IC points; future types may use different
+    /// shapes.
+    UpdateVKByType(u32, u32),
     /// Current group state (persistent storage).
     ///
     /// Legacy key. Reads fall back to this when `GroupV2` is absent; writes
@@ -335,10 +403,22 @@ pub enum DataKey {
     GroupV2(BytesN<32>),
     /// Group history in V2 format (persistent storage).
     HistoryV2(BytesN<32>),
-    /// Oligarchy admin-set Poseidon root (persistent storage).
-    /// Set at create time and rotated by `update_admin_set` (ceremony-gated
-    /// — not available in this contract build).
+    /// Oligarchy admin-set salted Poseidon commitment (persistent storage).
+    /// Stores `admin_commitment = Poseidon(Poseidon(admin_root, admin_epoch),
+    /// admin_salt)` per §6.2.2. Set at create time and rotated by
+    /// `update_admin_commitment` once the `AdminUpdateVK` is installed.
     AdminSet(BytesN<32>),
+    /// Monotonic admin-tree epoch for an Oligarchy group (persistent storage).
+    /// Bumped by `update_admin_commitment`. Missing == 0 for groups created
+    /// before this field existed (migration no-op: the first admin update
+    /// after deployment consumes epoch 0).
+    AdminEpoch(BytesN<32>),
+    /// Admin-rotation circuit verification key (persistent storage). Single
+    /// key, no tier parameter — admin trees are capped at 32 entries per
+    /// §6.2.2 admin-tier note, and the circuit is shape-identical to
+    /// `UpdateCircuit` (4 IC points). Installed via
+    /// `update_vk(VkKind::AdminUpdate, 0, …)`.
+    AdminUpdateVK,
     /// Used proof hash — prevents cross-function and cross-group proof replay.
     UsedProof(BytesN<32>),
     /// Active group count per tier (instance storage, for M-4 limit enforcement).
@@ -443,13 +523,23 @@ impl SepXxxxContract {
             .ok_or(Error::NotInitialized)?;
         admin.require_auth();
 
-        if tier > 2 {
+        // AdminUpdate ignores tier (single-tier admin trees per §6.4.4).
+        // All other kinds require a valid membership/update tier.
+        if !matches!(kind, VkKind::AdminUpdate) && tier > 2 {
             return Err(Error::InvalidTier);
         }
 
-        let (key, expected_ic_len) = match kind {
+        let (key, expected_ic_len) = match &kind {
             VkKind::Membership => (DataKey::VK(tier), 3u32),
             VkKind::Update => (DataKey::UpdateVK(tier), 4u32),
+            VkKind::UpdateByType(group_type) => match *group_type {
+                // Democracy: 5 public inputs → 6 IC points.
+                2 => (DataKey::UpdateVKByType(tier, 2), 6u32),
+                _ => return Err(Error::UnknownVkKind),
+            },
+            // AdminUpdate: 3 public inputs (admin_c_old, admin_epoch_old,
+            // admin_c_new) → 4 IC points. Same shape as Update, different key.
+            VkKind::AdminUpdate => (DataKey::AdminUpdateVK, 4u32),
         };
 
         if new_vk.ic.len() != expected_ic_len {
@@ -783,6 +873,15 @@ impl SepXxxxContract {
             LEDGER_THRESHOLD,
             LEDGER_BUMP,
         );
+        // Seed admin epoch at 0. Bumped by `update_admin_commitment`.
+        env.storage()
+            .persistent()
+            .set(&DataKey::AdminEpoch(group_id.clone()), &0u64);
+        env.storage().persistent().extend_ttl(
+            &DataKey::AdminEpoch(group_id.clone()),
+            LEDGER_THRESHOLD,
+            LEDGER_BUMP,
+        );
         env.storage()
             .instance()
             .set(&DataKey::GroupCount(tier), &(count + 1));
@@ -909,6 +1008,272 @@ impl SepXxxxContract {
         .publish(&env);
 
         Ok(())
+    }
+
+    /// Update the commitment of a Democracy (`group_type = 2`) group.
+    ///
+    /// Separate entrypoint from `update_commitment` because the Democracy
+    /// circuit proves a richer relation (§6.4.2): the prover must open the
+    /// current commitment to a quorum of ≥ ⌈n/2⌉ signers and witness a
+    /// single-leaf delta between the old and new member trees. The public
+    /// input vector therefore has five elements, not three, and feeds a
+    /// separately-ceremony-gated VK stored at
+    /// `DataKey::UpdateVKByType(tier, 2)`.
+    ///
+    /// Contract-side checks (pre-verification):
+    ///   * group exists, is active, and has `group_type == 2`
+    ///   * `public_inputs.c_old == stored.commitment`
+    ///   * `public_inputs.epoch_old == stored.epoch`
+    ///   * `public_inputs.member_count_old == stored.member_count` —
+    ///     authoritative quorum denominator binding
+    ///   * `|public_inputs.member_count_new − member_count_old| ≤ 1`
+    ///   * `public_inputs.member_count_new` is within tier capacity and ≥ 2
+    ///     (democracy-of-one is forbidden at create time and preserved here)
+    ///   * `c_new` is canonical
+    ///
+    /// On success, `member_count_new` is persisted into the V2 entry. The
+    /// rest follows the same proof-replay/archive/event emission pattern as
+    /// `update_commitment`.
+    pub fn update_commitment_democracy(
+        env: Env,
+        group_id: BytesN<32>,
+        proof: Groth16Proof,
+        public_inputs: DemocracyUpdatePublicInputs,
+    ) -> Result<(), Error> {
+        Self::require_initialized(&env)?;
+
+        let current = Self::load_group_v2(&env, &group_id)?;
+
+        if !current.active {
+            return Err(Error::GroupInactive);
+        }
+        if current.group_type != 2 {
+            return Err(Error::UnknownGroupType);
+        }
+
+        let new_epoch = current.epoch.checked_add(1).ok_or(Error::InvalidEpoch)?;
+
+        if public_inputs.c_old != current.commitment
+            || public_inputs.epoch_old != current.epoch
+        {
+            return Err(Error::PublicInputsMismatch);
+        }
+
+        // Source-of-truth binding (§6.4.2): the on-chain `member_count` is
+        // the authoritative quorum denominator; the circuit uses it as a
+        // public input, so the caller cannot vary it independently.
+        if public_inputs.member_count_old != current.member_count {
+            return Err(Error::MemberCountMismatch);
+        }
+
+        // `member_count_new ∈ {m-1, m, m+1}`. Checked both ways to avoid u32
+        // underflow surprises when member_count_old = 0 (can't happen for
+        // Democracy, but defence-in-depth).
+        let m_old = current.member_count;
+        let m_new = public_inputs.member_count_new;
+        let valid_delta = m_new == m_old
+            || (m_new == m_old + 1)
+            || (m_old > 0 && m_new + 1 == m_old);
+        if !valid_delta {
+            return Err(Error::MemberCountOutOfRange);
+        }
+
+        // Post-transition count must stay within the tier's capacity and
+        // keep the democracy-of-≥2 invariant.
+        if m_new < 2 {
+            return Err(Error::MemberCountOutOfRange);
+        }
+        if m_new > tier_capacity(current.tier) {
+            return Err(Error::MemberCountOutOfRange);
+        }
+
+        let c_new_fr = Fr::from_bytes(public_inputs.c_new.clone());
+        let c_new_canonical: BytesN<32> = c_new_fr.to_bytes();
+        if c_new_canonical != public_inputs.c_new {
+            return Err(Error::InvalidCommitmentEncoding);
+        }
+
+        Self::check_proof_replay(&env, &proof)?;
+
+        let vk = Self::load_update_vk_by_type(&env, current.tier, 2)?;
+        if !verify_groth16_proof_democracy_update(
+            &env,
+            &vk,
+            &proof,
+            &current.commitment,
+            current.epoch,
+            &public_inputs.c_new,
+            m_old,
+            m_new,
+        ) {
+            return Err(Error::InvalidProof);
+        }
+
+        Self::record_proof(&env, &proof);
+
+        let timestamp = env.ledger().timestamp();
+        Self::archive_entry(&env, &group_id, &current);
+
+        let new_entry = CommitmentEntryV2 {
+            commitment: public_inputs.c_new.clone(),
+            epoch: new_epoch,
+            timestamp,
+            tier: current.tier,
+            active: true,
+            group_type: current.group_type,
+            member_count: m_new,
+        };
+        Self::write_group_v2(&env, &group_id, &new_entry);
+        Self::bump_group(&env, &group_id);
+
+        CommitmentUpdated {
+            group_id,
+            commitment: public_inputs.c_new,
+            epoch: new_epoch,
+            timestamp,
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    /// Rotate the admin set of an Oligarchy (`group_type = 3`) group.
+    ///
+    /// Proof is `AdminUpdateCircuit` — shape-identical to the member
+    /// `UpdateCircuit` but rebound to the admin tree (§6.4.4). The three
+    /// public inputs are the salted admin commitments plus the admin epoch:
+    /// `(admin_c_old, admin_epoch_old, admin_c_new)`.
+    ///
+    /// Contract-side checks (pre-verification):
+    ///   * group exists, is active, and has `group_type == 3`
+    ///   * `public_inputs.admin_c_old == stored AdminSet(group_id)` — the
+    ///     source-of-truth binding; the caller cannot attest to a stale root
+    ///   * `public_inputs.admin_epoch_old == stored AdminEpoch(group_id)`
+    ///   * `admin_c_new` is a canonical Fr encoding
+    ///   * proof is not a replay
+    ///
+    /// On success, the new commitment is written to `AdminSet` and the
+    /// admin epoch is bumped. The *member* commitment is untouched — admin
+    /// rotation and member rotation are independent state transitions.
+    ///
+    /// Design note on the admin-∈-member invariant: this circuit does NOT
+    /// cross-check that the rotating admin is also a member of the group.
+    /// Per §6.4.4 and §8 T10, that invariant is enforced client-side (UIs
+    /// only surface "Promote" for current members) and not in-circuit —
+    /// tightening it would ~2× constraint count. A non-member admin can
+    /// rotate the admin set further but cannot produce an
+    /// `OligarchyUpdateCircuit` proof, so the residual risk is confined to
+    /// admin-set churn.
+    pub fn update_admin_commitment(
+        env: Env,
+        group_id: BytesN<32>,
+        proof: Groth16Proof,
+        public_inputs: AdminUpdatePublicInputs,
+    ) -> Result<(), Error> {
+        Self::require_initialized(&env)?;
+
+        let current = Self::load_group_v2(&env, &group_id)?;
+
+        if !current.active {
+            return Err(Error::GroupInactive);
+        }
+        if current.group_type != 3 {
+            return Err(Error::UnknownGroupType);
+        }
+
+        let stored_admin_commitment: BytesN<32> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AdminSet(group_id.clone()))
+            .ok_or(Error::MissingAdminRoot)?;
+        if public_inputs.admin_c_old != stored_admin_commitment {
+            return Err(Error::AdminRootMismatch);
+        }
+
+        // Missing AdminEpoch -> 0 (migration fallback for groups created
+        // before this field existed; the first admin rotation consumes
+        // epoch 0, after which the slot is always populated).
+        let stored_admin_epoch: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AdminEpoch(group_id.clone()))
+            .unwrap_or(0u64);
+        if public_inputs.admin_epoch_old != stored_admin_epoch {
+            return Err(Error::PublicInputsMismatch);
+        }
+
+        let new_admin_epoch = stored_admin_epoch
+            .checked_add(1)
+            .ok_or(Error::InvalidEpoch)?;
+
+        // Canonical encoding check on the new admin commitment.
+        let c_new_fr = Fr::from_bytes(public_inputs.admin_c_new.clone());
+        let c_new_canonical: BytesN<32> = c_new_fr.to_bytes();
+        if c_new_canonical != public_inputs.admin_c_new {
+            return Err(Error::InvalidCommitmentEncoding);
+        }
+
+        Self::check_proof_replay(&env, &proof)?;
+
+        let vk = Self::load_admin_update_vk(&env)?;
+        // Reuse the UpdateCircuit verifier — same 3 public inputs, 4 IC
+        // points. The circuit is rebound to the admin tree but the
+        // verification equation is identical.
+        if !verify_groth16_proof_update(
+            &env,
+            &vk,
+            &proof,
+            &public_inputs.admin_c_old,
+            public_inputs.admin_epoch_old,
+            &public_inputs.admin_c_new,
+        ) {
+            return Err(Error::InvalidProof);
+        }
+
+        Self::record_proof(&env, &proof);
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::AdminSet(group_id.clone()), &public_inputs.admin_c_new);
+        env.storage().persistent().extend_ttl(
+            &DataKey::AdminSet(group_id.clone()),
+            LEDGER_THRESHOLD,
+            LEDGER_BUMP,
+        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::AdminEpoch(group_id.clone()), &new_admin_epoch);
+        env.storage().persistent().extend_ttl(
+            &DataKey::AdminEpoch(group_id.clone()),
+            LEDGER_THRESHOLD,
+            LEDGER_BUMP,
+        );
+
+        let timestamp = env.ledger().timestamp();
+        AdminCommitmentUpdated {
+            group_id,
+            admin_commitment: public_inputs.admin_c_new,
+            admin_epoch: new_admin_epoch,
+            timestamp,
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    /// Read the current admin epoch for an Oligarchy group. Returns 0 if
+    /// the epoch slot was never written (pre-migration groups).
+    pub fn get_admin_epoch(env: Env, group_id: BytesN<32>) -> Result<u64, Error> {
+        Self::require_initialized(&env)?;
+        let current = Self::load_group_v2(&env, &group_id)?;
+        if current.group_type != 3 {
+            return Err(Error::MissingAdminRoot);
+        }
+        Ok(env
+            .storage()
+            .persistent()
+            .get(&DataKey::AdminEpoch(group_id))
+            .unwrap_or(0u64))
     }
 
     /// Verify a membership proof against the current group state.
@@ -1190,6 +1555,31 @@ impl SepXxxxContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Load the per-group-type update VK (e.g. Democracy for
+    /// `group_type = 2`). Returns `NotInitialized` when the admin has not yet
+    /// installed the ceremony-gated VK for this (tier, type) pair — the
+    /// Democracy dispatcher treats that as a feature-not-yet-enabled signal.
+    fn load_update_vk_by_type(
+        env: &Env,
+        tier: u32,
+        group_type: u32,
+    ) -> Result<VerificationKeyData, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::UpdateVKByType(tier, group_type))
+            .ok_or(Error::NotInitialized)
+    }
+
+    /// Load the AdminUpdate VK (single key, no tier param per §6.4.4).
+    /// Returns `NotInitialized` until the admin installs it via
+    /// `update_vk(VkKind::AdminUpdate, 0, …)`.
+    fn load_admin_update_vk(env: &Env) -> Result<VerificationKeyData, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::AdminUpdateVK)
+            .ok_or(Error::NotInitialized)
+    }
+
     fn bump_group(env: &Env, group_id: &BytesN<32>) {
         // Bump whichever key variant is present. After the first V2 write
         // the legacy keys are removed, so post-migration calls no-op on
@@ -1445,6 +1835,77 @@ fn verify_groth16_proof_update(
     let g1s: Vec<G1Affine> = vec![env, neg_a, alpha, vk_x, proof_c];
     let g2s: Vec<G2Affine> = vec![env, proof_b, beta, gamma, delta];
 
+    bls.pairing_check(g1s, g2s)
+}
+
+fn u32_to_fr(env: &Env, value: u32) -> Fr {
+    let bytes = Bytes::from_array(env, &u64_to_u256_be(value as u64));
+    Fr::from_u256(U256::from_be_bytes(env, &bytes))
+}
+
+/// Verify a DemocracyUpdateCircuit Groth16 proof with 5 public inputs:
+/// `(c_old, epoch_old, c_new, member_count_old, member_count_new)`.
+///
+/// IC length is 6: `IC[0]` base plus one per public input.
+/// `vk_x = IC[0] + c_old·IC[1] + epoch_old·IC[2] + c_new·IC[3] +
+///        member_count_old·IC[4] + member_count_new·IC[5]`.
+#[allow(clippy::too_many_arguments)]
+fn verify_groth16_proof_democracy_update(
+    env: &Env,
+    vk: &VerificationKeyData,
+    proof: &Groth16Proof,
+    c_old: &BytesN<32>,
+    epoch_old: u64,
+    c_new: &BytesN<32>,
+    member_count_old: u32,
+    member_count_new: u32,
+) -> bool {
+    let bls = env.crypto().bls12_381();
+
+    let proof_a = G1Affine::from_bytes(proof.a.clone());
+    let proof_b = G2Affine::from_bytes(proof.b.clone());
+    let proof_c = G1Affine::from_bytes(proof.c.clone());
+
+    let alpha = G1Affine::from_bytes(vk.alpha_g1.clone());
+    let beta = G2Affine::from_bytes(vk.beta_g2.clone());
+    let gamma = G2Affine::from_bytes(vk.gamma_g2.clone());
+    let delta = G2Affine::from_bytes(vk.delta_g2.clone());
+
+    // Validated == 6 at set time; defence-in-depth against storage tampering.
+    if vk.ic.len() != 6 {
+        return false;
+    }
+    let ic0 = G1Affine::from_bytes(vk.ic.get(0).unwrap());
+    let ic1 = G1Affine::from_bytes(vk.ic.get(1).unwrap());
+    let ic2 = G1Affine::from_bytes(vk.ic.get(2).unwrap());
+    let ic3 = G1Affine::from_bytes(vk.ic.get(3).unwrap());
+    let ic4 = G1Affine::from_bytes(vk.ic.get(4).unwrap());
+    let ic5 = G1Affine::from_bytes(vk.ic.get(5).unwrap());
+
+    let c_old_fr = Fr::from_bytes(c_old.clone());
+    let c_old_canonical: BytesN<32> = c_old_fr.to_bytes();
+    if c_old_canonical != *c_old {
+        return false;
+    }
+    let c_new_fr = Fr::from_bytes(c_new.clone());
+    let c_new_canonical: BytesN<32> = c_new_fr.to_bytes();
+    if c_new_canonical != *c_new {
+        return false;
+    }
+
+    let epoch_bytes = Bytes::from_array(env, &u64_to_u256_be(epoch_old));
+    let epoch_fr = Fr::from_u256(U256::from_be_bytes(env, &epoch_bytes));
+    let m_old_fr = u32_to_fr(env, member_count_old);
+    let m_new_fr = u32_to_fr(env, member_count_new);
+
+    let msm_points: Vec<G1Affine> = vec![env, ic1, ic2, ic3, ic4, ic5];
+    let msm_scalars: Vec<Fr> = vec![env, c_old_fr, epoch_fr, c_new_fr, m_old_fr, m_new_fr];
+    let msm_result = bls.g1_msm(msm_points, msm_scalars);
+    let vk_x = bls.g1_add(&ic0, &msm_result);
+
+    let neg_a = -proof_a;
+    let g1s: Vec<G1Affine> = vec![env, neg_a, alpha, vk_x, proof_c];
+    let g2s: Vec<G2Affine> = vec![env, proof_b, beta, gamma, delta];
     bls.pairing_check(g1s, g2s)
 }
 
@@ -3290,6 +3751,184 @@ mod test {
         assert_eq!(tier_capacity(2), 2048);
     }
 
+    // ================================================================
+    // Democracy `update_commitment_democracy` dispatcher tests
+    //
+    // These exercise the pre-verification rejection paths. The positive
+    // path (a real Groth16 proof verifying against a real Democracy VK)
+    // is covered by integration tests once the dev ceremony lands
+    // (see `docs/democracy-circuit-ceremony.md §3`).
+    // ================================================================
+
+    fn mock_democracy_vk(env: &Env) -> VerificationKeyData {
+        // 6 IC points (1 base + 5 public inputs) to satisfy the set-time
+        // length check. Will never verify a real proof — used for
+        // reject-path tests only.
+        let g1 = BytesN::from_array(env, &[0u8; 96]);
+        let g2 = BytesN::from_array(env, &[0u8; 192]);
+        VerificationKeyData {
+            alpha_g1: g1.clone(),
+            beta_g2: g2.clone(),
+            gamma_g2: g2.clone(),
+            delta_g2: g2,
+            ic: vec![env, g1.clone(), g1.clone(), g1.clone(), g1.clone(), g1.clone(), g1],
+        }
+    }
+
+    fn install_democracy_vk(
+        env: &Env,
+        contract_id: &Address,
+        tier: u32,
+    ) {
+        env.as_contract(contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::UpdateVKByType(tier, 2), &mock_democracy_vk(env));
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #9)")]
+    fn test_update_vk_democracy_rejects_wrong_ic_length() {
+        let (env, client, _admin, _cid) = setup_initialized();
+        let g1 = BytesN::from_array(&env, &[0u8; 96]);
+        let g2 = BytesN::from_array(&env, &[0u8; 192]);
+        // Democracy VKs require 6 IC points; 5 must be rejected.
+        let bad_vk = VerificationKeyData {
+            alpha_g1: g1.clone(),
+            beta_g2: g2.clone(),
+            gamma_g2: g2.clone(),
+            delta_g2: g2,
+            ic: vec![&env, g1.clone(), g1.clone(), g1.clone(), g1.clone(), g1],
+        };
+        client.update_vk(&VkKind::UpdateByType(2u32), &0u32, &bad_vk);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #16)")]
+    fn test_update_vk_rejects_unknown_group_type_for_update_by_type() {
+        // group_type = 4 has no defined update VK shape.
+        let (env, client, _admin, _cid) = setup_initialized();
+        let vk = mock_democracy_vk(&env);
+        client.update_vk(&VkKind::UpdateByType(4u32), &0u32, &vk);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #18)")]
+    fn test_update_commitment_democracy_rejects_non_democracy_group() {
+        // Anarchy group sent through the Democracy dispatcher must reject.
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[80u8; 32]);
+        let commitment = BytesN::from_array(&env, &[81u8; 32]);
+        inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 0, 0, 0);
+
+        let upi = DemocracyUpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: 0,
+            c_new: BytesN::from_array(&env, &[0u8; 32]),
+            member_count_old: 0,
+            member_count_new: 0,
+        };
+        client.update_commitment_democracy(&group_id, &mock_proof(&env), &upi);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #24)")]
+    fn test_update_commitment_democracy_rejects_member_count_mismatch() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[82u8; 32]);
+        let commitment = BytesN::from_array(&env, &[83u8; 32]);
+        // Stored member_count = 5; caller claims 4.
+        inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 0, 2, 5);
+
+        let upi = DemocracyUpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: 0,
+            c_new: BytesN::from_array(&env, &[0u8; 32]),
+            member_count_old: 4, // wrong
+            member_count_new: 5,
+        };
+        client.update_commitment_democracy(&group_id, &mock_proof(&env), &upi);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #25)")]
+    fn test_update_commitment_democracy_rejects_delta_too_large() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[84u8; 32]);
+        let commitment = BytesN::from_array(&env, &[85u8; 32]);
+        inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 0, 2, 5);
+
+        let upi = DemocracyUpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: 0,
+            c_new: BytesN::from_array(&env, &[0u8; 32]),
+            member_count_old: 5,
+            member_count_new: 7, // |Δ| = 2 — out of {-1, 0, +1}
+        };
+        client.update_commitment_democracy(&group_id, &mock_proof(&env), &upi);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #25)")]
+    fn test_update_commitment_democracy_rejects_drop_below_quorum_floor() {
+        // A Democracy with 2 members removing one collapses to "democracy
+        // of one" — rejected.
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[86u8; 32]);
+        let commitment = BytesN::from_array(&env, &[87u8; 32]);
+        inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 0, 2, 2);
+
+        let upi = DemocracyUpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: 0,
+            c_new: BytesN::from_array(&env, &[0u8; 32]),
+            member_count_old: 2,
+            member_count_new: 1, // below democracy-of-≥2 floor
+        };
+        client.update_commitment_democracy(&group_id, &mock_proof(&env), &upi);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn test_update_commitment_democracy_rejects_when_vk_missing() {
+        // Valid-looking Democracy call, but no Democracy VK has been
+        // installed for this tier yet. Must fail with NotInitialized.
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[88u8; 32]);
+        let commitment = BytesN::from_array(&env, &[89u8; 32]);
+        inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 0, 2, 4);
+
+        let c_new = Fr::from_bytes(BytesN::from_array(&env, &[0x01; 32])).to_bytes();
+        let upi = DemocracyUpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: 0,
+            c_new,
+            member_count_old: 4,
+            member_count_new: 4,
+        };
+        client.update_commitment_democracy(&group_id, &mock_proof(&env), &upi);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #10)")]
+    fn test_update_commitment_democracy_rejects_wrong_c_old() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[90u8; 32]);
+        let commitment = BytesN::from_array(&env, &[91u8; 32]);
+        inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 0, 2, 4);
+        install_democracy_vk(&env, &contract_id, 0);
+
+        let upi = DemocracyUpdatePublicInputs {
+            c_old: BytesN::from_array(&env, &[0xFF; 32]), // not the stored one
+            epoch_old: 0,
+            c_new: BytesN::from_array(&env, &[0u8; 32]),
+            member_count_old: 4,
+            member_count_new: 4,
+        };
+        client.update_commitment_democracy(&group_id, &mock_proof(&env), &upi);
+    }
+
     #[test]
     fn test_deactivate_group_dispatches_past_oligarchy_check() {
         // Deactivate is the safety valve — works for every governance
@@ -3325,5 +3964,205 @@ mod test {
             Err(Err(_)) => { /* reached Groth16 verifier — governance dispatch OK */ }
             other => panic!("expected verifier abort, got {:?}", other),
         }
+    }
+
+    // ================================================================
+    // Oligarchy AdminUpdate dispatcher tests (§6.4.4)
+    //
+    // Admin rotation reuses the UpdateCircuit shape against the admin
+    // tree. Positive-path proof verification requires a real VK from
+    // the dev ceremony; these are reject-path tests exercising the
+    // contract-side checks only.
+    // ================================================================
+
+    fn mock_admin_update_vk(env: &Env) -> VerificationKeyData {
+        // 4 IC points (1 base + 3 public inputs) to satisfy the set-time
+        // length check. Will never verify a real proof.
+        let g1 = BytesN::from_array(env, &[0u8; 96]);
+        let g2 = BytesN::from_array(env, &[0u8; 192]);
+        VerificationKeyData {
+            alpha_g1: g1.clone(),
+            beta_g2: g2.clone(),
+            gamma_g2: g2.clone(),
+            delta_g2: g2,
+            ic: vec![env, g1.clone(), g1.clone(), g1.clone(), g1],
+        }
+    }
+
+    fn install_admin_update_vk(env: &Env, contract_id: &Address) {
+        env.as_contract(contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::AdminUpdateVK, &mock_admin_update_vk(env));
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #9)")]
+    fn test_update_vk_admin_update_rejects_wrong_ic_length() {
+        let (env, client, _admin, _cid) = setup_initialized();
+        let g1 = BytesN::from_array(&env, &[0u8; 96]);
+        let g2 = BytesN::from_array(&env, &[0u8; 192]);
+        // AdminUpdate VKs require 4 IC points; 3 must be rejected.
+        let bad_vk = VerificationKeyData {
+            alpha_g1: g1.clone(),
+            beta_g2: g2.clone(),
+            gamma_g2: g2.clone(),
+            delta_g2: g2,
+            ic: vec![&env, g1.clone(), g1.clone(), g1],
+        };
+        client.update_vk(&VkKind::AdminUpdate, &0u32, &bad_vk);
+    }
+
+    #[test]
+    fn test_update_vk_admin_update_ignores_tier() {
+        // AdminUpdate is single-tier per §6.4.4 — the `tier` arg is a
+        // no-op, and values outside 0..=2 must NOT trigger InvalidTier.
+        let (env, client, _admin, _cid) = setup_initialized();
+        let vk = mock_admin_update_vk(&env);
+        // tier = 7 would fail InvalidTier for Membership/Update; must
+        // succeed here and land under the single DataKey::AdminUpdateVK.
+        client.update_vk(&VkKind::AdminUpdate, &7u32, &vk);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #18)")]
+    fn test_update_admin_commitment_rejects_non_oligarchy_group() {
+        // Anarchy group cannot go through the admin dispatcher.
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[92u8; 32]);
+        let commitment = BytesN::from_array(&env, &[93u8; 32]);
+        inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 0, 0, 0);
+
+        let upi = AdminUpdatePublicInputs {
+            admin_c_old: BytesN::from_array(&env, &[0u8; 32]),
+            admin_epoch_old: 0,
+            admin_c_new: BytesN::from_array(&env, &[0u8; 32]),
+        };
+        client.update_admin_commitment(&group_id, &mock_proof(&env), &upi);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #19)")]
+    fn test_update_admin_commitment_rejects_missing_admin_root() {
+        // Oligarchy metadata set, but the AdminSet slot is missing (can
+        // only happen from a directly-poked group entry — real create
+        // flow always populates it). Must fail with MissingAdminRoot.
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[94u8; 32]);
+        let commitment = BytesN::from_array(&env, &[95u8; 32]);
+        inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 0, 3, 5);
+        // Intentionally do NOT seed AdminSet.
+
+        let upi = AdminUpdatePublicInputs {
+            admin_c_old: BytesN::from_array(&env, &[0u8; 32]),
+            admin_epoch_old: 0,
+            admin_c_new: BytesN::from_array(&env, &[0u8; 32]),
+        };
+        client.update_admin_commitment(&group_id, &mock_proof(&env), &upi);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #20)")]
+    fn test_update_admin_commitment_rejects_wrong_admin_c_old() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[96u8; 32]);
+        let commitment = BytesN::from_array(&env, &[97u8; 32]);
+        let stored_admin = BytesN::from_array(&env, &[11u8; 32]);
+        inject_oligarchy_group(
+            &env, &contract_id, &group_id, &commitment, &stored_admin, 0, 0, 5,
+        );
+
+        let upi = AdminUpdatePublicInputs {
+            admin_c_old: BytesN::from_array(&env, &[0xAB; 32]), // not stored
+            admin_epoch_old: 0,
+            admin_c_new: BytesN::from_array(&env, &[0u8; 32]),
+        };
+        client.update_admin_commitment(&group_id, &mock_proof(&env), &upi);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #10)")]
+    fn test_update_admin_commitment_rejects_wrong_admin_epoch_old() {
+        // Admin epoch defaults to 0 (no slot written by inject). Caller
+        // claiming epoch_old=1 must be rejected as PublicInputsMismatch.
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[98u8; 32]);
+        let commitment = BytesN::from_array(&env, &[99u8; 32]);
+        let stored_admin = BytesN::from_array(&env, &[12u8; 32]);
+        inject_oligarchy_group(
+            &env, &contract_id, &group_id, &commitment, &stored_admin, 0, 0, 5,
+        );
+
+        let upi = AdminUpdatePublicInputs {
+            admin_c_old: stored_admin,
+            admin_epoch_old: 1, // wrong — stored is 0 (default)
+            admin_c_new: BytesN::from_array(&env, &[0u8; 32]),
+        };
+        client.update_admin_commitment(&group_id, &mock_proof(&env), &upi);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn test_update_admin_commitment_rejects_when_vk_missing() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[100u8; 32]);
+        let commitment = BytesN::from_array(&env, &[101u8; 32]);
+        let stored_admin = BytesN::from_array(&env, &[13u8; 32]);
+        inject_oligarchy_group(
+            &env, &contract_id, &group_id, &commitment, &stored_admin, 0, 0, 5,
+        );
+
+        let c_new = Fr::from_bytes(BytesN::from_array(&env, &[0x01; 32])).to_bytes();
+        let upi = AdminUpdatePublicInputs {
+            admin_c_old: stored_admin,
+            admin_epoch_old: 0,
+            admin_c_new: c_new,
+        };
+        client.update_admin_commitment(&group_id, &mock_proof(&env), &upi);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #15)")]
+    fn test_update_admin_commitment_rejects_non_canonical_c_new() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[102u8; 32]);
+        let commitment = BytesN::from_array(&env, &[103u8; 32]);
+        let stored_admin = BytesN::from_array(&env, &[14u8; 32]);
+        inject_oligarchy_group(
+            &env, &contract_id, &group_id, &commitment, &stored_admin, 0, 0, 5,
+        );
+        install_admin_update_vk(&env, &contract_id);
+
+        // 0xFF..FF is non-canonical (> Fr modulus).
+        let upi = AdminUpdatePublicInputs {
+            admin_c_old: stored_admin,
+            admin_epoch_old: 0,
+            admin_c_new: BytesN::from_array(&env, &[0xFF; 32]),
+        };
+        client.update_admin_commitment(&group_id, &mock_proof(&env), &upi);
+    }
+
+    #[test]
+    fn test_get_admin_epoch_for_fresh_oligarchy_is_zero() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[104u8; 32]);
+        let commitment = BytesN::from_array(&env, &[105u8; 32]);
+        let stored_admin = BytesN::from_array(&env, &[15u8; 32]);
+        inject_oligarchy_group(
+            &env, &contract_id, &group_id, &commitment, &stored_admin, 0, 0, 5,
+        );
+        let epoch = client.get_admin_epoch(&group_id);
+        assert_eq!(epoch, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #19)")]
+    fn test_get_admin_epoch_rejects_non_oligarchy() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[106u8; 32]);
+        let commitment = BytesN::from_array(&env, &[107u8; 32]);
+        inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 0, 0, 0);
+        client.get_admin_epoch(&group_id);
     }
 }

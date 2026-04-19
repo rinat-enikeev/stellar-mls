@@ -611,7 +611,9 @@ private fun rebuildInviteURL(
                 epoch = it.epoch,
                 salt = it.salt,
                 commitment = it.commitment,
-                tierRawValue = it.tier.id
+                tierRawValue = it.tier.id,
+                groupTypeRawValue = it.groupType.id,
+                adminPubkeys = it.adminPubkeys.toList()
             ).encode()
             "https://onym.chat/join?code=$code"
         }

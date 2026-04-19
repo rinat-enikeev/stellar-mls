@@ -8,6 +8,7 @@ import chat.onym.android.model.ChatGroup
 import chat.onym.android.model.InviteCode
 import chat.onym.android.model.toHex
 import chat.onym.android.onchain.OnChainVerificationResult
+import com.stellarmls.mls.SEPGroupType
 import com.stellarmls.mls.SEPTier
 
 class JoinGroupViewModel : ViewModel() {
@@ -48,7 +49,9 @@ class JoinGroupViewModel : ViewModel() {
                 epoch = invite.epoch,
                 salt = invite.salt,
                 commitment = invite.commitment,
-                tier = SEPTier.entries.find { it.id == invite.tierRawValue } ?: SEPTier.LARGE
+                tier = SEPTier.entries.find { it.id == invite.tierRawValue } ?: SEPTier.LARGE,
+                groupType = try { SEPGroupType.fromId(invite.groupTypeRawValue) } catch (_: IllegalArgumentException) { SEPGroupType.ANARCHY },
+                adminPubkeys = invite.adminPubkeys.toMutableSet()
             )
             verificationResult = null
             error = null

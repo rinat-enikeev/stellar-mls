@@ -45,7 +45,9 @@ data class ChatGroup(
     var pushNotificationsEnabled: Boolean = false,
     /** Timestamp (ms since epoch) of the latest message in this group. Drives chat-list
      *  ordering (most recent first). 0 = no messages yet, falls back to [createdAt]. */
-    var lastMessageAt: Long = 0
+    var lastMessageAt: Long = 0,
+    /** Whether this chat is pinned to the top of the chat list. */
+    var isPinned: Boolean = false
 ) {
     /** Group ID as raw bytes (hex string → ByteArray). */
     val groupIDData: ByteArray get() = id.hexToBytes()

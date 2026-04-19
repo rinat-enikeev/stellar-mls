@@ -552,6 +552,12 @@ final class AppState {
         unreadCounts = localUnread
     }
 
+    func togglePinGroup(id: String) {
+        guard let idx = groups.firstIndex(where: { $0.id == id }) else { return }
+        groups[idx].isPinned.toggle()
+        store.saveGroup(groups[idx])
+    }
+
     func removeGroup(id: String) {
         groups.removeAll { $0.id == id }
         store.deleteGroup(id: id)

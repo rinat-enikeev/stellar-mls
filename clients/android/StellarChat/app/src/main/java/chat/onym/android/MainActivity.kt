@@ -238,6 +238,7 @@ fun StellarChatNavHost(
                     onJoinGroup = { navController.navigate("join") },
                     onInvitations = { navController.navigate("invitations") },
                     onDeleteGroup = { id -> groupListViewModel.removeGroup(id) },
+                    onTogglePin = { id -> groupListViewModel.togglePinGroup(id) },
                     onRefresh = { groupListViewModel.reconnectRelays() },
                     onRestore = { navController.navigate("restore_identity") }
                 )

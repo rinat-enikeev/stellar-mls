@@ -1020,6 +1020,23 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         private const val EPOCH_SNAPSHOT_WINDOW = 64
         /** N-8: Max entries for dedup sets to prevent unbounded memory growth. */
         private const val MAX_DEDUP_SET_SIZE = 10_000
+
+        /**
+         * Canonical byte-wise lexicographic ordering on compressed BLS public
+         * keys. Must match `ChatGroup.addMember` and every join/admin path
+         * that reconstructs the Merkle commitment locally — any divergence
+         * yields a different Poseidon root.
+         */
+        val memberLeafComparator: Comparator<com.stellarmls.mls.SEPGroupMemberLeaf> =
+            Comparator { a, b ->
+                val aKey = a.publicKeyCompressed
+                val bKey = b.publicKeyCompressed
+                for (i in 0 until minOf(aKey.size, bKey.size)) {
+                    val cmp = (aKey[i].toInt() and 0xFF) - (bKey[i].toInt() and 0xFF)
+                    if (cmp != 0) return@Comparator cmp
+                }
+                aKey.size - bKey.size
+            }
     }
 
     /** Reconfigure the on-chain service when contract settings change. */
@@ -2391,25 +2408,6 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun sortMembers(group: ChatGroup) {
         group.members.sortWith(memberLeafComparator)
-    }
-
-    companion object {
-        /**
-         * Canonical byte-wise lexicographic ordering on compressed BLS public
-         * keys. Must match `ChatGroup.addMember` and every join/admin path
-         * that reconstructs the Merkle commitment locally — any divergence
-         * yields a different Poseidon root.
-         */
-        val memberLeafComparator: Comparator<com.stellarmls.mls.SEPGroupMemberLeaf> =
-            Comparator { a, b ->
-                val aKey = a.publicKeyCompressed
-                val bKey = b.publicKeyCompressed
-                for (i in 0 until minOf(aKey.size, bKey.size)) {
-                    val cmp = (aKey[i].toInt() and 0xFF) - (bKey[i].toInt() and 0xFF)
-                    if (cmp != 0) return@Comparator cmp
-                }
-                aKey.size - bKey.size
-            }
     }
 
     private fun lexCompare(a: ByteArray, b: ByteArray): Int {

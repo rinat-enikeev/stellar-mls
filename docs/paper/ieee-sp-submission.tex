@@ -1,0 +1,299 @@
+% ==============================================================
+% IEEE Security & Privacy Magazine — Feature Article Submission
+% Template: IEEEcsmag (IEEE Computer Society Magazine class)
+%
+% NOTE: This file uses the IEEEcsmag class. If you do not have
+% IEEEcsmag.cls, you can substitute IEEEtran with the
+% [journal] option as a fallback:
+%   \documentclass[journal]{IEEEtran}
+%
+% Before submission, run the IEEE LaTeX Analyzer on this file.
+% Submit via ScholarOne: https://mc.manuscriptcentral.com/cs-ieee
+% ==============================================================
+\documentclass[journal]{IEEEtran}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{microtype}
+
+% Math commands
+\newcommand{\FF}{\mathbb{F}_r}
+\newcommand{\GG}{\mathbb{G}}
+\newcommand{\Commit}{\mathsf{Commit}}
+\newcommand{\MT}{\mathsf{MT}}
+\newcommand{\Rmem}{R_{\mathsf{Mem}}}
+\newcommand{\Rupd}{R_{\mathsf{Upd}}^{\mathsf{Anarchy}}}
+\newcommand{\pk}{\mathsf{pk}}
+\newcommand{\sk}{\mathsf{sk}}
+\newcommand{\IC}{\mathsf{IC}}
+
+\begin{document}
+
+\title{Metadata Without Observers: A Postmortem-Driven Case Study of the Anarchy Group Type on a Public Ledger}
+
+\author{Rinat~Enikeev%
+\thanks{Manuscript submitted for review to IEEE Security \& Privacy magazine, April 2026.}%
+}
+
+\markboth{IEEE Security \& Privacy}{Enikeev: Metadata Without Observers}
+
+\maketitle
+
+\begin{abstract}
+End-to-end encryption closed the content half of the online-communication privacy problem. The metadata half---\emph{who is in a group with whom}---is still leaking to at least one operator in almost every deployed messaging system. We describe Onym, a testnet system that anchors each group's state on the Stellar blockchain as a 32-byte commitment and gates every state change on a Groth16 zero-knowledge proof over BLS12-381. The deployed contract supports four \emph{governance types} that trade off on-chain metadata against authorization strength. This article is about the Anarchy type: the oldest, lightest, and most metadata-minimising of the four. Under Anarchy, any current member may authorise any next state with a single membership proof; no member address, updater identity, or group-size signal beyond a coarse tier appears on the ledger. The article introduces the construction formally, with relations, instance-commitment binding, and game-based security statements scoped to Anarchy, and reports four postmortems from the Anarchy development history. Onym is not a mainnet system and does not yet have a production customer. This is a case study in what it took to build toward those properties, and in the specific ways the work kept going wrong.
+\end{abstract}
+
+% ----------------------------------------------------------------
+\section{The Metadata Problem for Online Communication}
+
+The last decade made content-level encryption a commodity. Signal's Double Ratchet, Apple's iMessage, WhatsApp, Google Messages' RCS-with-MLS rollout, and Matrix's Olm/Megolm all provide some form of end-to-end content encryption. None of them hide metadata from the operator. iCloud backups hold message metadata for \emph{every} Apple user. WhatsApp provides ``basic subscriber records'' and message metadata under stored-communications-act orders. Matrix homeservers see every room's membership list by construction. Telegram ``secret chats'' leave groups, channels, and cloud chats server-readable. Signal is the outlier: repeated grand-jury subpoenas (2016 Virginia, 2020 California, 2021 Santa Clara) have forced Signal to disclose only registration time and last-seen date. That is a deliberate and unusual engineering achievement. It is not the industry norm.
+
+Metadata is not a secondary concern. Two of the largest law-enforcement operations of the last five years---the 2020 EncroChat takedown (${\sim}60{,}000$ users) and the 2021 Sky ECC operation (${\sim}170{,}000$ users)---recovered content from compromised devices, but the \emph{targeting} was metadata-driven. A former NSA General Counsel's remark---``we kill people based on metadata''~\cite{hayden2014}---is a statement about operational reality.
+
+These examples establish that metadata matters. They do not, by themselves, establish that Onym's specific architecture is a warranted response. Onym's threat model is \emph{prospective}, not retrospective: no deployed Delivery Service (DS) has been publicly compromised for group-membership metadata yet, and we want an architecture that makes the question moot before the precedent exists.
+
+The structural cause is that every messaging architecture we know of has at least one operator positioned to observe the metadata. In centralised systems it is the server operator. In federated systems (XMPP, Matrix, email) every federated server learns the metadata of its tenants. In MLS deployments the DS is the ordering authority and therefore the metadata authority~\cite{barnes2023mls}.
+
+This paper is not a proposal to replace these deployed systems. Signal's Private Group System (PGS)~\cite{chase2020signal}, which uses anonymous credentials so that Signal servers cannot see group membership, is an existence proof that strong metadata privacy is compatible with a commercial messenger at scale. The question Onym asks is narrower: \textbf{can we build a group-membership registry where no operator---not even the anchor operator---is structurally positioned to observe the metadata, and where the privacy model is externally auditable from the public spec and the published bytecode?}
+
+% ----------------------------------------------------------------
+\section{A Candidate Solution, and Why Blockchain + SNARKs}
+
+There are four candidate approaches to a metadata-hiding group-membership registry:
+\begin{enumerate}
+\item \textbf{Transparency logs}~\cite{laurie2013ct,melara2015coniks} give every observer the same append-only view but do not hide co-membership.
+\item \textbf{Federated delivery} (Matrix, XMPP) distributes trust but does not eliminate per-server metadata observation.
+\item \textbf{Anonymous-credential-backed central servers}~\cite{chase2020signal} are deployed and scalable under an honest-but-curious server model. Auditability requires trusting the running server binary.
+\item \textbf{Public-ledger anchoring plus zero-knowledge membership proofs} commits to group state on a public chain and verifies membership with a SNARK. No operator is positioned to observe more.
+\end{enumerate}
+
+Onym takes approach~4. Within it, we chose Stellar over Ethereum because Stellar Protocol~22~\cite{sdf2024cap0046} introduced BLS12-381 host functions, reducing Groth16 verification to three pairings at negligible fee cost. BLS12-381 provides an estimated 120~bits of pairing security; BN254, at 100--103~bits after improved number-field-sieve attacks~\cite{barbulescu2019}, does not meet our 120-bit threshold.
+
+% ----------------------------------------------------------------
+\section{Governance Types and the Scope of This Article}
+
+Onym's deployed contract supports four \emph{governance types} (Table~\ref{tab:governance}). This article is about \textbf{Anarchy}: the lightest type, storing no governance metadata beyond tier, epoch, and timestamp.
+
+\begin{table}[t]
+\centering
+\caption{Governance types supported by the deployed Onym contract.}
+\label{tab:governance}
+\begin{tabular}{@{}p{1.3cm}p{2.8cm}p{1.8cm}p{1.2cm}@{}}
+\toprule
+\textbf{Type} & \textbf{Who authorises} & \textbf{Extra public inputs} & \textbf{Extra state} \\
+\midrule
+Anarchy & Any member, alone & $C_\text{old}, \epsilon_\text{old}, C_\text{new}$ & None \\
+1v1 & N/A (rekey disabled) & --- & count${}=2$ \\
+Democracy & $K$-of-$n$ quorum & $+m_\text{old}, m_\text{new}$ & Exact count \\
+Oligarchy & Admin-tree proof & Admin root+epoch & Admin state \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ----------------------------------------------------------------
+\section{Onym Anarchy, in Plain Language}
+
+Picture a town hall that keeps a membership register for many private clubs, where the hall is constitutionally prohibited from knowing who is in any club. Instead of names, the hall posts one sealed envelope per club---a 32-byte number that reveals nothing. A member proves membership by handing over a small slip of paper (a 192-byte proof); the desk staff perform a fixed arithmetic check and return ``yes'' or ``no'' without ever learning who the member is.
+
+When membership changes, a current member computes the next envelope, proves ``I belong inside yesterday's envelope, and today's envelope is the correct next version,'' and the hall swaps envelopes. In Anarchy, \emph{any} member can perform that swap alone.
+
+The architecture maps directly: the hall is the Stellar blockchain; the envelope is a cryptographic commitment; the slip is a Groth16 proof; the arithmetic check is three BLS12-381 pairings; and the clerk is the public Soroban smart contract \texttt{CBKKEZU3...PRFSO}. A relayer pattern decouples the fee payer from the prover to prevent account-level re-linkage.
+
+% ----------------------------------------------------------------
+\section{Onym Anarchy, Formally}
+
+Let $\FF$ be the BLS12-381 scalar field and $H\colon \FF^* \to \FF$ denote Poseidon~\cite{grassi2021poseidon}.
+
+\subsection{Commitment}
+
+For a member set $S = \{\pk_1, \ldots, \pk_n\} \subseteq \GG_1$ with $n \leq 2^d$:
+\begin{equation}
+\Commit(S, \epsilon, s) = H\bigl(H(\text{MerkleRoot}(\MT_H(\sigma(S))),\, \epsilon),\, s\bigr)
+\end{equation}
+where $\epsilon$ is the epoch counter and $s$ is a per-epoch salt.
+
+\subsection{Relations}
+
+$\Rmem$: Public input $(C, \epsilon)$; witness $(\sk, \text{root}, s, \text{path}, \text{idx})$. Verifies Merkle opening and commitment binding. Shared by all four governance types.
+
+$\Rupd$: Public input $(C_\text{old}, \epsilon_\text{old}, C_\text{new})$; witness $(\sk, \text{root}_\text{old}, s_\text{old}, \text{path}, \text{idx}, \text{root}_\text{new}, s_\text{new})$:
+\begin{equation}
+\Rupd \iff
+\begin{cases}
+\Rmem(C_\text{old}, \epsilon_\text{old}; \sk, \text{root}_\text{old}, s_\text{old}, \text{path}, \text{idx})\\
+H(H(\text{root}_\text{new}, \epsilon_\text{old}+1), s_\text{new}) = C_\text{new}.
+\end{cases}
+\end{equation}
+
+Critically, $C_\text{new}$ is a \emph{public input}: it enters the verifier's \IC{} linear combination and is bound to the proof by Groth16 non-malleability~\cite{groth2016,lipmaa2019}. Section~\ref{sec:p2} describes what went wrong when it was not.
+
+\subsection{Security Games}
+
+We state five games for Anarchy-typed groups: \emph{soundness} (Groth16 knowledge-soundness~\cite{groth2016}), \emph{zero-knowledge} (standard Groth16 ZK), \emph{commitment hiding} (Poseidon pseudorandomness~\cite{grassi2021poseidon}), \emph{operation-binding} (IC binding once $C_\text{new}$ is a public input), and \emph{fee-payer unlinkability} (relayer pattern; $1/n$ baseline, degraded by timing side channels for small groups). Full reductions will be posted to IACR ePrint prior to the camera-ready deadline.
+
+% ----------------------------------------------------------------
+\section{Four Postmortems (All on the Anarchy Path)}
+
+\subsection{P1---The Constraint-Cost Crisis}
+
+The original commitment composed Poseidon inside the circuit with SHA-256 outside it ($\Commit_A$). SHA-256 costs ${\sim}25{,}000$ R1CS constraints per compression; Poseidon costs ${\sim}300$. Replacing SHA-256 with a two-call Poseidon composition ($\Commit_B$) yielded 8.5--14$\times$ reduction (Table~\ref{tab:constraints}).
+
+\begin{table}[t]
+\centering
+\caption{R1CS constraint counts for the two commitment variants on $\Rupd$.}
+\label{tab:constraints}
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+Tier & Members & Depth & $\Commit_A$ & $\Commit_B$ & Reduction \\
+\midrule
+Small & 32 & 5 & ${\sim}$26,740 & \textbf{1,910} & 14.0$\times$ \\
+Medium & 256 & 8 & ${\sim}$27,640 & \textbf{2,630} & 10.5$\times$ \\
+Large & 2,048 & 11 & ${\sim}$28,540 & \textbf{3,350} & 8.5$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Lesson:} A primitive straddling the R1CS boundary must have its in-circuit cost counted \emph{first}.
+
+\subsection{P2---The Theorem That Proved the Wrong Thing}
+\label{sec:p2}
+
+Through v1.2.9, all state-changing operations shared one circuit ($\Rmem$). The \texttt{update\_commitment} entry point accepted a separate \texttt{new\_commitment} parameter not bound by the proof. Any network intermediary could substitute the new commitment while retaining the valid proof. A code-review question---``Where in the math is the argument that this proof is non-transferable to a different \texttt{new\_commitment}?''---exposed the gap. The fix: split into $\Rmem$ and $\Rupd$, with $C_\text{new}$ as a public input.
+
+\textbf{Lesson:} Formal soundness of a relation $R$ implies nothing about operations whose security predicate is over variables $R$ does not mention.
+
+\subsection{P3---Transport-Layer Co-Membership Leakage}
+
+Through v1.2.7, clients signed Nostr events with long-lived identity keys and used stable hidden topic tags. Any relay could cluster users by co-membership. The fix: ephemeral per-event signing keys and per-epoch rotating topic tags derived as $H(\text{group\_id} \| \epsilon)$.
+
+\textbf{Lesson:} A privacy invariant in a \emph{Security Considerations} bullet of a different document is fiction.
+
+\subsection{P4---The Single-Machine Trusted Setup}
+
+Groth16 requires a per-circuit trusted setup~\cite{groth2016}. Our Phase-2 ceremony currently runs on a single machine. Until a multi-party Phase-2 ceremony is completed, every security game in this article is conditional on trusting the setup operator. Mainnet is gated on this ceremony.
+
+\textbf{Lesson:} A cryptographic prerequisite does not become discharged by being documented in a limitations section.
+
+% ----------------------------------------------------------------
+\section{Evaluation (Anarchy)}
+
+The reference implementation is deployed on Stellar testnet at contract ID \texttt{CBKKEZU3...PRFSO}. A testnet deployment is not a production deployment.
+
+\textbf{Note:} The latency figures below are projections extrapolated from published arkworks Groth16 benchmarks on comparable circuits. They will be replaced with empirical measurements before submission.
+
+\begin{table}[t]
+\centering
+\caption{Projected proof generation latency (ms), median (95th pctl).}
+\label{tab:latency}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Tier & Pixel 8 $\Rmem$ & Pixel 8 $\Rupd$ & iPhone 15 $\Rmem$ & iPhone 15 $\Rupd$ \\
+\midrule
+Small & 180 (240) & 235 (310) & 165 (220) & 215 (290) \\
+Medium & 320 (410) & 415 (530) & 290 (380) & 380 (490) \\
+Large & 760 (920) & 985 (1200) & 690 (840) & 895 (1090) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Groth16 proofs are 192~bytes. Verification invokes three BLS12-381 pairings; total Soroban instruction count is 6--10~million.
+
+% ----------------------------------------------------------------
+\section{Honest Limitations}
+
+\textbf{Testnet, not mainnet.} Mainnet is gated on P4's MPC and an external audit.
+
+\textbf{No production customer.} The article's contribution is engineering lessons, not market validation.
+
+\textbf{Group-size leakage via tier.} The tier choice leaks an upper bound on group size.
+
+\textbf{Fee-payer correlation.} The relayer's account is a metadata observation point, mitigable with relayer rotation.
+
+\textbf{Governance-type leakage.} The type is stored in plaintext and observable from entry-point analysis.
+
+\textbf{All members must be online provers.} Delegating proof generation to a server would reintroduce operator trust.
+
+\textbf{Hostile takeover.} A single member can replace the entire set---the defining property of Anarchy.
+
+\textbf{Partial MLS integration.} Reference clients use a bespoke MLS-lite implementation.
+
+% ----------------------------------------------------------------
+\section{Related Work}
+
+Onym Anarchy is most directly comparable to Semaphore~\cite{semaphore2024} and Tornado Cash~\cite{wang2022tornado} in construction. It distinguishes itself as a general group-registry primitive coupled to MLS Commit semantics rather than a single-application identity tree. Aztec~\cite{williamson2022aztec} uses PLONK on Ethereum; we chose Groth16 because Stellar Protocol~22 provides BLS12-381 pairing host functions. Signal's Sealed Sender~\cite{lund2018sealed} addresses sender unlinkability at the messaging layer rather than the registry layer.
+
+% ----------------------------------------------------------------
+\section{Conclusion}
+
+The contribution of this article is the engineering lessons from building toward metadata-free group membership on testnet: count R1CS cost before host-function cost; a relation's soundness theorem says nothing about operations whose security predicate is over variables the relation does not mention; privacy invariants in Security Considerations bullets are fiction; and a trusted-setup prerequisite does not become discharged by being mentioned in a later section.
+
+We would prefer that readers take the postmortems more seriously than the system.
+
+% ----------------------------------------------------------------
+\section*{Acknowledgements}
+
+We thank the Stellar Development Foundation for Protocol~22's BLS12-381 host functions and the arkworks contributors. The reviewer who asked ``where in the math is the argument that this proof is non-transferable?'' is the reason P2 is a postmortem rather than a zero-day.
+
+% ----------------------------------------------------------------
+\begin{thebibliography}{15}
+
+\bibitem{barnes2023mls}
+R.~Barnes et~al., ``The Messaging Layer Security (MLS) Protocol,'' IETF RFC~9420, Jul.\ 2023.
+
+\bibitem{groth2016}
+J.~Groth, ``On the Size of Pairing-Based Non-Interactive Arguments,'' in \emph{Proc.\ EUROCRYPT}, 2016, pp.~305--326.
+
+\bibitem{fiatjaf2023nip01}
+fiatjaf, ``NIP-01: Basic Protocol Flow Description,'' Nostr Implementation Possibilities, 2023.
+
+\bibitem{semaphore2024}
+Privacy \& Scaling Explorations, ``Semaphore Protocol Specification v4,'' 2024.
+
+\bibitem{wang2022tornado}
+L.~Wang, X.~Tang, and S.~Meiklejohn, ``An Empirical Analysis of Privacy in the Tornado Cash Mixer,'' in \emph{Proc.\ ACM CCS}, 2022.
+
+\bibitem{zcash2024}
+D.~Hopwood, S.~Bowe, T.~Hornby, and N.~Wilcox, ``Zcash Protocol Specification,'' ver.\ 2024.5.0, Electric Coin Company, 2024.
+
+\bibitem{williamson2022aztec}
+J.~Williamson, ``The Aztec Protocol,'' Aztec Network tech.\ rep., 2022.
+
+\bibitem{lund2018sealed}
+J.~Lund, ``Sealed Sender for Signal,'' Signal blog, Oct.\ 2018.
+
+\bibitem{grassi2021poseidon}
+L.~Grassi et~al., ``Poseidon: A New Hash Function for Zero-Knowledge Proof Systems,'' in \emph{Proc.\ USENIX Security}, 2021, pp.~519--535.
+
+\bibitem{laurie2013ct}
+B.~Laurie, A.~Langley, and E.~Kasper, ``Certificate Transparency,'' IETF RFC~6962, Jun.\ 2013.
+
+\bibitem{chase2020signal}
+M.~Chase, T.~Perrin, and G.~Zaverucha, ``The Signal Private Group System and Anonymous Credentials Supporting Efficient Verifiable Encryption,'' in \emph{Proc.\ ACM CCS}, 2020.
+
+\bibitem{hayden2014}
+M.~V.~Hayden, ``The Price of Privacy: Re-Evaluating the NSA,'' Johns Hopkins Univ., Apr.\ 2014.
+
+\bibitem{melara2015coniks}
+M.~S.~Melara et~al., ``CONIKS: Bringing Key Transparency to End Users,'' in \emph{Proc.\ USENIX Security}, 2015, pp.~383--398.
+
+\bibitem{barbulescu2019}
+R.~Barbulescu and S.~Duquesne, ``Updating Key Size Estimations for Pairings,'' \emph{J.\ Cryptol.}, vol.~32, no.~4, pp.~1298--1336, 2019.
+
+\bibitem{lipmaa2019}
+H.~Lipmaa, ``Simulation-Extractable SNARKs Revisited,'' Cryptology ePrint Archive, Rep.\ 2019/612, 2019.
+
+\end{thebibliography}
+
+% ----------------------------------------------------------------
+\begin{IEEEbiography}[]{Rinat Enikeev}
+% TODO: Add author photo (minimum 300 dpi) and biography.
+% Format: "[Full name] is [role] at [institution]..."
+% Include: degrees, affiliations, research interests, IEEE membership status.
+\end{IEEEbiography}
+
+\end{document}

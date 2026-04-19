@@ -3,8 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ark_bls12_381::{Bls12_381, Fr, G1Affine, G2Affine};
-use ark_groth16::{Proof, VerifyingKey};
-use ark_serialize::CanonicalSerialize;
+use ark_groth16::{PreparedVerifyingKey, Proof, ProvingKey, VerifyingKey};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use sha2::{Digest, Sha256};
@@ -16,16 +16,38 @@ use sep_xxxx_circuits::prover::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let out_dir = parse_out_dir(env::args().skip(1))?;
-    fs::create_dir_all(&out_dir)?;
+    let args = parse_args(env::args().skip(1))?;
+    fs::create_dir_all(&args.out_dir)?;
 
-    let small_setup = deterministic_setup(5, 1001)?;
-    let medium_setup = deterministic_setup(8, 1002)?;
-    let large_setup = deterministic_setup(11, 1003)?;
+    let (small_setup, medium_setup, large_setup,
+         small_update_setup, medium_update_setup, large_update_setup) =
+        if let Some(keyset_dir) = &args.keyset_dir {
+            (
+                load_setup(&keyset_dir.join("small/proving_key.bin"),
+                           &keyset_dir.join("small/verifying_key.bin"))?,
+                load_setup(&keyset_dir.join("medium/proving_key.bin"),
+                           &keyset_dir.join("medium/verifying_key.bin"))?,
+                load_setup(&keyset_dir.join("large/proving_key.bin"),
+                           &keyset_dir.join("large/verifying_key.bin"))?,
+                load_setup(&keyset_dir.join("small/update_proving_key.bin"),
+                           &keyset_dir.join("small/update_verifying_key.bin"))?,
+                load_setup(&keyset_dir.join("medium/update_proving_key.bin"),
+                           &keyset_dir.join("medium/update_verifying_key.bin"))?,
+                load_setup(&keyset_dir.join("large/update_proving_key.bin"),
+                           &keyset_dir.join("large/update_verifying_key.bin"))?,
+            )
+        } else {
+            (
+                deterministic_setup(5, 1001)?,
+                deterministic_setup(8, 1002)?,
+                deterministic_setup(11, 1003)?,
+                deterministic_update_setup(5, 2001)?,
+                deterministic_update_setup(8, 2002)?,
+                deterministic_update_setup(11, 2003)?,
+            )
+        };
 
-    let small_update_setup = deterministic_update_setup(5, 2001)?;
-    let medium_update_setup = deterministic_update_setup(8, 2002)?;
-    let large_update_setup = deterministic_update_setup(11, 2003)?;
+    let out_dir = args.out_dir.clone();
 
     let member_secret_keys = vec![Fr::from(100u64), Fr::from(200u64)];
     let members = member_secret_keys
@@ -203,10 +225,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn parse_out_dir(
+struct Args {
+    out_dir: PathBuf,
+    /// When set, the 6 Groth16 setups (3 membership + 3 update) are loaded
+    /// from `<keyset-dir>/<tier>/{,update_}{proving,verifying}_key.bin`
+    /// instead of being regenerated from hardcoded RNG seeds. This makes
+    /// the installed contract VKs match the keys clients bundle, so
+    /// client-generated proofs verify on-chain.
+    keyset_dir: Option<PathBuf>,
+}
+
+fn parse_args(
     mut args: impl Iterator<Item = String>,
-) -> Result<PathBuf, Box<dyn std::error::Error>> {
+) -> Result<Args, Box<dyn std::error::Error>> {
     let mut out_dir: Option<PathBuf> = None;
+    let mut keyset_dir: Option<PathBuf> = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -214,11 +247,43 @@ fn parse_out_dir(
                 let value = args.next().ok_or("--out-dir requires a value")?;
                 out_dir = Some(PathBuf::from(value));
             }
+            "--keyset-dir" => {
+                let value = args.next().ok_or("--keyset-dir requires a value")?;
+                keyset_dir = Some(PathBuf::from(value));
+            }
             _ => return Err(format!("unknown argument: {arg}").into()),
         }
     }
 
-    out_dir.ok_or_else(|| "--out-dir is required".into())
+    Ok(Args {
+        out_dir: out_dir.ok_or("--out-dir is required")?,
+        keyset_dir,
+    })
+}
+
+fn load_setup(
+    pk_path: &Path,
+    vk_path: &Path,
+) -> Result<SetupResult, Box<dyn std::error::Error>> {
+    let pk_bytes = fs::read(pk_path)
+        .map_err(|e| format!("reading {}: {}", pk_path.display(), e))?;
+    let proving_key =
+        ProvingKey::<Bls12_381>::deserialize_compressed(&pk_bytes[..])
+            .map_err(|e| format!("deserializing {}: {}", pk_path.display(), e))?;
+
+    let vk_bytes = fs::read(vk_path)
+        .map_err(|e| format!("reading {}: {}", vk_path.display(), e))?;
+    let verifying_key =
+        VerifyingKey::<Bls12_381>::deserialize_compressed(&vk_bytes[..])
+            .map_err(|e| format!("deserializing {}: {}", vk_path.display(), e))?;
+
+    let prepared_vk = PreparedVerifyingKey::from(verifying_key.clone());
+
+    Ok(SetupResult {
+        proving_key,
+        verifying_key,
+        prepared_vk,
+    })
 }
 
 fn deterministic_setup(

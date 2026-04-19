@@ -64,12 +64,33 @@ if [ ! -f "$WASM_PATH" ]; then
 fi
 
 echo "==> Generating contract-ready Groth16 fixtures"
+# KEYSET_DIR: source of Groth16 setups for the fixture generator. When set,
+# the generator loads PKs+VKs from <KEYSET_DIR>/<tier>/*.bin instead of
+# regenerating them from hardcoded seeds. Defaults to the in-repo ceremony
+# keyset-v2/, which is the same set of PKs shipped inside the mobile
+# clients — so client-generated proofs verify against the VKs this script
+# installs on the contract. Override with KEYSET_DIR= to fall back to the
+# pre-ceremony behaviour (hardcoded seeds produce throwaway VKs that won't
+# match any client).
+KEYSET_DIR="${KEYSET_DIR:-$REPO_ROOT/keyset-v2}"
+KEYSET_ARGS=""
+if [ -n "$KEYSET_DIR" ]; then
+    if [ ! -d "$KEYSET_DIR" ]; then
+        echo "KEYSET_DIR=$KEYSET_DIR does not exist" >&2
+        exit 1
+    fi
+    echo "    using ceremony keyset: $KEYSET_DIR"
+    KEYSET_ARGS="--keyset-dir $KEYSET_DIR"
+else
+    echo "    KEYSET_DIR empty — using hardcoded-seed VKs (WILL NOT match client PKs)"
+fi
+# shellcheck disable=SC2086
 cargo run --quiet \
     --release \
     --manifest-path "$REPO_ROOT/Cargo.toml" \
     --bin generate_contract_testnet_fixtures \
     -- \
-    --out-dir "$FIXTURE_DIR"
+    --out-dir "$FIXTURE_DIR" $KEYSET_ARGS
 
 GROUP_ID="$(tr -d '\n' < "$FIXTURE_DIR/group-id.hex")"
 COMMITMENT_0="$(tr -d '\n' < "$FIXTURE_DIR/commitment-epoch-0.hex")"

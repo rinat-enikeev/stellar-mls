@@ -149,29 +149,44 @@ else
     echo "    -> reusing contract id: $NEW_CONTRACT_ID"
 fi
 
-# ─── Phase 1b: patch relayer/.env ───────────────────────────────────────
+# ─── Phase 1b: patch relayer/.env and relayer/.env.example ──────────────
+#
+# Both files need to reflect the new contract id: CI pipelines that
+# bootstrap from a clean checkout fall back to the `.env.example` values
+# when no `.env` is present (see release.yml + pr.yml `cp .env.example .env`
+# steps), so leaving the example stale ships the old contract id to builds.
+
+patch_contract_id() {
+    local target="$1"
+    [ -f "$target" ] || { echo "    -> skipping $target (not found)"; return 0; }
+
+    local tmp
+    tmp="$(mktemp "${TMPDIR:-/tmp}/relayer-env.XXXXXX")"
+    awk -v id="$NEW_CONTRACT_ID" '
+        /^RELAYER_CONTRACT_ID=/ { print "RELAYER_CONTRACT_ID=" id; next }
+        { print }
+    ' "$target" > "$tmp"
+
+    # If RELAYER_CONTRACT_ID wasn't present, append it.
+    if ! grep -qE '^RELAYER_CONTRACT_ID=' "$tmp"; then
+        printf 'RELAYER_CONTRACT_ID=%s\n' "$NEW_CONTRACT_ID" >> "$tmp"
+    fi
+
+    mv "$tmp" "$target"
+    echo "    -> $target now points to $NEW_CONTRACT_ID"
+}
 
 if [ "$SKIP_CONTRACT" != "1" ]; then
-    banner "Phase 1b: updating $RELAYER_ENV with new contract id"
+    banner "Phase 1b: updating $RELAYER_ENV (+ .env.example) with new contract id"
+
+    RELAYER_ENV_EXAMPLE="${RELAYER_ENV_EXAMPLE:-$REPO_ROOT/relayer/.env.example}"
 
     if [ "$DRY_RUN" = "1" ]; then
-        echo "(dry-run) sed -i '' 's|^RELAYER_CONTRACT_ID=.*|RELAYER_CONTRACT_ID=$NEW_CONTRACT_ID|' $RELAYER_ENV"
+        echo "(dry-run) patch RELAYER_CONTRACT_ID=$NEW_CONTRACT_ID in $RELAYER_ENV"
+        echo "(dry-run) patch RELAYER_CONTRACT_ID=$NEW_CONTRACT_ID in $RELAYER_ENV_EXAMPLE"
     else
-        # BSD sed (macOS) needs an empty extension after -i; use a portable
-        # in-place edit via a tempfile.
-        tmp_env="$(mktemp "${TMPDIR:-/tmp}/relayer-env.XXXXXX")"
-        awk -v id="$NEW_CONTRACT_ID" '
-            /^RELAYER_CONTRACT_ID=/ { print "RELAYER_CONTRACT_ID=" id; next }
-            { print }
-        ' "$RELAYER_ENV" > "$tmp_env"
-
-        # If RELAYER_CONTRACT_ID wasn't present, append it.
-        if ! grep -qE '^RELAYER_CONTRACT_ID=' "$tmp_env"; then
-            printf 'RELAYER_CONTRACT_ID=%s\n' "$NEW_CONTRACT_ID" >> "$tmp_env"
-        fi
-
-        mv "$tmp_env" "$RELAYER_ENV"
-        echo "    -> $RELAYER_ENV now points to $NEW_CONTRACT_ID"
+        patch_contract_id "$RELAYER_ENV"
+        patch_contract_id "$RELAYER_ENV_EXAMPLE"
     fi
 fi
 

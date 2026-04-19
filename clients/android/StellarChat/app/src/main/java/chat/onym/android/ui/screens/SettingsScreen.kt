@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -47,6 +48,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -79,6 +81,7 @@ fun SettingsScreen(
     viewModel: GroupListViewModel,
     onBack: (() -> Unit)? = null,
     onBackupRecoveryPhrase: (() -> Unit)? = null,
+    onRegenerateAndBackup: ((onError: (String) -> Unit) -> Unit)? = null,
     onOpenRelays: () -> Unit = {},
     onOpenBlossom: () -> Unit = {},
     onOpenTurn: () -> Unit = {},
@@ -88,6 +91,8 @@ fun SettingsScreen(
 ) {
     var tab by remember { mutableStateOf(SettingsTab.Invite) }
     var showAbout by remember { mutableStateOf(false) }
+    var showRegenerateConfirm by remember { mutableStateOf(false) }
+    var regenerateError by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         topBar = {
@@ -140,6 +145,7 @@ fun SettingsScreen(
                     onOpenStellarContract = onOpenStellarContract,
                     onOpenAdvanced = onOpenAdvanced,
                     onBackupRecoveryPhrase = onBackupRecoveryPhrase,
+                    onRequestRegenerate = { showRegenerateConfirm = true },
                     onShowAbout = { showAbout = true }
                 )
             }
@@ -148,6 +154,43 @@ fun SettingsScreen(
 
     if (showAbout) {
         OnboardingSheet(onDismiss = { showAbout = false }, isRevisit = true)
+    }
+
+    if (showRegenerateConfirm) {
+        AlertDialog(
+            onDismissRequest = { showRegenerateConfirm = false },
+            title = { Text("Generate new identity?") },
+            text = {
+                Text(
+                    "This replaces your current keys with a new BIP39-backed identity. " +
+                    "Existing groups will become read-only since other members won't recognize " +
+                    "your new keys — they'll need to re-invite you. You'll see the new recovery " +
+                    "phrase right after."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showRegenerateConfirm = false
+                    onRegenerateAndBackup?.invoke { err -> regenerateError = err }
+                }) {
+                    Text("Generate", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRegenerateConfirm = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    regenerateError?.let { err ->
+        AlertDialog(
+            onDismissRequest = { regenerateError = null },
+            title = { Text("Regeneration failed") },
+            text = { Text(err) },
+            confirmButton = {
+                TextButton(onClick = { regenerateError = null }) { Text("OK") }
+            }
+        )
     }
 }
 
@@ -253,6 +296,7 @@ private fun PreferencesTab(
     onOpenStellarContract: () -> Unit,
     onOpenAdvanced: () -> Unit,
     onBackupRecoveryPhrase: (() -> Unit)?,
+    onRequestRegenerate: () -> Unit,
     onShowAbout: () -> Unit,
 ) {
     val km = viewModel.keyManager
@@ -303,19 +347,29 @@ private fun PreferencesTab(
         }
         FooterNote("New groups will use this tier. Larger tiers support more members but use bigger ZK circuits.")
 
-        if (km.isBip39Backed && onBackupRecoveryPhrase != null) {
-            Spacer(Modifier.height(16.dp))
-            SectionHeaderSm("SECURITY")
-            GroupedCard {
-                NavRow(
-                    icon = Icons.Default.Key,
-                    iconBg = SettingsIconColors.Orange,
-                    title = "Backup Recovery Phrase",
-                    onClick = onBackupRecoveryPhrase
-                )
-            }
-            FooterNote("View your 12-word recovery phrase. You will need it to restore your identity on a new device.")
+        Spacer(Modifier.height(16.dp))
+        SectionHeaderSm("SECURITY")
+        GroupedCard {
+            NavRow(
+                icon = Icons.Default.Key,
+                iconBg = SettingsIconColors.Orange,
+                title = "Backup Recovery Phrase",
+                detail = if (km.isBip39Backed) null else "Upgrade required",
+                onClick = {
+                    if (km.isBip39Backed) {
+                        onBackupRecoveryPhrase?.invoke()
+                    } else {
+                        onRequestRegenerate()
+                    }
+                }
+            )
         }
+        FooterNote(
+            if (km.isBip39Backed)
+                "View your 12-word recovery phrase. You will need it to restore your identity on a new device."
+            else
+                "Your identity predates backup support. Generate a new BIP39-backed identity to enable backup. Your existing groups will become read-only since other members won't recognize your new keys."
+        )
 
         Spacer(Modifier.height(16.dp))
         SectionHeaderSm("ADVANCED")

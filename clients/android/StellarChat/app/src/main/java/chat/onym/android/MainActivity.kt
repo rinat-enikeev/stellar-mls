@@ -357,9 +357,25 @@ fun StellarChatNavHost(
             }
 
             composable("settings") {
+                val settingsScope = androidx.compose.runtime.rememberCoroutineScope()
                 SettingsScreen(
                     viewModel = groupListViewModel,
                     onBackupRecoveryPhrase = { navController.navigate("recovery_phrase") },
+                    onRegenerateAndBackup = { onError ->
+                        settingsScope.launch(Dispatchers.IO) {
+                            try {
+                                val newKM = chat.onym.android.crypto.KeyManager.regenerateWithBip39(context)
+                                withContext(Dispatchers.Main) {
+                                    groupListViewModel.replaceKeyManager(newKM)
+                                    navController.navigate("recovery_phrase")
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    onError(e.message ?: "Unknown error")
+                                }
+                            }
+                        }
+                    },
                     onOpenRelays = { navController.navigate("relays") },
                     onOpenBlossom = { navController.navigate("blossom_servers") },
                     onOpenTurn = { navController.navigate("turn_servers") },

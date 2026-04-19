@@ -91,7 +91,7 @@ sealed class PendingTransitionState {
 }
 
 class GroupListViewModel(application: Application) : AndroidViewModel(application) {
-    var keyManager = KeyManager.create(application)
+    var keyManager by mutableStateOf(KeyManager.create(application))
         private set
 
     /** Replace the active key manager after a BIP39 restore.

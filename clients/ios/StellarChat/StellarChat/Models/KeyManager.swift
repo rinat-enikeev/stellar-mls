@@ -145,6 +145,38 @@ final class KeyManager: Codable {
         return try KeyManager()
     }
 
+    /// Generate a fresh BIP39-backed identity, replacing any existing keys.
+    /// Used by legacy (pre-BIP39) installs to enable backup — existing groups
+    /// become read-only since other members won't recognize the new leaf keys.
+    static func regenerateWithBip39() throws -> KeyManager {
+        restoreLock.lock()
+        defer { restoreLock.unlock() }
+
+        let mnemonic = Bip39.generateMnemonic()
+        var entropy = Bip39.entropyFromMnemonic(mnemonic)!
+        var seed = Bip39.seedFromMnemonic(mnemonic)
+        var nostrKey = Bip39.deriveNostrKey(from: seed)
+        var blsKey = Bip39.deriveBlsKey(from: seed)
+
+        do {
+            try saveToKeychain(entropy, key: mnemonicKeychainKey)
+            try saveToKeychain(nostrKey, key: nostrKeychainKey)
+            try saveToKeychain(blsKey, key: blsKeychainKey)
+        } catch {
+            try? deleteKeychainItem(key: mnemonicKeychainKey)
+            try? deleteKeychainItem(key: nostrKeychainKey)
+            try? deleteKeychainItem(key: blsKeychainKey)
+            throw error
+        }
+
+        seed.resetBytes(in: seed.startIndex..<seed.endIndex)
+        nostrKey.resetBytes(in: nostrKey.startIndex..<nostrKey.endIndex)
+        blsKey.resetBytes(in: blsKey.startIndex..<blsKey.endIndex)
+        entropy.resetBytes(in: entropy.startIndex..<entropy.endIndex)
+
+        return try KeyManager()
+    }
+
     /// The BIP39 recovery phrase for this identity, or nil for legacy (pre-BIP39) identities.
     ///
     /// SECURITY NOTE: Reconstructed from stored entropy on each access. The returned String

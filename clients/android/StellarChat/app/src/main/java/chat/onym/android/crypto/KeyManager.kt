@@ -73,6 +73,37 @@ class KeyManager private constructor(private val prefs: android.content.SharedPr
             return KeyManager(prefs)
         }
 
+        /**
+         * Generate a fresh BIP39-backed identity, replacing any existing keys.
+         * Used by legacy (pre-BIP39) installs to enable backup — existing groups
+         * become read-only since other members won't recognize the new leaf keys.
+         */
+        fun regenerateWithBip39(context: Context): KeyManager {
+            val mnemonic = Bip39.generateMnemonic()
+            val entropy = Bip39.entropyFromMnemonic(mnemonic)!!
+            val seed = Bip39.seedFromMnemonic(mnemonic)
+            val nostrKey = Bip39.deriveNostrKey(seed)
+            val blsKey = Bip39.deriveBlsKey(seed)
+
+            val prefs = encryptedPrefs(context)
+            val saved = prefs.edit()
+                .putString(NOSTR_SECRET_KEY, nostrKey.toHex())
+                .putString(BLS_SECRET_KEY, blsKey.toHex())
+                .putString(BIP39_ENTROPY, entropy.toHex())
+                .putBoolean(IDENTITY_INITIALIZED, true)
+                .commit()
+
+            Arrays.fill(seed, 0)
+            Arrays.fill(nostrKey, 0)
+            Arrays.fill(blsKey, 0)
+            Arrays.fill(entropy, 0)
+
+            if (!saved) {
+                throw KeyManagerException("Failed to persist regenerated identity keys")
+            }
+            return KeyManager(prefs)
+        }
+
         private fun encryptedPrefs(context: Context): android.content.SharedPreferences {
             val masterKey = MasterKey.Builder(context)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)

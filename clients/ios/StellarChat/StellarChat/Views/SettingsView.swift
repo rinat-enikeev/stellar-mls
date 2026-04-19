@@ -8,6 +8,8 @@ struct SettingsView: View {
     @State private var showAbout = false
     @State private var showShareSheet = false
     @State private var showRecoveryPhrase = false
+    @State private var showRegenerateConfirm = false
+    @State private var regenerateError: String?
 
     enum SettingsTab: Hashable {
         case invite, preferences
@@ -43,6 +45,33 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showRecoveryPhrase) {
             RecoveryPhraseView()
+        }
+        .alert("Generate new identity?", isPresented: $showRegenerateConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Generate", role: .destructive) { regenerateIdentity() }
+        } message: {
+            Text("This replaces your current keys with a new BIP39-backed identity. Existing groups will become read-only since other members won't recognize your new keys — they'll need to re-invite you. You'll see the new recovery phrase right after.")
+        }
+        .alert("Regeneration failed", isPresented: Binding(get: { regenerateError != nil }, set: { if !$0 { regenerateError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(regenerateError ?? "")
+        }
+    }
+
+    private func regenerateIdentity() {
+        Task.detached(priority: .userInitiated) {
+            do {
+                let newKM = try KeyManager.regenerateWithBip39()
+                await MainActor.run {
+                    appState.replaceKeyManager(newKM)
+                    showRecoveryPhrase = true
+                }
+            } catch {
+                await MainActor.run {
+                    regenerateError = error.localizedDescription
+                }
+            }
         }
     }
 
@@ -211,22 +240,26 @@ struct SettingsView: View {
             }
 
             // Security
-            if appState.keyManager.isBip39Backed {
-                Section {
-                    Button {
+            Section {
+                Button {
+                    if appState.keyManager.isBip39Backed {
                         showRecoveryPhrase = true
-                    } label: {
-                        row(
-                            icon: SettingsIconBox(systemImage: "key.fill", background: .orange),
-                            title: "Backup Recovery Phrase",
-                            detail: nil
-                        )
+                    } else {
+                        showRegenerateConfirm = true
                     }
-                } header: {
-                    Text("Security")
-                } footer: {
-                    Text("View your 12-word recovery phrase. You will need it to restore your identity on a new device.")
+                } label: {
+                    row(
+                        icon: SettingsIconBox(systemImage: "key.fill", background: .orange),
+                        title: "Backup Recovery Phrase",
+                        detail: appState.keyManager.isBip39Backed ? nil : "Upgrade required"
+                    )
                 }
+            } header: {
+                Text("Security")
+            } footer: {
+                Text(appState.keyManager.isBip39Backed
+                     ? "View your 12-word recovery phrase. You will need it to restore your identity on a new device."
+                     : "Your identity predates backup support. Generate a new BIP39-backed identity to enable backup. Your existing groups will become read-only since other members won't recognize your new keys.")
             }
 
             // Advanced

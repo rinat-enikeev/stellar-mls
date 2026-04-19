@@ -61,6 +61,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -289,6 +292,7 @@ fun CreateGroupScreen(
 
 // MARK: - Identity step
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun IdentityStep(
     viewModel: CreateGroupViewModel,
@@ -410,12 +414,12 @@ private fun IdentityStep(
                 SEPGroupType.DEMOCRACY to "Democracy",
                 SEPGroupType.OLIGARCHY to "Oligarchy"
             )
-            androidx.compose.material3.SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 types.forEachIndexed { index, (type, label) ->
-                    androidx.compose.material3.SegmentedButton(
+                    SegmentedButton(
                         selected = viewModel.groupType == type,
-                        onClick = { viewModel.setGroupType(type) },
-                        shape = androidx.compose.material3.SegmentedButtonDefaults.itemShape(
+                        onClick = { viewModel.selectGroupType(type) },
+                        shape = SegmentedButtonDefaults.itemShape(
                             index = index,
                             count = types.size
                         ),

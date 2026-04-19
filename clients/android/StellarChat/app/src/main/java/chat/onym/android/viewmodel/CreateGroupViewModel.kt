@@ -55,7 +55,7 @@ class CreateGroupViewModel : ViewModel() {
     var onChainStatus by mutableStateOf<OnChainPublishStatus>(OnChainPublishStatus.Idle)
     val invitationStatuses = mutableStateMapOf<String, InvitationStatus>()
 
-    fun setGroupType(type: SEPGroupType) {
+    fun selectGroupType(type: SEPGroupType) {
         groupType = type
         // 1v1 caps at exactly one other participant; drop extras.
         if (type == SEPGroupType.ONE_ON_ONE && participantKeys.size > 1) {

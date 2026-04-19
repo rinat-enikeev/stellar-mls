@@ -266,7 +266,7 @@ struct GroupInfoView: View {
     @ViewBuilder
     private var membersSection: some View {
         Section {
-            if isMember {
+            if isMember && currentGroup.groupType != .oneOnOne {
                 addPeopleRow
             }
             ForEach(currentGroup.members, id: \.publicKeyCompressed) { member in
@@ -301,10 +301,12 @@ struct GroupInfoView: View {
 
     @ViewBuilder
     private func memberListRow(for member: SEPGroupMemberLeaf) -> some View {
+        let isOligarchyAdmin = currentGroup.groupType == .oligarchy &&
+            currentGroup.adminPubkeys.contains(hexKey(member))
         MemberRow(
             member: member,
             isMe: isMyKey(member),
-            isAdmin: isCreator(member),
+            isAdmin: isOligarchyAdmin,
             alias: appState.contactAliasStore.displayName(for: hexKey(member))
         )
         .contentShape(Rectangle())
@@ -315,13 +317,25 @@ struct GroupInfoView: View {
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if isMember && !isMyKey(member) {
-                Button(role: .destructive) {
-                    memberToRemove = member
-                    showRemoveConfirmation = true
-                } label: {
-                    Label("Remove", systemImage: "person.crop.circle.badge.minus")
+                if currentGroup.groupType == .democracy {
+                    Button {
+                        appState.proposeRemovalVote(
+                            groupID: currentGroup.id,
+                            targetPubkeyHex: hexKey(member)
+                        )
+                    } label: {
+                        Label("Propose vote", systemImage: "hand.raised")
+                    }
+                    .tint(.purple)
+                } else if currentGroup.groupType != .oneOnOne {
+                    Button(role: .destructive) {
+                        memberToRemove = member
+                        showRemoveConfirmation = true
+                    } label: {
+                        Label("Remove", systemImage: "person.crop.circle.badge.minus")
+                    }
+                    .disabled(isRemovingMember)
                 }
-                .disabled(isRemovingMember)
             }
         }
     }
@@ -567,13 +581,22 @@ struct GroupInfoView: View {
 
     private var quickActions: some View {
         HStack(spacing: 10) {
-            QuickActionTile(
-                icon: "square.and.arrow.up",
-                label: "Share",
-                subtitle: "Invite link",
-                tint: .accentColor
-            ) {
-                showInviteSheet = true
+            if currentGroup.groupType == .oneOnOne {
+                QuickActionTile(
+                    icon: "lock.fill",
+                    label: "Sealed",
+                    subtitle: "1v1",
+                    tint: .gray
+                ) {}
+            } else {
+                QuickActionTile(
+                    icon: "square.and.arrow.up",
+                    label: "Share",
+                    subtitle: "Invite link",
+                    tint: .accentColor
+                ) {
+                    showInviteSheet = true
+                }
             }
             QuickActionTile(
                 icon: currentGroup.pushNotificationsEnabled ? "bell.fill" : "bell.slash.fill",

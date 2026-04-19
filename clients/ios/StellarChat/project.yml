@@ -26,7 +26,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.onym.ios
         INFOPLIST_KEY_CFBundleDisplayName: Onym
-        MARKETING_VERSION: "1.7.1"
+        MARKETING_VERSION: "1.8.0"
         CURRENT_PROJECT_VERSION: 42
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: YES
@@ -127,7 +127,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.onym.ios.NotificationService
-        MARKETING_VERSION: "1.7.1"
+        MARKETING_VERSION: "1.8.0"
         CURRENT_PROJECT_VERSION: 42
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: NO

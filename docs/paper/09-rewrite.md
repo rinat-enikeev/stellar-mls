@@ -231,9 +231,11 @@ Until the Phase-2 ceremony is run as a multi-party computation, every security g
 
 Onym's reference implementation is deployed on Stellar testnet at contract ID `CBKKEZU3CEAXZNJ4RSLDSVCXNJFQK4WMAOGF26SUBT2QUKHWQE2PRFSO`. A testnet deployment is not a production deployment: no real users, no economic stakes, no adversarial environment. The measurements below are for the Anarchy path only; Democracy's larger public-input count and its K-of-N signature aggregation change its proving profile and are reported in [19].
 
-**Prover time.** Median of 50 runs on a Pixel 8 Pro and iPhone 15 Pro.
+**Prover time.** <!-- SOURCE DISCLOSURE (PR #73 comment 4276718584): The numbers in Table 3 are **projections**, not empirical measurements. They were estimated by the AI co-author from published arkworks Groth16 benchmarks on BLS12-381 for comparable constraint counts (1,900–3,400 R1CS constraints) on ARM64 SoCs of similar class (A17 Pro, Tensor G3). No benchmark harness exists in this repository, and no 50-run measurement was actually performed on physical devices. The "median of 50 runs" framing was written aspirationally as if the measurements had been taken; it should be replaced with actual device benchmarks before submission. TODO: run real benchmarks and replace this table with measured data. -->
 
-**Table 3.** End-to-end proof generation latency on the Anarchy path, median (95th percentile), in milliseconds.
+> **Note:** The latency figures below are **projections** extrapolated from published arkworks Groth16 proving times on BLS12-381 for circuits of comparable constraint count on ARM64 SoCs of similar class. They have not yet been validated by on-device benchmarking. The table will be updated with empirical measurements (median of 50 runs, 10 warmup runs discarded) on a Pixel 8 Pro and iPhone 15 Pro before submission.
+
+**Table 3.** Projected end-to-end proof generation latency on the Anarchy path, median (95th percentile), in milliseconds.
 
 | Tier | Members | Depth | Pixel 8 Pro $R_{\mathsf{Mem}}$ | Pixel 8 Pro $R_{\mathsf{Upd}}^{\mathsf{Anarchy}}$ | iPhone 15 Pro $R_{\mathsf{Mem}}$ | iPhone 15 Pro $R_{\mathsf{Upd}}^{\mathsf{Anarchy}}$ |
 |------|---------|-------|--------------------------------|---------------------------------------------------|----------------------------------|------------------------------------------------------|
@@ -241,7 +243,7 @@ Onym's reference implementation is deployed on Stellar testnet at contract ID `C
 | Medium | 256 | 8 | 320 (410) | 415 (530) | 290 (380) | 380 (490) |
 | Large | 2,048 | 11 | 760 (920) | 985 (1,200) | 690 (840) | 895 (1,090) |
 
-The small and medium tiers are sub-second on both platforms. The large tier is sub-1.2 s.
+The small and medium tiers are projected to be sub-second on both platforms. The large tier is projected to be sub-1.2 s.
 
 **On-chain verification cost.** Groth16 proofs are 192 bytes. Public inputs add 32 bytes for $R_{\mathsf{Mem}}$ and 96 bytes for $R_{\mathsf{Upd}}^{\mathsf{Anarchy}}$. Verification invokes three pairings via Stellar's BLS12-381 host functions plus a small multi-scalar multiplication over the IC; total Soroban instruction count is 6–10 million, inside testnet fee budgets.
 

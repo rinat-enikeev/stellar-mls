@@ -338,4 +338,4 @@ We thank the Stellar Development Foundation for Protocol 22's BLS12-381 host fun
 
 [18] arkworks contributors, "r1cs-std: SHA-256 gadget constraint benchmarks," 2023. [Online]. Available: https://github.com/arkworks-rs/r1cs-std
 
-[19] R. Enikeev, "Configurable Group Governance Types for Onym," internal design document, Apr. 2026. [Online]. Available in-repo at `docs/group-governance-types-design.md`.
+[19] R. Enikeev, "Configurable Group Governance Types for Onym," design document, Apr. 2026. Available by request.

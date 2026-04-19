@@ -11,6 +11,8 @@ This directory contains an end-to-end pass at producing a submission-ready featu
 | [`02-critique.md`](02-critique.md) | Reviewer-style self-critique against the first draft: 6 major, 7 moderate, 7 minor issues, with a suggested revision order. |
 | [`03-revised.md`](03-revised.md) | Submission-ready revision (6,438 words including front matter and references). Addresses every critique item. |
 | [`04-revision-notes.md`](04-revision-notes.md) | Item-by-item map from each critique point to the change that addresses it in the revised draft. |
+| [`05-venue-strategy.md`](05-venue-strategy.md) | Venue comparison matrices and coordinated submission timeline. |
+| [`06-hard-critique.md`](06-hard-critique.md) | Adversarial external critique targeting motivation, severity framing, and unresolved dependencies. |
 
 ## Submission status
 

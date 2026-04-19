@@ -3,9 +3,12 @@
 # Install the dev Democracy VKs (UpdateByType(2) for tiers 0 and 1) on an
 # already-upgraded testnet contract — Phase 2 of issue #78.
 #
-# Reads CONTRACT_ID and DEPLOYER from relayer/.env. Expects:
-#   CONTRACT_ID=C...   # target contract with PR #77 ABI (VkKind, UpdateByType)
-#   DEPLOYER=<alias>   # stellar keys alias holding the stored admin secret
+# Reads the target contract ID and deployer alias from relayer/.env. Expects:
+#   RELAYER_CONTRACT_ID=C...  # already present — same address as CONTRACT_ID
+#                             # (Stellar contract IDs are public, not secret)
+#   DEPLOYER=<alias>          # stellar keys alias holding the stored admin secret
+#
+# CONTRACT_ID, if explicitly set, takes precedence over RELAYER_CONTRACT_ID.
 #
 # The script invokes `update_vk` twice against the in-repo VK JSONs committed
 # at keyset-democracy-dev/vk-democracy-DEV-*.json.
@@ -53,12 +56,18 @@ set -a
 . "$ENV_FILE"
 set +a
 
-[ -n "${CONTRACT_ID:-}" ] || die "CONTRACT_ID not set in $ENV_FILE"
-[ -n "${DEPLOYER:-}" ]    || die "DEPLOYER not set in $ENV_FILE"
+# Prefer an explicit CONTRACT_ID override; otherwise fall back to the
+# RELAYER_CONTRACT_ID already stored in relayer/.env — they are the same
+# public contract address, so requiring the operator to duplicate the value
+# just invites drift.
+: "${CONTRACT_ID:=${RELAYER_CONTRACT_ID:-}}"
+
+[ -n "$CONTRACT_ID" ]  || die "neither CONTRACT_ID nor RELAYER_CONTRACT_ID set in $ENV_FILE"
+[ -n "${DEPLOYER:-}" ] || die "DEPLOYER not set in $ENV_FILE"
 
 case "$CONTRACT_ID" in
     C*) ;;
-    *) die "CONTRACT_ID does not look like a Stellar contract ID (must start with C): $CONTRACT_ID" ;;
+    *) die "contract ID does not look like a Stellar contract ID (must start with C): $CONTRACT_ID" ;;
 esac
 
 [ -f "$VK_TIER_0" ] || die "missing VK file: $VK_TIER_0 (run ./scripts/generate-democracy-vk-dev.sh)"

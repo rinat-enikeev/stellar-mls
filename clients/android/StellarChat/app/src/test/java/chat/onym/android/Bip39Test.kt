@@ -238,8 +238,8 @@ class Bip39Test {
         val seedHex = seed.toHex()
         // Known BIP39 reference vector for this mnemonic + "TREZOR" passphrase
         assertEquals(
-            "c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e7e24052f25f89aa2" +
-                "1542af40e8a46a291678e2f1ef17e2af5a3be3712d464bfb0d35d4e012cb3b99",
+            "c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e5349553" +
+                "1f09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04",
             seedHex
         )
         // Also verify it differs from the no-passphrase seed

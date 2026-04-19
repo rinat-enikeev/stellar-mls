@@ -237,7 +237,7 @@ struct Bip39PassphraseTests {
         let seed = Bip39.seedFromMnemonic(mnemonic, passphrase: "TREZOR")
         #expect(seed.count == 64)
         let seedHex = seed.map { String(format: "%02x", $0) }.joined()
-        #expect(seedHex == "c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e7e24052f25f89aa21542af40e8a46a291678e2f1ef17e2af5a3be3712d464bfb0d35d4e012cb3b99")
+        #expect(seedHex == "c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e53495531f09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04")
         // Also verify it differs from the no-passphrase seed
         let seedNoPassphrase = Bip39.seedFromMnemonic(mnemonic)
         #expect(seed != seedNoPassphrase, "Passphrase must change the derived seed")

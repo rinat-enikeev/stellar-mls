@@ -1061,6 +1061,15 @@ final class AppState {
             #endif
             return .chainRejected(reason: "Group removed during chain publish")
         }
+        // Re-check staleness: a remote state update or rekey may have advanced
+        // the stored epoch past our candidate while we awaited chain publish.
+        // Overwriting with an older candidate would revert the group.
+        guard candidate.epoch >= groups[liveIndex].epoch else {
+            #if DEBUG
+            print("[EpochTransition] Local transition stale after chain publish: candidateEpoch=\(candidate.epoch) storedEpoch=\(groups[liveIndex].epoch) group=\(groupID.prefix(8))")
+            #endif
+            return .chainRejected(reason: "Concurrent remote update raced local transition")
+        }
         groups[liveIndex] = candidate
         store.saveGroup(candidate)
         storeSalt(groupID: groupID, epoch: candidate.epoch, salt: candidate.salt)
@@ -1890,6 +1899,15 @@ final class AppState {
                 #endif
                 return
             }
+            // Re-check staleness: a subsequent update (or secure rekey) may have
+            // advanced the stored epoch past our fork-resolved epoch while we
+            // awaited the chain. Committing now would revert the group.
+            guard group.epoch >= groups[liveIndex].epoch else {
+                #if DEBUG
+                print("[AppState] Fork resolution stale after await: resolvedEpoch=\(group.epoch) storedEpoch=\(groups[liveIndex].epoch) group=\(groupID.prefix(8))")
+                #endif
+                return
+            }
             groups[liveIndex] = group
             store.saveGroup(group)
             storeSalt(groupID: groupID, epoch: group.epoch, salt: group.salt)
@@ -1990,6 +2008,17 @@ final class AppState {
             guard let liveIndex = groups.firstIndex(where: { $0.id == groupID }) else {
                 #if DEBUG
                 print("[AppState] Group \(groupID.prefix(8)) disappeared during chain verification; dropping update")
+                #endif
+                return
+            }
+            // Re-check staleness against the *current* stored epoch: a second
+            // update for the same group may have landed while we awaited chain
+            // verification, advancing the stored epoch past ours. Committing
+            // now would revert the group to an older state. Mirrors the Android
+            // `commitRemoteStateUpdate` recheck.
+            guard update.epoch > groups[liveIndex].epoch else {
+                #if DEBUG
+                print("[AppState] Remote update stale after await: updateEpoch=\(update.epoch) storedEpoch=\(groups[liveIndex].epoch) group=\(groupID.prefix(8))")
                 #endif
                 return
             }
@@ -2433,6 +2462,16 @@ final class AppState {
         guard let liveIndex = groups.firstIndex(where: { $0.id == groupIDHex }) else {
             #if DEBUG
             print("[Rekey] Group \(groupIDHex.prefix(8)) disappeared during chain verification; dropping envelope")
+            #endif
+            return
+        }
+        // Re-check staleness: a second rekey for the same group may have
+        // arrived and committed while we were awaiting chain confirmation.
+        // Installing older secrets now would revert everyone past the newer
+        // epoch. Mirrors the Android `commitRemoteRekey` recheck.
+        guard envelope.epoch > groups[liveIndex].epoch else {
+            #if DEBUG
+            print("[Rekey] DROPPED stale envelope after await: envelopeEpoch=\(envelope.epoch) storedEpoch=\(groups[liveIndex].epoch) group=\(groupIDHex.prefix(8))")
             #endif
             return
         }

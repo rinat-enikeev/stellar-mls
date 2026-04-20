@@ -328,4 +328,24 @@ struct ChainStateRetryTests {
         #expect(result.epoch == 7)
         #expect(attempt == 2)
     }
+
+    @Test("applies exponential backoff between attempts (250→500→1000ms)")
+    func exponentialBackoffTiming() async throws {
+        var sleeps: [UInt64] = []
+        var attempt = 0
+        _ = try await OnChainService.fetchOnChainStateAwaitingEpoch(
+            fetch: {
+                attempt += 1
+                // Force retry: return stale epoch on every attempt until the last.
+                return self.entry(epoch: attempt == 4 ? 5 : 3)
+            },
+            expectedEpoch: 5,
+            maxAttempts: 4,
+            initialDelayMs: 250,
+            sleep: { ms in sleeps.append(ms) }
+        )
+        // Three sleeps between four attempts: 250ms, 500ms, 1000ms.
+        // The sleep closure receives delay in milliseconds.
+        #expect(sleeps == [250, 500, 1000])
+    }
 }

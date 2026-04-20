@@ -125,4 +125,34 @@ class ChainStateRetryTest {
             assertTrue(e.message!!.contains("maxAttempts"))
         }
     }
+
+    /**
+     * Production default is 4 attempts with initialDelayMs=250, so the
+     * expected sleep schedule between attempts is 250→500→1000 ms. Under
+     * [runTest] the `delay` calls advance virtual time deterministically,
+     * so we can assert the total elapsed virtual time without wall-clocking
+     * 1.75 s. Locks in exponential backoff in case someone tweaks the
+     * multiplier.
+     */
+    @Test
+    @kotlinx.coroutines.ExperimentalCoroutinesApi
+    fun appliesExponentialBackoff_betweenAttempts() = runTest {
+        var attempt = 0
+        val startVirtual = testScheduler.currentTime
+        fetchOnChainStateAwaitingEpoch(
+            // Force three retries: return stale epoch on attempts 1..3, then
+            // the expected epoch on attempt 4 so we exercise all three sleeps.
+            fetch = {
+                attempt++
+                entry(epoch = if (attempt == 4) 5L else 3L)
+            },
+            expectedEpoch = 5,
+            maxAttempts = 4,
+            initialDelayMs = 250L
+        )
+        val elapsed = testScheduler.currentTime - startVirtual
+        // 250 + 500 + 1000 = 1750 ms of virtual time spent sleeping.
+        assertEquals(1750L, elapsed)
+        assertEquals(4, attempt)
+    }
 }

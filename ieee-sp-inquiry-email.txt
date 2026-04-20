@@ -29,5 +29,5 @@ Senior Software Engineer, Bolt Technology OU, Tallinn, Estonia
 Claude Opus
 AI model, Anthropic
 
-Draft: https://github.com/rinat-enikeev/stellar-mls/blob/main/final-draft-v2.md
-Deployed contract (Stellar testnet): CBKKEZU3CEAXZNJ4RSLDSVCXNJFQK4WMAOGF26SUBT2QUKHWQE2PRFSO
+Draft: https://github.com/rinat-enikeev/stellar-mls/blob/main/final-draft-v3.md
+Deployed contract (Stellar testnet): CC6NUUKG25RSFI6D57HISDQ4HRBLXFAUC3GFVZIACHQX3NLRPYTRWWKE

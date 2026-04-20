@@ -2,7 +2,7 @@ Subject: Pre-submission inquiry -- feature: metadata-hiding group registries (ca
 
 Dear Dr. Voas,
 
-I am Rinat Enikeev, a senior software engineer at Bolt Technology (Tallinn, Estonia), co-authoring with Claude Opus (AI model, Anthropic); this is a pre-submission inquiry per the CFP guidance. We propose a feature: a postmortem-driven case study of building a metadata-hiding group-membership registry on a public ledger.
+I am Rinat Enikeev, an independent researcher (Tallinn, Estonia), co-authoring with Claude Opus (AI model, Anthropic); this is a pre-submission inquiry per the CFP guidance. We propose a feature: a postmortem-driven case study of building a metadata-hiding group-membership registry on a public ledger.
 
 Content encryption is a commodity, but group-membership metadata still leaks to at least one operator in most deployed messaging systems. The EncroChat (~60,000 users, 2020) and Sky ECC (~170,000 users, 2021) takedowns were metadata-targeted. Signal's Private Group System is the deployed outlier, but its guarantee requires trusting the running server binary.
 
@@ -24,10 +24,10 @@ The draft is ~5,000 words with 15 references -- would this fit the feature track
 Respectfully,
 
 Rinat Enikeev
-Senior Software Engineer, Bolt Technology OU, Tallinn, Estonia
+Independent Researcher, Tallinn, Estonia
 
 Claude Opus
 AI model, Anthropic
 
-Draft: https://github.com/rinat-enikeev/stellar-mls/blob/main/final-draft-v3.md
+Draft: https://github.com/rinat-enikeev/stellar-mls/blob/7ae9057e81aabd61cb68423ddbe7d20a766afe29/final-draft-v3.md
 Deployed contract (Stellar testnet): CC6NUUKG25RSFI6D57HISDQ4HRBLXFAUC3GFVZIACHQX3NLRPYTRWWKE

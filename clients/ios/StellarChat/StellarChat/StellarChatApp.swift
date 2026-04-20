@@ -1051,7 +1051,17 @@ final class AppState {
         }
         captureEpochSnapshot(group: currentGroup, changeDescription: snapshotDescription)
 
-        groups[index] = candidate
+        // Re-lookup index: the chain-publish awaits above can suspend long enough
+        // for `groups` to be mutated (a concurrent apply/fork/leave can shift or
+        // remove entries), so the `index` captured before the await may now point
+        // at a different group or be out of bounds.
+        guard let liveIndex = groups.firstIndex(where: { $0.id == groupID }) else {
+            #if DEBUG
+            print("[EpochTransition] Group \(groupID.prefix(8)) disappeared during chain publish; dropping transition")
+            #endif
+            return .chainRejected(reason: "Group removed during chain publish")
+        }
+        groups[liveIndex] = candidate
         store.saveGroup(candidate)
         storeSalt(groupID: groupID, epoch: candidate.epoch, salt: candidate.salt)
 
@@ -1871,7 +1881,16 @@ final class AppState {
                 try? group.recomputeCommitment()
             }
 
-            groups[index] = group
+            // Re-lookup: the fork-resolution await above can suspend long enough
+            // for `groups` to be mutated, so `index` captured before the await
+            // may now point at a different entry or be out of bounds.
+            guard let liveIndex = groups.firstIndex(where: { $0.id == groupID }) else {
+                #if DEBUG
+                print("[AppState] Group \(groupID.prefix(8)) disappeared during fork resolution; dropping update")
+                #endif
+                return
+            }
+            groups[liveIndex] = group
             store.saveGroup(group)
             storeSalt(groupID: groupID, epoch: group.epoch, salt: group.salt)
             subscribeGroup(group)
@@ -1902,7 +1921,17 @@ final class AppState {
             // update, raced ahead of chain confirmation, or we're querying
             // an RPC that hasn't caught up. The sender's ack/retry will
             // eventually reconcile via a fresh broadcast or chain resync.
-            if candidate.isPublishedOnChain, let service = onChainService {
+            if candidate.isPublishedOnChain {
+                guard let service = onChainService else {
+                    // Published group with no contract service configured —
+                    // refuse to apply unverified updates. Mirrors the Android
+                    // guard in GroupListViewModel.applyStateUpdate so a
+                    // transiently-nil service can't become a governance bypass.
+                    #if DEBUG
+                    print("[AppState] Remote update DROPPED: onChainService unavailable for published group=\(groupID.prefix(8))")
+                    #endif
+                    return
+                }
                 do {
                     let entry = try await fetchOnChainStateAwaitingEpoch(
                         service: service,
@@ -1954,7 +1983,17 @@ final class AppState {
                 )
             }
 
-            groups[index] = group
+            // Re-lookup: the chain-state await above can suspend long enough for
+            // `groups` to be mutated (concurrent apply/fork/leave can shift or
+            // remove entries), so the `index` captured before the await may
+            // now point at a different group or be out of bounds.
+            guard let liveIndex = groups.firstIndex(where: { $0.id == groupID }) else {
+                #if DEBUG
+                print("[AppState] Group \(groupID.prefix(8)) disappeared during chain verification; dropping update")
+                #endif
+                return
+            }
+            groups[liveIndex] = group
             store.saveGroup(group)
             storeSalt(groupID: groupID, epoch: update.epoch, salt: update.salt)
 
@@ -2342,7 +2381,13 @@ final class AppState {
         // (sender hasn't published, contract rejected their proof, or we're
         // querying a lagging RPC), refuse to install fresh secrets — otherwise
         // we'd rotate away from a key the rest of the group still uses.
-        if updatedGroup.isPublishedOnChain, let service = onChainService {
+        if updatedGroup.isPublishedOnChain {
+            guard let service = onChainService else {
+                #if DEBUG
+                print("[Rekey] DROPPED: onChainService unavailable for published group=\(groupIDHex.prefix(8))")
+                #endif
+                return
+            }
             do {
                 let entry = try await fetchOnChainStateAwaitingEpoch(
                     service: service,
@@ -2382,7 +2427,16 @@ final class AppState {
         }
         processTransportBundle(envelope.senderBundle, groupID: groupIDHex)
 
-        groups[index] = group
+        // Re-lookup: the chain-state await above can suspend long enough for
+        // `groups` to be mutated, so `index` captured before the await may now
+        // point at a different group or be out of bounds.
+        guard let liveIndex = groups.firstIndex(where: { $0.id == groupIDHex }) else {
+            #if DEBUG
+            print("[Rekey] Group \(groupIDHex.prefix(8)) disappeared during chain verification; dropping envelope")
+            #endif
+            return
+        }
+        groups[liveIndex] = group
         store.saveGroup(group)
         storeSalt(groupID: groupIDHex, epoch: envelope.epoch, salt: envelope.salt)
 

@@ -603,6 +603,27 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         startRekeyResendTimer()
     }
 
+    /**
+     * Fetch on-chain state with a bounded retry for RPC lag. Delegates to the
+     * top-level [chat.onym.android.onchain.fetchOnChainStateAwaitingEpoch]
+     * helper (extracted so the retry logic can be unit-tested without
+     * instantiating the full ViewModel).
+     */
+    private suspend fun fetchOnChainStateAwaitingEpoch(
+        service: OnChainService,
+        groupIDData: ByteArray,
+        expectedEpoch: Long,
+        maxAttempts: Int = 4,
+        initialDelayMs: Long = 250L
+    ): chat.onym.android.onchain.SEPCommitmentEntry {
+        return chat.onym.android.onchain.fetchOnChainStateAwaitingEpoch(
+            fetch = { withContext(Dispatchers.IO) { service.fetchOnChainState(groupIDData) } },
+            expectedEpoch = expectedEpoch,
+            maxAttempts = maxAttempts,
+            initialDelayMs = initialDelayMs
+        )
+    }
+
     /** Apply a secure rekey envelope received via inbox. Installs fresh groupSecret/salt and migrates topic. */
     private fun applyRekeyEnvelope(obj: JSONObject) {
         val groupIDBytes = android.util.Base64.decode(obj.getString("groupID"), android.util.Base64.NO_WRAP)
@@ -644,26 +665,107 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
         val oldTopicTag = group.topicTag
 
-        // Capture epoch snapshot BEFORE mutation for epoch branching
-        captureEpochSnapshot(group, "Secure rekey (member removed)")
-
-        // Install new secrets
-        group = group.copy(
+        // Compute candidate state from the envelope WITHOUT mutating `groups[index]` yet.
+        // `cloneGroup` deep-copies `members`, `groupSecret`, `salt`, `commitment`
+        // so `candidate.members.removeAll { ... }` below cannot leak back into
+        // the stored group if we end up rejecting at chain verification.
+        val candidate = cloneGroup(group).copy(
             groupSecret = android.util.Base64.decode(obj.getString("groupSecret"), android.util.Base64.NO_WRAP),
             salt = android.util.Base64.decode(obj.getString("salt"), android.util.Base64.NO_WRAP),
             epoch = epoch,
             commitment = obj.optString("commitment", "").takeIf { it.isNotEmpty() }?.let {
                 android.util.Base64.decode(it, android.util.Base64.NO_WRAP)
-            } ?: group.commitment
+            } ?: group.commitment?.copyOf()
         )
 
-        // Apply member changes
+        // Apply member changes to candidate
         val removedArr = obj.optJSONArray("removedMemberKeys") ?: JSONArray()
         for (i in 0 until removedArr.length()) {
             val removedKey = android.util.Base64.decode(removedArr.getString(i), android.util.Base64.NO_WRAP)
-            group.members.removeAll { it.publicKeyCompressed.contentEquals(removedKey) }
+            candidate.members.removeAll { it.publicKeyCompressed.contentEquals(removedKey) }
         }
-        sortMembers(group)
+        sortMembers(candidate)
+        // Recompute commitment locally from the final member set so we can
+        // cross-check against the chain's stored commitment.
+        candidate.recomputeCommitment()
+
+        // --- Chain-first verification (async for published groups). If the chain
+        // disagrees (sender hasn't published, proof rejected, or RPC lagging),
+        // refuse to install fresh secrets — otherwise we'd rotate away from a
+        // key the rest of the group still uses. For unpublished groups, apply
+        // directly.
+        if (candidate.isPublishedOnChain) {
+            val service = onChainService
+            if (service == null) {
+                if (BuildConfig.DEBUG) Log.w("Rekey", "DROPPED: onChainService unavailable for published group=${groupIDHex.take(8)}")
+                return
+            }
+            viewModelScope.launch {
+                val chainMatches: Boolean = try {
+                    val entry = fetchOnChainStateAwaitingEpoch(service, groupIDBytes, expectedEpoch = epoch)
+                    val localCommitment = candidate.commitment
+                    localCommitment != null
+                        && entry.active
+                        && entry.epoch == epoch
+                        && entry.commitment.contentEquals(localCommitment)
+                } catch (e: Exception) {
+                    if (BuildConfig.DEBUG) Log.w("Rekey", "DROPPED: chain fetch failed: ${e.message} group=${groupIDHex.take(8)}")
+                    false
+                }
+                if (!chainMatches) {
+                    if (BuildConfig.DEBUG) Log.w("Rekey", "REJECTED: chain disagrees at epoch=$epoch group=${groupIDHex.take(8)}")
+                    return@launch
+                }
+                commitRemoteRekey(
+                    groupIDHex = groupIDHex,
+                    groupIDBytes = groupIDBytes,
+                    candidate = candidate,
+                    senderBundle = senderBundle,
+                    obj = obj,
+                    oldTopicTag = oldTopicTag,
+                    epoch = epoch,
+                    removedArr = removedArr
+                )
+            }
+            return
+        }
+
+        // Unpublished draft — no chain authority, commit directly.
+        commitRemoteRekey(
+            groupIDHex = groupIDHex,
+            groupIDBytes = groupIDBytes,
+            candidate = candidate,
+            senderBundle = senderBundle,
+            obj = obj,
+            oldTopicTag = oldTopicTag,
+            epoch = epoch,
+            removedArr = removedArr
+        )
+    }
+
+    /**
+     * Install a chain-verified candidate from an incoming rekey envelope. Called
+     * from [applyRekeyEnvelope] after on-chain verification succeeds.
+     */
+    private fun commitRemoteRekey(
+        groupIDHex: String,
+        groupIDBytes: ByteArray,
+        candidate: ChatGroup,
+        senderBundle: com.stellarmls.mls.SEPMemberTransportBundle,
+        obj: JSONObject,
+        oldTopicTag: String,
+        epoch: Long,
+        removedArr: JSONArray
+    ) {
+        val idx = groups.indexOfFirst { it.id == groupIDHex }
+        if (idx < 0) return
+        val stored = groups[idx]
+        // Re-check staleness: something could have advanced while we were
+        // awaiting chain confirmation.
+        if (epoch <= stored.epoch) return
+
+        // Capture epoch snapshot of the pre-rekey state now that we're committing.
+        captureEpochSnapshot(stored, "Secure rekey (member removed)")
 
         // Update transport bundles
         val bundlesArr = obj.optJSONArray("memberBundles") ?: JSONArray()
@@ -675,15 +777,22 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
         processTransportBundle(senderBundle, groupIDHex)
 
-        groups[index] = group
-        storeSalt(groupIDHex, epoch, group.salt)
+        // Refresh chain baseline to match the now-confirmed state.
+        if (candidate.isPublishedOnChain) {
+            chainBaseline[groupIDHex] = ChainBaseline(
+                candidate.members.toList(), candidate.epoch, candidate.salt.copyOf()
+            )
+        }
+
+        groups[idx] = candidate
+        storeSalt(groupIDHex, epoch, candidate.salt)
 
         // Migrate topic
         if (!BuildConfig.DEBUG) transport.unsubscribe(oldTopicTag)
-        syncTransportAndSubscribe(group)
+        syncTransportAndSubscribe(candidate)
 
         viewModelScope.launch {
-            try { store.saveGroup(group) } catch (_: Exception) { }
+            try { store.saveGroup(candidate) } catch (_: Exception) { }
         }
 
         // System messages
@@ -693,7 +802,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             insertSystemMessage(groupIDHex, "$name was removed from the group", "member-remove", epoch)
         }
 
-        if (BuildConfig.DEBUG) Log.d("Rekey", "INSTALLED groupID=${groupIDHex.take(8)} epoch=$epoch newTopic=${group.topicTag.take(8)}")
+        if (BuildConfig.DEBUG) Log.d("Rekey", "INSTALLED groupID=${groupIDHex.take(8)} epoch=$epoch newTopic=${candidate.topicTag.take(8)}")
 
         // Send ack on the NEW topic
         val myBls = keyManager.blsPublicKey()
@@ -703,7 +812,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             put("epoch", epoch)
             put("senderBlsPubkey", android.util.Base64.encodeToString(myBls, android.util.Base64.NO_WRAP))
         }.toString()
-        transport.sendProtocolMessage(group, ackJson)
+        transport.sendProtocolMessage(candidate, ackJson)
     }
 
     /** Handle a resend request: look up stored envelope, verify requester is authorized, and re-send. */
@@ -1392,16 +1501,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         val currentGroup = cloneGroup(groups[index])
 
         // Note: we no longer block transitions when a chain publish is pending.
-        // Local transitions proceed immediately; chain publishes are cancelled and
-        // restarted with the latest state (coalesced).
-
-        // Capture epoch snapshot BEFORE mutation
-        val changeDesc = when (kind) {
-            is EpochTransitionKind.MemberAdd -> "Member added"
-            is EpochTransitionKind.MemberRemove -> "Member removed"
-            is EpochTransitionKind.KeyRotation -> "Key rotated"
-        }
-        captureEpochSnapshot(currentGroup, changeDesc)
+        // Chain publishes are awaited synchronously before mutating local state
+        // (see chain-first block below), so concurrent transitions queue naturally.
 
         // Compute candidate next state
         var candidate = cloneGroup(currentGroup)
@@ -1463,6 +1564,15 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             Log.d("GroupListVM", "Removal flow: useSecureRekey=$useSecureRekey isRemoval=$isRemoval bundles=$bundleKeys members=$memberKeys")
         }
 
+        // Removals REQUIRE inbox delivery (secure rekey). If bundles are missing,
+        // bail before advancing chain state — otherwise chain epoch advances
+        // while peers can't follow. Caller must rotate the key first to
+        // distribute bundles.
+        if (isRemoval && !useSecureRekey) {
+            if (BuildConfig.DEBUG) Log.w("GroupListVM", "Removal blocked pre-chain: not all remaining members have transport bundles. Rotate key first.")
+            return EpochTransitionResult.BUNDLES_MISSING
+        }
+
         // If secure rekey, apply fresh groupSecret + salt now so the chain publish
         // uses the final commitment (one publish instead of two).
         val preRekeyCandidate = cloneGroup(candidate)
@@ -1474,26 +1584,35 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             candidate.recomputeCommitment()
         }
 
-        // --- Persist locally FIRST (optimistic), then sync chain in background ---
-        candidate.isPublishedOnChain = currentGroup.isPublishedOnChain
-        groups[index] = candidate
-        storeSalt(groupID, candidate.epoch, candidate.salt)
-
-        // --- Async chain sync (non-blocking, coalesced) ---
-        // Launch BEFORE the Nostr broadcast so the chain publish isn't gated
-        // by relay round-trips.
-        if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain sync check: isPublishedOnChain=${currentGroup.isPublishedOnChain} onChainService=${onChainService != null} group=${groupID.take(8)} newEpoch=${candidate.epoch} oneOnOneFinalize=$isOneOnOneFinalize")
-        if (isOneOnOneFinalize && onChainService != null) {
+        // --- Chain-first: confirm on-chain BEFORE mutating local state ---
+        // Any group whose state is tracked on-chain MUST have its next-epoch
+        // commitment accepted by the contract before we persist, subscribe,
+        // or broadcast. If the contract rejects (e.g. Oligarchy non-admin
+        // removal, proof mismatch, stale baseline), we return without
+        // touching local state so sender and peers stay consistent with
+        // chain authority.
+        if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain-first check: isPublishedOnChain=${currentGroup.isPublishedOnChain} isOneOnOneFinalize=$isOneOnOneFinalize onChainService=${onChainService != null} group=${groupID.take(8)} newEpoch=${candidate.epoch}")
+        if (isOneOnOneFinalize) {
+            if (onChainService == null) return EpochTransitionResult.CHAIN_UNAVAILABLE
             chainPublishJobs[groupID]?.cancel()
-            val chainCandidate = cloneGroup(candidate)
-            publishGroupOnChain(chainCandidate) { result ->
-                if (BuildConfig.DEBUG) {
-                    if (result.isSuccess) Log.d("GroupListVM", "1v1 finalize SUCCEEDED group=${groupID.take(8)}")
-                    else Log.e("GroupListVM", "1v1 finalize FAILED group=${groupID.take(8)} error=${result.exceptionOrNull()?.message}")
-                }
+            chainPublishJobs.remove(groupID)
+            val deferred = kotlinx.coroutines.CompletableDeferred<Result<Unit>>()
+            publishGroupOnChain(cloneGroup(candidate)) { deferred.complete(it) }
+            val result = deferred.await()
+            if (result.isFailure) {
+                if (BuildConfig.DEBUG) Log.e("GroupListVM", "1v1 finalize chain publish FAILED group=${groupID.take(8)} error=${result.exceptionOrNull()?.message}")
+                return EpochTransitionResult.CHAIN_REJECTED
             }
-        } else if (currentGroup.isPublishedOnChain && onChainService != null) {
+            // publishGroupOnChain flips isPublishedOnChain=true on the stored
+            // group via updateGroup(...). Re-read the live group so subsequent
+            // local mutations build on that flag.
+            groups.find { it.id == groupID }?.let {
+                candidate.isPublishedOnChain = it.isPublishedOnChain
+            }
+        } else if (currentGroup.isPublishedOnChain) {
+            if (onChainService == null) return EpochTransitionResult.CHAIN_UNAVAILABLE
             chainPublishJobs[groupID]?.cancel()
+            chainPublishJobs.remove(groupID)
             val targetEpoch = candidate.epoch
             pendingTransitions[groupID] = PendingTransitionState.AwaitingChainConfirmation(targetEpoch)
             val baseline = chainBaseline[groupID]
@@ -1507,35 +1626,50 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             } else {
                 cloneGroup(currentGroup)
             }
-            val chainCandidate = cloneGroup(candidate)
-            if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain sync STARTING: baselineEpoch=${baselineGroup.epoch} targetEpoch=$targetEpoch baselineMembers=${baselineGroup.members.size} candidateMembers=${chainCandidate.members.size} hasStoredBaseline=${baseline != null}")
-            chainPublishJobs[groupID] = viewModelScope.launch {
-                if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain sync Task EXECUTING for epoch=$targetEpoch group=${groupID.take(8)}")
-                try {
-                    val result = publishMembershipUpdateIfNeeded(baselineGroup, chainCandidate)
-                    if (result.isSuccess) {
-                        chainBaseline[groupID] = ChainBaseline(
-                            chainCandidate.members.toList(), chainCandidate.epoch, chainCandidate.salt.copyOf()
-                        )
-                        if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain sync SUCCEEDED epoch=${chainCandidate.epoch} group=${groupID.take(8)}")
-                    } else {
-                        if (BuildConfig.DEBUG) Log.e("GroupListVM", "Chain sync FAILED epoch=${chainCandidate.epoch} baselineEpoch=${baselineGroup.epoch} group=${groupID.take(8)} error=${result.exceptionOrNull()?.message}")
-                    }
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain sync CANCELLED (superseded) epoch=${chainCandidate.epoch} group=${groupID.take(8)}")
-                } catch (e: Exception) {
-                    if (BuildConfig.DEBUG) Log.e("GroupListVM", "Chain sync FAILED epoch=${chainCandidate.epoch} baselineEpoch=${baselineGroup.epoch} group=${groupID.take(8)} error=${e.message}", e)
-                } finally {
-                    val current = pendingTransitions[groupID]
-                    if (current is PendingTransitionState.AwaitingChainConfirmation && current.targetEpoch == targetEpoch) {
-                        pendingTransitions[groupID] = PendingTransitionState.Idle
-                    }
-                    chainPublishJobs.remove(groupID)
-                }
+            if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain publish STARTING: baselineEpoch=${baselineGroup.epoch} targetEpoch=$targetEpoch baselineMembers=${baselineGroup.members.size} candidateMembers=${candidate.members.size} hasStoredBaseline=${baseline != null}")
+            val result = try {
+                publishMembershipUpdateIfNeeded(baselineGroup, candidate)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Result.failure(e)
             }
+            pendingTransitions[groupID] = PendingTransitionState.Idle
+            if (result.isFailure) {
+                if (BuildConfig.DEBUG) Log.e("GroupListVM", "Chain publish REJECTED epoch=${candidate.epoch} baselineEpoch=${baselineGroup.epoch} group=${groupID.take(8)} error=${result.exceptionOrNull()?.message}")
+                return EpochTransitionResult.CHAIN_REJECTED
+            }
+            chainBaseline[groupID] = ChainBaseline(
+                candidate.members.toList(), candidate.epoch, candidate.salt.copyOf()
+            )
+            candidate.isPublishedOnChain = currentGroup.isPublishedOnChain
+            if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain publish SUCCEEDED epoch=${candidate.epoch} group=${groupID.take(8)}")
         } else {
-            if (BuildConfig.DEBUG) Log.d("GroupListVM", "Chain sync SKIPPED: isPublishedOnChain=${currentGroup.isPublishedOnChain} onChainService=${onChainService != null} group=${groupID.take(8)}")
+            // Unpublished draft group (e.g. 1v1 creator waiting for peer).
+            // No chain authority yet — safe to mutate locally.
+            candidate.isPublishedOnChain = currentGroup.isPublishedOnChain
         }
+
+        // Chain confirmed (or not required). Capture snapshot of the pre-transition
+        // state for history/fork resolution, then persist the candidate locally.
+        val changeDesc = when (kind) {
+            is EpochTransitionKind.MemberAdd -> "Member added"
+            is EpochTransitionKind.MemberRemove -> "Member removed"
+            is EpochTransitionKind.KeyRotation -> "Key rotated"
+        }
+        captureEpochSnapshot(currentGroup, changeDesc)
+
+        // Re-locate the group by ID — `index` captured above may be stale after
+        // the suspend points on chain publish (groups list can be mutated during
+        // the await). If the group disappeared entirely, abort without persisting.
+        val liveIndex = groups.indexOfFirst { it.id == groupID }
+        if (liveIndex < 0) {
+            if (BuildConfig.DEBUG) Log.w("GroupListVM", "Group $groupID disappeared during chain publish; dropping transition")
+            return EpochTransitionResult.CHAIN_REJECTED
+        }
+        groups[liveIndex] = candidate
+        try { store.saveGroup(candidate) } catch (_: Exception) { }
+        storeSalt(groupID, candidate.epoch, candidate.salt)
 
         // Sync transport and ensure subscription uses the latest key.
         // This must happen BEFORE the secure rekey / legacy blocks so A can
@@ -1628,33 +1762,20 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             }
             if (BuildConfig.DEBUG) Log.d("Rekey", "COMPLETE groupID=${groupID.take(8)} epoch=${candidate.epoch} sent=$sentCount/${candidate.members.size}")
 
-            // Persist new group state SYNCHRONOUSLY before subscribing/publishing,
-            // so a crash can't leave us on a stale groupSecret while recipients
-            // have already installed the new one from the rekey envelope.
+            // Group state was persisted synchronously above (chain-first block).
+            // Persist the pending rekey so retry can re-deliver envelopes if a
+            // recipient is offline.
             val unackedKeys = candidate.members
                 .filter { !it.publicKeyCompressed.contentEquals(myLeaf.publicKeyCompressed) }
                 .map { it.publicKeyCompressed.toHex() }
-            kotlinx.coroutines.runBlocking {
-                try {
-                    store.saveGroup(candidate)
-                    store.savePendingRekey(groupID, candidate.epoch.toInt(), envelopeJson, unackedKeys, isRemovalEpoch = true)
-                } catch (_: Exception) { }
-            }
+            try {
+                store.savePendingRekey(groupID, candidate.epoch.toInt(), envelopeJson, unackedKeys, isRemovalEpoch = true)
+            } catch (_: Exception) { }
 
-        } else if (isRemoval) {
-            // Removals REQUIRE inbox delivery (secure rekey). If bundles are missing,
-            // the remover must first do a key rotation to distribute bundles.
-            if (BuildConfig.DEBUG) Log.w("GroupListVM", "Removal blocked: not all remaining members have transport bundles. Rotate key first.")
-            // Revert the optimistic local state
-            groups[index] = currentGroup
-            return EpochTransitionResult.BUNDLES_MISSING
         } else {
             // --- LEGACY FLOW: non-removal operations only (add member, key rotation) ---
             val update = buildStateUpdate(candidate, addedMembers, removedMemberKeys)
             broadcastStateUpdate(candidate, update, overrideKey = previousKey)
-            viewModelScope.launch {
-                try { store.saveGroup(candidate) } catch (_: Exception) { }
-            }
         }
 
         // Insert system message for the transition
@@ -2067,40 +2188,104 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 try { store.saveGroup(group) } catch (_: Exception) { }
             }
         } else {
-            // Check if WE were removed before applying
+            // Normal case: update.epoch > group.epoch
             val selfRemoved = isSelfRemoved(update)
 
-            // Apply optimistically — sender already verified with chain.
-            // Verify in background for integrity, but don't block the update.
-            applyMemberDelta(update, group)
-            group.epoch = update.epoch
-            group.salt = update.salt
-            if (update.commitment != null) group.commitment = update.commitment
+            // Compute candidate state from the update without mutating `group` yet.
+            val candidate = cloneGroup(group)
+            applyMemberDelta(update, candidate)
+            candidate.epoch = update.epoch
+            candidate.salt = update.salt
+            if (update.commitment != null) candidate.commitment = update.commitment
+            else candidate.recomputeCommitment()
 
-            // Discard any superseded pending transition
-            val pt = pendingTransitions[groupID]
-            if (pt is PendingTransitionState.AwaitingChainConfirmation && update.epoch >= pt.targetEpoch) {
-                pendingTransitions[groupID] = PendingTransitionState.Idle
-            }
-
-            groups[index] = group
-            storeSalt(groupID, update.epoch, update.salt)
-
-            if (selfRemoved) {
-                if (!BuildConfig.DEBUG) transport.unsubscribe(group.topicTag)
-                val removerBlsHex = update.senderAttestation?.blsPubkey?.toHex()
-                val removerName = removerBlsHex?.let { memberDisplayName(update.senderAttestation!!.blsPubkey) } ?: "unknown"
-                group.removedByPubkeyHex = removerBlsHex
-                groups[index] = group
-                viewModelScope.launch { try { store.saveGroup(group) } catch (_: Exception) { } }
-                insertSystemMessage(groupID, "You were removed from this group by $removerName", "self-removed", update.epoch)
-            } else {
-                syncTransportAndSubscribe(group)
-                viewModelScope.launch {
-                    try { store.saveGroup(group) } catch (_: Exception) { }
+            // --- Chain-first verification: for on-chain groups, the contract is
+            // authoritative. Accept the update only if the chain's stored
+            // commitment at this epoch matches what we computed from the
+            // update. Reject otherwise — sender forged the update, raced
+            // ahead of chain confirmation, or our RPC hasn't caught up. The
+            // sender's retry will eventually reconcile.
+            if (candidate.isPublishedOnChain) {
+                val service = onChainService
+                if (service != null) {
+                    viewModelScope.launch {
+                        val chainMatches: Boolean = try {
+                            val entry = fetchOnChainStateAwaitingEpoch(service, group.groupIDData, expectedEpoch = update.epoch)
+                            val localCommitment = candidate.commitment
+                            localCommitment != null
+                                && entry.active
+                                && entry.epoch == update.epoch
+                                && entry.commitment.contentEquals(localCommitment)
+                        } catch (e: Exception) {
+                            if (BuildConfig.DEBUG) Log.w("GroupListVM", "Remote update DROPPED: chain fetch failed: ${e.message} group=${groupID.take(8)}")
+                            false
+                        }
+                        if (!chainMatches) {
+                            if (BuildConfig.DEBUG) Log.w("GroupListVM", "Remote update REJECTED: chain disagrees at epoch=${update.epoch} group=${groupID.take(8)}")
+                            return@launch
+                        }
+                        commitRemoteStateUpdate(groupID, candidate, update, selfRemoved)
+                    }
+                    return
                 }
-                insertSystemMessagesForStateUpdate(update, groupID)
+                // No contract service configured but group is published —
+                // refuse to apply unverified updates.
+                if (BuildConfig.DEBUG) Log.w("GroupListVM", "Remote update DROPPED: onChainService unavailable for published group=${groupID.take(8)}")
+                return
             }
+
+            // Unpublished draft group — no chain authority, commit directly.
+            commitRemoteStateUpdate(groupID, candidate, update, selfRemoved)
+        }
+    }
+
+    /**
+     * Install a chain-verified candidate state from an incoming SEPGroupStateUpdate.
+     * Called from [applyStateUpdate] after on-chain verification succeeds (or for
+     * unpublished groups that have no chain authority).
+     */
+    private fun commitRemoteStateUpdate(
+        groupID: String,
+        candidate: ChatGroup,
+        update: SEPGroupStateUpdate,
+        selfRemoved: Boolean
+    ) {
+        val idx = groups.indexOfFirst { it.id == groupID }
+        if (idx < 0) return
+        val stored = groups[idx]
+        // Re-check staleness: something could have advanced while awaiting chain.
+        if (update.epoch <= stored.epoch) return
+
+        // Discard any superseded pending transition
+        val pt = pendingTransitions[groupID]
+        if (pt is PendingTransitionState.AwaitingChainConfirmation && update.epoch >= pt.targetEpoch) {
+            pendingTransitions[groupID] = PendingTransitionState.Idle
+        }
+
+        // Refresh chain baseline to match the now-confirmed state.
+        if (candidate.isPublishedOnChain) {
+            chainBaseline[groupID] = ChainBaseline(
+                candidate.members.toList(), candidate.epoch, candidate.salt.copyOf()
+            )
+        }
+
+        groups[idx] = candidate
+        storeSalt(groupID, update.epoch, update.salt)
+
+        if (selfRemoved) {
+            if (!BuildConfig.DEBUG) transport.unsubscribe(candidate.topicTag)
+            val removerBlsHex = update.senderAttestation?.blsPubkey?.toHex()
+            val removerName = removerBlsHex?.let { memberDisplayName(update.senderAttestation!!.blsPubkey) } ?: "unknown"
+            candidate.removedByPubkeyHex = removerBlsHex
+            groups[idx] = candidate
+            viewModelScope.launch { try { store.saveGroup(candidate) } catch (_: Exception) { } }
+            insertSystemMessage(groupID, "You were removed from this group by $removerName", "self-removed", update.epoch)
+        } else {
+            syncTransportAndSubscribe(candidate)
+            viewModelScope.launch {
+                try { store.saveGroup(candidate) } catch (_: Exception) { }
+            }
+            insertSystemMessagesForStateUpdate(update, groupID)
         }
     }
 

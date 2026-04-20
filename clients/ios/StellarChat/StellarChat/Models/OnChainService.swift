@@ -390,6 +390,54 @@ actor OnChainService {
         try await withRetry { try await self.contractClient.getState(groupID: groupIDData) }
     }
 
+    /// Bounded retry for on-chain state reads when the RPC node is expected
+    /// to trail the network briefly. Used on the receive path: when a peer
+    /// broadcasts an update for epoch N, our RPC may not yet have indexed
+    /// the ledger close that committed epoch N to the contract. Polling
+    /// once and rejecting on mismatch would silently drop a legitimate
+    /// update; polling forever risks blocking on a genuinely-missing
+    /// commitment.
+    ///
+    /// Returns the most recent entry seen — even when its epoch still
+    /// trails `expectedEpoch` after exhausting `maxAttempts` — so the
+    /// caller can still compare the stale entry and make a chain-authority
+    /// decision. Re-throws the last error only if every fetch attempt
+    /// threw. Extracted as a static helper (delegating `fetch`) so the
+    /// retry semantics can be unit-tested without a live RPC.
+    static func fetchOnChainStateAwaitingEpoch(
+        fetch: () async throws -> SEPCommitmentEntry,
+        expectedEpoch: UInt64,
+        maxAttempts: Int = 4,
+        initialDelayMs: UInt64 = 250,
+        sleep: (UInt64) async -> Void = { ms in
+            try? await Task.sleep(nanoseconds: ms * 1_000_000)
+        }
+    ) async throws -> SEPCommitmentEntry {
+        precondition(maxAttempts >= 1, "maxAttempts must be >= 1")
+        var delayMs: UInt64 = initialDelayMs
+        var lastEntry: SEPCommitmentEntry?
+        var lastError: Error?
+        for attempt in 0..<maxAttempts {
+            do {
+                let entry = try await fetch()
+                lastEntry = entry
+                if entry.epoch >= expectedEpoch { return entry }
+            } catch {
+                lastError = error
+            }
+            if attempt < maxAttempts - 1 {
+                await sleep(delayMs)
+                delayMs *= 2
+            }
+        }
+        if let entry = lastEntry { return entry }
+        throw lastError ?? NSError(
+            domain: "OnChainService",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: "fetchOnChainState failed after \(maxAttempts) attempts"]
+        )
+    }
+
     // MARK: - Democracy (#26)
 
     /// Delta kind for a Democracy update (add/remove/kick), matching the

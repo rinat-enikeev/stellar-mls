@@ -922,6 +922,17 @@ final class AppState {
         print("[AppState] Removal flow: useSecureRekey=\(useSecureRekey) isRemoval=\(isRemoval) bundles=\(bundleKeys) members=\(memberKeys)")
         #endif
 
+        // Removals REQUIRE inbox delivery (secure rekey). If bundles are missing,
+        // bail before advancing chain state — otherwise chain epoch advances
+        // while peers can't follow. Caller must rotate the key first to
+        // distribute bundles.
+        if isRemoval && !useSecureRekey {
+            #if DEBUG
+            print("[EpochTransition] Removal blocked pre-chain: not all remaining members have transport bundles. Rotate key first.")
+            #endif
+            return .bundlesMissing
+        }
+
         // If secure rekey, apply fresh groupSecret + salt now so the chain publish
         // uses the final commitment (one publish instead of two).
         // Save pre-rekey candidate for broadcasting on the old channel later.
@@ -952,7 +963,81 @@ final class AppState {
             candidate = rekeyCandidate
         }
 
-        // Capture epoch snapshot BEFORE persisting the new state
+        // --- Chain-first: confirm on-chain BEFORE mutating local state ---
+        // Any group whose state is tracked on-chain MUST have its next-epoch
+        // commitment accepted by the contract before we persist, subscribe,
+        // or broadcast. If the contract rejects (e.g. Oligarchy non-admin
+        // removal, proof mismatch, stale baseline), we return without
+        // touching local state so sender and peers stay consistent with
+        // chain authority.
+        #if DEBUG
+        print("[EpochTransition] Chain-first check: isPublishedOnChain=\(currentGroup.isPublishedOnChain) isOneOnOneFinalize=\(isOneOnOneFinalize) onChainService=\(onChainService != nil) group=\(groupID.prefix(8)) newEpoch=\(candidate.epoch)")
+        #endif
+        if isOneOnOneFinalize {
+            guard onChainService != nil else {
+                return .chainUnavailable
+            }
+            chainPublishTasks[groupID]?.cancel()
+            chainPublishTasks[groupID] = nil
+            do {
+                try await publishGroupOnChain(candidate)
+                // publishGroupOnChain flips isPublishedOnChain=true on the
+                // stored group via updateGroup(...). Re-read the live group
+                // so subsequent local mutations build on that flag.
+                if let refreshed = groups.first(where: { $0.id == groupID }) {
+                    candidate.isPublishedOnChain = refreshed.isPublishedOnChain
+                }
+            } catch {
+                #if DEBUG
+                print("[EpochTransition] 1v1 finalize chain publish FAILED group=\(groupID.prefix(8)) error=\(error)")
+                #endif
+                return .chainRejected(reason: error.localizedDescription)
+            }
+        } else if currentGroup.isPublishedOnChain {
+            guard onChainService != nil else {
+                return .chainUnavailable
+            }
+            chainPublishTasks[groupID]?.cancel()
+            chainPublishTasks[groupID] = nil
+            let targetEpoch = candidate.epoch
+            pendingTransitions[groupID] = .awaitingChainConfirmation(targetEpoch: targetEpoch)
+            let baseline = chainBaseline[groupID]
+                ?? (members: currentGroup.members, epoch: currentGroup.epoch, salt: currentGroup.salt)
+            #if DEBUG
+            print("[EpochTransition] Chain publish STARTING: baselineEpoch=\(baseline.epoch) targetEpoch=\(targetEpoch) baselineMembers=\(baseline.members.count) candidateMembers=\(candidate.members.count) hasStoredBaseline=\(chainBaseline[groupID] != nil)")
+            #endif
+            do {
+                try await publishMemberUpdate(
+                    group: candidate,
+                    oldMembers: baseline.members,
+                    oldEpoch: baseline.epoch,
+                    oldSalt: baseline.salt
+                )
+                chainBaseline[groupID] = (
+                    members: candidate.members,
+                    epoch: candidate.epoch,
+                    salt: candidate.salt
+                )
+                pendingTransitions[groupID] = .idle
+                #if DEBUG
+                print("[EpochTransition] Chain publish SUCCEEDED epoch=\(candidate.epoch) group=\(groupID.prefix(8))")
+                #endif
+            } catch {
+                pendingTransitions[groupID] = .idle
+                #if DEBUG
+                print("[EpochTransition] Chain publish REJECTED epoch=\(candidate.epoch) baselineEpoch=\(baseline.epoch) group=\(groupID.prefix(8)) error=\(error)")
+                #endif
+                return .chainRejected(reason: error.localizedDescription)
+            }
+            candidate.isPublishedOnChain = currentGroup.isPublishedOnChain
+        } else {
+            // Unpublished draft group (e.g. 1v1 creator waiting for peer).
+            // No chain authority yet — safe to mutate locally.
+            candidate.isPublishedOnChain = currentGroup.isPublishedOnChain
+        }
+
+        // Chain confirmed (or not required). Capture snapshot of the pre-transition
+        // state for history/fork resolution, then persist the candidate locally.
         let snapshotDescription: String
         switch kind {
         case .memberAdd(let member):
@@ -966,92 +1051,28 @@ final class AppState {
         }
         captureEpochSnapshot(group: currentGroup, changeDescription: snapshotDescription)
 
-        // --- Persist locally FIRST (optimistic), then sync chain in background ---
-        candidate.isPublishedOnChain = currentGroup.isPublishedOnChain
-        groups[index] = candidate
+        // Re-lookup index: the chain-publish awaits above can suspend long enough
+        // for `groups` to be mutated (a concurrent apply/fork/leave can shift or
+        // remove entries), so the `index` captured before the await may now point
+        // at a different group or be out of bounds.
+        guard let liveIndex = groups.firstIndex(where: { $0.id == groupID }) else {
+            #if DEBUG
+            print("[EpochTransition] Group \(groupID.prefix(8)) disappeared during chain publish; dropping transition")
+            #endif
+            return .chainRejected(reason: "Group removed during chain publish")
+        }
+        // Re-check staleness: a remote state update or rekey may have advanced
+        // the stored epoch past our candidate while we awaited chain publish.
+        // Overwriting with an older candidate would revert the group.
+        guard candidate.epoch >= groups[liveIndex].epoch else {
+            #if DEBUG
+            print("[EpochTransition] Local transition stale after chain publish: candidateEpoch=\(candidate.epoch) storedEpoch=\(groups[liveIndex].epoch) group=\(groupID.prefix(8))")
+            #endif
+            return .chainRejected(reason: "Concurrent remote update raced local transition")
+        }
+        groups[liveIndex] = candidate
         store.saveGroup(candidate)
         storeSalt(groupID: groupID, epoch: candidate.epoch, salt: candidate.salt)
-
-        // --- Async chain sync (non-blocking, coalesced) ---
-        // Launch BEFORE the Nostr broadcast so the chain publish isn't gated
-        // by relay round-trips. Cancel any in-flight publish and restart with
-        // the latest state.
-        #if DEBUG
-        print("[EpochTransition] Chain sync check: isPublishedOnChain=\(currentGroup.isPublishedOnChain) onChainService=\(onChainService != nil) group=\(groupID.prefix(8)) newEpoch=\(candidate.epoch)")
-        #endif
-        if isOneOnOneFinalize, onChainService != nil {
-            chainPublishTasks[groupID]?.cancel()
-            let chainCandidate = candidate
-            chainPublishTasks[groupID] = Task {
-                defer {
-                    if self.chainPublishTasks[groupID]?.isCancelled != false {
-                        self.chainPublishTasks[groupID] = nil
-                    }
-                }
-                do {
-                    try await self.publishGroupOnChain(chainCandidate)
-                } catch is CancellationError {
-                    #if DEBUG
-                    print("[EpochTransition] 1v1 finalize CANCELLED group=\(groupID.prefix(8))")
-                    #endif
-                } catch {
-                    #if DEBUG
-                    print("[EpochTransition] 1v1 finalize FAILED group=\(groupID.prefix(8)) error=\(error)")
-                    #endif
-                }
-            }
-        } else if currentGroup.isPublishedOnChain, onChainService != nil {
-            chainPublishTasks[groupID]?.cancel()
-            let targetEpoch = candidate.epoch
-            pendingTransitions[groupID] = .awaitingChainConfirmation(targetEpoch: targetEpoch)
-            let chainCandidate = candidate
-            let baseline = chainBaseline[groupID]
-                ?? (members: currentGroup.members, epoch: currentGroup.epoch, salt: currentGroup.salt)
-            #if DEBUG
-            print("[EpochTransition] Chain sync STARTING: baselineEpoch=\(baseline.epoch) targetEpoch=\(targetEpoch) baselineMembers=\(baseline.members.count) candidateMembers=\(chainCandidate.members.count) hasStoredBaseline=\(chainBaseline[groupID] != nil)")
-            #endif
-            chainPublishTasks[groupID] = Task {
-                #if DEBUG
-                print("[EpochTransition] Chain sync Task EXECUTING for epoch=\(targetEpoch) group=\(groupID.prefix(8))")
-                #endif
-                defer {
-                    if case .awaitingChainConfirmation(let t) = self.pendingTransitions[groupID], t == targetEpoch {
-                        self.pendingTransitions[groupID] = .idle
-                    }
-                    if self.chainPublishTasks[groupID]?.isCancelled != false {
-                        self.chainPublishTasks[groupID] = nil
-                    }
-                }
-                do {
-                    try await self.publishMemberUpdate(
-                        group: chainCandidate,
-                        oldMembers: baseline.members,
-                        oldEpoch: baseline.epoch,
-                        oldSalt: baseline.salt
-                    )
-                    self.chainBaseline[groupID] = (
-                        members: chainCandidate.members,
-                        epoch: chainCandidate.epoch,
-                        salt: chainCandidate.salt
-                    )
-                    #if DEBUG
-                    print("[EpochTransition] Chain sync SUCCEEDED epoch=\(chainCandidate.epoch) group=\(groupID.prefix(8))")
-                    #endif
-                } catch is CancellationError {
-                    #if DEBUG
-                    print("[EpochTransition] Chain sync CANCELLED (superseded) epoch=\(chainCandidate.epoch) group=\(groupID.prefix(8))")
-                    #endif
-                } catch {
-                    #if DEBUG
-                    print("[EpochTransition] Chain sync FAILED epoch=\(chainCandidate.epoch) baselineEpoch=\(baseline.epoch) group=\(groupID.prefix(8)) error=\(error)")
-                    #endif
-                }
-            }
-        } else {
-            #if DEBUG
-            print("[EpochTransition] Chain sync SKIPPED: isPublishedOnChain=\(currentGroup.isPublishedOnChain) onChainService=\(onChainService != nil) group=\(groupID.prefix(8))")
-            #endif
-        }
 
         // Sync transport and ensure subscription uses the latest key.
         // This must happen BEFORE the secure rekey / legacy blocks so A can
@@ -1183,16 +1204,6 @@ final class AppState {
                 },
                 isRemovalEpoch: true
             )
-        } else if isRemoval {
-            // Removals REQUIRE inbox delivery (secure rekey). If bundles are missing,
-            // the remover must first do a key rotation to distribute bundles.
-            #if DEBUG
-            print("[EpochTransition] Removal blocked: not all remaining members have transport bundles. Rotate key first.")
-            #endif
-            // Revert the optimistic local state
-            groups[index] = currentGroup
-            store.saveGroup(currentGroup)
-            return .bundlesMissing
         } else {
             // --- LEGACY FLOW: non-removal operations only (add member, key rotation) ---
             let update = buildStateUpdate(
@@ -1750,6 +1761,25 @@ final class AppState {
         )
     }
 
+    /// Fetch on-chain state with a bounded retry for RPC lag. Thin wrapper
+    /// around the top-level `fetchOnChainStateAwaitingEpoch` helper
+    /// (extracted so the retry logic can be unit-tested without
+    /// instantiating the full AppState).
+    private func fetchOnChainStateAwaitingEpoch(
+        service: OnChainService,
+        groupIDData: Data,
+        expectedEpoch: UInt64,
+        maxAttempts: Int = 4,
+        initialDelayMs: UInt64 = 250
+    ) async throws -> SEPCommitmentEntry {
+        try await OnChainService.fetchOnChainStateAwaitingEpoch(
+            fetch: { try await service.fetchOnChainState(groupIDData: groupIDData) },
+            expectedEpoch: expectedEpoch,
+            maxAttempts: maxAttempts,
+            initialDelayMs: initialDelayMs
+        )
+    }
+
     /// Apply a received state update to a local group.
     /// Handles three cases:
     /// Apply a received state update. For published groups, chain-confirm-first:
@@ -1860,7 +1890,25 @@ final class AppState {
                 try? group.recomputeCommitment()
             }
 
-            groups[index] = group
+            // Re-lookup: the fork-resolution await above can suspend long enough
+            // for `groups` to be mutated, so `index` captured before the await
+            // may now point at a different entry or be out of bounds.
+            guard let liveIndex = groups.firstIndex(where: { $0.id == groupID }) else {
+                #if DEBUG
+                print("[AppState] Group \(groupID.prefix(8)) disappeared during fork resolution; dropping update")
+                #endif
+                return
+            }
+            // Re-check staleness: a subsequent update (or secure rekey) may have
+            // advanced the stored epoch past our fork-resolved epoch while we
+            // awaited the chain. Committing now would revert the group.
+            guard group.epoch >= groups[liveIndex].epoch else {
+                #if DEBUG
+                print("[AppState] Fork resolution stale after await: resolvedEpoch=\(group.epoch) storedEpoch=\(groups[liveIndex].epoch) group=\(groupID.prefix(8))")
+                #endif
+                return
+            }
+            groups[liveIndex] = group
             store.saveGroup(group)
             storeSalt(groupID: groupID, epoch: group.epoch, salt: group.salt)
             subscribeGroup(group)
@@ -1870,16 +1918,68 @@ final class AppState {
             #endif
         } else {
             // Normal case: update.epoch > group.epoch
-            // Apply optimistically — sender already verified with chain.
             // Check if WE were removed before applying
             let selfRemoved = isSelfRemoved(in: update)
 
-            applyMemberDelta(update, to: &group)
-            group.epoch = update.epoch
-            group.salt = update.salt
+            // Compute candidate state from the update without mutating `group` yet.
+            var candidate = group
+            applyMemberDelta(update, to: &candidate)
+            candidate.epoch = update.epoch
+            candidate.salt = update.salt
             if let commitment = update.commitment {
-                group.commitment = commitment
+                candidate.commitment = commitment
+            } else {
+                try? candidate.recomputeCommitment()
             }
+
+            // --- Chain-first verification: for on-chain groups, the contract
+            // is authoritative. Accept the update only if the chain's
+            // stored commitment at this epoch matches what we computed from
+            // the update. Reject otherwise — the sender either forged the
+            // update, raced ahead of chain confirmation, or we're querying
+            // an RPC that hasn't caught up. The sender's ack/retry will
+            // eventually reconcile via a fresh broadcast or chain resync.
+            if candidate.isPublishedOnChain {
+                guard let service = onChainService else {
+                    // Published group with no contract service configured —
+                    // refuse to apply unverified updates. Mirrors the Android
+                    // guard in GroupListViewModel.applyStateUpdate so a
+                    // transiently-nil service can't become a governance bypass.
+                    #if DEBUG
+                    print("[AppState] Remote update DROPPED: onChainService unavailable for published group=\(groupID.prefix(8))")
+                    #endif
+                    return
+                }
+                do {
+                    let entry = try await fetchOnChainStateAwaitingEpoch(
+                        service: service,
+                        groupIDData: group.groupIDData,
+                        expectedEpoch: update.epoch
+                    )
+                    let chainMatches: Bool
+                    if let candCommitment = candidate.commitment {
+                        chainMatches = entry.active
+                            && entry.epoch == update.epoch
+                            && entry.commitment == candCommitment
+                    } else {
+                        chainMatches = false
+                    }
+                    if !chainMatches {
+                        #if DEBUG
+                        print("[AppState] Remote update REJECTED: chain epoch=\(entry.epoch) active=\(entry.active) updateEpoch=\(update.epoch) group=\(groupID.prefix(8))")
+                        #endif
+                        return
+                    }
+                } catch {
+                    #if DEBUG
+                    print("[AppState] Remote update DROPPED: chain fetch failed: \(error) group=\(groupID.prefix(8))")
+                    #endif
+                    return
+                }
+            }
+
+            // Chain confirmed (or group is unpublished draft). Commit candidate.
+            group = candidate
             if selfRemoved {
                 group.removedByPubkeyHex = update.senderAttestation.map {
                     $0.blsPubkey.map { String(format: "%02x", $0) }.joined()
@@ -1892,7 +1992,37 @@ final class AppState {
                 pendingTransitions[groupID] = .idle
             }
 
-            groups[index] = group
+            // Update chain baseline to reflect the chain-confirmed state.
+            if group.isPublishedOnChain {
+                chainBaseline[groupID] = (
+                    members: group.members,
+                    epoch: group.epoch,
+                    salt: group.salt
+                )
+            }
+
+            // Re-lookup: the chain-state await above can suspend long enough for
+            // `groups` to be mutated (concurrent apply/fork/leave can shift or
+            // remove entries), so the `index` captured before the await may
+            // now point at a different group or be out of bounds.
+            guard let liveIndex = groups.firstIndex(where: { $0.id == groupID }) else {
+                #if DEBUG
+                print("[AppState] Group \(groupID.prefix(8)) disappeared during chain verification; dropping update")
+                #endif
+                return
+            }
+            // Re-check staleness against the *current* stored epoch: a second
+            // update for the same group may have landed while we awaited chain
+            // verification, advancing the stored epoch past ours. Committing
+            // now would revert the group to an older state. Mirrors the Android
+            // `commitRemoteStateUpdate` recheck.
+            guard update.epoch > groups[liveIndex].epoch else {
+                #if DEBUG
+                print("[AppState] Remote update stale after await: updateEpoch=\(update.epoch) storedEpoch=\(groups[liveIndex].epoch) group=\(groupID.prefix(8))")
+                #endif
+                return
+            }
+            groups[liveIndex] = group
             store.saveGroup(group)
             storeSalt(groupID: groupID, epoch: update.epoch, salt: update.salt)
 
@@ -2209,7 +2339,7 @@ final class AppState {
     }
 
     /// Apply a secure rekey envelope received via inbox. Installs fresh groupSecret/salt and migrates topic.
-    func applyRekeyEnvelope(_ envelope: SEPRekeyEnvelope) {
+    func applyRekeyEnvelope(_ envelope: SEPRekeyEnvelope) async {
         let groupIDHex = envelope.groupID.map { String(format: "%02x", $0) }.joined()
         guard let index = groups.firstIndex(where: { $0.id == groupIDHex }) else { return }
         var group = groups[index]
@@ -2271,7 +2401,54 @@ final class AppState {
         // survive epoch transitions (member add/remove/key rotation).
         updatedGroup.adminPubkeys = group.adminPubkeys
         updatedGroup.groupType = group.groupType
+        // Recompute commitment locally from final member set + salt so we can
+        // cross-check against what the chain says before installing anything.
+        try? updatedGroup.recomputeCommitment()
+
+        // --- Chain-first verification: on-chain state must match the envelope's
+        // claimed new commitment at the new epoch. If the chain disagrees
+        // (sender hasn't published, contract rejected their proof, or we're
+        // querying a lagging RPC), refuse to install fresh secrets — otherwise
+        // we'd rotate away from a key the rest of the group still uses.
+        if updatedGroup.isPublishedOnChain {
+            guard let service = onChainService else {
+                #if DEBUG
+                print("[Rekey] DROPPED: onChainService unavailable for published group=\(groupIDHex.prefix(8))")
+                #endif
+                return
+            }
+            do {
+                let entry = try await fetchOnChainStateAwaitingEpoch(
+                    service: service,
+                    groupIDData: envelope.groupID,
+                    expectedEpoch: envelope.epoch
+                )
+                let chainMatches: Bool = {
+                    guard let local = updatedGroup.commitment else { return false }
+                    return entry.active && entry.epoch == envelope.epoch && entry.commitment == local
+                }()
+                if !chainMatches {
+                    #if DEBUG
+                    print("[Rekey] REJECTED: chain epoch=\(entry.epoch) active=\(entry.active) envelopeEpoch=\(envelope.epoch) group=\(groupIDHex.prefix(8))")
+                    #endif
+                    return
+                }
+            } catch {
+                #if DEBUG
+                print("[Rekey] DROPPED: chain fetch failed: \(error) group=\(groupIDHex.prefix(8))")
+                #endif
+                return
+            }
+        }
+
         group = updatedGroup
+        if group.isPublishedOnChain {
+            chainBaseline[groupIDHex] = (
+                members: group.members,
+                epoch: group.epoch,
+                salt: group.salt
+            )
+        }
 
         // Update transport bundles from envelope
         for bundle in envelope.memberBundles {
@@ -2279,7 +2456,26 @@ final class AppState {
         }
         processTransportBundle(envelope.senderBundle, groupID: groupIDHex)
 
-        groups[index] = group
+        // Re-lookup: the chain-state await above can suspend long enough for
+        // `groups` to be mutated, so `index` captured before the await may now
+        // point at a different group or be out of bounds.
+        guard let liveIndex = groups.firstIndex(where: { $0.id == groupIDHex }) else {
+            #if DEBUG
+            print("[Rekey] Group \(groupIDHex.prefix(8)) disappeared during chain verification; dropping envelope")
+            #endif
+            return
+        }
+        // Re-check staleness: a second rekey for the same group may have
+        // arrived and committed while we were awaiting chain confirmation.
+        // Installing older secrets now would revert everyone past the newer
+        // epoch. Mirrors the Android `commitRemoteRekey` recheck.
+        guard envelope.epoch > groups[liveIndex].epoch else {
+            #if DEBUG
+            print("[Rekey] DROPPED stale envelope after await: envelopeEpoch=\(envelope.epoch) storedEpoch=\(groups[liveIndex].epoch) group=\(groupIDHex.prefix(8))")
+            #endif
+            return
+        }
+        groups[liveIndex] = group
         store.saveGroup(group)
         storeSalt(groupID: groupIDHex, epoch: envelope.epoch, salt: envelope.salt)
 
@@ -3462,7 +3658,7 @@ final class AppState {
         invitationTransport.onRekeyEnvelope = { [weak self] envelope in
             Task { @MainActor in
                 guard let self else { return }
-                self.applyRekeyEnvelope(envelope)
+                await self.applyRekeyEnvelope(envelope)
             }
         }
 

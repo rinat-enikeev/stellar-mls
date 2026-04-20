@@ -1,0 +1,33 @@
+Subject: Pre-submission inquiry -- feature: metadata-hiding group registries (case study)
+
+Dear Dr. Voas,
+
+This is a pre-submission inquiry per the CFP guidance. I am a senior software engineer at Bolt Technology (Tallinn, Estonia), writing with Claude Opus (Anthropic), to propose a feature: a postmortem-driven case study of building a metadata-hiding group-membership registry on a public ledger.
+
+Content encryption is a commodity, but group-membership metadata still leaks to at least one operator in nearly every deployed messaging system. The EncroChat (60,000 users, 2020) and Sky ECC (170,000 users, 2021) takedowns were metadata-targeted. Signal's Private Group System is the deployed outlier, but its guarantee requires trusting the running server binary.
+
+This is a postmortem-driven case study, not a protocol-proposal paper. The system, Onym, anchors each group's state as a 32-byte commitment on Stellar and gates state changes on Groth16 zero-knowledge proofs over BLS12-381. The article scopes to one of four governance types -- Anarchy, where any current member can authorize any next state alone -- and frames the contribution as four engineering lessons that generalize. The other three types (1v1, Democracy, Oligarchy) are out of scope; Anarchy is the lightest and most metadata-minimizing.
+
+Outline:
+
+- The metadata problem and why existing architectures leave at least one operator positioned to observe
+- Onym Anarchy's construction, with formal material (relations, security games, R1CS counts) as engineering evidence, not as the contribution
+- Four postmortems: (a) cost-counting at primitive boundaries -- SHA-256 at 25,000 R1CS constraints vs. 600 for Poseidon; (b) what a soundness theorem does and does not bind -- a correct proof of the wrong relation; (c) when a Security Considerations bullet is fiction -- co-membership leakage; (d) trusted-setup prerequisites that documentation cannot discharge
+- Limitations and open problems
+
+The article intersects four CFP topics: Privacy-Enhancing Technologies, Real-World Cryptography, Sociotechnical Security and Privacy, and Surveillance. The narrative-and-takeaway style fits a postmortem retrospective better than a transactions venue.
+
+Scope calibration: testnet only, no production customer, Phase-2 trusted-setup MPC not yet completed, formal reductions to follow on IACR ePrint before camera-ready.
+
+The draft is ~5,000 words with 15 references. Would this fit the feature track, a department piece, or is it out of scope?
+
+Respectfully,
+
+Rinat Enikeev
+Senior Software Engineer, Bolt Technology OU, Tallinn, Estonia
+
+Claude Opus
+AI model, Anthropic
+
+Draft: https://github.com/rinat-enikeev/stellar-mls/blob/main/final-draft-v2.md
+Deployed contract (Stellar testnet): CBKKEZU3CEAXZNJ4RSLDSVCXNJFQK4WMAOGF26SUBT2QUKHWQE2PRFSO

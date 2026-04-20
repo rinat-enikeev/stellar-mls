@@ -18,7 +18,6 @@ struct ChatView: View {
     @State private var isNearBottom = true
     @State private var videoThumbnail: UIImage?
     @State private var videoDuration: Int?
-    @State private var showCallScreen = false
     @State private var showForkSheet = false
     @State private var pushBannerDismissed = false
     @State private var governanceBannerDismissed: [String: Bool] = [:]
@@ -456,22 +455,10 @@ struct ChatView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                HStack(spacing: 12) {
-                    Button {
-                        startCall(video: false)
-                    } label: {
-                        Image(systemName: "phone.fill")
-                    }
-                    Button {
-                        startCall(video: true)
-                    } label: {
-                        Image(systemName: "video.fill")
-                    }
-                    Button {
-                        showGroupInfo = true
-                    } label: {
-                        Image(systemName: "person.3")
-                    }
+                Button {
+                    showGroupInfo = true
+                } label: {
+                    Image(systemName: "person.3")
                 }
             }
         }
@@ -483,18 +470,6 @@ struct ChatView: View {
         .sheet(isPresented: $showForkSheet) {
             if let group = viewModel.group {
                 ForkGroupView(originalGroup: group)
-            }
-        }
-        .fullScreenCover(isPresented: $showCallScreen) {
-            CallView(
-                callManager: appState.callManager,
-                remoteName: viewModel.group?.name ?? "Call",
-                onDismiss: { showCallScreen = false }
-            )
-        }
-        .onChange(of: appState.callManager.state) { _, newState in
-            if newState == .ringing || newState == .active {
-                showCallScreen = true
             }
         }
         .onDisappear {
@@ -546,13 +521,6 @@ struct ChatView: View {
             && curr.timestamp.timeIntervalSince(prev.timestamp) < 120
     }
 
-    private func startCall(video: Bool) {
-        guard let groupID = viewModel.group?.id else { return }
-        appState.callManager.sendSignal = { [weak appState] callDict in
-            try await appState?.sendCallSignal(callDict, groupID: groupID)
-        }
-        Task { try? await appState.callManager.startCall(video: video) }
-    }
 }
 
 // MARK: - Unread Separator

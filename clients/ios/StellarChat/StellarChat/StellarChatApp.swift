@@ -181,11 +181,6 @@ final class AppState {
     private static let declinedGroupIDsKey = "chat.onym.ios.declinedGroupIDs"
     let pushManager = PushNotificationManager()
 
-    // MARK: - Calls
-
-    let callManager = CallManager()
-    private(set) var callKitProvider: CallKitProvider?
-
     // MARK: - Persistent Chat & Protocol Transport
 
     /// Single transport for ALL group communication (chat + protocol).
@@ -259,25 +254,6 @@ final class AppState {
     }
     private static let defaultGroupTierKey = "chat.onym.ios.defaultGroupTier"
 
-    // MARK: - TURN Server Configuration
-
-    var turnEnabled: Bool {
-        didSet { UserDefaults.standard.set(turnEnabled, forKey: Self.turnEnabledKey) }
-    }
-    var turnURLs: [String] {
-        didSet { UserDefaults.standard.set(turnURLs, forKey: Self.turnURLsKey) }
-    }
-    var turnUsername: String {
-        didSet { Self.saveToKeychain(turnUsername, key: Self.turnUsernameKey) }
-    }
-    var turnPassword: String {
-        didSet { Self.saveToKeychain(turnPassword, key: Self.turnPasswordKey) }
-    }
-    private static let turnEnabledKey = "chat.onym.ios.turnEnabled"
-    private static let turnURLsKey = "chat.onym.ios.turnURLs"
-    private static let turnUsernameKey = "chat.onym.ios.turnUsername"
-    private static let turnPasswordKey = "chat.onym.ios.turnPassword"
-
     // MARK: - Salt History (for offline recovery)
 
     /// Per-group salt history keyed by group ID, mapping epoch → salt.
@@ -350,11 +326,6 @@ final class AppState {
         }
         // Load declined invitation group IDs
         self.declinedGroupIDs = Set(UserDefaults.standard.stringArray(forKey: Self.declinedGroupIDsKey) ?? [])
-        // Load TURN server config
-        self.turnEnabled = UserDefaults.standard.bool(forKey: Self.turnEnabledKey)
-        self.turnURLs = UserDefaults.standard.stringArray(forKey: Self.turnURLsKey) ?? []
-        self.turnUsername = Self.loadFromKeychain(key: Self.turnUsernameKey) ?? ""
-        self.turnPassword = Self.loadFromKeychain(key: Self.turnPasswordKey) ?? ""
         configureContractIfReady()
 
         // M-17: Load persisted salt history, then add current group salts
@@ -396,10 +367,6 @@ final class AppState {
         chatTransport.currentMembers = groups.flatMap(\.members)
         setupChatHandler()
         setupProtocolHandler()
-        setupCallSignalHandler()
-        callKitProvider = CallKitProvider(callManager: callManager)
-        callManager.callKit = callKitProvider
-        syncTurnConfig()
         Task { await connectAndSubscribeAllGroups() }
     }
 
@@ -3298,39 +3265,6 @@ final class AppState {
         try? FileManager.default.removeItem(at: audioURL)
     }
 
-    // MARK: - Call Signaling
-
-    private func setupCallSignalHandler() {
-        chatTransport.onCallSignal = { [weak self] groupID, callDict, senderBlsPubkey, event in
-            Task { @MainActor in
-                guard let self else { return }
-                // Configure signaling channel for incoming calls before handling
-                self.callManager.sendSignal = { [weak self] callDict in
-                    try await self?.sendCallSignal(callDict, groupID: groupID)
-                }
-                await self.callManager.handleSignal(callDict, senderBlsPubkey: senderBlsPubkey)
-            }
-        }
-    }
-
-    /// Send a call signaling message (offer/answer/ice/hangup) to the active group.
-    func sendCallSignal(_ callDict: [String: Any], groupID: String) async throws {
-        guard let group = groups.first(where: { $0.id == groupID }) else { return }
-        let blsPubkey = try keyManager.blsPublicKey
-        let ts = Int64(Date().timeIntervalSince1970)
-        let wrapper: [String: Any] = [
-            "v": 2,
-            "type": "call",
-            "text": "",
-            "senderBlsPubkey": blsPubkey.base64EncodedString(),
-            "ts": ts,
-            "call": callDict,
-        ]
-        let wrapperData = try JSONSerialization.data(withJSONObject: wrapper)
-        let wrapperText = String(data: wrapperData, encoding: .utf8)!
-        try await chatTransport.sendWrapper(wrapperText, topic: group.topicTag, key: group.encryptionKey, keyManager: keyManager)
-    }
-
     /// Set up the protocol message handler (runs once at init).
     private func setupProtocolHandler() {
         chatTransport.onProtocolMessage = { [weak self] groupID, json, eventID, senderBlsPubkeyHex in
@@ -3540,15 +3474,6 @@ final class AppState {
                 reason: "\(result)"
             )
         }
-    }
-
-    // MARK: - TURN Configuration
-
-    func syncTurnConfig() {
-        callManager.turnEnabled = turnEnabled
-        callManager.turnURLs = turnURLs
-        callManager.turnUsername = turnUsername
-        callManager.turnPassword = turnPassword
     }
 
     // MARK: - Contract Configuration

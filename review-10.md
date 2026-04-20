@@ -11,15 +11,15 @@ word_count_target: ~4,000
 
 ## Abstract
 
-End-to-end encryption closed the content half of the online-communication privacy problem. The metadata half — *who is in a group with whom* — still leaks to at least one operator in almost every deployed messaging system. We describe Onym, a testnet system that anchors each group's state on the Stellar blockchain as a 32-byte commitment and gates every state change on a Groth16 zero-knowledge Succinct Non-Interactive Argument of Knowledge (SNARK) over BLS12-381. This article is scoped to a single mode of operation: a group where any current member may unilaterally authorize any next state with a single membership proof. No member address, updater identity, or group-size signal beyond a coarse tier appears on the ledger. We introduce the construction formally — relations, instance-commitment (IC) binding, and game-based security statements — and report four postmortems from its development. Onym is not a mainnet system and does not yet have a production customer. This is a case study in what it took to build toward those properties, and in the specific ways the work kept going wrong.
+End-to-end encryption closed the content half of the online-communication privacy problem. The metadata half — *who is in a group with whom* — still leaks to at least one operator in almost every deployed messaging system. We describe Onym, a testnet system that anchors each group's state on the Stellar blockchain as a 32-byte commitment and gates every state change on a Groth16 zero-knowledge Succinct Non-Interactive Argument of Knowledge (SNARK) over BLS12-381. This article is scoped to a single mode of operation: a group where any current member may unilaterally authorize any next state with a single membership proof. No member address, updater identity, or group-size signal beyond a coarse tier appears on the ledger. The deployed contract supports other policies out of scope here [15]. We introduce the construction formally — relations, instance-commitment (IC) binding, and game-based security statements — and report four postmortems from its development. Onym is not a mainnet system and does not yet have a production customer. This is a case study in what it took to build toward those properties, and in the specific ways the work kept going wrong.
 
 ---
 
 ## 1. The metadata problem
 
-Content-level encryption is now a commodity. Signal's Double Ratchet, iMessage, WhatsApp, Google Messages' Messaging-Layer-Security (MLS) rollout, and Matrix's Olm/Megolm all provide end-to-end content encryption. None hide metadata from the operator. iCloud backups hold message metadata for every Apple user. WhatsApp provides subscriber records and message metadata under stored-communications-act orders. Matrix homeservers see every room's membership list by construction. Telegram "secret chats" leave groups, channels, and cloud chats server-readable. Signal is the outlier: repeated grand-jury subpoenas have forced it to disclose only registration time and last-seen date, and its transparency reports substantiate that list is exhaustive.
+Content-level encryption is now a commodity. Signal's Double Ratchet, iMessage, WhatsApp, Google Messages' Messaging-Layer-Security (MLS) rollout, and Matrix's Olm/Megolm all provide end-to-end content encryption. None hide metadata from the operator. iCloud backups hold message metadata for every Apple user. WhatsApp provides subscriber records and message metadata under stored-communications-act orders. Matrix homeservers see every room's membership list by construction. Telegram "secret chats" leave groups, channels, and cloud chats server-readable. Signal is the outlier: repeated grand-jury subpoenas have forced it to disclose only registration time and last-seen date, and its transparency reports substantiate that the list is exhaustive.
 
-Metadata is not a secondary concern. Two of the largest law-enforcement operations of the last five years — the 2020 EncroChat takedown and the 2021 Sky ECC operation — recovered content from compromised devices, but the *targeting* was metadata-driven. A former NSA General Counsel's remark — "we kill people based on metadata" [10] — is a statement about operational reality.
+Metadata is not a secondary concern. Two of the largest law-enforcement operations of the last five years — the 2020 EncroChat takedown and the 2021 Sky ECC operation — recovered content from compromised devices, but the *targeting* was metadata-driven. Former NSA Director Michael Hayden's remark — "we kill people based on metadata" [10] — is a statement about operational reality.
 
 The structural cause is that every messaging architecture we know of has at least one operator positioned to observe the metadata. In centralized systems it is the server operator. In federated systems (XMPP, Matrix, email) every federated server learns its tenants' metadata. In MLS deployments the Delivery Service (DS) is the ordering authority and therefore the metadata authority — it sees each Commit, each Welcome, and which device-pseudonyms are present in each group. The MLS specification [1] is explicit that the DS is trusted for ordering.
 
@@ -32,15 +32,15 @@ Four candidate approaches exist.
 1. **Transparency logs** (Certificate / Key Transparency [11]) hide content but do not hide who is writing to which key — not suited to a group-registry setting.
 2. **Federated delivery** (Matrix, XMPP, email) distributes trust but does not eliminate per-server metadata observation.
 3. **Anonymous-credential-backed central servers** (Signal PGS [9]) give excellent metadata privacy under an honest-but-curious server. A third party auditing Onym can verify, from public chain state and the deployed contract bytecode alone, that every state transition was authorized by a valid SNARK — without trusting any server binary to match any spec. For Signal PGS, the equivalent verification requires trusting that the running binary faithfully implements the published protocol.
-4. **Public-ledger anchoring plus zero-knowledge (ZK) membership proofs** commit group state on a public chain and verify membership with a SNARK. Every observer reads the same chain; no operator is positioned to observe more. The trust assumptions that remain are on chain censorship resistance, SNARK soundness, and the SNARK's trusted setup.
+4. **Public-ledger anchoring plus zero-knowledge (ZK) membership proofs** commit group state on a public chain and verify membership with a SNARK. Every observer reads the same chain; no operator is positioned to observe more. The trust assumptions that remain are on the chain's censorship resistance, SNARK soundness, and the SNARK's trusted setup.
 
 Onym takes the fourth approach. Within it, we chose Stellar over Ethereum because Stellar Protocol 22 [14] introduced BLS12-381 host functions, reducing Groth16 verification to three pairings and a small multi-scalar multiplication at negligible fee cost. BN254's effective security dropped to an estimated 100–103 bits after improved number-field-sieve attacks [12]; BLS12-381 is at roughly 120 bits of pairing security. Our threshold is 120 bits.
 
 ## 3. Scope of this article
 
-The deployed Onym contract supports several authorization policies for state changes. This article is scoped to a single one: **a group where any current member, alone, may authorize any next state.** That is the complete characterization needed to follow the rest of the paper; the other policies are out of scope and described in the companion design document [15]. Readers should not generalize the privacy properties reported here to those other policies.
+The deployed Onym contract supports several authorization policies for state changes. This article is scoped to a single one, which we call the **unanimous-member mode**: a group where any current member, alone, may authorize any next state. That is the complete characterization needed to follow the rest of the paper; the other policies are out of scope and described in the companion design document [15]. Readers should not generalize the privacy properties reported here to those other policies.
 
-All four postmortems in Sec. 5 occurred before additional policies shipped (v1.0.0–v1.6.7 supported only this mode; other policies shipped in v1.7.0 on 2026-04-19). Every design mistake and every fix therefore concerns the relation we study here.
+All four postmortems in Sec. 6 occurred before additional policies shipped (v1.0.0–v1.6.7 supported only the unanimous-member mode; other policies shipped in v1.7.0 on 2026-04-19). Every design mistake and every fix therefore concerns the mode we study here.
 
 ## 4. In plain language
 
@@ -77,7 +77,7 @@ where $\epsilon \in \mathbb{F}_r$ is the epoch counter and $s \in \mathbb{F}_r$ 
 
 ### 5.2 Relations
 
-Two nondeterministic polynomial-time (NP) relations, both compiled to Rank-1 Constraint System (R1CS) and proved with Groth16 [2], cover every operation.
+Two nondeterministic polynomial-time (NP) relations, both compiled to Rank-1 Constraint System (R1CS) and proved with Groth16 [2], cover every operation of the mode studied here.
 
 $R_{\mathsf{Mem}}$: Public input $(C, \epsilon) \in \mathbb{F}_r^2$; witness $(sk, \mathsf{root}, s, \mathsf{path}, \mathsf{idx})$.
 
@@ -98,6 +98,8 @@ R_{\mathsf{Mem}}(C_{\mathsf{old}}, \epsilon_{\mathsf{old}}; \, sk, \mathsf{root}
 H(H(\mathsf{root}_{\mathsf{new}}, \epsilon_{\mathsf{old}} + 1), s_{\mathsf{new}}) = C_{\mathsf{new}}.
 \end{cases}
 $$
+
+$R_{\mathsf{Mem}}$ is invoked by the `create_group`, `verify_membership`, and `deactivate_group` contract entry points; $R_{\mathsf{Upd}}$ is invoked by `update_commitment`.
 
 Critically, $C_{\mathsf{new}}$ is a *public input*: it enters the verifier's instance-commitment (IC) linear combination and is thus bound to the proof by Groth16's public-input non-malleability [2, 13]. Postmortem P2 describes what went wrong when $C_{\mathsf{new}}$ was *not* a public input.
 
@@ -155,7 +157,7 @@ Two Poseidon evaluations cost roughly 600 R1CS constraints total.
 
 **Severity first.** A critical authorization vulnerability. Any party in the network path between a prover and the contract could substitute the new commitment written to storage, retaining the prover's still-valid proof. Every privacy and authorization guarantee was void for the operation that changes group state.
 
-**What went wrong.** Through v1.2.9 all four state-changing contract operations shared one circuit whose relation was $R_{\mathsf{Mem}}$ with public inputs $(C, \epsilon)$. The `update_commitment` entry point accepted, *in addition to* the proof and its public inputs, a separate `new_commitment: BytesN<32>` parameter; the contract wrote this parameter to storage as the next epoch's state. The proof authorized knowledge of a member in the *current* state. It said nothing about which next state was being authorized. `new_commitment` was a contract-controlled free parameter.
+**What went wrong.** Through v1.2.9 every state-changing contract operation shared one circuit whose relation was $R_{\mathsf{Mem}}$ with public inputs $(C, \epsilon)$. The `update_commitment` entry point accepted, *in addition to* the proof and its public inputs, a separate `new_commitment: BytesN<32>` parameter; the contract wrote this parameter to storage as the next epoch's state. The proof authorized knowledge of a member in the *current* state. It said nothing about which next state was being authorized. `new_commitment` was a contract-controlled free parameter.
 
 A code-review question exposed the gap: *"Where in the math is the argument that this proof is non-transferable to a different `new_commitment`?"* The answer was: nowhere. Groth16's verification equation incorporates public inputs through the IC linear combination [13], and the proof is cryptographically bound exactly to those public inputs and nothing else.
 
@@ -173,7 +175,7 @@ Onym's clients exchange invitations, rekey envelopes, and group ciphertext over 
 
 That bullet is technically true and strategically misleading. The actual consequence was *group linkability*: any relay could cluster the user base by co-membership from public relay data — "these $N$ keys all published to hidden-topic $T$ → these $N$ devices are in the same group."
 
-**The fix.** Ephemeral per-event secp256k1 keys, with a receive-side audit switching four places from `event.pubkey` to the inner BLS public key. Topic tags are now derived per-epoch as $H(\mathsf{group\_id} \| \epsilon)$ and rotate on every state change. We do not claim that no traffic-analysis-based co-membership inference remains — relay-level timing correlation is an open problem — but the two concrete mechanisms that made co-membership trivially observable from public data are both eliminated.
+**The fix.** Ephemeral per-event secp256k1 keys, with a receive-side audit switching four places from `event.pubkey` to the inner BLS public key. Topic tags are now derived per-epoch as $H(\mathsf{group\_id} \mathbin\| \epsilon)$ and rotate on every state change. We do not claim that no traffic-analysis-based co-membership inference remains — relay-level timing correlation is an open problem — but the two concrete mechanisms that made co-membership trivially observable from public data are both eliminated.
 
 **Lesson.** A privacy invariant that lives in a *Security Considerations* bullet of a different document is fiction. Identity coupling — a single key serving as both signing key and sender identity — is a recurring antipattern; decoupling the two roles is almost free on day one and a postmortem otherwise.
 
@@ -193,7 +195,7 @@ Reference implementation is deployed on Stellar testnet at contract `CC6NUUKG25R
 
 **On-chain verification cost.** Groth16 proofs are 192 bytes; public inputs add 32 bytes for $R_{\mathsf{Mem}}$ and 96 bytes for $R_{\mathsf{Upd}}$. Verification invokes three pairings via Stellar's BLS12-381 host functions plus a small multi-scalar multiplication over the IC; total Soroban instruction count is 6–10 million, inside testnet fee budgets.
 
-**Privacy.** A public-ledger observer learns: that a group exists; number and timestamps of its state changes; an upper bound on group size from the tier; and the relayer's Stellar account. An observer does *not* learn, conditional on intact trusted setup (P4) and Groth16 soundness: the member set, the updater's identity, the exact member count, or whether the group grew, shrank, or rotated. We have *not* run a formal differential-privacy analysis of the timing channel, nor quantified information recoverable from tier-transition patterns.
+**Privacy.** A public-ledger observer learns: that a group exists; number and timestamps of its state changes; an upper bound on group size from the tier; and the relayer's Stellar account. An observer does *not* learn, conditional on intact trusted setup (P4) and Groth16 soundness: the member set, the updater's identity, the exact member count, or whether the group grew, shrank, or rotated. We have *not* run a formal differential-privacy analysis of the timing channel, nor quantified information recoverable from tier-transition patterns. Other policies [15] may publish additional signals; the enumeration above applies only to the mode studied here.
 
 ## 8. Honest limitations
 
@@ -214,6 +216,8 @@ In addition to the open P4:
 **MLS integration is partial.** Onym maps an MLS Commit to an `update_commitment` call and distributes the fresh salt over MLS's encrypted GroupContext extension. We have not yet integrated Onym with a stock MLS implementation's DS interface; our reference clients use a bespoke MLS-lite implementation.
 
 ## 9. Related work
+
+Table 2 locates Onym within the space of approaches to the metadata-hiding group-membership problem.
 
 **Table 2.** Approaches to the metadata-hiding group-membership problem.
 
@@ -240,7 +244,7 @@ We would prefer that readers take the postmortems more seriously than the system
 
 We thank the Stellar Development Foundation for Protocol 22's BLS12-381 host functions and the arkworks contributors for the Rust Groth16 and Poseidon gadgets. The reviewer who asked *"where in the math is the argument that this proof is non-transferable?"* is the reason P2 is a postmortem rather than a zero-day.
 
-**Use of generative AI.** This manuscript was co-drafted with Claude Opus (Anthropic, 2025). The system was used across all sections at the level of prose generation, technical exposition, and structural editing. The first author directed the technical content, verified all formal statements, and is responsible for the correctness of the work. All AI-generated text was reviewed and revised by the first author.
+**Use of generative AI.** This manuscript was co-drafted with Claude Opus (Anthropic, 2026). The system was used across all sections at the level of prose generation, technical exposition, and structural editing. The first author directed the technical content, verified all formal statements, and is responsible for the correctness of the work. All AI-generated text was reviewed and revised by the first author.
 
 ## References
 
@@ -262,7 +266,7 @@ We thank the Stellar Development Foundation for Protocol 22's BLS12-381 host fun
 
 [9] M. Chase, T. Perrin, and G. Zaverucha, "The Signal Private Group System and Anonymous Credentials Supporting Efficient Verifiable Encryption," in *Proc. ACM CCS*, 2020.
 
-[10] M. V. Hayden, "The Price of Privacy: Re-Evaluating the NSA," Johns Hopkins University, Apr. 7, 2014.
+[10] D. Cole, "'We Kill People Based on Metadata,'" *New York Review of Books*, May 10, 2014. Quoting Gen. M. V. Hayden at the Johns Hopkins Foreign Affairs Symposium, Apr. 7, 2014.
 
 [11] M. S. Melara et al., "CONIKS: Bringing Key Transparency to End Users," in *Proc. USENIX Security*, 2015, pp. 383-398.
 
@@ -270,6 +274,6 @@ We thank the Stellar Development Foundation for Protocol 22's BLS12-381 host fun
 
 [13] H. Lipmaa, "Simulation-Extractable SNARKs Revisited," Cryptology ePrint Archive, Report 2019/612, 2019.
 
-[14] Stellar Development Foundation, "CAP-0046-12: BLS12-381 Host Functions," Stellar Core Advancement Proposal, 2024.
+[14] Stellar Development Foundation, "CAP-0059: Host functions for BLS12-381," Stellar Core Advancement Proposal, Aug. 2024.
 
 [15] R. Enikeev, "Configurable Group Policies for Onym," design document, Apr. 2026.

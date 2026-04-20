@@ -9,9 +9,6 @@ options:
 packages:
   SwiftMLS:
     path: ../../../swift-mls
-  WebRTC:
-    url: https://github.com/stasel/WebRTC.git
-    from: "146.0.0"
 
 targets:
   StellarChat:
@@ -38,7 +35,7 @@ targets:
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
         CODE_SIGN_ENTITLEMENTS: StellarChat/StellarChat.entitlements
-        INFOPLIST_KEY_UIBackgroundModes: "remote-notification voip"
+        INFOPLIST_KEY_UIBackgroundModes: "remote-notification"
     preBuildScripts:
       - name: Generate Relayer Defaults
         script: |
@@ -94,7 +91,6 @@ targets:
           - $(SRCROOT)/StellarChat/RelayerDefaults.generated.swift
     dependencies:
       - package: SwiftMLS
-      - package: WebRTC
       - target: StellarChatNotificationService
         embed: true
 

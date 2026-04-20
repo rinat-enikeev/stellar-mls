@@ -146,16 +146,6 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     val isRelayerConfigured: Boolean
         get() = relayerURL.isNotBlank()
 
-    // TURN server configuration
-    val turnURLs = mutableStateListOf<String>()
-    var turnEnabled by mutableStateOf(false)
-        private set
-    var turnUsername by mutableStateOf("")
-        private set
-    var turnPassword by mutableStateOf("")
-        private set
-    private val turnPrefs = application.getSharedPreferences("stellar_turn", Context.MODE_PRIVATE)
-
     // On-chain
     var onChainService: OnChainService? = null
         private set
@@ -185,10 +175,6 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Epoch snapshots for epoch branching: groupID → (epoch → snapshot). */
     val epochSnapshots = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.ConcurrentHashMap<Long, EpochSnapshot>>()
-
-    // Calls
-    lateinit var callManager: chat.onym.android.call.CallManager
-        private set
 
     // Push notifications
     private var pushManager: PushNotificationManager? = null
@@ -290,24 +276,9 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         relayerAuthToken = keyManager.loadRelayerAuthToken()
             .ifEmpty { BuildConfig.DEFAULT_RELAYER_AUTH_TOKEN }
 
-        // Load TURN server config
-        turnEnabled = turnPrefs.getBoolean("turn_enabled", false)
-        val savedTurnURLs = turnPrefs.getString("turn_urls", null)
-        if (savedTurnURLs != null) {
-            turnURLs.addAll(savedTurnURLs.split(",").filter { it.isNotBlank() })
-        }
-        turnUsername = keyManager.loadTurnUsername()
-        turnPassword = keyManager.loadTurnPassword()
-
         // Initialize transports
         transport = NostrMessageTransport(keyManager, relayURLs.toList())
         invitationTransport = InvitationTransport(keyManager)
-
-        // Initialize call manager and telecom integration
-        chat.onym.android.call.CallManager.initialize(application)
-        callManager = chat.onym.android.call.CallManager(application)
-        chat.onym.android.call.CallConnectionService.initialize(application, callManager)
-        syncTurnConfig()
 
         // Initialize on-chain service if configured
         configureContract()
@@ -401,7 +372,6 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             setupChatMessageHandler()
             setupImageMessageHandler()
             setupProtocolMessageHandler()
-            setupCallSignalHandler()
             setupOKHandler()
             connected = true
 
@@ -1046,51 +1016,6 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         // N-5: Store auth token in encrypted prefs instead of plaintext SharedPreferences
         keyManager.saveRelayerAuthToken(relayerAuthToken)
         configureContract()
-    }
-
-    // -- TURN server configuration --
-
-    fun syncTurnConfig() {
-        callManager.turnEnabled = turnEnabled
-        callManager.turnURLs = turnURLs.toList()
-        callManager.turnUsername = turnUsername
-        callManager.turnPassword = turnPassword
-    }
-
-    fun addTurnURL(urlString: String): Boolean {
-        val trimmed = urlString.trim()
-        if (!trimmed.startsWith("turn:") && !trimmed.startsWith("turns:")) return false
-        if (turnURLs.contains(trimmed)) return false
-        turnURLs.add(trimmed)
-        persistTurnURLs()
-        syncTurnConfig()
-        return true
-    }
-
-    fun removeTurnURL(index: Int) {
-        if (index in turnURLs.indices) {
-            turnURLs.removeAt(index)
-            persistTurnURLs()
-            syncTurnConfig()
-        }
-    }
-
-    fun updateTurnEnabled(enabled: Boolean) {
-        turnEnabled = enabled
-        turnPrefs.edit().putBoolean("turn_enabled", enabled).apply()
-        syncTurnConfig()
-    }
-
-    fun saveTurnCredentials(username: String, password: String) {
-        turnUsername = username.trim()
-        turnPassword = password.trim()
-        keyManager.saveTurnUsername(turnUsername)
-        keyManager.saveTurnPassword(turnPassword)
-        syncTurnConfig()
-    }
-
-    private fun persistTurnURLs() {
-        turnPrefs.edit().putString("turn_urls", turnURLs.joinToString(",")).apply()
     }
 
     companion object {
@@ -3393,43 +3318,6 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 audioFile.delete()
             } catch (e: Exception) {
                 if (BuildConfig.DEBUG) Log.e("GroupListVM", "sendVoice failed: ${e.message}")
-            }
-        }
-    }
-
-    // MARK: - Call Signaling
-
-    /** Send a call signaling message (offer/answer/ice/hangup) to a group. */
-    fun sendCallSignal(groupID: String, callJson: JSONObject) {
-        val group = groups.find { it.id == groupID } ?: return
-        val wrapper = JSONObject().apply {
-            put("v", 2)
-            put("type", "call")
-            put("text", "")
-            put("senderBlsPubkey", android.util.Base64.encodeToString(
-                keyManager.blsPublicKey(), android.util.Base64.NO_WRAP))
-            put("ts", System.currentTimeMillis() / 1000)
-            put("call", callJson)
-        }
-        val key = effectiveEncryptionKey(group)
-        val envelopeJson = GroupCrypto.encrypt(wrapper.toString(), key)
-        val content = android.util.Base64.encodeToString(
-            envelopeJson.toByteArray(), android.util.Base64.NO_WRAP)
-        val tags = listOf(listOf("t", effectiveTopicTag(group)))
-        val event = NostrEventBuilder.build(
-            kind = 44114, tags = tags, content = content, keyManager = keyManager,
-            ephemeralSigner = RustBackedNostrSigner.ephemeral())
-        transport.publish(event)
-    }
-
-    private fun setupCallSignalHandler() {
-        transport.onCallSignal = { groupID, callJson, senderPubkey, eventID ->
-            viewModelScope.launch {
-                // Configure signaling channel for incoming calls before handling
-                callManager.sendSignal = { outgoingJson ->
-                    sendCallSignal(groupID, outgoingJson)
-                }
-                callManager.handleSignal(callJson, senderPubkey)
             }
         }
     }

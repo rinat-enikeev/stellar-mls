@@ -73,9 +73,6 @@ class StellarChatUnifiedPushReceiver : MessagingReceiver() {
                     "chat", "image" -> NotificationHelper.showMessageNotification(
                         context, groupName, senderAlias, text, subscription.groupID
                     )
-                    "call" -> NotificationHelper.showCallNotification(
-                        context, groupName, senderAlias
-                    )
                     else -> NotificationHelper.showMessageNotification(
                         context, groupName, senderAlias, text, subscription.groupID
                     )

@@ -187,19 +187,10 @@ struct SettingsView: View {
                         detail: "\(appState.blossomServerURLs.count)"
                     )
                 }
-                NavigationLink {
-                    TurnServersView()
-                } label: {
-                    row(
-                        icon: SettingsIconBox(systemImage: "globe", background: Color(red: 0.35, green: 0.78, blue: 0.98)),
-                        title: "TURN Servers",
-                        detail: appState.turnEnabled ? "Custom" : "EU default"
-                    )
-                }
             } header: {
                 Text("Network")
             } footer: {
-                Text("Relays carry encrypted messages. Blossom servers store encrypted media. TURN aids calls behind restrictive networks.")
+                Text("Relays carry encrypted messages. Blossom servers store encrypted media.")
             }
 
             // Protocol

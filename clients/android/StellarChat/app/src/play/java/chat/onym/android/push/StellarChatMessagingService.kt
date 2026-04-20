@@ -154,9 +154,6 @@ class StellarChatMessagingService : FirebaseMessagingService() {
                         } catch (_: Exception) { }
                     }
                 }
-                "call" -> NotificationHelper.showCallNotification(
-                    applicationContext, groupName, senderAlias
-                )
                 // Protocol messages (sep_message_ack, sep_rekey, etc.) — silently ignore
                 else -> return
             }

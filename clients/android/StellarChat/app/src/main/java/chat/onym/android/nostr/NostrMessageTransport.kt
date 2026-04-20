@@ -69,8 +69,6 @@ class NostrMessageTransport(
     /** Called when a decrypted message is an image message with media attachment.
      *  senderPubkey is the sender's BLS12-381 compressed pubkey as hex. */
     var onImageMessage: ((groupID: String, text: String, media: chat.onym.android.model.MediaAttachment, eventID: String, senderPubkey: String, timestamp: Long, epoch: Long?, replyToID: String?) -> Unit)? = null
-    /** Callback for received call signaling messages (offer, answer, ice, hangup, busy, reject). */
-    var onCallSignal: ((groupID: String, callJson: JSONObject, senderPubkey: ByteArray, eventID: String) -> Unit)? = null
     /** Callback for relay OK responses: (eventID, accepted). Used for delivery status. */
     var onOK: ((String, Boolean) -> Unit)? = null
 
@@ -289,8 +287,6 @@ class NostrMessageTransport(
             val replyToID = wrapper?.optString("replyTo", "")?.takeIf { it.isNotEmpty() }
 
             // N-6: Reject messages without BLS sender authentication.
-            // Call signals have empty text (payload is in "call" field), so only
-            // require non-empty text for chat messages.
             if (blsPubkeyB64.isNullOrEmpty() || (wrapperType == "chat" && innerText.isNullOrEmpty())) {
                 if (chat.onym.android.BuildConfig.DEBUG) android.util.Log.w("MsgTransport", "Rejected: missing BLS auth.")
                 chat.onym.android.SecurityLog.nonMemberMessageRejected(groupID)
@@ -299,22 +295,7 @@ class NostrMessageTransport(
 
             if (chat.onym.android.BuildConfig.DEBUG) android.util.Log.d("MsgTransport", "Decrypted OK group=${groupID.take(8)} wrapperType=$wrapperType members=${currentMembers.size}")
 
-            if (wrapperType == "call") {
-                // Call signaling — verify sender is a group member
-                val blsPubkey = android.util.Base64.decode(blsPubkeyB64, android.util.Base64.NO_WRAP)
-                val isMember = currentMembers.any { it.publicKeyCompressed.contentEquals(blsPubkey) }
-                if (!isMember) {
-                    chat.onym.android.SecurityLog.nonMemberMessageRejected(groupID)
-                    return
-                }
-                val callObj = wrapper.optJSONObject("call") ?: return
-                // Reject stale signaling (>60 seconds old)
-                val ts = wrapper.optLong("ts", 0)
-                val age = (System.currentTimeMillis() / 1000) - ts
-                if (age <= 60) {
-                    onCallSignal?.invoke(groupID, callObj, blsPubkey, event.id)
-                }
-            } else if (wrapperType == "image" || wrapperType == "video" || wrapperType == "audio") {
+            if (wrapperType == "image" || wrapperType == "video" || wrapperType == "audio") {
                 // Image message — verify BLS pubkey is in member list (H-4)
                 val blsPubkey = android.util.Base64.decode(blsPubkeyB64, android.util.Base64.NO_WRAP)
                 val isMember = currentMembers.any { it.publicKeyCompressed.contentEquals(blsPubkey) }

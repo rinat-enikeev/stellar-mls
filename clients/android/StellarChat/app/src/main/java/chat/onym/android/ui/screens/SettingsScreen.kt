@@ -32,7 +32,6 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Settings
@@ -84,7 +83,6 @@ fun SettingsScreen(
     onRegenerateAndBackup: ((onError: (String) -> Unit) -> Unit)? = null,
     onOpenRelays: () -> Unit = {},
     onOpenBlossom: () -> Unit = {},
-    onOpenTurn: () -> Unit = {},
     onOpenStellarContract: () -> Unit = {},
     onOpenAdvanced: () -> Unit = {},
     onJoinGroup: () -> Unit = {},
@@ -141,7 +139,6 @@ fun SettingsScreen(
                     viewModel = viewModel,
                     onOpenRelays = onOpenRelays,
                     onOpenBlossom = onOpenBlossom,
-                    onOpenTurn = onOpenTurn,
                     onOpenStellarContract = onOpenStellarContract,
                     onOpenAdvanced = onOpenAdvanced,
                     onBackupRecoveryPhrase = onBackupRecoveryPhrase,
@@ -292,7 +289,6 @@ private fun PreferencesTab(
     viewModel: GroupListViewModel,
     onOpenRelays: () -> Unit,
     onOpenBlossom: () -> Unit,
-    onOpenTurn: () -> Unit,
     onOpenStellarContract: () -> Unit,
     onOpenAdvanced: () -> Unit,
     onBackupRecoveryPhrase: (() -> Unit)?,
@@ -324,16 +320,8 @@ private fun PreferencesTab(
                 detail = "${viewModel.blossomServerURLs.size}",
                 onClick = onOpenBlossom
             )
-            RowSeparator(start = 58.dp)
-            NavRow(
-                icon = Icons.Default.Public,
-                iconBg = SettingsIconColors.Cyan,
-                title = "TURN Servers",
-                detail = if (viewModel.turnEnabled) "Custom" else "EU default",
-                onClick = onOpenTurn
-            )
         }
-        FooterNote("Relays carry encrypted messages. Blossom servers store encrypted media. TURN aids calls behind restrictive networks.")
+        FooterNote("Relays carry encrypted messages. Blossom servers store encrypted media.")
 
         Spacer(Modifier.height(16.dp))
         SectionHeaderSm("PROTOCOL")

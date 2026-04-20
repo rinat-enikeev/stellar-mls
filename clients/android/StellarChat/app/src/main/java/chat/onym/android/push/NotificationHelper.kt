@@ -8,13 +8,11 @@ import android.content.Intent
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import chat.onym.android.MainActivity
-import chat.onym.android.R
 import java.util.concurrent.atomic.AtomicInteger
 
 object NotificationHelper {
     const val CHANNEL_MESSAGES = "stellarchat_messages"
     const val CHANNEL_INVITATIONS = "stellarchat_invitations"
-    const val CHANNEL_CALLS = "stellarchat_calls"
 
     private val notificationIdCounter = AtomicInteger(1000)
 
@@ -37,15 +35,7 @@ object NotificationHelper {
             description = "Group invitations"
         }
 
-        val calls = NotificationChannel(
-            CHANNEL_CALLS,
-            "Calls",
-            NotificationManager.IMPORTANCE_MAX
-        ).apply {
-            description = "Voice and video calls"
-        }
-
-        manager.createNotificationChannels(listOf(messages, invitations, calls))
+        manager.createNotificationChannels(listOf(messages, invitations))
     }
 
     fun showMessageNotification(
@@ -104,26 +94,4 @@ object NotificationHelper {
         } catch (_: SecurityException) { }
     }
 
-    fun showCallNotification(context: Context, groupName: String, callerAlias: String) {
-        val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            context, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val notification = NotificationCompat.Builder(context, CHANNEL_CALLS)
-            .setSmallIcon(android.R.drawable.ic_menu_call)
-            .setContentTitle(groupName)
-            .setContentText("$callerAlias is calling...")
-            .setAutoCancel(true)
-            .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .build()
-
-        try {
-            NotificationManagerCompat.from(context).notify(notificationIdCounter.getAndIncrement(), notification)
-        } catch (_: SecurityException) { }
-    }
 }

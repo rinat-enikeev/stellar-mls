@@ -48,7 +48,7 @@ jni = ["dep:jni"]
 [profile.release]
 strip = "symbols"
 opt-level = "z"
-lto = "thin"
+lto = "fat"
 codegen-units = 1
 
 [profile.release-ceremony]

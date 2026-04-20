@@ -603,6 +603,27 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         startRekeyResendTimer()
     }
 
+    /**
+     * Fetch on-chain state with a bounded retry for RPC lag. Delegates to the
+     * top-level [chat.onym.android.onchain.fetchOnChainStateAwaitingEpoch]
+     * helper (extracted so the retry logic can be unit-tested without
+     * instantiating the full ViewModel).
+     */
+    private suspend fun fetchOnChainStateAwaitingEpoch(
+        service: OnChainService,
+        groupIDData: ByteArray,
+        expectedEpoch: Long,
+        maxAttempts: Int = 4,
+        initialDelayMs: Long = 250L
+    ): chat.onym.android.onchain.SEPCommitmentEntry {
+        return chat.onym.android.onchain.fetchOnChainStateAwaitingEpoch(
+            fetch = { withContext(Dispatchers.IO) { service.fetchOnChainState(groupIDData) } },
+            expectedEpoch = expectedEpoch,
+            maxAttempts = maxAttempts,
+            initialDelayMs = initialDelayMs
+        )
+    }
+
     /** Apply a secure rekey envelope received via inbox. Installs fresh groupSecret/salt and migrates topic. */
     private fun applyRekeyEnvelope(obj: JSONObject) {
         val groupIDBytes = android.util.Base64.decode(obj.getString("groupID"), android.util.Base64.NO_WRAP)
@@ -645,13 +666,16 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         val oldTopicTag = group.topicTag
 
         // Compute candidate state from the envelope WITHOUT mutating `groups[index]` yet.
-        val candidate = group.copy(
+        // `cloneGroup` deep-copies `members`, `groupSecret`, `salt`, `commitment`
+        // so `candidate.members.removeAll { ... }` below cannot leak back into
+        // the stored group if we end up rejecting at chain verification.
+        val candidate = cloneGroup(group).copy(
             groupSecret = android.util.Base64.decode(obj.getString("groupSecret"), android.util.Base64.NO_WRAP),
             salt = android.util.Base64.decode(obj.getString("salt"), android.util.Base64.NO_WRAP),
             epoch = epoch,
             commitment = obj.optString("commitment", "").takeIf { it.isNotEmpty() }?.let {
                 android.util.Base64.decode(it, android.util.Base64.NO_WRAP)
-            } ?: group.commitment
+            } ?: group.commitment?.copyOf()
         )
 
         // Apply member changes to candidate
@@ -678,9 +702,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             }
             viewModelScope.launch {
                 val chainMatches: Boolean = try {
-                    val entry = withContext(Dispatchers.IO) {
-                        service.fetchOnChainState(groupIDBytes)
-                    }
+                    val entry = fetchOnChainStateAwaitingEpoch(service, groupIDBytes, expectedEpoch = epoch)
                     val localCommitment = candidate.commitment
                     localCommitment != null
                         && entry.active
@@ -1637,7 +1659,15 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
         captureEpochSnapshot(currentGroup, changeDesc)
 
-        groups[index] = candidate
+        // Re-locate the group by ID — `index` captured above may be stale after
+        // the suspend points on chain publish (groups list can be mutated during
+        // the await). If the group disappeared entirely, abort without persisting.
+        val liveIndex = groups.indexOfFirst { it.id == groupID }
+        if (liveIndex < 0) {
+            if (BuildConfig.DEBUG) Log.w("GroupListVM", "Group $groupID disappeared during chain publish; dropping transition")
+            return EpochTransitionResult.CHAIN_REJECTED
+        }
+        groups[liveIndex] = candidate
         try { store.saveGroup(candidate) } catch (_: Exception) { }
         storeSalt(groupID, candidate.epoch, candidate.salt)
 
@@ -2180,9 +2210,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 if (service != null) {
                     viewModelScope.launch {
                         val chainMatches: Boolean = try {
-                            val entry = withContext(Dispatchers.IO) {
-                                service.fetchOnChainState(group.groupIDData)
-                            }
+                            val entry = fetchOnChainStateAwaitingEpoch(service, group.groupIDData, expectedEpoch = update.epoch)
                             val localCommitment = candidate.commitment
                             localCommitment != null
                                 && entry.active

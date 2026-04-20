@@ -213,3 +213,119 @@ struct EpochSnapshotTests {
         #expect(snapshot.changeDescription == "Member added")
     }
 }
+
+// MARK: - OnChainService.fetchOnChainStateAwaitingEpoch
+
+/// Regression tests for the chain-first receive-path retry helper. The
+/// receive path rejects an update when the on-chain commitment at the
+/// update's epoch disagrees with what the envelope claims. Without bounded
+/// retry, an RPC node that trails the network by one ledger close would
+/// cause a legitimate update to be silently dropped. These tests lock in
+/// the retry semantics so a future refactor can't regress to single-shot
+/// polling.
+@Suite("OnChainService.fetchOnChainStateAwaitingEpoch")
+struct ChainStateRetryTests {
+
+    private func entry(epoch: UInt64, active: Bool = true) -> SEPCommitmentEntry {
+        SEPCommitmentEntry(
+            commitment: Data(repeating: 0x11, count: 32),
+            epoch: epoch,
+            timestamp: 0,
+            tier: 0,
+            active: active
+        )
+    }
+
+    @Test("returns immediately when chain already at expected epoch")
+    func returnsImmediatelyWhenAtExpectedEpoch() async throws {
+        var calls = 0
+        let result = try await OnChainService.fetchOnChainStateAwaitingEpoch(
+            fetch: {
+                calls += 1
+                return self.entry(epoch: 5)
+            },
+            expectedEpoch: 5,
+            maxAttempts: 4,
+            initialDelayMs: 0,
+            sleep: { _ in }
+        )
+        #expect(result.epoch == 5)
+        #expect(calls == 1)
+    }
+
+    @Test("retries until epoch advances, simulating RPC lag")
+    func retriesUntilEpochAdvances() async throws {
+        let epochsToReturn: [UInt64] = [3, 3, 5]
+        var attempt = 0
+        var epochsSeen: [UInt64] = []
+        let result = try await OnChainService.fetchOnChainStateAwaitingEpoch(
+            fetch: {
+                let e = epochsToReturn[attempt]
+                attempt += 1
+                epochsSeen.append(e)
+                return self.entry(epoch: e)
+            },
+            expectedEpoch: 5,
+            maxAttempts: 4,
+            initialDelayMs: 0,
+            sleep: { _ in }
+        )
+        #expect(result.epoch == 5)
+        #expect(epochsSeen == [3, 3, 5])
+    }
+
+    @Test("returns last stale entry when chain never advances within budget")
+    func returnsLastStaleEntry() async throws {
+        var calls = 0
+        let result = try await OnChainService.fetchOnChainStateAwaitingEpoch(
+            fetch: {
+                calls += 1
+                return self.entry(epoch: 3)
+            },
+            expectedEpoch: 5,
+            maxAttempts: 3,
+            initialDelayMs: 0,
+            sleep: { _ in }
+        )
+        #expect(result.epoch == 3)
+        #expect(calls == 3)
+    }
+
+    @Test("rethrows when every attempt fails")
+    func rethrowsWhenAllAttemptsFail() async throws {
+        struct RPCDown: Error {}
+        var calls = 0
+        await #expect(throws: RPCDown.self) {
+            try await OnChainService.fetchOnChainStateAwaitingEpoch(
+                fetch: {
+                    calls += 1
+                    throw RPCDown()
+                },
+                expectedEpoch: 5,
+                maxAttempts: 3,
+                initialDelayMs: 0,
+                sleep: { _ in }
+            )
+        }
+        #expect(calls == 3)
+    }
+
+    @Test("returns successful entry even after a transient error")
+    func recoversFromTransientError() async throws {
+        struct Transient: Error {}
+        var attempt = 0
+        let result = try await OnChainService.fetchOnChainStateAwaitingEpoch(
+            fetch: {
+                attempt += 1
+                if attempt == 1 { throw Transient() }
+                return self.entry(epoch: 7)
+            },
+            expectedEpoch: 7,
+            maxAttempts: 4,
+            initialDelayMs: 0,
+            sleep: { _ in }
+        )
+        #expect(result.epoch == 7)
+        #expect(attempt == 2)
+    }
+}

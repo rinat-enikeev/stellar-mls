@@ -1742,6 +1742,25 @@ final class AppState {
         )
     }
 
+    /// Fetch on-chain state with a bounded retry for RPC lag. Thin wrapper
+    /// around the top-level `fetchOnChainStateAwaitingEpoch` helper
+    /// (extracted so the retry logic can be unit-tested without
+    /// instantiating the full AppState).
+    private func fetchOnChainStateAwaitingEpoch(
+        service: OnChainService,
+        groupIDData: Data,
+        expectedEpoch: UInt64,
+        maxAttempts: Int = 4,
+        initialDelayMs: UInt64 = 250
+    ) async throws -> SEPCommitmentEntry {
+        try await OnChainService.fetchOnChainStateAwaitingEpoch(
+            fetch: { try await service.fetchOnChainState(groupIDData: groupIDData) },
+            expectedEpoch: expectedEpoch,
+            maxAttempts: maxAttempts,
+            initialDelayMs: initialDelayMs
+        )
+    }
+
     /// Apply a received state update to a local group.
     /// Handles three cases:
     /// Apply a received state update. For published groups, chain-confirm-first:
@@ -1885,7 +1904,11 @@ final class AppState {
             // eventually reconcile via a fresh broadcast or chain resync.
             if candidate.isPublishedOnChain, let service = onChainService {
                 do {
-                    let entry = try await service.fetchOnChainState(groupIDData: group.groupIDData)
+                    let entry = try await fetchOnChainStateAwaitingEpoch(
+                        service: service,
+                        groupIDData: group.groupIDData,
+                        expectedEpoch: update.epoch
+                    )
                     let chainMatches: Bool
                     if let candCommitment = candidate.commitment {
                         chainMatches = entry.active
@@ -2321,7 +2344,11 @@ final class AppState {
         // we'd rotate away from a key the rest of the group still uses.
         if updatedGroup.isPublishedOnChain, let service = onChainService {
             do {
-                let entry = try await service.fetchOnChainState(groupIDData: envelope.groupID)
+                let entry = try await fetchOnChainStateAwaitingEpoch(
+                    service: service,
+                    groupIDData: envelope.groupID,
+                    expectedEpoch: envelope.epoch
+                )
                 let chainMatches: Bool = {
                     guard let local = updatedGroup.commitment else { return false }
                     return entry.active && entry.epoch == envelope.epoch && entry.commitment == local

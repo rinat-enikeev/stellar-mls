@@ -166,9 +166,6 @@ dependencies {
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
 
-    // WebRTC (voice/video calls)
-    implementation("io.github.webrtc-sdk:android:144.7559.01")
-
     // QR code generation
     implementation("com.google.zxing:core:3.5.3")
 

@@ -28,10 +28,8 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.QuestionMark
 import androidx.compose.material.icons.filled.Router
-import androidx.compose.material.icons.filled.SettingsEthernet
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
@@ -42,7 +40,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -296,144 +293,6 @@ private fun BlossomRow(url: String, isPrimary: Boolean, onRemove: () -> Unit, se
             }
         }
         if (separator) RowSeparator(start = 58.dp)
-    }
-}
-
-// MARK: - TURN Servers
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun TurnServersScreen(
-    viewModel: GroupListViewModel,
-    onBack: () -> Unit
-) {
-    var newUrl by remember { mutableStateOf("") }
-    var usernameInput by remember { mutableStateOf(viewModel.turnUsername) }
-    var passwordInput by remember { mutableStateOf(viewModel.turnPassword) }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    SubScreenScaffold("TURN Servers", onBack) {
-        SectionHeaderSm("BUILT-IN")
-        GroupedCard {
-            Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                SettingsIconBox(icon = Icons.Default.Public, background = SettingsIconColors.Cyan)
-                Spacer(Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("EU TURN servers", style = MaterialTheme.typography.bodyLarge)
-                    Text("Built-in", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                StatusChip("Active", SettingsIconColors.Green)
-            }
-        }
-        FooterNote("Always included for call relay through restrictive networks.")
-
-        Spacer(Modifier.height(16.dp))
-        SectionHeaderSm("CUSTOM")
-        GroupedCard {
-            Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Enable custom TURN", modifier = Modifier.weight(1f))
-                Switch(
-                    checked = viewModel.turnEnabled,
-                    onCheckedChange = { viewModel.updateTurnEnabled(it) }
-                )
-            }
-        }
-
-        if (viewModel.turnEnabled) {
-            Spacer(Modifier.height(16.dp))
-            SectionHeaderSm("SERVER URL")
-            GroupedCard {
-                viewModel.turnURLs.forEachIndexed { index, url ->
-                    Column {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Default.SettingsEthernet,
-                                contentDescription = null,
-                                tint = SettingsIconColors.Blue,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Text(
-                                url,
-                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                                modifier = Modifier.weight(1f),
-                                maxLines = 1
-                            )
-                            IconButton(onClick = { viewModel.removeTurnURL(index) }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Remove", tint = MaterialTheme.colorScheme.error)
-                            }
-                        }
-                        if (index < viewModel.turnURLs.size - 1) RowSeparator(start = 46.dp)
-                    }
-                }
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = newUrl,
-                        onValueChange = { newUrl = it; error = null },
-                        placeholder = { Text("turn:host:443?transport=tcp") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrect = false)
-                    )
-                    if (newUrl.trim().isNotEmpty()) {
-                        Spacer(Modifier.width(8.dp))
-                        Button(
-                            onClick = {
-                                if (viewModel.addTurnURL(newUrl.trim())) {
-                                    newUrl = ""; error = null
-                                } else error = "Invalid URL. Must start with turn: or turns: and not already added."
-                            }
-                        ) { Text("Add") }
-                    }
-                }
-            }
-            error?.let { FooterNote(it, error = true) }
-
-            Spacer(Modifier.height(16.dp))
-            SectionHeaderSm("CREDENTIALS")
-            GroupedCard {
-                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                    OutlinedTextField(
-                        value = usernameInput,
-                        onValueChange = { usernameInput = it },
-                        label = { Text("Username") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrect = false)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = passwordInput,
-                        onValueChange = { passwordInput = it },
-                        label = { Text("Password") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation()
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    Button(
-                        onClick = { viewModel.saveTurnCredentials(usernameInput, passwordInput) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("Save credentials") }
-                }
-            }
-            FooterNote("Optional custom TURN servers for restrictive networks. Use turn: or turns: URL schemes.")
-        }
     }
 }
 

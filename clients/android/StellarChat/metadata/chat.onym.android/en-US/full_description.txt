@@ -3,7 +3,6 @@ Onym is a private group messaging app built on Stellar MLS (Messaging Layer Secu
 Features:
 - End-to-end encrypted group chat with forward secrecy
 - Zero-knowledge proof based group membership (no server knows who is in which group)
-- Voice and video calls via WebRTC
 - Decentralized push notifications via UnifiedPush
 - QR code based group invitations
 - On-chain group state verification via Soroban smart contracts

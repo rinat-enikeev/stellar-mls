@@ -47,8 +47,6 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Phone
-import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
@@ -127,7 +125,6 @@ fun ChatScreen(
     viewModel: ChatViewModel,
     onBack: () -> Unit,
     onGroupInfo: () -> Unit = {},
-    onStartCall: (video: Boolean) -> Unit = {},
     contactAliasStore: chat.onym.android.persistence.ContactAliasStore? = null,
     onUnpinEpoch: (() -> Unit)? = null,
     groupListViewModel: chat.onym.android.viewmodel.GroupListViewModel? = null,
@@ -179,12 +176,6 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { onStartCall(false) }) {
-                        Icon(Icons.Filled.Phone, contentDescription = "Call")
-                    }
-                    IconButton(onClick = { onStartCall(true) }) {
-                        Icon(Icons.Filled.Videocam, contentDescription = "Video Call")
-                    }
                     IconButton(onClick = onGroupInfo) {
                         Icon(Icons.Filled.Group, contentDescription = "Group Info")
                     }

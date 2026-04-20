@@ -25,7 +25,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -57,7 +56,6 @@ import chat.onym.android.ui.screens.AdvancedSettingsScreen
 import chat.onym.android.ui.screens.BlossomServersScreen
 import chat.onym.android.ui.screens.RelaysScreen
 import chat.onym.android.ui.screens.StellarContractScreen
-import chat.onym.android.ui.screens.TurnServersScreen
 import chat.onym.android.ui.theme.StellarChatTheme
 import chat.onym.android.viewmodel.ChatViewModel
 import chat.onym.android.viewmodel.CreateGroupViewModel
@@ -164,27 +162,6 @@ fun StellarChatNavHost(
         ActivityResultContracts.RequestPermission()
     ) { _ -> /* Permission result doesn't gate registration — FCM works regardless */ }
 
-    // Call permission handling — request RECORD_AUDIO (+ CAMERA for video) before starting a call
-    var pendingCallVideo by remember { androidx.compose.runtime.mutableStateOf<Boolean?>(null) }
-    var pendingCallGroupId by remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
-    val callPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { grants ->
-        val audioGranted = grants[Manifest.permission.RECORD_AUDIO] == true
-        val video = pendingCallVideo ?: false
-        val groupId = pendingCallGroupId
-        val cameraGranted = !video || grants[Manifest.permission.CAMERA] == true
-        if (audioGranted && cameraGranted && groupId != null) {
-            val cm = groupListViewModel.callManager
-            cm.sendSignal = { callJson ->
-                groupListViewModel.sendCallSignal(groupId, callJson)
-            }
-            cm.startCall(video)
-        }
-        pendingCallVideo = null
-        pendingCallGroupId = null
-    }
-
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     val showBottomBar = currentRoute in tabRoutes
@@ -282,27 +259,6 @@ fun StellarChatNavHost(
                     viewModel = chatViewModel,
                     onBack = { navController.popBackStack() },
                     onGroupInfo = { navController.navigate("groupinfo/$groupId") },
-                    onStartCall = { video ->
-                        val permissions = if (video) {
-                            arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
-                        } else {
-                            arrayOf(Manifest.permission.RECORD_AUDIO)
-                        }
-                        val allGranted = permissions.all {
-                            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
-                        }
-                        if (allGranted) {
-                            val cm = groupListViewModel.callManager
-                            cm.sendSignal = { callJson ->
-                                groupListViewModel.sendCallSignal(groupId, callJson)
-                            }
-                            cm.startCall(video)
-                        } else {
-                            pendingCallVideo = video
-                            pendingCallGroupId = groupId
-                            callPermissionLauncher.launch(permissions)
-                        }
-                    },
                     contactAliasStore = groupListViewModel.contactAliasStore,
                     onUnpinEpoch = {
                         groupListViewModel.unpinEpoch(groupId)
@@ -322,16 +278,6 @@ fun StellarChatNavHost(
                         }
                     }
                 )
-
-                // Show call screen overlay when a call is active
-                val callState = groupListViewModel.callManager.state
-                if (callState != chat.onym.android.call.CallState.IDLE) {
-                    chat.onym.android.call.CallScreen(
-                        callManager = groupListViewModel.callManager,
-                        remoteName = chatViewModel.groupName,
-                        onDismiss = {}
-                    )
-                }
             }
 
             composable("create") {
@@ -405,7 +351,6 @@ fun StellarChatNavHost(
                     },
                     onOpenRelays = { navController.navigate("relays") },
                     onOpenBlossom = { navController.navigate("blossom_servers") },
-                    onOpenTurn = { navController.navigate("turn_servers") },
                     onOpenStellarContract = { navController.navigate("stellar_contract") },
                     onOpenAdvanced = { navController.navigate("advanced_settings") },
                     onJoinGroup = { navController.navigate("join") }
@@ -421,13 +366,6 @@ fun StellarChatNavHost(
 
             composable("blossom_servers") {
                 BlossomServersScreen(
-                    viewModel = groupListViewModel,
-                    onBack = { navController.popBackStack() }
-                )
-            }
-
-            composable("turn_servers") {
-                TurnServersScreen(
                     viewModel = groupListViewModel,
                     onBack = { navController.popBackStack() }
                 )

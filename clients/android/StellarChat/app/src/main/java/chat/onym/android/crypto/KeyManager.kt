@@ -331,24 +331,4 @@ class KeyManager private constructor(private val prefs: android.content.SharedPr
         return prefs.getString("relayer_auth_token", "") ?: ""
     }
 
-    /** Save TURN username securely. */
-    fun saveTurnUsername(username: String) {
-        prefs.edit().putString("turn_username", username).apply()
-    }
-
-    /** Load TURN username from encrypted storage. */
-    fun loadTurnUsername(): String {
-        return prefs.getString("turn_username", "") ?: ""
-    }
-
-    /** Save TURN password securely. */
-    fun saveTurnPassword(password: String) {
-        prefs.edit().putString("turn_password", password).apply()
-    }
-
-    /** Load TURN password from encrypted storage. */
-    fun loadTurnPassword(): String {
-        return prefs.getString("turn_password", "") ?: ""
-    }
-
 }

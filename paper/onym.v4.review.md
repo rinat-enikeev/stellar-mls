@@ -74,3 +74,37 @@ Re-checked each of the three gaps from the prior review against the current file
 ## Net assessment of the delta
 
 Both cuts — §4.3 and the reviewer-expectations section — are the correct camera-ready moves. The paper is now structurally self-contained and the §4 postmortem rhythm is consistent. Gap 1 (acknowledgments blur) and gap 2 (no contract address) remain the two substantive items open and are unchanged by this pass. Gap 3 downgrades on re-examination. Approving the delta; the two remaining substantive items are one-line fixes either author can apply in a final polish pass before submission.
+
+---
+
+# Re-review (commits `9b59ad2`, `58471a9`) — and venue question
+
+Two more commits since the last pass. 154 lines now (was 149). Net change to `paper/onym.v4.md`: one acknowledgments-line rewording — *"shaped the framing of v3 and v4"* → *"shaped the paper's framing"*.
+
+## Delta
+
+- **Gap 1 (acknowledgments human/AI blur) — touched but not resolved.** The line now reads *"…the anonymous reviewer whose hard critique shaped the paper's framing."* Dropping "v3 and v4" removes a small self-referential artifact but does not address the substantive issue: an unprimed reader still parses "anonymous reviewer" as a human peer reviewer, and the *Use of generative AI* paragraph still separately credits Claude as the interlocutor for the §2 and §4 framing. The two sentences still describe the same work under different labels. Still a one-sentence fix (fold or specify), still open.
+- **Gap 2 (no artifact identifier in §5) — unchanged.** Still no contract address, repository URL, or build-tag mapping for the `v1.0.0–v1.2.9` / `v1.2.7` / `v1.7.0` postmortem versions.
+- **Gap 3 (validator-trust argument) — as before, polish not gap.**
+- No other body changes.
+
+## Is it good enough?
+
+For the genre it declares — an experience report, postmortems plus a review template, not a proofs or production-evaluation contribution — **yes**, with two one-line polish items open (gap 1 and gap 2). The paper now knows what it is, says so up front, re-says it in the limitations, and the §4 postmortems carry the contribution on their own weight. The writing is tight (154 lines), §4.1 is load-bearing and clean, and the AI-use paragraph is the most direct version across v2–v4. The remaining open items do not require re-doing work and should not gate submission; they are a final polish pass.
+
+## Venue
+
+The paper's genre self-declaration — *"experience report (not a systems-construction or security-proofs submission)"* — rules out the standard crypto venues (Crypto, Eurocrypt, CCS, S&P, USENIX Security) where proofs/production measurements are load-bearing. Correctly so; submitting there would invite exactly the round of reviewer asks v4 §1 is pre-empting, and v4 does not have the content to answer them.
+
+The right venues, in priority order:
+
+1. **Real World Crypto (RWC) — primary recommendation, as a short talk.** RWC is practitioner-facing, explicitly welcomes deployment postmortems and engineering lessons about cryptographic systems in the field, and has no proofs requirement. The P1 postmortem — a relation's public-input structure not matching the operation's security predicate, and the SE-vs-KS distinction that followed — is exactly the shape of content RWC audiences come for. RWC 2027 submissions typically open late summer / early fall 2026; an extended-abstract + talk submission fits naturally. A one-slide version of the design-review template is the right level of detail.
+2. **HotPETs (workshop co-located with PoPETS) — secondary.** HotPETs takes short position / experience papers in the privacy-enhancing-technologies space; the co-membership-leakage P2 postmortem and the fee-payer-unlinkability framing in §2 fit the venue's scope. HotPETs is non-archival, which matches the genre and keeps the full archival venue open for a later systems paper.
+3. **USENIX `;login:` (online magazine) — for the written artifact.** Long-form engineering postmortems by practitioners are exactly what `;login:` publishes. The current paper reads as a `;login:` article almost unchanged; one editorial pass to soften inline formalism into explanatory prose is all the genre adjustment needed.
+4. **IACR ePrint as preprint, in parallel with any of the above.** Low-cost archival step that makes the postmortems citable without committing the paper to a proofs-venue review round.
+
+Not a fit — in addition to the top-tier crypto/security venues above — are Financial Cryptography full track (still proofs-leaning), NDSS (systems-security construction expected), and IEEE S&P Magazine (broader audience; the SNARK-deployment specifics would need heavy translation, weakening the contribution).
+
+One caveat for any of these paths: Gap 2 (missing contract address / tag range in §5) matters more for an external venue than for an internal review. A reader at RWC or HotPETs will want to look at the artifact the postmortems are about; one line in §5 closes this. Gap 1 (acknowledgments blur) is a professional-norms item — AI-use transparency is increasingly expected at RWC and at `;login:` — and the fix is one sentence. Both should be done before submission, neither requires new technical work.
+
+**Bottom line.** Good enough for RWC 2027 as a short talk and for `;login:` as a written article, after the two one-line polish items (artifact id in §5; fold acknowledgments line into AI-use paragraph or make it specific about Claude). Not good enough — and correctly not shaped for — the top-tier crypto/security full-paper venues, which v4 §1 already says it is not targeting.

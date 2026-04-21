@@ -49,3 +49,28 @@ v4 no longer makes the "externally auditable from deployed bytecode alone" claim
 ## Summary
 
 v4 is a material improvement over v3 on the four axes the honesty review flagged: title no longer overclaims (adopted), genre declared in abstract (adopted), Phase-2 promoted (already done in v3, retained), auditability-claim/artifact-id (softened the claim; artifact id still missing but less load-bearing now). The "reviewer-expectations" §is an unusual but honest addition. Three gaps remain — the acknowledgments-line human/AI blur, the missing contract address in §5, and the regression on the validator-trust argument — none of which require re-doing work. v4 reads as a paper that knows what it is and what it is not; that is the most important property for an experience report to have.
+
+---
+
+# Re-review (commits `9009b43 v4 camera`, `dd87b39 v4 cleanuo`)
+
+Delta against the review above. 12 lines changed in `paper/onym.v4.md`: §4.3 rewritten, the "A note on reviewer expectations" section removed in full. Paper is now 149 lines (was 160).
+
+## What the delta does right
+
+- **"A note on reviewer expectations" removed.** The first review described that section as "unusual but effective"; on re-read it is the correct cut. A camera-ready experience report should not carry a standing dialogue with an earlier reviewer round in its body — it reads as self-referential drafting commentary, and §1 already does the genre-declaration work that section was doing. Removal is a net gain in self-containment.
+- **§4.3 prose cleanup.** The self-referential parenthetical *"(Demoted from P1 in earlier drafts; kept for the design-review template.)"* is gone, the heading is softened to *"A demoted lesson"*, and the durable lesson is broken out into its own closing paragraph cleanly separated from the Protocol 25 obsoleting fact. This matches the shape of §4.1 and §4.2 — the postmortem section now has a consistent rhythm across all three entries. One very minor prose note: the first sentence *"An earlier version of Onym composed Poseidon inside the circuit with SHA-256 outside, chosen because Soroban exposes SHA-256 as a native host function"* has *"chosen"* agreeing in number with neither *"an earlier version"* nor *"Poseidon"* cleanly; the v3-era phrasing "SHA-256 was chosen because Soroban has a native host function for it" was grammatically tighter. Pre-camera-ready polish, not a content issue.
+
+## Open-gap re-evaluation
+
+Re-checked each of the three gaps from the prior review against the current file.
+
+**Gap 1 — Acknowledgments human/AI blur.** *Still open, unchanged.* The acknowledgments line *"…the anonymous reviewer whose hard critique shaped the framing of v3 and v4"* still reads as human-peer-reviewer to an unprimed reader, and the *Use of generative AI* paragraph still separately commits that Claude was the interlocutor for the §2 and §4 framing choices — the same framing choices the "anonymous reviewer" was just thanked for. The cleanup pass did not touch this line. One-sentence fix: fold the two sentences together, or make the acknowledgments line specific ("an adversarial-review pass conducted via Claude on prior drafts").
+
+**Gap 2 — No artifact identifier in §5.** *Still open, unchanged.* §5 still opens with "Testnet deployment in alpha phase" with no contract address, repository URL, or build-tag reference. The §4 postmortems cite specific version ranges (*v1.0.0–v1.2.9*, *v1.2.7*, *v1.7.0 on 2026-04-19*); a reader has no artifact to map those to. One line in §5 — contract address plus tag range per postmortem — would close this without reshaping the paper. Unchanged by the camera pass.
+
+**Gap 3 — Validator-trust argument regression.** *Correction needed to my prior review.* On re-read of §6 the bullet reads: *"Seconds-scale observation window around block close; qualitatively weaker than an application server (no ability to decide which transactions exist, bounded retention), but not cryptographically absent."* Two of the three argument clauses from v3 (no decision over which transactions exist; bounded observation window) are in that parenthetical; only the SCP-safety-under-Byzantine-threshold clause is missing. I undercharacterized the bullet as "conclusion but not argument" in the prior review — the parenthetical does carry the argument in compressed form. Remaining delta is a one-clause hedge about SCP's safety threshold, not a whole-paragraph restoration. Demotes this from a gap to a polish item.
+
+## Net assessment of the delta
+
+Both cuts — §4.3 and the reviewer-expectations section — are the correct camera-ready moves. The paper is now structurally self-contained and the §4 postmortem rhythm is consistent. Gap 1 (acknowledgments blur) and gap 2 (no contract address) remain the two substantive items open and are unchanged by this pass. Gap 3 downgrades on re-examination. Approving the delta; the two remaining substantive items are one-line fixes either author can apply in a final polish pass before submission.

@@ -69,6 +69,7 @@ DESIRED+=("pr-review-request         pull_request")
 DESIRED+=("pr-address-comment        issue_comment")
 DESIRED+=("pr-address-review-comment pull_request_review_comment")
 DESIRED+=("pr-merge                  issue_comment")
+DESIRED+=("issue-mention             issue_comment")
 
 echo "==> fetching existing webhooks from $REPO"
 gh api "repos/$REPO/hooks" --paginate > /tmp/gh-hooks.json

@@ -1,0 +1,329 @@
+{
+  "name": "07 Issue mention",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "issue-mention",
+        "responseMode": "onReceived",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "a7000000-0000-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "webhookId": "issue-mention"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "b7000000-0000-0000-0000-000000000001",
+              "leftValue": "={{ (() => { const body = $json.body; if (body.action !== 'created') return false; if (!body.issue) return false; if (body.issue.pull_request) return false; if (body.sender && body.sender.type === 'Bot') return false; const text = ((body.comment && body.comment.body) || '').trim(); if (/^\\/(build|merge|review|fix)\\b/i.test(text)) return false; const commandUsers = ($env.N8N_COMMAND_USERS || '').split(',').map(s => s.trim()).filter(Boolean); const senderLogin = body.sender && body.sender.login; const commenter = (body.comment && body.comment.user && body.comment.user.login) || senderLogin; if (!commandUsers.includes(commenter)) return false; let map = {}; try { map = JSON.parse($env.N8N_AGENT_MAP || '{}'); } catch (e) { return false; } const implementerLogins = Object.keys(map).filter(k => map[k] && map[k].role === 'implementer'); if (!implementerLogins.length) return false; return new RegExp('@(' + implementerLogins.join('|') + ')(?![a-z0-9-])', 'i').test(text); })() }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a7000000-0000-0000-0000-000000000002",
+      "name": "Is authorised issue mention?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c7000000-0000-0000-0000-000000000001",
+              "name": "issueNumber",
+              "value": "={{ $json.body.issue.number }}",
+              "type": "number"
+            },
+            {
+              "id": "c7000000-0000-0000-0000-000000000002",
+              "name": "issueTitle",
+              "value": "={{ $json.body.issue.title }}",
+              "type": "string"
+            },
+            {
+              "id": "c7000000-0000-0000-0000-000000000003",
+              "name": "issueBody",
+              "value": "={{ $json.body.issue.body || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "c7000000-0000-0000-0000-000000000004",
+              "name": "commentBody",
+              "value": "={{ ($json.body.comment && $json.body.comment.body) || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "c7000000-0000-0000-0000-000000000005",
+              "name": "commentId",
+              "value": "={{ ($json.body.comment && $json.body.comment.id) || 0 }}",
+              "type": "number"
+            },
+            {
+              "id": "c7000000-0000-0000-0000-000000000006",
+              "name": "senderLogin",
+              "value": "={{ ($json.body.sender && $json.body.sender.login) || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "c7000000-0000-0000-0000-000000000007",
+              "name": "repoOwner",
+              "value": "={{ $json.body.repository.owner.login }}",
+              "type": "string"
+            },
+            {
+              "id": "c7000000-0000-0000-0000-000000000008",
+              "name": "repoName",
+              "value": "={{ $json.body.repository.name }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a7000000-0000-0000-0000-000000000003",
+      "name": "Extract issue fields",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [680, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $input.first().json;\nconst map = JSON.parse($env.N8N_AGENT_MAP || '{}');\nconst implementerLogins = Object.keys(map).filter(k => map[k] && map[k].role === 'implementer');\nconst commentBody = (prev.commentBody || '').trim();\nconst re = new RegExp('@(' + implementerLogins.join('|') + ')(?![a-z0-9-])', 'i');\nconst m = commentBody.match(re);\nif (!m) {\n  throw new Error('Workflow 07 reached Resolve with no implementer @-mention — filter regression');\n}\nconst mentionedLogin = implementerLogins.find(l => l.toLowerCase() === m[1].toLowerCase());\nconst entry = map[mentionedLogin];\nif (!entry) {\n  throw new Error(`N8N_AGENT_MAP has no entry for mentioned login \"${mentionedLogin}\"`);\n}\nconst instruction = (commentBody.slice(0, m.index) + commentBody.slice(m.index + m[0].length)).trim();\nconst reviewerLogin = $env.N8N_REVIEWER_DEFAULT || '';\nreturn [{ json: { ...prev, host: entry.host, sshPort: entry.port, sshUser: entry.user, implementerLogin: mentionedLogin, reviewerLogin, instruction } }];\n"
+      },
+      "id": "a7000000-0000-0000-0000-000000000004",
+      "name": "Resolve implementer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [790, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst prompt = `You are @${j.implementerLogin}, responding to an instruction from @${j.senderLogin} on issue #${j.issueNumber}.\n\nIssue title: ${j.issueTitle}\n\nIssue body:\n---\n${j.issueBody}\n---\n\nInstruction from @${j.senderLogin}:\n---\n${j.instruction}\n---\n\nImplement the change. Keep it minimal and scoped to what was asked. Open a PR with a clear title and body; the workflow will push the branch and open the PR for you.\n`;\nreturn [{ json: { ...j, promptB64: Buffer.from(prompt, 'utf8').toString('base64') } }];\n"
+      },
+      "id": "a7000000-0000-0000-0000-000000000005",
+      "name": "Encode prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 220]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "d7000000-0000-0000-0000-000000000001",
+                    "leftValue": "={{ $json.host }}",
+                    "rightValue": "release-agent",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "release-agent"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "d7000000-0000-0000-0000-000000000002",
+                    "leftValue": "={{ $json.host }}",
+                    "rightValue": "qa-agent",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "qa-agent"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a7000000-0000-0000-0000-000000000006",
+      "name": "Switch by host",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1020, 220]
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "resource": "command",
+        "command": "=set +e\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngit fetch origin main >/dev/null 2>&1\ngit checkout -f -B main origin/main >/dev/null 2>&1\nexec bash ./build/dev-env/bin/n8n-agent-issue.sh \"{{ $json.issueNumber }}\" \"{{ $json.promptB64 }}\" \"{{ $json.reviewerLogin }}\"\n"
+      },
+      "id": "a7000000-0000-0000-0000-000000000007",
+      "name": "Run claude in release-agent",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [1240, 140],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "REPLACE_ME",
+          "name": "release-agent SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "resource": "command",
+        "command": "=set +e\ncd ~/workspace || exit 10\n_URL=$(git remote get-url origin 2>/dev/null)\n_T=\"${_URL#*x-access-token:}\"\nexport GH_TOKEN=\"${_T%%@*}\"\ngit fetch origin main >/dev/null 2>&1\ngit checkout -f -B main origin/main >/dev/null 2>&1\nexec bash ./build/dev-env/bin/n8n-agent-issue.sh \"{{ $json.issueNumber }}\" \"{{ $json.promptB64 }}\" \"{{ $json.reviewerLogin }}\"\n"
+      },
+      "id": "a7000000-0000-0000-0000-000000000008",
+      "name": "Run claude in qa-agent",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [1240, 300],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "REPLACE_ME",
+          "name": "qa-agent SSH"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "numberInputs": 2
+      },
+      "id": "a7000000-0000-0000-0000-000000000009",
+      "name": "Merge SSH outputs",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1460, 220]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "b7000000-0000-0000-0000-000000000002",
+              "leftValue": "={{ (() => { const s = $json.stdout || ''; return /^PR_URL=https:\\/\\//m.test(s) && !/^SKIPPED=/m.test(s); })() }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a7000000-0000-0000-0000-000000000010",
+      "name": "Should comment?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1570, 220]
+    },
+    {
+      "parameters": {
+        "resource": "issue",
+        "operation": "createComment",
+        "owner": "={{ $('Extract issue fields').item.json.repoOwner }}",
+        "repository": "={{ $('Extract issue fields').item.json.repoName }}",
+        "issueNumber": "={{ $('Extract issue fields').item.json.issueNumber }}",
+        "body": "=agent opened {{ (($json.stdout || '').match(/^PR_URL=(https:\\/\\/\\S+)$/m) || [])[1] || '' }}"
+      },
+      "id": "a7000000-0000-0000-0000-000000000011",
+      "name": "Comment on issue",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [1680, 220],
+      "credentials": {
+        "githubApi": {
+          "id": "REPLACE_ME",
+          "name": "qa-bot GitHub"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Is authorised issue mention?", "type": "main", "index": 0 }]]
+    },
+    "Is authorised issue mention?": {
+      "main": [
+        [{ "node": "Extract issue fields", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Extract issue fields": {
+      "main": [[{ "node": "Resolve implementer", "type": "main", "index": 0 }]]
+    },
+    "Resolve implementer": {
+      "main": [[{ "node": "Encode prompt", "type": "main", "index": 0 }]]
+    },
+    "Encode prompt": {
+      "main": [[{ "node": "Switch by host", "type": "main", "index": 0 }]]
+    },
+    "Switch by host": {
+      "main": [
+        [{ "node": "Run claude in release-agent", "type": "main", "index": 0 }],
+        [{ "node": "Run claude in qa-agent", "type": "main", "index": 0 }]
+      ]
+    },
+    "Run claude in release-agent": {
+      "main": [[{ "node": "Merge SSH outputs", "type": "main", "index": 0 }]]
+    },
+    "Run claude in qa-agent": {
+      "main": [[{ "node": "Merge SSH outputs", "type": "main", "index": 1 }]]
+    },
+    "Merge SSH outputs": {
+      "main": [[{ "node": "Should comment?", "type": "main", "index": 0 }]]
+    },
+    "Should comment?": {
+      "main": [
+        [{ "node": "Comment on issue", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

@@ -117,18 +117,28 @@
     },
     {
       "parameters": {
+        "jsCode": "const stdout = $input.first().json.stdout || '';\nconst stderr = $input.first().json.stderr || '';\nconst target = $('Parse command').item.json.target;\nconst shortSha = (($('Get PR head SHA').item.json.head || {}).sha || '').slice(0, 7);\n\nconst landingMatch = stdout.match(/landing: (\\S+)/);\nconst downloadMatch = stdout.match(/download: (\\S+)/);\n\n// stderr carries the real build output for both targets (gradle + xcodebuild\n// are redirected with >&2). stdout only has trailing marker lines. Prefer\n// stderr so the comment's log tail is informative; fall back to stdout if\n// stderr happens to be empty.\nconst logSource = (stderr && stderr.trim()) ? stderr : stdout;\n\nconst lines = [];\nlines.push(`**${target}** build finished for \\`${shortSha}\\``);\nlines.push('');\nif (landingMatch) lines.push(`🔗 [Install page on onym.chat](${landingMatch[1]})  `);\nif (downloadMatch) lines.push(`📦 [Download APK (GitHub)](${downloadMatch[1]})`);\nlines.push('');\nlines.push('<details><summary>build log (tail)</summary>');\nlines.push('');\nlines.push('```');\nlines.push(logSource.slice(-1500));\nlines.push('```');\nlines.push('');\nlines.push('</details>');\n\nreturn [{ json: { body: lines.join('\\n') } }];\n"
+      },
+      "id": "a3000000-0000-0000-0000-000000000007",
+      "name": "Format comment body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 220]
+    },
+    {
+      "parameters": {
         "resource": "issue",
         "operation": "createComment",
         "owner": "={{ $('Parse command').item.json.repoOwner }}",
         "repository": "={{ $('Parse command').item.json.repoName }}",
         "issueNumber": "={{ $('Parse command').item.json.prNumber }}",
-        "body": "=**{{ $('Parse command').item.json.target }}** build finished for `{{ $('Get PR head SHA').item.json.head.sha.slice(0,7) }}`\n\n{{ (($json.stdout.match(/landing: (\\S+)/) || [])[1]) ? '🔗 [Install page on onym.chat](' + $json.stdout.match(/landing: (\\S+)/)[1] + ')  \n' : '' }}{{ (($json.stdout.match(/download: (\\S+)/) || [])[1]) ? '📦 [Download APK (GitHub)](' + $json.stdout.match(/download: (\\S+)/)[1] + ')' : '' }}\n\n<details><summary>build log (tail)</summary>\n\n```\n{{ $json.stdout.slice(-1500) }}\n```\n\n</details>"
+        "body": "={{ $json.body }}"
       },
       "id": "a3000000-0000-0000-0000-000000000006",
       "name": "Post build result",
       "type": "n8n-nodes-base.github",
       "typeVersion": 1,
-      "position": [1340, 220],
+      "position": [1560, 220],
       "credentials": {
         "githubApi": {
           "id": "REPLACE_ME",
@@ -154,6 +164,9 @@
       "main": [[{ "node": "Run build in qa-agent", "type": "main", "index": 0 }]]
     },
     "Run build in qa-agent": {
+      "main": [[{ "node": "Format comment body", "type": "main", "index": 0 }]]
+    },
+    "Format comment body": {
       "main": [[{ "node": "Post build result", "type": "main", "index": 0 }]]
     }
   },

@@ -19,6 +19,12 @@
 # remote-jnilibs unpacks into the container's workspace/build/android.
 set -euo pipefail
 
+# Force a UTF-8 locale. Non-interactive ssh inherits sshd's empty locale
+# (C/POSIX), which makes fastlane and many Ruby tools warn and then crash
+# the moment they hit a non-ASCII byte in a path or log line.
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
 # Homebrew bindir is NOT on the default non-interactive ssh PATH
 # (sshd hands us /usr/bin:/bin:/usr/sbin:/sbin when SSH_ORIGINAL_COMMAND
 # runs via authorized_keys `command="..."` — no shell rc files are sourced).

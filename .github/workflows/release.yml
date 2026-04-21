@@ -407,7 +407,8 @@ jobs:
       - name: Generate OTA manifest + install page
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: bash scripts/generate-ota-manifest.sh "${{ steps.version.outputs.version }}"
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash scripts/generate-ota-manifest.sh "$VERSION"
 
       - name: Commit and push to main
         env:
@@ -421,30 +422,46 @@ jobs:
             exit 0
           fi
           git commit -m "ota: publish manifest for v${VERSION}"
-          # CI also pushes altstore updates on the same branch; rebase before retrying on contention.
+          # CI also pushes altstore updates on the same branch. On push
+          # contention, re-run the generator against fresh main so the root
+          # index.html listing stays complete with any version dirs that were
+          # added concurrently.
           for attempt in 1 2 3; do
             if git push origin main; then
               exit 0
             fi
-            echo "push attempt ${attempt} failed, rebasing..."
-            git pull --rebase origin main
+            echo "push attempt ${attempt} failed; resetting to origin/main and regenerating..."
+            git fetch origin main
+            git reset --hard origin/main
+            bash scripts/generate-ota-manifest.sh "$VERSION"
+            git add deploy/website/ota/
+            if git diff --cached --quiet; then
+              echo "After reset, no OTA changes left to publish for v${VERSION}."
+              exit 0
+            fi
+            git commit -m "ota: publish manifest for v${VERSION}"
           done
-          git push origin main
+          echo "failed to push OTA manifest for v${VERSION} after 3 attempts" >&2
+          exit 1
 
   redeploy-ota:
     runs-on: ubuntu-latest
     needs: publish-ota-manifest
+    concurrency:
+      group: ota-redeploy-main
+      cancel-in-progress: false
     steps:
       - name: Check redeploy secrets
         id: check
         env:
           HAS_KEY: ${{ secrets.DROPLET_SSH_KEY != '' }}
           HAS_IP: ${{ secrets.DROPLET_IP != '' }}
+          HAS_HOST_KEY: ${{ secrets.DROPLET_HOST_KEY != '' }}
         run: |
-          if [ "$HAS_KEY" = "true" ] && [ "$HAS_IP" = "true" ]; then
+          if [ "$HAS_KEY" = "true" ] && [ "$HAS_IP" = "true" ] && [ "$HAS_HOST_KEY" = "true" ]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
-            echo "DROPLET_SSH_KEY or DROPLET_IP not set; skipping redeploy."
+            echo "DROPLET_SSH_KEY / DROPLET_IP / DROPLET_HOST_KEY not all set; skipping redeploy."
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -457,12 +474,18 @@ jobs:
         if: steps.check.outputs.enabled == 'true'
         env:
           DROPLET_SSH_KEY: ${{ secrets.DROPLET_SSH_KEY }}
-          DROPLET_IP: ${{ secrets.DROPLET_IP }}
+          DROPLET_HOST_KEY: ${{ secrets.DROPLET_HOST_KEY }}
         run: |
           mkdir -p ~/.ssh
-          echo "$DROPLET_SSH_KEY" > ~/.ssh/droplet
+          chmod 700 ~/.ssh
+          # Pin the expected droplet host key (ed25519 / rsa line from
+          # `ssh-keyscan -H <droplet-ip>` captured once by the operator and
+          # stored as secret). This replaces runtime TOFU with an explicit
+          # trust anchor.
+          printf '%s\n' "$DROPLET_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+          printf '%s\n' "$DROPLET_SSH_KEY" > ~/.ssh/droplet
           chmod 600 ~/.ssh/droplet
-          ssh-keyscan -H "$DROPLET_IP" >> ~/.ssh/known_hosts
 
       - name: Rsync OTA files to droplet
         if: steps.check.outputs.enabled == 'true'
@@ -479,19 +502,38 @@ jobs:
         env:
           DROPLET_IP: ${{ secrets.DROPLET_IP }}
         run: |
+          set -euo pipefail
           # Nginx conf rarely changes per release, but keep it in sync.
           # Static-file changes don't need a reload (bind mount); conf changes do.
           local_sha=$(sha256sum deploy/nginx/conf.d/onym.chat.conf | awk '{print $1}')
           remote_sha=$(ssh -i ~/.ssh/droplet "root@${DROPLET_IP}" \
             "sha256sum /opt/onym-chat/deploy/nginx/conf.d/onym.chat.conf 2>/dev/null | awk '{print \$1}'" \
             || echo "")
-          if [ "$local_sha" != "$remote_sha" ]; then
-            echo "nginx conf changed, uploading + reloading..."
-            rsync -az -e "ssh -i ~/.ssh/droplet" \
-              deploy/nginx/conf.d/onym.chat.conf \
-              "root@${DROPLET_IP}:/opt/onym-chat/deploy/nginx/conf.d/onym.chat.conf"
-            ssh -i ~/.ssh/droplet "root@${DROPLET_IP}" \
-              'cd /opt/onym-chat && docker compose exec -T nginx nginx -t && docker compose exec -T nginx nginx -s reload'
-          else
+          if [ "$local_sha" = "$remote_sha" ]; then
             echo "nginx conf unchanged; no reload."
+            exit 0
           fi
+          echo "nginx conf changed; staging + validating + atomically swapping..."
+          # 1. Upload to a staging filename alongside the live one. Nginx
+          #    only reads files matching *.conf in /etc/nginx/conf.d/, so
+          #    a *.conf.new filename is a harmless staging slot.
+          rsync -az -e "ssh -i ~/.ssh/droplet" \
+            deploy/nginx/conf.d/onym.chat.conf \
+            "root@${DROPLET_IP}:/opt/onym-chat/deploy/nginx/conf.d/onym.chat.conf.new"
+          # 2. Atomically swap + validate on the droplet. If the new conf
+          #    fails `nginx -t`, restore the backup before any reload.
+          ssh -i ~/.ssh/droplet "root@${DROPLET_IP}" bash -s <<'REMOTE'
+          set -euo pipefail
+          cd /opt/onym-chat
+          cp deploy/nginx/conf.d/onym.chat.conf deploy/nginx/conf.d/onym.chat.conf.bak
+          mv deploy/nginx/conf.d/onym.chat.conf.new deploy/nginx/conf.d/onym.chat.conf
+          if docker compose exec -T nginx nginx -t; then
+            docker compose exec -T nginx nginx -s reload
+            rm -f deploy/nginx/conf.d/onym.chat.conf.bak
+            echo "nginx reloaded with new config"
+          else
+            echo "ERROR: new nginx config failed validation, rolling back" >&2
+            mv deploy/nginx/conf.d/onym.chat.conf.bak deploy/nginx/conf.d/onym.chat.conf
+            exit 1
+          fi
+          REMOTE

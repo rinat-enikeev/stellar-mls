@@ -20,6 +20,7 @@
 \usepackage{xcolor}
 \usepackage[hidelinks]{hyperref}
 \usepackage{url}
+\usepackage{seqsplit}
 \urlstyle{tt}
 
 \newcommand{\Fr}{\mathbb{F}_r}
@@ -147,7 +148,7 @@ The durable takeaway --- \emph{R1CS cost dominates host-function cost for any pr
 
 \section{Evaluation}
 
-Testnet deployment in alpha phase. Groth16 proofs are 192 bytes; public inputs add 32 bytes for $\Rmem$ and 96 bytes for $\Rupd$. On-chain verification invokes three BLS12-381 pairings plus a small multi-scalar multiplication; Soroban instruction count is 6--10M per update, inside testnet fee budgets. We do not report production group counts or update volumes; the system is not in production.
+Testnet deployment in alpha phase. Contract: \texttt{\seqsplit{CC6NUUKG25RSFI6D57HISDQ4HRBLXFAUC3GFVZIACHQX3NLRPYTRWWKE}} on Stellar testnet. Source: \url{https://github.com/rinat-enikeev/stellar-mls}. Postmortem tag ranges: P1 pre-fix at tags \texttt{v1.0.0}--\texttt{v1.2.9}; P2 pre-fix at tag \texttt{v1.2.7}; multi-policy landing at tag \texttt{v1.7.0} (2026-04-19). Groth16 proofs are 192 bytes; public inputs add 32 bytes for $\Rmem$ and 96 bytes for $\Rupd$. On-chain verification invokes three BLS12-381 pairings plus a small multi-scalar multiplication; Soroban instruction count is 6--10M per update, inside testnet fee budgets. We do not report production group counts or update volumes; the system is not in production.
 
 What an observer learns, once an honest multi-contributor Phase-2 MPC has been run (a deployment prerequisite, currently unmet): that a group exists, how many state changes have occurred and when, its current size tier and any prior tier it graduated out of, and the relayer's identity. Not learned: the member set, the updater's identity, the exact count within tier, or whether the group shrank or rotated within tier. We have not performed a formal differential-privacy analysis of the timing channel nor quantified tier-transition information leakage; methodology and measurements are future work.
 

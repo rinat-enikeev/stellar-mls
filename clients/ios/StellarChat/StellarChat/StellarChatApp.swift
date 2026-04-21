@@ -576,6 +576,24 @@ final class AppState {
         unreadCounts = localUnread
     }
 
+    /// ACK the last `count` non-mine messages in a group, so senders see ✓✓ for messages
+    /// that arrived while the recipient had the chat closed.
+    func sendBacklogAcks(groupID: String, count: Int) {
+        guard count > 0 else { return }
+        guard let msgs = chatMessages[groupID] else { return }
+        guard let group = groups.first(where: { $0.id == groupID }) else { return }
+        let start = max(0, msgs.count - count)
+        for i in start..<msgs.count {
+            let m = msgs[i]
+            if m.isMine { continue }
+            let ack = SEPMessageAck(eventID: m.id)
+            Task {
+                try? await chatTransport.sendProtocolMessage(
+                    ack, topic: group.topicTag, key: group.encryptionKey, keyManager: keyManager)
+            }
+        }
+    }
+
     func togglePinGroup(id: String) {
         guard let idx = groups.firstIndex(where: { $0.id == id }) else { return }
         groups[idx].isPinned.toggle()

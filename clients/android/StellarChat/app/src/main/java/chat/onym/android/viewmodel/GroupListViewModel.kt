@@ -2884,6 +2884,24 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /** ACK the last [count] messages in a group that aren't ours, so senders see ✓✓
+     *  for messages that arrived while the chat was closed. */
+    fun sendBacklogAcks(groupID: String, count: Int) {
+        if (count <= 0) return
+        val msgs = chatMessages[groupID] ?: return
+        val group = groups.find { it.id == groupID } ?: return
+        val start = (msgs.size - count).coerceAtLeast(0)
+        for (i in start until msgs.size) {
+            val m = msgs[i]
+            if (m.isMine) continue
+            val ackJson = JSONObject().apply {
+                put("type", SEPMessageAck.MESSAGE_TYPE)
+                put("eventID", m.id)
+            }.toString()
+            transport.sendProtocolMessage(group, ackJson)
+        }
+    }
+
     /** Wire relay OK responses to update message delivery status. */
     private fun setupOKHandler() {
         transport.onOK = { eventID, accepted ->

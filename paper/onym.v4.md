@@ -87,11 +87,11 @@ Technically true, strategically misleading: the actual consequence was *group li
 
 **Lesson.** A privacy invariant that lives in a *Security Considerations* bullet of a different document is fiction. Identity coupling — one key serving as both signing key and sender identity — is a recurring antipattern; decoupling is almost free on day one and a postmortem otherwise.
 
-### 4.3 Demoted: host-function hashes as a constraint-budget landmine
+### 4.3 A demoted lesson: host-function hashes as a constraint-budget landmine
 
-*(Demoted from P1 in earlier drafts; kept for the design-review template.)*
+An earlier version of Onym composed Poseidon inside the circuit with SHA-256 outside, chosen because Soroban exposes SHA-256 as a native host function. Because the circuit must reproduce the outer hash to bind its inner Poseidon output to the commitment the contract observes, the outer primitive's R1CS cost is paid in full at proving time: one SHA-256 compression requires approximately 25,000 R1CS constraints in the standard arkworks gadget, which dominated the small-tier circuit by an order of magnitude. Replacing the outer SHA-256 with two Poseidon calls (approximately 600 constraints in total) reduced R1CS cost by 8–14× across tiers.
 
-An earlier version of Onym composed Poseidon inside the circuit with SHA-256 outside. SHA-256 was chosen because Soroban has a native host function for it. The trouble is that the circuit has to *recompute* the outer hash to bind its inner Poseidon output to the commitment the contract observes, and one SHA-256 compression is ~25,000 R1CS constraints; on the small tier the circuit was outer-hash-dominated by an order of magnitude. Replacing the outer SHA-256 with two Poseidon calls (~600 constraints) reduces R1CS cost by 8–14× across tiers. The lesson — **R1CS cost dominates host-function cost for a primitive that straddles the circuit boundary** — is the durable takeaway; the specific SHA-256-vs-Poseidon trade-off is being obsoleted by Protocol 25's native Poseidon host function (CAP-0075, Jan 2026).
+The durable takeaway — *R1CS cost dominates host-function cost for any primitive that straddles the circuit boundary* — is what the design-review template retains. The specific SHA-256-versus-Poseidon trade-off that produced the mistake is now moot on Stellar: Protocol 25's CAP-0075 (January 2026) adds native Poseidon and Poseidon2 host functions, collapsing the host-side asymmetry that made SHA-256 the attractive default.
 
 ## 5. Evaluation
 

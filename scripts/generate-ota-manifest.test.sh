@@ -3,11 +3,14 @@
 #
 # Copies the generator into an isolated fake-repo tree (so it writes to a
 # temp directory rather than the real deploy/website/ota/), then checks:
-#   - First-run single version produces manifest + install page + root listing.
-#   - Multiple versions are listed in descending semver order, with the
-#     highest semver (not lexicographic max) badged "latest".
+#   - First-run single version produces manifest + per-version install page.
+#   - Multiple invocations create separate version dirs without clobbering.
 #   - Re-running with the same args is idempotent (byte-identical output).
 #   - Env overrides (GITHUB_REPOSITORY, BUNDLE_ID, TITLE, DOMAIN) are honored.
+#
+# The root /ota/index.html is no longer this script's concern — it's
+# regenerated on the droplet by scripts/regenerate-ota-index.sh so it can
+# see both release and PR builds at once.
 #
 # Run: bash scripts/generate-ota-manifest.test.sh
 
@@ -56,10 +59,10 @@ else
     fail "per-version index.html missing"
 fi
 
-if [ -f "${ota}/index.html" ]; then
-    pass "root index.html written"
+if [ ! -e "${ota}/index.html" ]; then
+    pass "root index.html not written (delegated to regenerator)"
 else
-    fail "root index.html missing"
+    fail "root index.html written — this script should no longer touch it"
 fi
 
 if grep -q 'v1.10.2/StellarChat-1.10.2.ipa' "${ota}/1.10.2/manifest.plist"; then
@@ -74,38 +77,29 @@ else
     fail "default bundle-id missing"
 fi
 
-# -------- Test 2: multiple versions → semver descending with badge --------
-echo "Test 2: multiple versions sorted descending"
+# -------- Test 2: multiple versions produce separate dirs --------
+echo "Test 2: multiple versions — each lands in its own dir"
 run_gen 1.9.0
 run_gen 1.10.10
 run_gen 2.0.0
-run_gen 1.10.2   # re-run to rebuild root listing
 
-root_index="${ota}/index.html"
-# Extract version strings in the order they appear in the listing.
-order=$(grep -oE '/ota/[0-9]+\.[0-9]+\.[0-9]+/' "$root_index" \
-    | sed 's|/ota/||; s|/||')
-expected=$(printf '2.0.0\n1.10.10\n1.10.2\n1.9.0\n')
-if [ "$order" = "$expected" ]; then
-    pass "versions in descending semver order"
-else
-    fail "version order wrong"
-    printf '    got:\n%s\n    expected:\n%s\n' "$order" "$expected" >&2
+all_present=1
+for v in 1.9.0 1.10.2 1.10.10 2.0.0; do
+    if [ ! -f "${ota}/${v}/manifest.plist" ]; then
+        fail "manifest missing for ${v}"
+        all_present=0
+    fi
+done
+if [ "$all_present" = "1" ]; then
+    pass "all four versions have their own manifest.plist"
 fi
 
-# Badge must be on 2.0.0 row only.
-badge_line=$(grep -n 'class="badge"' "$root_index" | head -1 || true)
-if [ -n "$badge_line" ] && printf '%s' "$badge_line" | grep -q '2.0.0'; then
-    pass "latest badge on highest semver"
+# Each manifest must reference its own version — no cross-talk.
+if grep -q 'v2.0.0/StellarChat-2.0.0.ipa' "${ota}/2.0.0/manifest.plist" \
+    && grep -q 'v1.10.10/StellarChat-1.10.10.ipa' "${ota}/1.10.10/manifest.plist"; then
+    pass "per-version manifests reference their own IPA"
 else
-    fail "latest badge missing or on wrong version (line: ${badge_line})"
-fi
-
-badge_count=$(grep -c 'class="badge"' "$root_index" || true)
-if [ "$badge_count" = "1" ]; then
-    pass "exactly one latest badge"
-else
-    fail "expected 1 badge, got ${badge_count}"
+    fail "cross-version IPA reference detected"
 fi
 
 # -------- Test 3: idempotency (same args → byte-identical output) --------

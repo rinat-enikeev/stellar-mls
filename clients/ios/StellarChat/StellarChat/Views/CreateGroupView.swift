@@ -790,8 +790,10 @@ struct CreateGroupView: View {
                                 .foregroundStyle(.tertiary)
                                 .rotationEffect(.degrees(showRawInviteCode ? 90 : 0))
                         }
+                        .frame(minHeight: 44)
                         .padding(.vertical, 12)
                         .padding(.horizontal, 16)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
 

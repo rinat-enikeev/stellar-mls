@@ -6,7 +6,7 @@ agents over SSH at `qa-agent:22` / `release-agent:22` using a dedicated
 key pair stored in n8n's encrypted credential store — **never** via the
 Docker socket.
 
-Six workflows live under `workflows/`. They're JSON exports of n8n
+Seven workflows live under `workflows/`. They're JSON exports of n8n
 flows, but the specs below describe what each one does in plain terms so
 you (or a future agent) can rebuild them from scratch in the n8n UI.
 
@@ -131,7 +131,7 @@ back-post as the right GitHub identity by consulting env vars set in
 | `N8N_HUMAN_QA_LOGIN` | Receives the smoke-test issue created by workflow 06. |
 | `N8N_BOT_LOGINS` | CSV of logins whose events must never re-trigger the round-trip. Include every agent-bound handle from `N8N_AGENT_MAP` plus `github-actions[bot]`. |
 | `N8N_MERGE_AUTHORIZED_LOGINS` | CSV of logins whose `/merge` comments workflow 06 will honour. |
-| `N8N_COMMAND_USERS` | CSV of logins allowed to address agents in PR comments by `@`-mentioning an implementer (see workflow 05). Can include agent handles — loop-proof because bot-posted comments never match the `@<login> <free text>` pattern. |
+| `N8N_COMMAND_USERS` | CSV of logins allowed to address agents by `@`-mentioning an implementer — used by workflow 05 (PR comments) and workflow 07 (plain-issue comments). Can include agent handles — loop-proof because bot-posted comments never match the `@<login> <free text>` pattern. |
 
 **Adding a new agent**: add a JSON key to `N8N_AGENT_MAP`; create the
 matching n8n SSH + GitHub credentials; add a new branch to the `Switch
@@ -186,6 +186,11 @@ agents by name on any PR.
 ## Workflow 1 — `01-qa-agent-issue`
 
 **Trigger**: GitHub webhook, `issues` event.
+
+> **See also**: workflow 07 handles `issue_comment` events on plain
+> issues when the commenter `@`-mentions an implementer. Both workflows
+> share the same `n8n-agent-issue.sh` script and target the same
+> `agent/issue-<N>` branch, so they're idempotent against each other.
 
 **Filter** (single boolean expression):
 - `action ∈ [opened, reopened, labeled, assigned]`
@@ -458,6 +463,56 @@ smallest change possible. Commit with message `address review comment
 
 The actual `gh pr merge` side-effect fires `pull_request.closed` +
 `merged == true`, which then flows into **workflow 02** to cut a tag.
+
+---
+
+## Workflow 7 — `07-issue-mention`
+
+**Trigger**: GitHub webhook, `issue_comment` event.
+
+**Filter** (all AND):
+- `action == "created"`.
+- Comment is on a **plain issue** (`issue` set, `issue.pull_request` is
+  falsy). PR comments are handled by workflow 05, not here.
+- Sender not a Bot; sender and comment author both ∉ `N8N_BOT_LOGINS`.
+- Commenter ∈ `N8N_COMMAND_USERS`.
+- Comment body does **not** match `/^\/(build|merge|review|fix)\b/i`
+  (those are slash-command workflows).
+- Comment body `@`-mentions at least one `implementer` login from
+  `N8N_AGENT_MAP` (`@<login>(?![a-z0-9-])`, case-insensitive) so prefix
+  collisions like `@gramyzer-helper` don't fire.
+
+**Steps**:
+
+1. **Extract issue fields** (Set): `issueNumber`, `issueTitle`,
+   `issueBody`, `commentBody`, `commentId`, `senderLogin`, `repoOwner`,
+   `repoName`.
+2. **Resolve implementer** (Code): parse the `@<implementer>` mention
+   from the comment → `implementerLogin`; strip the mention from the
+   body to get the free-text `instruction`; look up `host`/`port`/`user`
+   in the map; set `reviewerLogin = N8N_REVIEWER_DEFAULT`.
+3. **Encode prompt** (Code): build a Claude prompt that includes the
+   issue title + body plus the stripped instruction from the commenter,
+   base64-encoded.
+4. **Switch by host** — same branches as workflows 01/04/05/06.
+5. **SSH to the resolved agent**: same wrapper as workflow 01,
+   delegating to `./build/dev-env/bin/n8n-agent-issue.sh <issue#>
+   <promptB64> <reviewer>`. The script is idempotent on
+   `agent/issue-<N>` — if workflow 01 already opened a PR for this
+   issue, workflow 07 prints `SKIPPED=existing-pr` and returns the
+   existing PR URL rather than double-commenting.
+6. **Merge SSH outputs**, **Should comment?** (requires `PR_URL=` on
+   stdout and no `SKIPPED=`), **Comment on issue** posting the new PR
+   URL via the qa-bot credential.
+
+**Loop safety**: `sender.type === 'Bot'` rejects App-posted comments
+(the primary channel for agent comments); the `commandUsers.includes
+(commenter)` gate is the authorisation boundary for human commenters.
+Agents can still cross-delegate (agent A mentions agent B) if both are
+in `N8N_COMMAND_USERS` and A posts as a PAT/`User` type — mirrors
+workflow 05's design. This does not self-loop because agent-authored
+comments are templated (`agent opened …`) and never include free-text
+`@<agent>` mentions.
 
 ---
 

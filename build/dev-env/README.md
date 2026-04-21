@@ -68,7 +68,7 @@ build/dev-env/
 │   ├── remote-xcodebuild.sh     # baked to /usr/local/bin/remote-xcodebuild in container
 │   └── remote-jnilibs.sh        # baked to /usr/local/bin/remote-jnilibs
 ├── n8n/
-│   ├── README.md                # workflow specs (6 workflows — see docs/design-n8n-agent-round-trip.md for the round-trip)
+│   ├── README.md                # workflow specs (7 workflows — see docs/design-n8n-agent-round-trip.md for the round-trip)
 │   └── workflows/               # exported JSON (manual import in n8n UI)
 └── host/                        # deployed manually to the Mac mini
     ├── host-build-dispatch.sh
@@ -320,7 +320,7 @@ chmod 600 n8n/secrets/*.json
 
 `n8n-deploy.sh` imports every credential + workflow into
 `stellar-n8n`, rewrites `REPLACE_ME` IDs to real ones, activates the
-six workflows, and prints each webhook URL.
+seven workflows, and prints each webhook URL.
 
 You still need to create the owner account at
 http://127.0.0.1:5678 (UI, one-time) and point a cloudflared tunnel at

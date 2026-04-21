@@ -37,17 +37,18 @@ final class ChatViewModel {
     init(groupID: String, appState: AppState) {
         self.groupID = groupID
         self.appState = appState
-        // Capture the first unread message before clearing the count
+        // Capture the first unread message before clearing the count. Walks backwards
+        // counting only non-mine entries so the separator anchor stays correct even when
+        // outgoing echoes are interleaved with received messages — matches the isMine
+        // skipping in `sendBacklogAcks`.
         let unreadCount = appState.unreadCounts[groupID] ?? 0
         let msgs = appState.chatMessages[groupID] ?? []
-        if unreadCount > 0 && msgs.count >= unreadCount {
-            firstUnreadMessageID = msgs[msgs.count - unreadCount].id
-        }
+        firstUnreadMessageID = AppState.firstUnreadMessageID(msgs: msgs, unreadCount: unreadCount)
         // Mark this group as active BEFORE flushing backlog so any message decoded in the
         // gap between these two lines is gated in by the handler rather than dropped.
         appState.activeGroupID = groupID
         // Flush ACKs for messages that arrived while the chat was closed so the sender sees ✓✓.
-        appState.sendBacklogAcks(groupID: groupID, count: unreadCount)
+        appState.sendBacklogAcks(groupID: groupID)
         appState.unreadCounts[groupID] = 0
     }
 

@@ -67,6 +67,27 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private val groupListViewModel: GroupListViewModel by viewModels()
+    /** Active group ID stashed across background trips so the chat can be restored when
+     *  the user returns. Cleared on background so incoming messages decoded while the
+     *  app is not foreground (push wake, FCM, foreground service) do not auto-ACK and
+     *  burn a ✓✓ that the recipient hasn't actually seen. */
+    private var savedActiveGroupID: String? = null
+
+    override fun onStart() {
+        super.onStart()
+        val saved = savedActiveGroupID ?: return
+        savedActiveGroupID = null
+        groupListViewModel.activeGroupID = saved
+        // Catch up on any messages that arrived while backgrounded so the sender sees ✓✓
+        // when we resume — same idea as ChatViewModel.init flushing on chat open.
+        groupListViewModel.sendBacklogAcks(saved)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        savedActiveGroupID = groupListViewModel.activeGroupID
+        groupListViewModel.activeGroupID = null
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Demo flag must be set BEFORE the lazy `viewModels()` delegate

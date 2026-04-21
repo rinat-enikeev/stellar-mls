@@ -1068,6 +1068,54 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         private const val SALT_HISTORY_WINDOW = 64
         /** Maximum number of epoch snapshots retained per group. */
         private const val EPOCH_SNAPSHOT_WINDOW = 64
+
+        /** Cap on ACKs sent per backlog flush — bounds redundant ACK traffic when a
+         *  long history is walked at cold-start with no `isMine` to anchor against. */
+        const val BACKLOG_ACK_MAX = 50
+        /** Cap on messages scanned per backlog flush — bounds the cost of walking a long
+         *  history when nothing new needs ACKing (re-open with full `ackedEventIDs`). */
+        const val BACKLOG_ACK_SCAN_CAP = 200
+
+        /** Compute which event IDs to ACK from the tail of [msgs], skipping isMine
+         *  entries (anchor: when we last sent, prior msgs were ACKed) and entries already
+         *  in [alreadyAcked] (handler beat us, or earlier call this session). Returns IDs
+         *  in reverse-chronological order. Pure for unit testing. */
+        fun computeBacklogAcks(
+            msgs: List<ChatMessage>,
+            alreadyAcked: Set<String>,
+            maxAcks: Int = BACKLOG_ACK_MAX,
+            maxScan: Int = BACKLOG_ACK_SCAN_CAP
+        ): List<String> {
+            val toAck = ArrayList<String>(maxAcks)
+            var i = msgs.size - 1
+            var scanned = 0
+            while (i >= 0 && scanned < maxScan && toAck.size < maxAcks) {
+                val m = msgs[i]
+                if (m.isMine) break
+                if (m.id !in alreadyAcked) toAck.add(m.id)
+                i--
+                scanned++
+            }
+            return toAck
+        }
+
+        /** Locate the oldest of the last [unreadCount] non-mine messages — used as the
+         *  anchor for the unread-separator. Walks backwards counting only non-mine entries
+         *  so interleaved isMine messages do not shift the window. */
+        fun firstUnreadMessageID(msgs: List<ChatMessage>, unreadCount: Int): String? {
+            if (unreadCount <= 0) return null
+            var nonMine = 0
+            var firstUnread: String? = null
+            var i = msgs.size - 1
+            while (i >= 0 && nonMine < unreadCount) {
+                if (!msgs[i].isMine) {
+                    nonMine++
+                    firstUnread = msgs[i].id
+                }
+                i--
+            }
+            return firstUnread
+        }
         /** N-8: Max entries for dedup sets to prevent unbounded memory growth. */
         private const val MAX_DEDUP_SET_SIZE = 10_000
 
@@ -2895,26 +2943,18 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    /** ACK the last [count] non-mine messages in a group, so senders see ✓✓ for messages
-     *  that arrived while the chat was closed. Walks backwards counting only non-mine
-     *  entries to skip over any interleaved `isMine` messages (outgoing echoes, multi-device)
-     *  that would otherwise shift a fixed tail window and silently drop older unread messages.
-     *  Dedupes against [ackedEventIDs] so if the live handler already ACKed an arriving
-     *  message in the micro-window between setting `activeGroupID` and this call, we do
-     *  not re-ACK it. Best-effort: messages not yet hydrated into [chatMessages] at
-     *  cold-start open will not be ACKed on this open; the next open picks them up. */
-    fun sendBacklogAcks(groupID: String, count: Int) {
-        if (count <= 0) return
+    /** ACK recent non-mine messages in a group so senders see ✓✓ for messages that
+     *  arrived while the chat was closed. Walks backwards from the tail, stopping on the
+     *  first `isMine` (we sent that, so prior messages were already ACKed at that time)
+     *  or the scan/ACK caps — independent of `unreadCounts`, which is in-memory and resets
+     *  on restart. Skips messages already in [ackedEventIDs] (handler-acked head, repeat
+     *  opens) but keeps walking past them so a handler-acked newest message does not block
+     *  the cold-start backfill. */
+    fun sendBacklogAcks(groupID: String) {
         val msgs = chatMessages[groupID] ?: return
         val group = groups.find { it.id == groupID } ?: return
         val acked = ackedEventIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }
-        val toAck = ArrayList<String>(count)
-        var i = msgs.size - 1
-        while (i >= 0 && toAck.size < count) {
-            val m = msgs[i]
-            if (!m.isMine && acked.add(m.id)) toAck.add(m.id)
-            i--
-        }
+        val toAck = computeBacklogAcks(msgs, acked, BACKLOG_ACK_MAX, BACKLOG_ACK_SCAN_CAP)
         for (eventID in toAck) {
             val ackJson = JSONObject().apply {
                 put("type", SEPMessageAck.MESSAGE_TYPE)

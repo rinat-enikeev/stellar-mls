@@ -63,6 +63,7 @@
 		A49A5C6B2401EEB1847229DE /* QRCodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C2E0A174CC0B050D6BADB3 /* QRCodeView.swift */; };
 		AE25761903B1EA84D9AFADD2 /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8ACE473C3096412015326C52 /* ImageCache.swift */; };
 		B5836D3E7760359CFB8C42AC /* GroupCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8210CED65D67082D16673F07 /* GroupCrypto.swift */; };
+		BAC9F0AE0F1234560078ABCE /* BacklogAckTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAC9F0AE0F1234560078ABCD /* BacklogAckTests.swift */; };
 		C551E3710EC9BA8ACFC5A9C0 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0734DFA865A663F2138CD236 /* NotificationService.swift */; };
 		C5CAEF720E408DC99AAA19EE /* Bip39.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCBFA293E16FE5CE0F53A15C /* Bip39.swift */; };
 		C7C75384DD857AC9ABA5DF86 /* NostrEventTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE1DB9EAD5AE4BE3069DD5EF /* NostrEventTests.swift */; };
@@ -179,6 +180,7 @@
 		B0884F32E9A807B2566DD234 /* NostrRelayConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrRelayConnection.swift; sourceTree = "<group>"; };
 		B0EA74F19D71BB7C486F8B09 /* vk-update-medium.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "vk-update-medium.json"; sourceTree = "<group>"; };
 		BA643A0E8E9EAA763609E1EA /* StellarChat.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StellarChat.entitlements; sourceTree = "<group>"; };
+		BAC9F0AE0F1234560078ABCD /* BacklogAckTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BacklogAckTests.swift; sourceTree = "<group>"; };
 		BCBFA293E16FE5CE0F53A15C /* Bip39.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bip39.swift; sourceTree = "<group>"; };
 		BF781055530F3AF0953DE842 /* CreateGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateGroupView.swift; sourceTree = "<group>"; };
 		C1FB5F184FBA9633C01BDFBC /* VideoCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCache.swift; sourceTree = "<group>"; };
@@ -387,6 +389,7 @@
 		C1AFFA22C05C5C880CC15516 /* StellarChatTests */ = {
 			isa = PBXGroup;
 			children = (
+				BAC9F0AE0F1234560078ABCD /* BacklogAckTests.swift */,
 				26D7E8F6C119C6A9C6A3BD8D /* Bip39Tests.swift */,
 				EF0E72244FC0BE4C56CDFB4F /* CrossPlatformVectorTests.swift */,
 				F33C8AAAF9A2C4EA161050D8 /* GroupCryptoTests.swift */,
@@ -580,6 +583,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BAC9F0AE0F1234560078ABCE /* BacklogAckTests.swift in Sources */,
 				1217C3E28A0511F81BA95FB5 /* Bip39Tests.swift in Sources */,
 				C9FEBB1D7F88D7C80D131E20 /* CrossPlatformVectorTests.swift in Sources */,
 				08EF0A9E890B87680DE253A9 /* GroupCryptoTests.swift in Sources */,

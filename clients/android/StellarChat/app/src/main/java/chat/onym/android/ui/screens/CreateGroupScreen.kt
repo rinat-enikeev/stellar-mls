@@ -143,6 +143,7 @@ fun CreateGroupScreen(
     }
 
     if (showScanner) {
+        BackHandler { showScanner = false }
         Box(modifier = Modifier.fillMaxSize()) {
             QRScannerView { scanned ->
                 val trimmed = scanned.trim().lowercase()

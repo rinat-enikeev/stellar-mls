@@ -44,6 +44,21 @@ if command -v rbenv >/dev/null 2>&1; then
     eval "$(rbenv init - --no-rehash bash)"
 fi
 
+# Load fastlane/match credentials from an operator-managed env file.
+# GitHub Actions (release.yml) injects these as secrets; on mac-host we
+# read them from ~/.stellar-builder.env, which must be chmod 600 and
+# contain at minimum:
+#   MATCH_GIT_URL="git@github.com:.../match-profiles.git"
+#   MATCH_PASSWORD="..."
+#   MATCH_TEAM_ID="..."
+# `set -a` promotes every assignment to an export so fastlane sees them.
+if [ -f "$HOME/.stellar-builder.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$HOME/.stellar-builder.env"
+    set +a
+fi
+
 LOG_DIR="${HOME}/logs"
 BARE="${HOME}/work/stellar-mls.git"
 WORK_ROOT="/tmp/stellar-builds"

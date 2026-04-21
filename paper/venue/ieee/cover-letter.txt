@@ -1,0 +1,11 @@
+Subject: Submission to IEEE Security & Privacy Magazine — Feature Article
+
+Dear Editor-in-Chief,
+
+I am submitting "Postmortems from a SNARK-Gated Group Registry on Stellar" for consideration as a Feature Article. The paper is an experience report — not a cryptographic-proofs contribution, not a production-readiness claim, and not a general messaging substrate — documenting two authorization and privacy postmortems from the alpha deployment of Onym, a Stellar Soroban contract that gates group-membership state changes with Groth16 SNARKs. IEEE Security & Privacy is the natural venue because the article is engineering writing aimed at practitioners who design, review, or deploy ZK-based systems, and the durable contribution is two postmortems plus the design-review template they produced: P1 — the proof bound the wrong statement, allowing any party in the network path to substitute the new commitment while reusing a valid proof, fixed by splitting the relation, making the new commitment a public input, and adopting the public-input-hashing modification to obtain simulation-extractability rather than plain knowledge-soundness; P2 — long-lived Nostr signing keys leaked group co-membership through a public relay channel that a companion spec had documented only as "sender linkability," fixed by ephemeral per-event keys and per-epoch topic rotation. The lessons generalize beyond this deployment: a relation's soundness theorem says nothing about an operation whose security predicate is over variables the relation does not mention; privacy invariants that live in Security Considerations bullets of other documents are fiction. Two deployment caveats are stated up front in the abstract rather than buried — a single-contributor Phase-2 trusted setup, and trivial defeat of fee-payer unlinkability for n=2 pair chats — because they are load-bearing for any reader's interpretation of what the system currently provides. The paper has not been published or submitted elsewhere. The author has no conflicts of interest to declare.
+
+Sincerely,
+Rinat Enikeev
+Independent researcher, Tallinn, Estonia
+rinat.enikeev@gmail.com
+https://github.com/rinat-enikeev/stellar-mls

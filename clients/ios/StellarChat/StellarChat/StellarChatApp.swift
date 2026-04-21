@@ -210,6 +210,11 @@ final class AppState {
     var chatMessages: [String: [ChatMessage]] = [:]
     /// Dedup set for chat message event IDs, keyed by group ID.
     private var seenMessageIDs: [String: Set<String>] = [:]
+    /// Event IDs already ACKed this session, per group. Dedupes the batched live handler
+    /// (`flushPendingMessages`) against `sendBacklogAcks` so an open-close-open cycle, a
+    /// stale `unreadCounts` after restart, or a multi-device echo cannot resend the same
+    /// ACK to the sender.
+    private var ackedEventIDs: [String: Set<String>] = [:]
     /// Message IDs currently being retried. Prevents two rapid taps on the same
     /// failed message from launching concurrent retries (mirrors Android's
     /// `retryingMessageIDs`). Access is serialised on the @MainActor class.
@@ -565,7 +570,8 @@ final class AppState {
             }
             // ACK drives the ✓✓ "read" indicator — only send when recipient has the chat open.
             if !msg.isMine, activeGroupID == groupID,
-               let group = groups.first(where: { $0.id == groupID }) {
+               let group = groups.first(where: { $0.id == groupID }),
+               ackedEventIDs[groupID, default: []].insert(event.id).inserted {
                 let ack = SEPMessageAck(eventID: event.id)
                 Task {
                     try? await chatTransport.sendProtocolMessage(
@@ -580,7 +586,10 @@ final class AppState {
     /// that arrived while the recipient had the chat closed. Walks backwards counting only
     /// non-mine entries to skip over any interleaved `isMine` messages (outgoing echoes,
     /// multi-device) that would otherwise shift a fixed tail window and silently drop
-    /// older unread messages.
+    /// older unread messages. Dedupes against `ackedEventIDs` so repeated opens, a stale
+    /// `unreadCounts` after restart, or a multi-device echo cannot cause us to re-ACK a
+    /// message this session. Best-effort: messages not yet hydrated into `chatMessages`
+    /// at cold-start open are silently skipped and will be ACKed on the next open.
     func sendBacklogAcks(groupID: String, count: Int) {
         guard count > 0 else { return }
         guard let msgs = chatMessages[groupID] else { return }
@@ -590,7 +599,9 @@ final class AppState {
         var i = msgs.count - 1
         while i >= 0 && toAck.count < count {
             let m = msgs[i]
-            if !m.isMine { toAck.append(m.id) }
+            if !m.isMine, ackedEventIDs[groupID, default: []].insert(m.id).inserted {
+                toAck.append(m.id)
+            }
             i -= 1
         }
         for eventID in toAck {
@@ -620,6 +631,7 @@ final class AppState {
             invitation.payload.groupID.map { String(format: "%02x", $0) }.joined() == id
         }
         declinedGroupIDs.insert(id)
+        ackedEventIDs.removeValue(forKey: id)
     }
 
     func removePendingInvitation(id: String) {

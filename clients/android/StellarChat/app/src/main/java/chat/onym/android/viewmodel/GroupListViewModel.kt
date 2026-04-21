@@ -112,6 +112,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     // Uses SnapshotStateMap so Compose recomposes when messages change.
     val chatMessages = androidx.compose.runtime.mutableStateMapOf<String, List<ChatMessage>>()
     private val seenMessageIDs = java.util.concurrent.ConcurrentHashMap<String, MutableSet<String>>()
+    /** Event IDs already ACKed this session, per group. Dedupes the live handler against
+     *  `sendBacklogAcks` so the micro-race between setting `activeGroupID` and flushing
+     *  the backlog (handler may fire on a transport thread) cannot emit the same ACK twice. */
+    private val ackedEventIDs = java.util.concurrent.ConcurrentHashMap<String, MutableSet<String>>()
     /** Unread message count per group. Reset when the user opens the chat. */
     val unreadCounts = androidx.compose.runtime.mutableStateMapOf<String, Int>()
     /** The group ID currently being viewed, used to suppress unread increments. */
@@ -457,6 +461,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         groups.removeAll { it.id == id }
         chatMessages.remove(id)
         seenMessageIDs.remove(id)
+        ackedEventIDs.remove(id)
         epochSnapshots.remove(id)
         pushEnabledStates.remove(id)
         viewModelScope.launch {
@@ -2815,13 +2820,16 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 // ACK drives the ✓✓ "read" indicator — only send when recipient has the chat open.
                 if (!msg.isMine && activeGroupID == groupID) {
-                    val group = groups.find { it.id == groupID }
-                    if (group != null) {
-                        val ackJson = JSONObject().apply {
-                            put("type", SEPMessageAck.MESSAGE_TYPE)
-                            put("eventID", eventID)
-                        }.toString()
-                        transport.sendProtocolMessage(group, ackJson)
+                    val acked = ackedEventIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }
+                    if (acked.add(eventID)) {
+                        val group = groups.find { it.id == groupID }
+                        if (group != null) {
+                            val ackJson = JSONObject().apply {
+                                put("type", SEPMessageAck.MESSAGE_TYPE)
+                                put("eventID", eventID)
+                            }.toString()
+                            transport.sendProtocolMessage(group, ackJson)
+                        }
                     }
                 }
                 // Update lastEventTimestamp (stored in seconds for relay catch-up filters)
@@ -2863,13 +2871,16 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 // ACK drives the ✓✓ "read" indicator — only send when recipient has the chat open.
                 if (!msg.isMine && activeGroupID == groupID) {
-                    val group = groups.find { it.id == groupID }
-                    if (group != null) {
-                        val ackJson = JSONObject().apply {
-                            put("type", SEPMessageAck.MESSAGE_TYPE)
-                            put("eventID", eventID)
-                        }.toString()
-                        transport.sendProtocolMessage(group, ackJson)
+                    val acked = ackedEventIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }
+                    if (acked.add(eventID)) {
+                        val group = groups.find { it.id == groupID }
+                        if (group != null) {
+                            val ackJson = JSONObject().apply {
+                                put("type", SEPMessageAck.MESSAGE_TYPE)
+                                put("eventID", eventID)
+                            }.toString()
+                            transport.sendProtocolMessage(group, ackJson)
+                        }
                     }
                 }
                 val group = groups.find { it.id == groupID }
@@ -2887,16 +2898,21 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     /** ACK the last [count] non-mine messages in a group, so senders see ✓✓ for messages
      *  that arrived while the chat was closed. Walks backwards counting only non-mine
      *  entries to skip over any interleaved `isMine` messages (outgoing echoes, multi-device)
-     *  that would otherwise shift a fixed tail window and silently drop older unread messages. */
+     *  that would otherwise shift a fixed tail window and silently drop older unread messages.
+     *  Dedupes against [ackedEventIDs] so if the live handler already ACKed an arriving
+     *  message in the micro-window between setting `activeGroupID` and this call, we do
+     *  not re-ACK it. Best-effort: messages not yet hydrated into [chatMessages] at
+     *  cold-start open will not be ACKed on this open; the next open picks them up. */
     fun sendBacklogAcks(groupID: String, count: Int) {
         if (count <= 0) return
         val msgs = chatMessages[groupID] ?: return
         val group = groups.find { it.id == groupID } ?: return
+        val acked = ackedEventIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }
         val toAck = ArrayList<String>(count)
         var i = msgs.size - 1
         while (i >= 0 && toAck.size < count) {
             val m = msgs[i]
-            if (!m.isMine) toAck.add(m.id)
+            if (!m.isMine && acked.add(m.id)) toAck.add(m.id)
             i--
         }
         for (eventID in toAck) {

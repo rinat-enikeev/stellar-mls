@@ -19,6 +19,15 @@
 # remote-jnilibs unpacks into the container's workspace/build/android.
 set -euo pipefail
 
+# rbenv bootstrap. ssh with SSH_ORIGINAL_COMMAND is a non-interactive,
+# non-login shell — ~/.zshrc / ~/.bashrc aren't sourced — so rbenv is
+# absent by default and `bundle` would fall through to macOS system Ruby
+# 2.6, which is too old for the bundler version our Gemfile.lock pins.
+if [ -d "$HOME/.rbenv" ]; then
+    export PATH="$HOME/.rbenv/bin:$HOME/.rbenv/shims:$PATH"
+    eval "$(rbenv init - --no-rehash bash)"
+fi
+
 LOG_DIR="${HOME}/logs"
 BARE="${HOME}/work/stellar-mls.git"
 WORK_ROOT="/tmp/stellar-builds"
@@ -73,6 +82,15 @@ echo ">>> $(date -u +%FT%TZ) sub=$SUB sha=$SHA log=$LOG" >&2
             echo "==> xcodegen + fastlane build_local" >&2
             (cd clients/ios/StellarChat && xcodegen generate) >&2
             cd clients
+            # Install the exact bundler version pinned in Gemfile.lock's
+            # BUNDLED WITH footer if it's missing. Skipping this step leaves
+            # `bundle exec` crashing with Gem::GemNotFoundException whenever
+            # the lockfile bumps bundler faster than mac-host does.
+            BUNDLER_VERSION=$(awk '/^BUNDLED WITH/{getline; gsub(/^[[:space:]]+/,""); print; exit}' Gemfile.lock)
+            if [ -n "$BUNDLER_VERSION" ] && ! gem list -i bundler -v "$BUNDLER_VERSION" >/dev/null 2>&1; then
+                echo "==> installing bundler ${BUNDLER_VERSION} (pinned in Gemfile.lock)" >&2
+                gem install bundler -v "$BUNDLER_VERSION" --no-document >&2
+            fi
             bundle install --path vendor/bundle >&2
             bundle exec fastlane ios build_local >&2
 

@@ -125,12 +125,6 @@ We thank the Stellar Development Foundation for the ZK primitives landed in the 
 
 **Use of generative AI.** The author is a builder, not a cryptographer. Onym was designed, implemented, and deployed before any of §2's language existed on paper. Turning the working system into writing that a cryptographer would read as sound required consulting Claude (Anthropic, 2026) extensively — as a tutor on the literature (AGM, simulation-extractability, the public-input-hashing modification, Poseidon's ROM framing) and as an interlocutor for the framing choices in §2 and §4. For each framing, the author read the sources Claude surfaced and adopted it only after the sources checked out. This article is a builder's postmortems and review lessons, not a protocol proposal; the postmortems are the author's work, the author is accountable for every technical statement and any remaining errors, and the formal scaffolding around the postmortems is in the paper at all because AI made it accessible to a builder.
 
-## A note on reviewer expectations
-
-A draft of this material received a review that, in good faith, asked for a cryptographic-proofs contribution: full BKSV-style simulation-extractability game definitions, a reduction for commitment hiding via random-oracle programmability, a quantified post-quantum migration plan, a key-compromise recovery protocol, a diff-constrained relation with measured R1CS deltas, and a conforming MLS Delivery Service integration demonstrated before submission. We have not done any of those, and v4 deliberately does not pretend to. This is an experience report — the same review at the correct genre would read most of those asks as out of scope. We flag the genre here and in §1 so the scope question is not re-litigated in every subsection.
-
-Two of the reviewer's critiques were fair and are adopted: the title no longer claims "metadata without observers" (the paper always had caveats its title didn't advertise); and the framing commits to "registry primitive" rather than oscillating between registry and messaging substrate. The Phase-2 MPC status is stated in the abstract and §2 rather than deep in a limitations subsection. Everything else the reviewer asked for is work for a different paper or a different version of this one.
-
 ## References
 
 [1] R. Barnes et al., "The Messaging Layer Security (MLS) Protocol," IETF RFC 9420, 2023.

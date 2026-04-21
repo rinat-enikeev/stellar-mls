@@ -86,6 +86,9 @@ services:
       - ./deploy/nginx/ssl-params.conf:/etc/nginx/ssl-params.conf:ro
       - ./deploy/website:/var/www/website:ro
       - ./deploy/ceremony:/var/www/ceremony:ro
+      # PR debug build landing pages published by the /build android n8n flow.
+      # Lives outside deploy/ so deploy.sh's `rm -rf deploy` doesn't wipe it.
+      - /opt/onym-chat-builds:/var/www/builds:ro
       - certbot-webroot:/var/www/certbot:ro
       - certbot-certs:/etc/letsencrypt:ro
     restart: unless-stopped

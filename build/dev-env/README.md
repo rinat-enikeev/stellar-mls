@@ -328,6 +328,46 @@ http://127.0.0.1:5678 (UI, one-time) and point a cloudflared tunnel at
 `WEBHOOK_URL` in `n8n.env` before running the deploy script so the
 printed webhook URLs are correct. Full playbook: `n8n/README.md`.
 
+### 12. qa-agent SSH trust for onym.chat build hosting (optional)
+
+The `/build android` flow publishes a landing page for each debug
+build at `https://onym.chat/build/pr-<N>/<short-sha>/`. qa-agent
+reaches the droplet over SSH using the alias `droplet`. If this trust
+is not set up, the build still succeeds and the PR comment still
+includes the GitHub download link — only the onym.chat link is
+omitted.
+
+One-time setup (run on the Mac host, then into qa-agent):
+
+```bash
+# 1. Generate a dedicated key inside qa-agent.
+docker exec -it stellar-qa-agent bash -lc '
+  ssh-keygen -t ed25519 -N "" -f /home/agent/.ssh/droplet -C "qa-agent@droplet"
+  cat >> /home/agent/.ssh/config <<CFG
+Host droplet
+    HostName <droplet-ip-or-dns>
+    User root
+    IdentityFile /home/agent/.ssh/droplet
+    StrictHostKeyChecking accept-new
+CFG
+  chmod 600 /home/agent/.ssh/config /home/agent/.ssh/droplet
+  cat /home/agent/.ssh/droplet.pub
+'
+
+# 2. Add the printed pub key to the droplet:
+ssh root@<droplet-ip> 'cat >> /root/.ssh/authorized_keys' < <the-pub-key>
+
+# 3. On the droplet, create the persistent build-hosting directory
+#    (bind-mounted read-only into nginx by docker-compose.yml).
+ssh root@<droplet-ip> 'mkdir -p /opt/onym-chat-builds && chmod 755 /opt/onym-chat-builds'
+
+# 4. Rolling restart the nginx container so the new bind mount is picked up:
+ssh root@<droplet-ip> 'cd /opt/onym-chat && docker compose up -d nginx'
+
+# 5. Verify trust from qa-agent:
+docker exec stellar-qa-agent ssh -o BatchMode=yes droplet 'echo ok'
+```
+
 ---
 
 ## Verification

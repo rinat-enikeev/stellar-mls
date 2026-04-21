@@ -1,0 +1,52 @@
+% Fig2.tex — P1 before/after (the bug and its fix)
+% Standalone wrapper for IEEE submission.
+\documentclass[border=4pt,tikz]{standalone}
+\usepackage{amsmath,amssymb}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,calc}
+
+% Math shortcuts (mirror onym-ieee.tex)
+\newcommand{\Cold}{C_{\mathsf{old}}}
+\newcommand{\Cnew}{C_{\mathsf{new}}}
+\newcommand{\eold}{\epsilon_{\mathsf{old}}}
+\newcommand{\Rmem}{R_{\mathsf{Mem}}}
+\newcommand{\Rupd}{R_{\mathsf{Upd}}}
+
+% Bracketed cite for the standalone version (no bibliography here);
+% the inline version in onym-ieee.tex uses \cite{baghery2021}.
+\providecommand{\cite}[1]{[9]}
+
+\begin{document}
+\begin{tikzpicture}[
+    font=\footnotesize,
+    panel/.style={draw, thick, rounded corners=2pt, inner sep=6pt, text width=58mm, align=left, fill=black!5},
+    arr/.style={-{Latex[length=3mm]}, very thick}
+]
+
+\node[panel] (before) at (-3.4,0) {%
+    \textbf{Before (v1.0.0--v1.2.9): vulnerable}\\[3pt]
+    Relation: $\Rmem(C, \epsilon)$\\
+    Public inputs: $C,\, \epsilon$\\[3pt]
+    Contract entry point:\\
+    \quad\texttt{update\_commitment(}\\
+    \quad\quad\texttt{proof,}\\
+    \quad\quad\texttt{new\_commitment} $\leftarrow$ \emph{free}\\
+    \quad\texttt{)}\\[3pt]
+    \emph{Anyone in the network path can\\swap \texttt{new\_commitment} while\\keeping the proof valid.}
+};
+
+\node[panel] (after) at (3.4,0) {%
+    \textbf{After (v1.3.0+): SE-bound}\\[3pt]
+    Relation: $\Rupd(\Cold, \eold, \Cnew)$\\
+    Public inputs: $\Cold,\, \eold,\, \Cnew$\\
+    \quad(hashed per~[9])\\[3pt]
+    Contract entry point:\\
+    \quad\texttt{update\_commitment(proof)}\\
+    \quad$\Cnew$ bound by IC\\[3pt]
+    \emph{Simulation-extractable; no\\contract-controlled free\\parameter on this path.}
+};
+
+\draw[arr] (before) -- (after);
+
+\end{tikzpicture}
+\end{document}

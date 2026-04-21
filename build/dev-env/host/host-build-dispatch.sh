@@ -19,12 +19,22 @@
 # remote-jnilibs unpacks into the container's workspace/build/android.
 set -euo pipefail
 
-# rbenv bootstrap. ssh with SSH_ORIGINAL_COMMAND is a non-interactive,
-# non-login shell — ~/.zshrc / ~/.bashrc aren't sourced — so rbenv is
-# absent by default and `bundle` would fall through to macOS system Ruby
-# 2.6, which is too old for the bundler version our Gemfile.lock pins.
-if [ -d "$HOME/.rbenv" ]; then
-    export PATH="$HOME/.rbenv/bin:$HOME/.rbenv/shims:$PATH"
+# Homebrew bindir is NOT on the default non-interactive ssh PATH
+# (sshd hands us /usr/bin:/bin:/usr/sbin:/sbin when SSH_ORIGINAL_COMMAND
+# runs via authorized_keys `command="..."` — no shell rc files are sourced).
+# Prepend whichever brew prefix actually exists so tools like flock,
+# rbenv, xcodegen, and gh resolve.
+for brew_bin in /opt/homebrew/bin /usr/local/bin; do
+    [ -d "$brew_bin" ] && PATH="$brew_bin:$PATH"
+done
+export PATH
+
+# rbenv bootstrap — same rationale: non-interactive ssh doesn't source
+# ~/.zshrc / ~/.bashrc, so `bundle` would otherwise fall through to
+# macOS system Ruby 2.6, which is too old for the bundler version our
+# Gemfile.lock pins (and Bundler 2.5+ requires Ruby >= 3.0).
+if command -v rbenv >/dev/null 2>&1; then
+    export PATH="$HOME/.rbenv/shims:$PATH"
     eval "$(rbenv init - --no-rehash bash)"
 fi
 

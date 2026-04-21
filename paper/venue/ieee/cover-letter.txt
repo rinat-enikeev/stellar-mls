@@ -1,0 +1,68 @@
+Rinat Enikeev
+Independent Researcher
+Tallinn, Estonia
+rinat.enikeev@gmail.com
+
+April 21, 2026
+
+To the Editor-in-Chief and Associate Editors,
+IEEE Security & Privacy
+
+Dear Editors,
+
+I am submitting the enclosed manuscript, "Postmortems from a SNARK-Gated
+Group Registry on Stellar," for consideration as a feature article in
+IEEE Security & Privacy.
+
+The article is an experience report on Onym, an alpha-stage Stellar
+contract that anchors group-membership state as a 32-byte commitment and
+gates each state transition on a Groth16 SNARK. The technical contribution
+is not a new cryptographic primitive — it is two postmortems and a
+design-review template derived from real engineering missteps that
+happened during deployment. The first postmortem (P1) is an authorization
+vulnerability in which a relation's soundness theorem was a true statement
+about the wrong predicate; the second (P2) is a transport-layer
+co-membership leak that lived in the Security Considerations bullet of a
+companion document. A third demoted lesson concerns R1CS cost as the
+binding constraint on host-function choice for primitives that straddle
+the circuit boundary.
+
+I believe the article fits the magazine's stated scope for the following
+reasons. First, the lessons generalize beyond Onym to any SNARK-gated
+contract: review topology, simulation-extractability vs. plain
+knowledge-soundness, and identity-coupling antipatterns are recurring
+issues across the applied-ZK design space, not Onym-specific. Second, the
+piece is deliberately written as a builder's postmortem rather than a
+research result — there are no new theorems and no performance tables
+beyond the on-chain instruction count. Third, the submission is honest
+about what it does not claim: the abstract states upfront that the
+deployed verification keys are the output of a single-contributor Phase-2
+trusted setup, which makes every formal authorization claim vacuous
+against the setup operator until a multi-contributor MPC has been re-run.
+
+Two things the editors should know:
+
+(1) Use of generative AI. The Acknowledgments contain a "Use of generative
+AI" note describing how I worked with Claude (Anthropic) to translate a
+working system into writing that a cryptographer would read as sound.
+The note distinguishes AI as tutor and reader from AI as text generator,
+and the postmortem content is my own engineering work.
+
+(2) Concurrent submissions and prior dissemination. The manuscript has
+not been submitted to any other venue. The deployed contract source and
+the postmortem version tags are public on GitHub
+(https://github.com/rinat-enikeev/stellar-mls); no preprint exists.
+
+The figures (Fig. 1: data and metadata flow; Fig. 2: P1 before/after) are
+included inline in the manuscript and are also supplied as separate PDF
+source files per the IEEE Magazine submission requirements.
+
+Suggested reviewers and conflicts of interest: I have no academic
+co-authors and no institutional affiliation that constrains reviewer
+choice. I would defer to the editor on reviewer selection within the
+applied-cryptography and metadata-private-messaging community.
+
+Thank you for your consideration.
+
+Sincerely,
+Rinat Enikeev

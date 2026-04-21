@@ -110,6 +110,62 @@ echo ">>> $(date -u +%FT%TZ) sub=$SUB sha=$SHA log=$LOG" >&2
             echo "==> building iOS xcframework" >&2
             ./scripts/build-xcframework.sh >&2
 
+            # RelayerDefaults.generated.swift is gitignored. xcodegen snapshots
+            # the StellarChat/ folder at project-generation time, so the file
+            # must exist on disk before xcodegen runs or it won't be added to
+            # the target's compile sources. The .xcodeproj's "Generate Relayer
+            # Defaults" pre-build phase is too late. CI does the same in
+            # pr.yml / release.yml — keep those three paths in sync.
+            echo "==> pre-generating RelayerDefaults.generated.swift" >&2
+            ENV_FILE="relayer/.env"
+            [ -f "$ENV_FILE" ] || ENV_FILE="relayer/.env.example"
+            ROOT_ENV=".env"
+            [ -f "$ROOT_ENV" ] || ROOT_ENV=".env.example"
+            OUT="clients/ios/StellarChat/StellarChat/RelayerDefaults.generated.swift"
+            EP=""; CID=""; BIND=""; AUTH=""; DOMAIN=""
+            if [ -f "$ENV_FILE" ]; then
+                while IFS= read -r line || [ -n "$line" ]; do
+                    case "$line" in \#*|"") continue ;; esac
+                    key="${line%%=*}"; val="${line#*=}"
+                    val="${val%\"}"; val="${val#\"}"
+                    case "$key" in
+                        RELAYER_RPC_URL) EP="$val" ;;
+                        RELAYER_CONTRACT_ID) CID="$val" ;;
+                        RELAYER_BIND) BIND="$val" ;;
+                        RELAYER_AUTH_TOKENS) AUTH="${val%%,*}" ;;
+                    esac
+                done < "$ENV_FILE"
+            fi
+            if [ -f "$ROOT_ENV" ]; then
+                while IFS= read -r line || [ -n "$line" ]; do
+                    case "$line" in \#*|"") continue ;; esac
+                    key="${line%%=*}"; val="${line#*=}"
+                    val="${val%\"}"; val="${val#\"}"
+                    case "$key" in
+                        DOMAIN) DOMAIN="$val" ;;
+                    esac
+                done < "$ROOT_ENV"
+            fi
+            NOSTR=""; BLOSSOM=""; RELAY=""
+            if [ -n "$DOMAIN" ]; then
+                NOSTR="wss://nostr.$DOMAIN"
+                BLOSSOM="https://blossom.$DOMAIN"
+                RELAY="https://relay.$DOMAIN"
+            elif [ -n "$BIND" ]; then
+                RELAY="http://$BIND"
+            fi
+            cat > "$OUT" << SWIFT
+// Auto-generated from .env + relayer/.env — do not edit
+enum RelayerDefaults {
+    static let contractEndpoint = "$EP"
+    static let contractID = "$CID"
+    static let relayerURL = "$RELAY"
+    static let relayerAuthToken = "$AUTH"
+    static let defaultNostrRelay = "$NOSTR"
+    static let defaultBlossomServer = "$BLOSSOM"
+}
+SWIFT
+
             echo "==> xcodegen + fastlane build_local" >&2
             (cd clients/ios/StellarChat && xcodegen generate) >&2
             cd clients

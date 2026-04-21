@@ -563,8 +563,9 @@ final class AppState {
                event.createdAt > group.lastEventTimestamp {
                 updateLastEventTimestamp(groupID: groupID, timestamp: event.createdAt)
             }
-            // Send delivery ACK for non-mine messages (fire-and-forget)
-            if !msg.isMine, let group = groups.first(where: { $0.id == groupID }) {
+            // ACK drives the ✓✓ "read" indicator — only send when recipient has the chat open.
+            if !msg.isMine, activeGroupID == groupID,
+               let group = groups.first(where: { $0.id == groupID }) {
                 let ack = SEPMessageAck(eventID: event.id)
                 Task {
                     try? await chatTransport.sendProtocolMessage(

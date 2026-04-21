@@ -2813,8 +2813,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 if (!msg.isMine && activeGroupID != groupID) {
                     unreadCounts[groupID] = (unreadCounts[groupID] ?: 0) + 1
                 }
-                // Send delivery ACK for non-mine messages (fire-and-forget)
-                if (!msg.isMine) {
+                // ACK drives the ✓✓ "read" indicator — only send when recipient has the chat open.
+                if (!msg.isMine && activeGroupID == groupID) {
                     val group = groups.find { it.id == groupID }
                     if (group != null) {
                         val ackJson = JSONObject().apply {
@@ -2861,8 +2861,8 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 if (!msg.isMine && activeGroupID != groupID) {
                     unreadCounts[groupID] = (unreadCounts[groupID] ?: 0) + 1
                 }
-                // Send delivery ACK for non-mine image messages (fire-and-forget)
-                if (!msg.isMine) {
+                // ACK drives the ✓✓ "read" indicator — only send when recipient has the chat open.
+                if (!msg.isMine && activeGroupID == groupID) {
                     val group = groups.find { it.id == groupID }
                     if (group != null) {
                         val ackJson = JSONObject().apply {

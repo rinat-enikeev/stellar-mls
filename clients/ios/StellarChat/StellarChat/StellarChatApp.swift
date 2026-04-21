@@ -577,16 +577,24 @@ final class AppState {
     }
 
     /// ACK the last `count` non-mine messages in a group, so senders see ✓✓ for messages
-    /// that arrived while the recipient had the chat closed.
+    /// that arrived while the recipient had the chat closed. Walks backwards counting only
+    /// non-mine entries to skip over any interleaved `isMine` messages (outgoing echoes,
+    /// multi-device) that would otherwise shift a fixed tail window and silently drop
+    /// older unread messages.
     func sendBacklogAcks(groupID: String, count: Int) {
         guard count > 0 else { return }
         guard let msgs = chatMessages[groupID] else { return }
         guard let group = groups.first(where: { $0.id == groupID }) else { return }
-        let start = max(0, msgs.count - count)
-        for i in start..<msgs.count {
+        var toAck: [String] = []
+        toAck.reserveCapacity(count)
+        var i = msgs.count - 1
+        while i >= 0 && toAck.count < count {
             let m = msgs[i]
-            if m.isMine { continue }
-            let ack = SEPMessageAck(eventID: m.id)
+            if !m.isMine { toAck.append(m.id) }
+            i -= 1
+        }
+        for eventID in toAck {
+            let ack = SEPMessageAck(eventID: eventID)
             Task {
                 try? await chatTransport.sendProtocolMessage(
                     ack, topic: group.topicTag, key: group.encryptionKey, keyManager: keyManager)

@@ -74,10 +74,11 @@ class ChatViewModel(
         firstUnreadMessageID = if (unreadCount > 0 && msgs.size >= unreadCount) {
             msgs[msgs.size - unreadCount].id
         } else null
+        // Mark this group as active BEFORE flushing backlog so any message decoded in the
+        // gap between these two lines is gated in by the handler rather than dropped.
+        groupListViewModel.activeGroupID = groupID
         // Flush ACKs for messages that arrived while the chat was closed so the sender sees ✓✓.
         groupListViewModel.sendBacklogAcks(groupID, unreadCount)
-        // Mark this group as active and clear unread count
-        groupListViewModel.activeGroupID = groupID
         groupListViewModel.unreadCounts[groupID] = 0
     }
 

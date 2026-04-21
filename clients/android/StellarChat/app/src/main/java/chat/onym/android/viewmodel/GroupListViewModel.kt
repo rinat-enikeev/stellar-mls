@@ -2884,19 +2884,25 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    /** ACK the last [count] messages in a group that aren't ours, so senders see ✓✓
-     *  for messages that arrived while the chat was closed. */
+    /** ACK the last [count] non-mine messages in a group, so senders see ✓✓ for messages
+     *  that arrived while the chat was closed. Walks backwards counting only non-mine
+     *  entries to skip over any interleaved `isMine` messages (outgoing echoes, multi-device)
+     *  that would otherwise shift a fixed tail window and silently drop older unread messages. */
     fun sendBacklogAcks(groupID: String, count: Int) {
         if (count <= 0) return
         val msgs = chatMessages[groupID] ?: return
         val group = groups.find { it.id == groupID } ?: return
-        val start = (msgs.size - count).coerceAtLeast(0)
-        for (i in start until msgs.size) {
+        val toAck = ArrayList<String>(count)
+        var i = msgs.size - 1
+        while (i >= 0 && toAck.size < count) {
             val m = msgs[i]
-            if (m.isMine) continue
+            if (!m.isMine) toAck.add(m.id)
+            i--
+        }
+        for (eventID in toAck) {
             val ackJson = JSONObject().apply {
                 put("type", SEPMessageAck.MESSAGE_TYPE)
-                put("eventID", m.id)
+                put("eventID", eventID)
             }.toString()
             transport.sendProtocolMessage(group, ackJson)
         }

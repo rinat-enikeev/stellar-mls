@@ -430,3 +430,68 @@ jobs:
             git pull --rebase origin main
           done
           git push origin main
+
+  redeploy-ota:
+    runs-on: ubuntu-latest
+    needs: publish-ota-manifest
+    steps:
+      - name: Check redeploy secrets
+        id: check
+        env:
+          HAS_KEY: ${{ secrets.DROPLET_SSH_KEY != '' }}
+          HAS_IP: ${{ secrets.DROPLET_IP != '' }}
+        run: |
+          if [ "$HAS_KEY" = "true" ] && [ "$HAS_IP" = "true" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "DROPLET_SSH_KEY or DROPLET_IP not set; skipping redeploy."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.check.outputs.enabled == 'true'
+        with:
+          ref: main
+
+      - name: Configure SSH
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          DROPLET_SSH_KEY: ${{ secrets.DROPLET_SSH_KEY }}
+          DROPLET_IP: ${{ secrets.DROPLET_IP }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$DROPLET_SSH_KEY" > ~/.ssh/droplet
+          chmod 600 ~/.ssh/droplet
+          ssh-keyscan -H "$DROPLET_IP" >> ~/.ssh/known_hosts
+
+      - name: Rsync OTA files to droplet
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          DROPLET_IP: ${{ secrets.DROPLET_IP }}
+        run: |
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/droplet -o StrictHostKeyChecking=yes" \
+            deploy/website/ota/ \
+            "root@${DROPLET_IP}:/opt/onym-chat/deploy/website/ota/"
+
+      - name: Upload nginx conf + reload if changed
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          DROPLET_IP: ${{ secrets.DROPLET_IP }}
+        run: |
+          # Nginx conf rarely changes per release, but keep it in sync.
+          # Static-file changes don't need a reload (bind mount); conf changes do.
+          local_sha=$(sha256sum deploy/nginx/conf.d/onym.chat.conf | awk '{print $1}')
+          remote_sha=$(ssh -i ~/.ssh/droplet "root@${DROPLET_IP}" \
+            "sha256sum /opt/onym-chat/deploy/nginx/conf.d/onym.chat.conf 2>/dev/null | awk '{print \$1}'" \
+            || echo "")
+          if [ "$local_sha" != "$remote_sha" ]; then
+            echo "nginx conf changed, uploading + reloading..."
+            rsync -az -e "ssh -i ~/.ssh/droplet" \
+              deploy/nginx/conf.d/onym.chat.conf \
+              "root@${DROPLET_IP}:/opt/onym-chat/deploy/nginx/conf.d/onym.chat.conf"
+            ssh -i ~/.ssh/droplet "root@${DROPLET_IP}" \
+              'cd /opt/onym-chat && docker compose exec -T nginx nginx -t && docker compose exec -T nginx nginx -s reload'
+          else
+            echo "nginx conf unchanged; no reload."
+          fi

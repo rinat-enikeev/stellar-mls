@@ -1,40 +1,51 @@
 #!/usr/bin/env bash
-# Generates the OTA manifest.plist + install page for an iOS ad-hoc release.
+# Generates the OTA manifest.plist + install page for a per-PR iOS ad-hoc build.
 #
-# Usage: scripts/generate-ota-manifest.sh <version>
-#   e.g. scripts/generate-ota-manifest.sh 1.10.2
+# Usage: scripts/generate-ota-pr-build.sh <pr-number> <short-sha> <out-dir>
+#   e.g. scripts/generate-ota-pr-build.sh 93 62308dc /tmp/ios-build
 #
-# Env overrides (normally unset):
-#   GITHUB_REPOSITORY  — owner/repo for the IPA URL (default rinat-enikeev/stellar-mls)
-#   BUNDLE_ID          — iOS bundle identifier (default chat.onym.ios)
-#   TITLE              — app title shown in the iOS install prompt (default Onym)
-#   DOMAIN             — domain the manifest is served from (default onym.chat)
+# Writes into <out-dir>:
+#   manifest.plist  — points at https://<DOMAIN>/ota/pr-<N>/<short-sha>/StellarChat.ipa
+#   index.html      — landing page with itms-services install button
 #
-# Writes:
-#   deploy/website/ota/<version>/manifest.plist
-#   deploy/website/ota/<version>/index.html
+# The n8n /build flow then scp's these two files plus StellarChat.ipa to
+# droplet:/opt/onym-chat/deploy/website/ota/pr-<N>/<short-sha>/. The root
+# /ota/index.html that lists all builds is rebuilt separately on the droplet
+# by scripts/regenerate-ota-index.sh.
 #
-# The root /ota/index.html (listing all releases + PR debug builds) is NOT
-# written here — that index is regenerated on the droplet by
-# scripts/regenerate-ota-index.sh after both release rsyncs and per-PR
-# publishes, so it can see both sources of builds at once.
+# Env overrides (normally unset; mirror generate-ota-manifest.sh):
+#   BUNDLE_ID  — iOS bundle identifier (default chat.onym.ios)
+#   TITLE      — app title shown in the iOS install prompt (default Onym)
+#   DOMAIN     — domain the manifest is served from (default onym.chat)
 
 set -euo pipefail
 
-VERSION="${1:?version required (without leading v), e.g. 1.10.2}"
-REPO="${GITHUB_REPOSITORY:-rinat-enikeev/stellar-mls}"
+PR_NUM="${1:?pr number required}"
+SHORT_SHA="${2:?short sha required}"
+OUT_DIR="${3:?out dir required}"
+
+# Sanity-check inputs. The values end up in filesystem paths, a URL, and the
+# plist body, so a stray shell metacharacter would be bad.
+if ! [[ "$PR_NUM" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: pr number '$PR_NUM' must be digits" >&2
+    exit 2
+fi
+if ! [[ "$SHORT_SHA" =~ ^[0-9a-f]{7,40}$ ]]; then
+    echo "ERROR: short sha '$SHORT_SHA' must be 7–40 hex chars" >&2
+    exit 2
+fi
+
 BUNDLE_ID="${BUNDLE_ID:-chat.onym.ios}"
 TITLE="${TITLE:-Onym}"
 DOMAIN="${DOMAIN:-onym.chat}"
 
-IPA_URL="https://github.com/${REPO}/releases/download/v${VERSION}/StellarChat-${VERSION}.ipa"
+LABEL="PR #${PR_NUM} · ${SHORT_SHA}"
+IPA_URL="https://${DOMAIN}/ota/pr-${PR_NUM}/${SHORT_SHA}/StellarChat.ipa"
+MANIFEST_URL="https://${DOMAIN}/ota/pr-${PR_NUM}/${SHORT_SHA}/manifest.plist"
 
-repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-ota_root="${repo_root}/deploy/website/ota"
-version_dir="${ota_root}/${VERSION}"
-mkdir -p "$version_dir"
+mkdir -p "$OUT_DIR"
 
-cat > "${version_dir}/manifest.plist" <<PLIST
+cat > "${OUT_DIR}/manifest.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -68,11 +79,11 @@ cat > "${version_dir}/manifest.plist" <<PLIST
                 <key>bundle-identifier</key>
                 <string>${BUNDLE_ID}</string>
                 <key>bundle-version</key>
-                <string>${VERSION}</string>
+                <string>pr-${PR_NUM}.${SHORT_SHA}</string>
                 <key>kind</key>
                 <string>software</string>
                 <key>title</key>
-                <string>${TITLE}</string>
+                <string>${TITLE} (${LABEL})</string>
             </dict>
         </dict>
     </array>
@@ -80,13 +91,13 @@ cat > "${version_dir}/manifest.plist" <<PLIST
 </plist>
 PLIST
 
-cat > "${version_dir}/index.html" <<HTML
+cat > "${OUT_DIR}/index.html" <<HTML
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Install ${TITLE} ${VERSION}</title>
+    <title>Install ${TITLE} — ${LABEL}</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -138,19 +149,19 @@ cat > "${version_dir}/index.html" <<HTML
 <body>
     <img class="icon" src="/icon.png" alt="${TITLE}">
     <h1>${TITLE}</h1>
-    <div class="version">Version ${VERSION} &middot; ad-hoc build</div>
+    <div class="version">${LABEL} &middot; debug build</div>
 
     <a class="install"
-       href="itms-services://?action=download-manifest&url=https://${DOMAIN}/ota/${VERSION}/manifest.plist">
+       href="itms-services://?action=download-manifest&url=${MANIFEST_URL}">
         Install on iPhone
     </a>
 
     <div class="note">
-        <strong>Requirements:</strong> Open this page in Safari on iOS. Your device UDID must be registered in the ad-hoc provisioning profile used to sign <code>v${VERSION}</code>. If the install fails with "Unable to Install", the UDID was not included in that build.
+        <strong>Requirements:</strong> Open this page in Safari on iOS. Your device UDID must be registered in the ad-hoc provisioning profile used to sign this build. PR debug builds reuse the release ad-hoc profile, so if release installs work for you, this will too.
     </div>
 </body>
 </html>
 HTML
 
-echo "Wrote ${version_dir}/manifest.plist"
-echo "Wrote ${version_dir}/index.html"
+echo "Wrote ${OUT_DIR}/manifest.plist"
+echo "Wrote ${OUT_DIR}/index.html"

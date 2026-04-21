@@ -423,9 +423,8 @@ jobs:
           fi
           git commit -m "ota: publish manifest for v${VERSION}"
           # CI also pushes altstore updates on the same branch. On push
-          # contention, re-run the generator against fresh main so the root
-          # index.html listing stays complete with any version dirs that were
-          # added concurrently.
+          # contention, reset and re-run the generator so the commit rebases
+          # cleanly onto whatever landed in the meantime.
           for attempt in 1 2 3; do
             if git push origin main; then
               exit 0
@@ -492,10 +491,24 @@ jobs:
         env:
           DROPLET_IP: ${{ secrets.DROPLET_IP }}
         run: |
-          rsync -az --delete \
+          # --exclude='pr-*' protects the per-PR debug build dirs that the
+          # /build ios n8n flow publishes directly to the droplet. Without
+          # this, --delete would wipe them on every release.
+          rsync -az --delete --exclude='pr-*' --exclude='index.html' \
             -e "ssh -i ~/.ssh/droplet -o StrictHostKeyChecking=yes" \
             deploy/website/ota/ \
             "root@${DROPLET_IP}:/opt/onym-chat/deploy/website/ota/"
+
+      - name: Regenerate OTA root index.html on droplet
+        if: steps.check.outputs.enabled == 'true'
+        env:
+          DROPLET_IP: ${{ secrets.DROPLET_IP }}
+        run: |
+          # The root /ota/index.html listing now has to see both the freshly
+          # rsynced releases and any pre-existing PR debug build dirs. Pipe
+          # the regenerator to the droplet so it reads the on-disk truth.
+          ssh -i ~/.ssh/droplet -o StrictHostKeyChecking=yes \
+            "root@${DROPLET_IP}" 'bash -s' < scripts/regenerate-ota-index.sh
 
       - name: Upload nginx conf + reload if changed
         if: steps.check.outputs.enabled == 'true'

@@ -11,12 +11,13 @@
 # run this script; no shell, no scp, no port forward. The script parses
 # $SSH_ORIGINAL_COMMAND into subcommand + sha + (optional) args:
 #
-#   "ios <sha>"      → build iOS XCFramework + fastlane build_local lane
+#   "ios <sha>"      → build xcframework + fastlane build_local, stream IPA on stdout
 #   "jnilibs <sha>"  → run scripts/build-android.sh and tar build/android/jniLibs to stdout
 #
 # Build logs stream back over the SSH channel as stderr so the container
-# sees them in real time. For jnilibs, stdout is the tar stream that
-# remote-jnilibs unpacks into the container's workspace/build/android.
+# sees them in real time. Stdout is the build artifact:
+#   ios      → the raw .ipa bytes (redirect to a file on the caller side)
+#   jnilibs  → a tar stream that remote-jnilibs unpacks into workspace/build/android
 set -euo pipefail
 
 # Force a UTF-8 locale. Non-interactive ssh inherits sshd's empty locale
@@ -182,7 +183,16 @@ SWIFT
             bundle exec fastlane ios build_local >&2
 
             IPA=$(ls build/ios/adhoc/*.ipa 2>/dev/null | head -1 || true)
-            echo "ARTIFACT: ${IPA:-none}" >&2
+            if [ -z "$IPA" ] || [ ! -f "$IPA" ]; then
+                echo "ERROR: no IPA produced under build/ios/adhoc/" >&2
+                exit 1
+            fi
+            echo "ARTIFACT: ${IPA}" >&2
+            echo "==> streaming IPA → stdout (${IPA})" >&2
+            # Stream the IPA on stdout so the n8n /build flow can redirect it
+            # into a file on the qa-agent and publish it. Logs keep flowing on
+            # stderr back to the SSH channel. Mirrors the jnilibs tar pattern.
+            cat "$IPA"
             ;;
 
         jnilibs)

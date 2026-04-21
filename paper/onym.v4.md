@@ -121,9 +121,9 @@ The contribution is two postmortems and a design-review template, not a producti
 
 ## Acknowledgments
 
-We thank the Stellar Development Foundation for the ZK primitives landed in the chain core (CAP-0059 BLS12-381 in Protocol 22, CAP-0073/74/75 in Protocol 25 X-Ray) that made this work practical; the arkworks contributors for the Rust Groth16 and Poseidon gadgets; the external code reviewer whose P1-catching question this paper takes its name from; and the anonymous reviewer whose hard critique shaped the paper's framing.
+We thank the Stellar Development Foundation for the ZK primitives landed in the chain core (CAP-0059 BLS12-381 in Protocol 22, CAP-0073/74/75 in Protocol 25 X-Ray) that made this work practical; the arkworks contributors for the Rust Groth16 and Poseidon gadgets; and the external code reviewer whose P1-catching question this paper takes its name from. The author's other significant interlocutor was Claude (Anthropic, 2026), whose role is described in the *Use of generative AI* note below rather than folded into the human-contributor list.
 
-**Use of generative AI.** The author is a builder, not a cryptographer. Onym was designed, implemented, and deployed before any of §2's language existed on paper. Turning the working system into writing that a cryptographer would read as sound required consulting Claude (Anthropic, 2026) extensively — as a tutor on the literature (AGM, simulation-extractability, the public-input-hashing modification, Poseidon's ROM framing) and as an interlocutor for the framing choices in §2 and §4. For each framing, the author read the sources Claude surfaced and adopted it only after the sources checked out. This article is a builder's postmortems and review lessons, not a protocol proposal; the postmortems are the author's work, the author is accountable for every technical statement and any remaining errors, and the formal scaffolding around the postmortems is in the paper at all because AI made it accessible to a builder.
+**Use of generative AI.** The author is a builder, not a cryptographer. Onym was designed, implemented, and deployed before any of §2's language existed on paper. Turning the working system into writing that a cryptographer would read as sound required consulting Claude extensively — both as a tutor on the literature (AGM, simulation-extractability, the public-input-hashing modification, Poseidon's ROM framing) and as a reader whose hard critiques of successive drafts shaped the paper's framing: retitling away from an over-claim, committing to the registry-primitive genre rather than oscillating into messaging-substrate territory, and moving the Phase-2 MPC disclosure out of a limitations subsection and into the abstract. For each such framing change the author read the sources Claude surfaced and adopted it only after the sources checked out. This article is a builder's postmortems and review lessons, not a protocol proposal; the postmortems are the author's work, the author is accountable for every technical statement and any remaining errors, and the formal scaffolding around the postmortems is in the paper at all because AI made it accessible to a builder.
 
 ## References
 
@@ -137,7 +137,7 @@ We thank the Stellar Development Foundation for the ZK primitives landed in the 
 
 [5] L. Grassi et al., "Poseidon: A New Hash Function for Zero-Knowledge Proof Systems," *USENIX Security*, 2021.
 
-[6] G. Fuchsbauer, "Subversion-Zero-Knowledge SNARKs," *PKC*, 2018.
+[6] J. Groth and M. Maller, "Snarky Signatures: Minimal Signatures of Knowledge from Simulation-Extractable SNARKs," *CRYPTO*, 2017.
 
 [7] M. Chase, T. Perrin, G. Zaverucha, "The Signal Private Group System and Anonymous Credentials Supporting Efficient Verifiable Encryption," *ACM CCS*, 2020.
 

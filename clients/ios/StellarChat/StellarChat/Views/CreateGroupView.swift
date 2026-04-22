@@ -1175,12 +1175,23 @@ private struct InviteByKeyDetailView: View {
             }
             .sheet(isPresented: $showScanner) {
                 QRScannerView { scanned in
-                    let t = scanned.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                    if isValidKey(t) {
-                        keyInput = t
-                        addTapped()
-                    }
                     showScanner = false
+                    let t = scanned.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    guard isValidKey(t) else {
+                        error = "Scanned code is not a valid 64-character inbox key."
+                        return
+                    }
+                    if t == ownInboxKey.lowercased() {
+                        error = "Cannot add your own inbox key."
+                        return
+                    }
+                    if existing.contains(t) {
+                        error = "This user has already been added."
+                        return
+                    }
+                    error = nil
+                    onAdd(t)
+                    dismiss()
                 }
             }
         }

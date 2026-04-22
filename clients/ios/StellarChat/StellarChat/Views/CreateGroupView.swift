@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftMLS
 import SwiftUI
 
@@ -9,6 +10,9 @@ struct CreateGroupView: View {
     @State private var groupName = ""
     @State private var accent: GroupAccent = .blue
     @State private var groupType: SEPGroupType = .anarchy
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var avatarImage: UIImage?
+    @State private var avatarData: Data?
 
     // Participants (Step 2)
     @State private var participantKeys: [String] = []
@@ -105,22 +109,37 @@ struct CreateGroupView: View {
     private var identityStep: some View {
         ScrollView {
             VStack(spacing: 0) {
-                // Hero avatar
-                ZStack(alignment: .bottomTrailing) {
-                    groupAvatar(
-                        size: 108,
-                        filled: nameIsValid,
-                        corner: 54
-                    )
-                    Circle()
-                        .fill(Color.accentColor)
-                        .frame(width: 36, height: 36)
-                        .overlay(Image(systemName: "camera.fill").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white))
-                        .overlay(Circle().stroke(Color(.systemGroupedBackground), lineWidth: 3))
-                        .offset(x: 2, y: 2)
+                // Hero avatar — tap to pick a photo.
+                PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                    ZStack(alignment: .bottomTrailing) {
+                        groupAvatar(
+                            size: 108,
+                            filled: nameIsValid,
+                            corner: 54
+                        )
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 36, height: 36)
+                            .overlay(Image(systemName: "camera.fill").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white))
+                            .overlay(Circle().stroke(Color(.systemGroupedBackground), lineWidth: 3))
+                            .offset(x: 2, y: 2)
+                    }
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Change group photo")
                 .padding(.top, 12)
                 .padding(.bottom, 20)
+                .onChange(of: selectedPhotoItem) { _, newItem in
+                    guard let newItem else { return }
+                    Task {
+                        if let data = try? await newItem.loadTransferable(type: Data.self),
+                           let image = UIImage(data: data) {
+                            let processed = Self.downscaleAvatar(image)
+                            avatarImage = processed.image
+                            avatarData = processed.data
+                        }
+                    }
+                }
 
                 // Name input
                 VStack(alignment: .leading, spacing: 8) {
@@ -856,7 +875,13 @@ struct CreateGroupView: View {
     private func groupAvatar(size: CGFloat, filled: Bool, corner: CGFloat) -> some View {
         let label = nameIsValid ? groupName.trimmingCharacters(in: .whitespaces) : ""
         ZStack {
-            if filled {
+            if let avatarImage {
+                Image(uiImage: avatarImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: size, height: size)
+                    .clipShape(RoundedRectangle(cornerRadius: corner))
+            } else if filled {
                 RoundedRectangle(cornerRadius: corner)
                     .fill(accent.gradient)
                 Text(initials(for: label))
@@ -871,6 +896,24 @@ struct CreateGroupView: View {
             }
         }
         .frame(width: size, height: size)
+    }
+
+    /// Downscale the picked image so the long edge is at most 256 px and re-encode
+    /// as JPEG quality 0.85 so the persisted row stays small.
+    private static func downscaleAvatar(_ source: UIImage) -> (image: UIImage, data: Data) {
+        let maxEdge: CGFloat = 256
+        let longest = max(source.size.width, source.size.height)
+        let scale = longest > maxEdge ? maxEdge / longest : 1
+        let targetSize = CGSize(
+            width: source.size.width * scale,
+            height: source.size.height * scale
+        )
+        let renderer = UIGraphicsImageRenderer(size: targetSize)
+        let resized = renderer.image { _ in
+            source.draw(in: CGRect(origin: .zero, size: targetSize))
+        }
+        let data = resized.jpegData(compressionQuality: 0.85) ?? Data()
+        return (resized, data)
     }
 
     private func avatarCircle(seed: String, size: CGFloat, name: String) -> some View {
@@ -906,7 +949,11 @@ struct CreateGroupView: View {
 
         Task {
             do {
-                let (group, code) = try appState.createGroup(name: sanitizedName, groupType: groupType)
+                let (group, code) = try appState.createGroup(
+                    name: sanitizedName,
+                    groupType: groupType,
+                    avatarData: avatarData
+                )
                 createdGroup = group
                 inviteCode = code
                 GroupAccentStore.set(accent, for: group.id)

@@ -175,7 +175,8 @@ class PersistenceStore(context: Context) {
             pushNotificationsEnabled = group.pushNotificationsEnabled,
             lastMessageAt = group.lastMessageAt,
             isPinned = group.isPinned,
-            encryptedAdminPubkeys = encAdmins
+            encryptedAdminPubkeys = encAdmins,
+            encryptedAvatar = group.avatarData?.let { StorageEncryption.encrypt(it) }
         )
     }
 
@@ -203,6 +204,10 @@ class PersistenceStore(context: Context) {
             } catch (_: Exception) { mutableSetOf() }
         } ?: mutableSetOf()
 
+        val avatarData: ByteArray? = persisted.encryptedAvatar?.let { enc ->
+            try { StorageEncryption.decrypt(enc) } catch (_: Exception) { null }
+        }
+
         return ChatGroup(
             id = persisted.id,
             name = name,
@@ -223,7 +228,8 @@ class PersistenceStore(context: Context) {
             removedByPubkeyHex = persisted.removedByPubkeyHex,
             pushNotificationsEnabled = persisted.pushNotificationsEnabled,
             lastMessageAt = persisted.lastMessageAt,
-            isPinned = persisted.isPinned
+            isPinned = persisted.isPinned,
+            avatarData = avatarData
         )
     }
 

@@ -31,6 +31,9 @@ final class PersistedGroup {
     /// Encrypted JSON-encoded `[String]` of admin BLS pubkey hex. Optional so
     /// existing SwiftData stores migrate in as `nil` (empty set).
     var encryptedAdminPubkeys: Data?
+    /// Encrypted JPEG bytes of a locally-set group avatar. Optional so existing
+    /// SwiftData stores migrate in as `nil`.
+    var encryptedAvatar: Data?
 
     init(
         id: String,
@@ -52,7 +55,8 @@ final class PersistedGroup {
         lastMessageAt: Date? = nil,
         isPinned: Bool = false,
         groupTypeRawValue: Int? = nil,
-        encryptedAdminPubkeys: Data? = nil
+        encryptedAdminPubkeys: Data? = nil,
+        encryptedAvatar: Data? = nil
     ) {
         self.id = id
         self.encryptedName = encryptedName
@@ -74,6 +78,7 @@ final class PersistedGroup {
         self.isPinned = isPinned
         self.groupTypeRawValue = groupTypeRawValue
         self.encryptedAdminPubkeys = encryptedAdminPubkeys
+        self.encryptedAvatar = encryptedAvatar
     }
 }
 

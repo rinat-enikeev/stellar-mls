@@ -55,7 +55,10 @@ data class ChatGroup(
      *  ordering (most recent first). 0 = no messages yet, falls back to [createdAt]. */
     var lastMessageAt: Long = 0,
     /** Whether this chat is pinned to the top of the chat list. */
-    var isPinned: Boolean = false
+    var isPinned: Boolean = false,
+    /** JPEG/PNG bytes of a locally-set group avatar (downscaled at pick time).
+     *  Held on the creator's device only; not propagated to other members yet. */
+    var avatarData: ByteArray? = null
 ) {
     /** Group ID as raw bytes (hex string → ByteArray). */
     val groupIDData: ByteArray get() = id.hexToBytes()

@@ -652,6 +652,8 @@ final class PersistenceStore {
             }
         }
 
+        let encAvatar: Data? = group.avatarData.flatMap { try? StorageEncryption.encrypt($0) }
+
         return PersistedGroup(
             id: group.id,
             encryptedName: encName,
@@ -672,7 +674,8 @@ final class PersistenceStore {
             lastMessageAt: group.lastMessageAt,
             isPinned: group.isPinned,
             groupTypeRawValue: Int(group.groupType.rawValue),
-            encryptedAdminPubkeys: encAdmins
+            encryptedAdminPubkeys: encAdmins,
+            encryptedAvatar: encAvatar
         )
     }
 
@@ -722,6 +725,10 @@ final class PersistenceStore {
            let adminJSON = try? StorageEncryption.decrypt(encAdmins),
            let admins = try? JSONDecoder().decode([String].self, from: adminJSON) {
             group.adminPubkeys = Set(admins)
+        }
+        if let encAvatar = persisted.encryptedAvatar,
+           let avatar = try? StorageEncryption.decrypt(encAvatar) {
+            group.avatarData = avatar
         }
         return group
     }

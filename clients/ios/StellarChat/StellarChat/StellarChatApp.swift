@@ -575,7 +575,7 @@ final class AppState {
     }
 
     /// Create a group with the local user as the first member, computing the initial commitment.
-    func createGroup(name: String, groupType: SEPGroupType = .anarchy) throws -> (ChatGroup, String) {
+    func createGroup(name: String, groupType: SEPGroupType = .anarchy, avatarData: Data? = nil) throws -> (ChatGroup, String) {
         var groupIDBytes = [UInt8](repeating: 0, count: 32)
         _ = SecRandomCopyBytes(kSecRandomDefault, 32, &groupIDBytes)
         let groupID = Data(groupIDBytes)
@@ -604,6 +604,7 @@ final class AppState {
             tier: tier
         )
         group.groupType = groupType
+        group.avatarData = avatarData
         // Oligarchy creator is seeded as the initial admin. Demoting this
         // member (via future on-chain flows) requires another admin's consent.
         if groupType == .oligarchy {

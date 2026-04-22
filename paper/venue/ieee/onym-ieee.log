@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.4.21)  21 APR 2026 13:32
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.4.21)  22 APR 2026 18:52
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -798,35 +798,44 @@ Package hyperref Info: Link coloring ON on input line 38.
 
 LaTeX Font Info:    Font shape `OT1/phv/b/it' in size <9.5> not available
 (Font)              Font shape `OT1/phv/b/sl' tried instead on input line 49.
-LaTeX Font Info:    Calculating math sizes for size <9.5> on input line 49.
-LaTeX Font Info:    Trying to load font information for U+msa on input line 49.
+Package lettrine.sty Info: Targeted height = 18.68192pt
+(lettrine.sty)             (for loversize=0, accent excluded),
+(lettrine.sty)             Lettrine height = 18.68193pt (M);
+(lettrine.sty)             reported on input line 57.
+LaTeX Font Info:    Calculating math sizes for size <10.53937> on input line 63
+.
+LaTeX Font Info:    Trying to load font information for U+msa on input line 63.
 
 
 (/usr/local/texlive/2026/texmf-dist/tex/latex/amsfonts/umsa.fd
 File: umsa.fd 2013/01/14 v3.01 AMS symbols A
 )
-LaTeX Font Info:    Trying to load font information for U+msb on input line 49.
+LaTeX Font Info:    Trying to load font information for U+msb on input line 63.
 
 
 (/usr/local/texlive/2026/texmf-dist/tex/latex/amsfonts/umsb.fd
 File: umsb.fd 2013/01/14 v3.01 AMS symbols B
 )
-Package lettrine.sty Info: Targeted height = 18.68192pt
-(lettrine.sty)             (for loversize=0, accent excluded),
-(lettrine.sty)             Lettrine height = 18.68193pt (M);
-(lettrine.sty)             reported on input line 57.
-
-Underfull \vbox (badness 10000) has occurred while \output is active []
-
-LaTeX Font Info:    Calculating math sizes for size <10.53937> on input line 63
-.
-
 Underfull \hbox (badness 3679) in paragraph at lines 64--65
 \OT1/ptm/m/n/10.53937 need; read-ers who want full simulation-
  []
 
-LaTeX Font Info:    Trying to load font information for TS1+phv on input line 6
-5.
+
+Underfull \hbox (badness 1852) in paragraph at lines 66--67
+\OT1/ptm/m/n/10.53937 member mode is an-a-lyzed; other poli-cies
+ []
+
+
+Underfull \hbox (badness 1412) in paragraph at lines 69--70
+[]\OT1/ptm/m/n/10.53937 The con-tri-bu-tion is the en-gi-neer-ing post-
+ []
+
+
+Underfull \vbox (badness 5862) has occurred while \output is active []
+
+LaTeX Font Info:    Trying to load font information for TS1+phv on input line 7
+1.
+
 (/usr/local/texlive/2026/texmf-dist/tex/latex/psnfss/ts1phv.fd
 File: ts1phv.fd 2020/03/25 scalable font definitions for TS1/phv.
 )
@@ -842,16 +851,6 @@ ocal/texlive/2026/texmf-dist/fonts/enc/dvips/base/8r.enc}
 
 
 ]
-Underfull \hbox (badness 1852) in paragraph at lines 66--67
-\OT1/ptm/m/n/10.53937 member mode is an-a-lyzed; other poli-cies
- []
-
-
-Underfull \hbox (badness 1412) in paragraph at lines 69--70
-[]\OT1/ptm/m/n/10.53937 The con-tri-bu-tion is the en-gi-neer-ing post-
- []
-
-
 Underfull \hbox (badness 10000) in paragraph at lines 82--83
 []$\OML/cmm/m/it/10.95 R[]\OT1/cmr/m/n/10.95 (\OML/cmm/m/it/10.95 C[]; ^^O[]; C
 []\OT1/cmr/m/n/10.95 )$\OT1/ptm/m/n/10.53937 : $\OML/cmm/m/it/10.95 R[]$ \OT1/p
@@ -909,7 +908,9 @@ Underfull \hbox (badness 2941) in paragraph at lines 199--200
  []
 
 
-Underfull \vbox (badness 10000) has occurred while \output is active []
+Underfull \hbox (badness 4084) in paragraph at lines 211--212
+[]\OT1/ptm/m/n/10.53937 Technically true, strate-gi-cally mis-lead-ing:
+ []
 
 
 Overfull \vbox (6.27187pt too high) has occurred while \output is active []
@@ -920,11 +921,6 @@ Overfull \hbox (18.0pt too wide) has occurred while \output is active
  []
 
 [3]
-Underfull \hbox (badness 4084) in paragraph at lines 211--212
-[]\OT1/ptm/m/n/10.53937 Technically true, strate-gi-cally mis-lead-ing:
- []
-
-
 Underfull \hbox (badness 10000) in paragraph at lines 213--214
 []\OT1/ptm/b/n/10.53937 Fix. \OT1/ptm/m/n/10.53937 Ephemeral per-event secp256k
 1
@@ -960,9 +956,6 @@ Underfull \hbox (badness 2126) in paragraph at lines 213--214
 Underfull \hbox (badness 4981) in paragraph at lines 213--214
 \OT1/ptm/m/n/10.53937 open resid-ual chan-nel and also feeds the
  []
-
-
-Underfull \vbox (badness 3039) has occurred while \output is active []
 
 
 Overfull \vbox (8.107pt too high) has occurred while \output is active []
@@ -1034,11 +1027,11 @@ Package rerunfilecheck Info: File `onym-ieee.out' has not changed.
 (rerunfilecheck)             Checksum: 966DEB6EF6953BAA108D4B4C372B743F;2888.
  ) 
 Here is how much of TeX's memory you used:
- 22232 strings out of 467525
- 413914 string characters out of 5418982
- 848900 words of memory out of 5000000
- 50699 multiletter control sequences out of 15000+600000
- 705236 words of font info for 190 fonts, out of 8000000 for 9000
+ 22213 strings out of 467525
+ 413612 string characters out of 5418982
+ 809900 words of memory out of 5000000
+ 50680 multiletter control sequences out of 15000+600000
+ 703313 words of font info for 181 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
  84i,11n,104p,1249b,806s stack positions out of 10000i,1000n,20000p,200000b,200000s
 
@@ -1069,7 +1062,7 @@ elvetic/uhvr8a.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/urw/helvetic
 /uhvro8a.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/urw/times/utmb8a.p
 fb></usr/local/texlive/2026/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/l
 ocal/texlive/2026/texmf-dist/fonts/type1/urw/times/utmri8a.pfb>
-Output written on onym-ieee.pdf (7 pages, 283050 bytes).
+Output written on onym-ieee.pdf (7 pages, 280673 bytes).
 PDF statistics:
  303 PDF objects out of 1000 (max. 8388607)
  240 compressed objects within 3 object streams

@@ -46,7 +46,7 @@
 
 \markboth{FEATURE ARTICLE}{FEATURE ARTICLE}
 
-\begin{abstract}\looseness-1Onym is a Stellar contract that anchors each group's membership state as a 32-byte commitment and gates every state change on a Groth16 zero-knowledge SNARK. The alpha deployment is on Stellar testnet and is scoped to the \emph{unanimous-member} authorization mode, where any one current member may authorize any next state. This article is an experience report: it documents two authorization and privacy postmortems from the deployment, a demoted R1CS-cost lesson, and the design-review template we derived. It is not a cryptographic-proofs contribution, not a production-readiness claim, and not a general messaging substrate. Two deployment facts are load-bearing: the Phase-2 trusted setup currently has a single contributor, so every formal claim is vacuous against that party; and for $n=2$ pair chats, fee-payer unlinkability is trivially defeated by realistic side information. Both belong here rather than buried.
+\begin{abstract}Affordable on-chain Groth16 verification---enabled by Stellar's BLS12-381 host functions---let us gate public-ledger group-membership updates on zero-knowledge proofs with no application-layer operator. This article reports two design postmortems from the alpha deployment: a soundness theorem that bound the wrong predicate, and a transport-layer co-membership leak.
 
 \vspace{4pt}\noindent\textbf{Index Terms}---Authentication, blockchains, cryptographic protocols, privacy, smart contracts, zero-knowledge proof.
 \end{abstract}

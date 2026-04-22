@@ -20,6 +20,7 @@
 \@writefile{toc}{\contentsline {subsection}{\relax Replay}{2}{section*.3}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\relax Fee-Payer Unlinkability, Stated Cleanly}{2}{section*.4}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\relax Deployment Honesty}{2}{section*.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\relax IN PLAIN LANGUAGE}{2}{section*.6}\protected@file@percent }
 \citation{baghery2021}
 \citation{baghery2021}
 \citation{baghery2021}
@@ -28,32 +29,31 @@
 \citation{grothmaller2017}
 \citation{baghery2021}
 \citation{baghery2021}
-\@writefile{toc}{\contentsline {section}{\relax IN PLAIN LANGUAGE}{3}{section*.6}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\relax POSTMORTEMS}{3}{section*.7}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\relax P1---The Theorem That Proved the Wrong Thing}{3}{section*.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\relax P2---Transport-Layer Co-Membership Leakage}{3}{section*.9}\protected@file@percent }
 \@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Onym data and metadata flow. Each member holds a BLS12-381 secret key and produces a 192-byte Groth16 proof $\pi $ locally; one member submits the update tuple via a public relayer that pays the transaction fee. The Soroban contract verifies the proof using three BLS12-381 pairings and writes the new 32-byte commitment $C_{\mathsf  {new}}$ and incremented epoch to storage. Italicized callouts mark the metadata each non-member party in the path observes.}}{4}{figure.1}\protected@file@percent }
 \newlabel{fig:arch}{{1}{4}{Onym data and metadata flow. Each member holds a BLS12-381 secret key and produces a 192-byte Groth16 proof $\pi $ locally; one member submits the update tuple via a public relayer that pays the transaction fee. The Soroban contract verifies the proof using three BLS12-381 pairings and writes the new 32-byte commitment $\Cnew $ and incremented epoch to storage. Italicized callouts mark the metadata each non-member party in the path observes}{figure.1}{}}
 \@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces P1: the bug and its fix. The original relation $R_{\mathsf  {Mem}}$ bound only the current state $(C, \epsilon )$; the contract wrote whatever \texttt  {new\_commitment} appeared in the call, leaving it controllable by anyone in the network path. The fix promotes $C_{\mathsf  {new}}$ to a public input of a new relation $R_{\mathsf  {Upd}}$, and the public-input-hashing modification of~\cite  {baghery2021} adds simulation-extractability so the proof cannot be re-randomized into a different accepting proof.}}{4}{figure.2}\protected@file@percent }
 \newlabel{fig:p1}{{2}{4}{P1: the bug and its fix. The original relation $\Rmem $ bound only the current state $(C, \epsilon )$; the contract wrote whatever \texttt {new\_commitment} appeared in the call, leaving it controllable by anyone in the network path. The fix promotes $\Cnew $ to a public input of a new relation $\Rupd $, and the public-input-hashing modification of~\cite {baghery2021} adds simulation-extractability so the proof cannot be re-randomized into a different accepting proof}{figure.2}{}}
-\@writefile{toc}{\contentsline {subsection}{\relax P2---Transport-Layer Co-Membership Leakage}{4}{section*.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\relax A Demoted Lesson: Host-Function Hashes as a Constraint-Budget Landmine}{4}{section*.10}\protected@file@percent }
 \citation{mafia2025}
-\@writefile{toc}{\contentsline {subsection}{\relax A Demoted Lesson: Host-Function Hashes as a Constraint-Budget Landmine}{5}{section*.10}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\relax EVALUATION}{5}{section*.11}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\relax LIMITATIONS}{5}{section*.12}\protected@file@percent }
 \citation{semaphore}
 \citation{chase2020}
 \citation{mafia2025}
+\@writefile{toc}{\contentsline {section}{\relax EVALUATION}{5}{section*.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\relax LIMITATIONS}{5}{section*.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\relax RELATED WORK}{5}{section*.13}\protected@file@percent }
 \citation{cap0059}
 \bibcite{rfc9420}{1}
 \bibcite{groth2016}{2}
 \bibcite{semaphore}{3}
-\@writefile{toc}{\contentsline {section}{\relax RELATED WORK}{6}{section*.13}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\relax CONCLUSION}{6}{section*.14}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\relax ACKNOWLEDGMENTS}{6}{section*.15}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{REFERENCES}{6}{section*.16}\protected@file@percent }
 \bibcite{grassi2021}{4}
 \bibcite{grothmaller2017}{5}
 \bibcite{chase2020}{6}
+\@writefile{toc}{\contentsline {section}{\relax CONCLUSION}{6}{section*.14}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\relax ACKNOWLEDGMENTS}{6}{section*.15}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{REFERENCES}{6}{section*.16}\protected@file@percent }
 \bibcite{baghery2021}{7}
 \bibcite{cap0059}{8}
 \bibcite{lipmaa2019}{9}

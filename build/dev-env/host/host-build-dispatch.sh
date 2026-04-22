@@ -62,6 +62,13 @@ fi
 
 LOG_DIR="${HOME}/logs"
 BARE="${HOME}/work/stellar-mls.git"
+# Used to top up the bare mirror on demand with whatever SHA the caller asked
+# for. Nothing else syncs this mirror (no webhook, no cron, no push from the
+# agent containers — their SSH keys are pinned to host-build-dispatch only),
+# so without this fetch the mirror is frozen at whenever the operator last
+# seeded it and `git checkout "$SHA"` fails with "unable to read tree".
+# Override via ~/.stellar-builder.env if the repo moves.
+REMOTE_URL="${STELLAR_MLS_REMOTE_URL:-https://github.com/rinat-enikeev/stellar-mls.git}"
 WORK_ROOT="/tmp/stellar-builds"
 LOCK="${WORK_ROOT}/.lock"
 
@@ -98,9 +105,20 @@ echo ">>> $(date -u +%FT%TZ) sub=$SUB sha=$SHA log=$LOG" >&2
 (
     flock -x 200
 
+    # Ensure the bare mirror actually has $SHA. GitHub's uploadpack
+    # advertises refs/heads/* and refs/pull/*/head, so fetching a PR head
+    # SHA by value works as long as it's reachable from one of those.
+    # Incremental after the first build per SHA — only missing objects
+    # cross the wire.
+    if ! git -C "$BARE" config --get remote.origin.url >/dev/null 2>&1; then
+        git -C "$BARE" remote add origin "$REMOTE_URL" >&2
+    fi
+    git -C "$BARE" fetch --quiet origin "$SHA" >&2
+
     # Fresh work tree per SHA. Cheap on local SSD, avoids concurrent
-    # writers stomping each other. The git clone from the bare repo is
-    # local-disk fast (no network).
+    # writers stomping each other. The clone itself is local hardlinks
+    # from the bare repo (no network) — the network hop is the fetch
+    # above.
     rm -rf "$WORK"
     git clone --quiet "$BARE" "$WORK" >&2
     cd "$WORK"

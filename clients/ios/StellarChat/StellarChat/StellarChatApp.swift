@@ -160,6 +160,11 @@ struct StellarChatApp: App {
                         // active group so background-decoded messages don't auto-ACK.
                         // Guarded so the second call in the .active → .inactive →
                         // .background sequence doesn't stomp `savedActiveGroupID` to nil.
+                        // Flush any queued messages first so in-flight arrivals from when
+                        // the chat was genuinely open still get ACKed against the
+                        // still-active groupID — preserves the "ACK iff chat was open
+                        // when message arrived" invariant across the 16ms flush debounce.
+                        appState.flushPendingMessages()
                         savedActiveGroupID = active
                         appState.activeGroupID = nil
                     }
@@ -547,7 +552,7 @@ final class AppState {
         }
     }
 
-    private func flushPendingMessages() {
+    func flushPendingMessages() {
         let batch = pendingIncomingMessages
         pendingIncomingMessages.removeAll()
         messageFlushTask = nil
@@ -627,6 +632,12 @@ final class AppState {
 
     /// Cap on ACKs sent per backlog flush — bounds redundant ACK traffic when a
     /// long history is walked at cold-start with no `isMine` to anchor against.
+    /// Enforced on the newest entries (we walk from the tail), so with >50 unread
+    /// and no `isMine` anchor the senders of the older messages do not get ✓✓.
+    /// Intentional: the recipient sees those messages as read locally, and a single
+    /// outbound reply ACKs the entire history via the `isMine` anchor on the next
+    /// open. Persisting `ackedEventIDs` across restarts to drain the rest is tracked
+    /// as followup (see review #4150750508).
     nonisolated static let backlogAckMax = 50
     /// Cap on messages scanned per backlog flush — bounds the cost of walking a long
     /// history when nothing new needs ACKing (re-open with full `ackedEventIDs`).

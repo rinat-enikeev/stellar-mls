@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Install Onym 1.10.11</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 420px;
+            margin: 0 auto;
+            padding: 48px 24px;
+            color: #1c1c1e;
+            background: #f2f2f7;
+            text-align: center;
+        }
+        img.icon {
+            width: 96px;
+            height: 96px;
+            border-radius: 22px;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+        }
+        h1 { font-size: 24px; margin: 16px 0 4px; }
+        .version { color: #6e6e73; font-size: 15px; margin-bottom: 32px; }
+        a.install {
+            display: inline-block;
+            background: #6c5ce7;
+            color: #fff;
+            text-decoration: none;
+            padding: 14px 32px;
+            border-radius: 22px;
+            font-size: 17px;
+            font-weight: 600;
+        }
+        a.install:active { opacity: 0.85; }
+        .note {
+            margin-top: 32px;
+            padding: 16px;
+            background: #fff;
+            border-radius: 12px;
+            font-size: 14px;
+            color: #3c3c43;
+            text-align: left;
+            line-height: 1.5;
+        }
+        .note strong { color: #1c1c1e; }
+        code {
+            background: #e5e5ea;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <img class="icon" src="/icon.png" alt="Onym">
+    <h1>Onym</h1>
+    <div class="version">Version 1.10.11 &middot; ad-hoc build</div>
+
+    <a class="install"
+       href="itms-services://?action=download-manifest&url=https://onym.chat/ota/1.10.11/manifest.plist">
+        Install on iPhone
+    </a>
+
+    <div class="note">
+        <strong>Requirements:</strong> Open this page in Safari on iOS. Your device UDID must be registered in the ad-hoc provisioning profile used to sign <code>v1.10.11</code>. If the install fails with "Unable to Install", the UDID was not included in that build.
+    </div>
+</body>
+</html>

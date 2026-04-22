@@ -3335,6 +3335,13 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 processedProtocolEventIDs.add(eventID)
             }
             if (isNew) {
+                // Transport invokes this callback on Dispatchers.IO. Dispatching to
+                // Main ensures writes to SnapshotStateList (`groups`, `chatMessages`)
+                // happen on the Compose frame thread, so that recomposition of
+                // ChatScreen / GroupInfoScreen fires immediately when a member is
+                // added/removed — rather than deferring until the user forces a
+                // re-read by navigating away and back (issue #115).
+                viewModelScope.launch {
                 try {
                     val obj = JSONObject(json)
                     val msgType = obj.optString("type")
@@ -3363,7 +3370,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                             // Phase 4: Refuse salt responses for removal epochs — the requester
                             // should use SEPRekeyResendRequest via inbox instead.
                             val isRemoval = try {
-                                kotlinx.coroutines.runBlocking { store.isRemovalEpoch(groupID, epoch.toInt()) }
+                                store.isRemovalEpoch(groupID, epoch.toInt())
                             } catch (_: Exception) { false }
                             if (isRemoval) {
                                 if (BuildConfig.DEBUG) Log.d("GroupListVM", "Salt request for removal epoch $epoch — refusing")
@@ -3461,6 +3468,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                         }
                     }
                 } catch (_: Exception) { }
+                }
             }
         }
     }

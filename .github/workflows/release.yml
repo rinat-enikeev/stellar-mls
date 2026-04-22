@@ -494,7 +494,7 @@ jobs:
           # --exclude='pr-*' protects the per-PR debug build dirs that the
           # /build ios n8n flow publishes directly to the droplet. Without
           # this, --delete would wipe them on every release.
-          rsync -az --delete --exclude='pr-*' --exclude='index.html' \
+          rsync -az --delete --exclude='pr-*' --exclude='/index.html' \
             -e "ssh -i ~/.ssh/droplet -o StrictHostKeyChecking=yes" \
             deploy/website/ota/ \
             "root@${DROPLET_IP}:/opt/onym-chat/deploy/website/ota/"

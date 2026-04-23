@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -96,25 +97,36 @@ fun ContactsScreen(
     var filter by remember { mutableStateOf("") }
     var permission by remember { mutableStateOf(SystemContactsImporter.permission(context)) }
 
+    val loadPhonebook: () -> Unit = {
+        importing = true
+        scope.launch {
+            try {
+                val loaded = withContext(Dispatchers.IO) {
+                    SystemContactsImporter.fetchAll(context)
+                }
+                phonebook = loaded
+                importError = null
+            } catch (e: Exception) {
+                importError = "Couldn't load contacts: ${e.message ?: ""}"
+            } finally {
+                importing = false
+            }
+        }
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         permission = if (granted) ContactsPermission.AUTHORIZED else ContactsPermission.DENIED
-        if (granted) {
-            importing = true
-            scope.launch {
-                try {
-                    val loaded = withContext(Dispatchers.IO) {
-                        SystemContactsImporter.fetchAll(context)
-                    }
-                    phonebook = loaded
-                    importError = null
-                } catch (e: Exception) {
-                    importError = "Couldn't load contacts: ${e.message ?: ""}"
-                } finally {
-                    importing = false
-                }
-            }
+        if (granted) loadPhonebook()
+    }
+
+    // Re-check permission on entry: the user may have toggled it in system
+    // settings while the app was backgrounded.
+    LaunchedEffect(Unit) {
+        permission = SystemContactsImporter.permission(context)
+        if (permission == ContactsPermission.AUTHORIZED && phonebook.isEmpty() && !importing) {
+            loadPhonebook()
         }
     }
 
@@ -309,22 +321,7 @@ fun ContactsScreen(
                 } else if (phonebook.isEmpty()) {
                     item {
                         OutlinedButton(
-                            onClick = {
-                                importing = true
-                                scope.launch {
-                                    try {
-                                        val loaded = withContext(Dispatchers.IO) {
-                                            SystemContactsImporter.fetchAll(context)
-                                        }
-                                        phonebook = loaded
-                                        importError = null
-                                    } catch (e: Exception) {
-                                        importError = "Couldn't load contacts: ${e.message ?: ""}"
-                                    } finally {
-                                        importing = false
-                                    }
-                                }
-                            },
+                            onClick = loadPhonebook,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                         ) { Text("Load Contacts") }
                     }

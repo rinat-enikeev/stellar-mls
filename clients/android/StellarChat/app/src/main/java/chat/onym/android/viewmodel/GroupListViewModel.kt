@@ -2978,11 +2978,16 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         val acked = ackedEventIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }
         val toAck = computeBacklogAcks(msgs, acked, BACKLOG_ACK_MAX, BACKLOG_ACK_SCAN_CAP)
         for (eventID in toAck) {
-            val ackJson = JSONObject().apply {
-                put("type", SEPMessageAck.MESSAGE_TYPE)
-                put("eventID", eventID)
-            }.toString()
-            transport.sendProtocolMessage(group, ackJson)
+            // `acked.add` claims the ID: dedupes this backlog flush against a second
+            // `sendBacklogAcks` (onStop→onStart re-arm) and against a concurrent
+            // text/image handler on the transport thread racing the same event.
+            if (acked.add(eventID)) {
+                val ackJson = JSONObject().apply {
+                    put("type", SEPMessageAck.MESSAGE_TYPE)
+                    put("eventID", eventID)
+                }.toString()
+                transport.sendProtocolMessage(group, ackJson)
+            }
         }
     }
 

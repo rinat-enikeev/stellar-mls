@@ -155,11 +155,14 @@ struct StellarChatApp: App {
                             appState.sendBacklogAcks(groupID: groupID)
                             savedActiveGroupID = nil
                         }
-                    } else if let active = appState.activeGroupID {
-                        // Backgrounding (locked phone, app switcher, etc.): clear the
-                        // active group so background-decoded messages don't auto-ACK.
-                        // Guarded so the second call in the .active → .inactive →
-                        // .background sequence doesn't stomp `savedActiveGroupID` to nil.
+                    } else if newPhase == .background, let active = appState.activeGroupID {
+                        // True backgrounding only (home, app switcher commit, screen lock):
+                        // clear the active group so background-decoded messages don't auto-ACK.
+                        // Gated on `.background` rather than any non-`.active` transition so
+                        // transient interruptions (Control Center pull-down, incoming call
+                        // banner, notification center) — which fire `.inactive` then return
+                        // to `.active` without passing through `.background` — don't stomp
+                        // `activeGroupID` and silence in-window ACKs until the user returns.
                         // Flush any queued messages first so in-flight arrivals from when
                         // the chat was genuinely open still get ACKed against the
                         // still-active groupID — preserves the "ACK iff chat was open
@@ -552,6 +555,13 @@ final class AppState {
         }
     }
 
+    /// Drains `pendingIncomingMessages` into `chatMessages`, increments unread
+    /// counters, and emits ACKs for entries that arrived while the chat was open.
+    /// Normally fired by the 16ms debounce task; also called from
+    /// `StellarChatApp`'s scene-phase handler on `.background` to flush
+    /// in-flight arrivals before `activeGroupID` is nilled — without that,
+    /// messages queued in the final debounce window would lose their "chat was
+    /// open" ACK.
     func flushPendingMessages() {
         let batch = pendingIncomingMessages
         pendingIncomingMessages.removeAll()

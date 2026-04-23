@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -204,12 +205,12 @@ private fun CameraPreview(onCodeScanned: (String) -> Unit) {
 
         // Instruction text below the reticle
         Text(
-            text = "Scan a group invitation QR code\nshared by a group member",
+            text = "Point camera at QR code",
             color = Color.White,
             textAlign = TextAlign.Center,
             modifier = Modifier
                 .align(Alignment.Center)
-                .padding(top = reticleSizeDp / 2 + 32.dp)
+                .offset(y = reticleSizeDp / 2 + 40.dp)
         )
     }
 }

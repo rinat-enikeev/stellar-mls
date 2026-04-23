@@ -2641,17 +2641,61 @@ final class AppState {
 
     func setPushNotifications(enabled: Bool, forGroup groupID: String) {
         guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
-        groups[index].pushNotificationsEnabled = enabled
-        store.saveGroupAsync(groups[index])
 
-        let group = groups[index]
-        Task {
-            if enabled {
-                await ensurePushPermissionAndRegister(group: group)
-            } else {
-                await pushManager.unregisterGroup(groupID)
-            }
+        if enabled {
+            // Don't flip the flag optimistically — iOS may deny the permission,
+            // in which case we'd silently claim push is on while delivering nothing.
+            // enablePushNotifications flips it only after a successful grant+register.
+            Task { _ = await enablePushNotifications(forGroup: groupID) }
+        } else {
+            groups[index].pushNotificationsEnabled = false
+            store.saveGroupAsync(groups[index])
+            Task { await pushManager.unregisterGroup(groupID) }
         }
+    }
+
+    /// Outcome of attempting to enable push notifications for a group.
+    /// Callers (e.g. the chat banner) use this to decide whether to surface an
+    /// alert that points the user at iOS Settings.
+    enum PushEnableOutcome {
+        case enabled
+        case deniedJustNow
+        case deniedPreviously
+        case failed
+    }
+
+    /// Request notification permission and register the group. Returns the
+    /// outcome so the UI can react (e.g. show a Settings prompt on denial).
+    /// Only flips `pushNotificationsEnabled` on a confirmed grant.
+    @discardableResult
+    func enablePushNotifications(forGroup groupID: String) async -> PushEnableOutcome {
+        guard let group = groups.first(where: { $0.id == groupID }) else {
+            return .failed
+        }
+        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        switch status {
+        case .denied:
+            return .deniedPreviously
+        case .authorized, .provisional, .ephemeral:
+            let ok = await ensurePushPermissionAndRegister(group: group)
+            if ok { persistPushEnabled(groupID: groupID) }
+            return ok ? .enabled : .failed
+        case .notDetermined:
+            let ok = await ensurePushPermissionAndRegister(group: group)
+            if ok {
+                persistPushEnabled(groupID: groupID)
+                return .enabled
+            }
+            return .deniedJustNow
+        @unknown default:
+            return .failed
+        }
+    }
+
+    private func persistPushEnabled(groupID: String) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        groups[index].pushNotificationsEnabled = true
+        store.saveGroupAsync(groups[index])
     }
 
     // MARK: - Rekey Health & Diagnostics
@@ -3680,12 +3724,13 @@ final class AppState {
     }
 
     /// Request notification permission, wait for APNs token, and register a group.
-    /// Called when the user first enables push for a group.
-    func ensurePushPermissionAndRegister(group: ChatGroup) async {
+    /// Returns true iff permission was granted and registration proceeded.
+    @discardableResult
+    func ensurePushPermissionAndRegister(group: ChatGroup) async -> Bool {
         do {
             let center = UNUserNotificationCenter.current()
             let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
-            guard granted else { return }
+            guard granted else { return false }
 
             UIApplication.shared.registerForRemoteNotifications()
 
@@ -3713,10 +3758,12 @@ final class AppState {
             }
 
             await pushManager.registerGroup(group)
+            return true
         } catch {
             #if DEBUG
             print("[Push] Authorization error: \(error)")
             #endif
+            return false
         }
     }
 

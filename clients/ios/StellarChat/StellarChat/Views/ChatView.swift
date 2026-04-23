@@ -21,6 +21,8 @@ struct ChatView: View {
     @State private var showForkSheet = false
     @State private var pushBannerDismissed = false
     @State private var governanceBannerDismissed: [String: Bool] = [:]
+    @State private var pushDeniedAlertShown = false
+    @State private var isRequestingPushPermission = false
     @AppStorage("hasSeenFirstGroupWelcome") private var hasSeenFirstGroupWelcome = false
 
     var body: some View {
@@ -75,11 +77,24 @@ struct ChatView: View {
                         .font(.caption)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Button("Enable") {
-                        appState.setPushNotifications(enabled: true, forGroup: group.id)
-                        pushBannerDismissed = true
+                        guard !isRequestingPushPermission else { return }
+                        isRequestingPushPermission = true
+                        let groupID = group.id
+                        Task {
+                            let outcome = await appState.enablePushNotifications(forGroup: groupID)
+                            isRequestingPushPermission = false
+                            switch outcome {
+                            case .enabled:
+                                // Banner hides on its own once pushNotificationsEnabled flips.
+                                break
+                            case .deniedJustNow, .deniedPreviously, .failed:
+                                pushDeniedAlertShown = true
+                            }
+                        }
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .disabled(isRequestingPushPermission)
                     Button {
                         pushBannerDismissed = true
                     } label: {
@@ -499,6 +514,16 @@ struct ChatView: View {
             if let error = viewModel.errorMessage {
                 Text(error)
             }
+        }
+        .alert("Notifications are disabled", isPresented: $pushDeniedAlertShown) {
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            Button("Not now", role: .cancel) {}
+        } message: {
+            Text("Enable notifications for this app in iOS Settings to receive messages from this chat.")
         }
     }
 

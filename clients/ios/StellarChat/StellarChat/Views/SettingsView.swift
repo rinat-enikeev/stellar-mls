@@ -273,7 +273,7 @@ struct SettingsView: View {
                 row(
                     icon: SettingsIconBox(systemImage: "info.circle.fill", background: .gray),
                     title: "Version",
-                    detail: "1.6.1"
+                    detail: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
                 )
                 row(
                     icon: SettingsIconBox(systemImage: "lock.shield.fill", background: .blue),

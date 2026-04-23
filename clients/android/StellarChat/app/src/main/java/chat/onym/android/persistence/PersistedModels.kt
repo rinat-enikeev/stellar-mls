@@ -33,7 +33,10 @@ data class PersistedGroup(
     val groupTypeRawValue: Int = 0,
     /** Encrypted JSON-encoded list of admin BLS pubkey hex strings (lowercase).
      *  Only populated for Oligarchy groups; existing groups migrate in as null. */
-    val encryptedAdminPubkeys: ByteArray? = null
+    val encryptedAdminPubkeys: ByteArray? = null,
+    /** Encrypted avatar image bytes (JPEG, downscaled at pick time). Null for
+     *  groups without a locally-set avatar and for pre-migration rows. */
+    val encryptedAvatar: ByteArray? = null
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

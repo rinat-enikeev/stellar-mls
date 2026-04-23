@@ -1,5 +1,9 @@
 package chat.onym.android.viewmodel
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -22,6 +26,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.security.SecureRandom
 import kotlin.coroutines.resume
 
@@ -40,6 +45,8 @@ sealed class InvitationStatus {
     data class Failed(val reason: String) : InvitationStatus()
 }
 
+private const val AVATAR_MAX_EDGE_PX = 256
+
 class CreateGroupViewModel : ViewModel() {
     var groupName by mutableStateOf("")
     var groupType by mutableStateOf(SEPGroupType.ANARCHY)
@@ -54,6 +61,11 @@ class CreateGroupViewModel : ViewModel() {
     var keyValidationError by mutableStateOf<String?>(null)
     var onChainStatus by mutableStateOf<OnChainPublishStatus>(OnChainPublishStatus.Idle)
     val invitationStatuses = mutableStateMapOf<String, InvitationStatus>()
+
+    /** Downscaled JPEG bytes of the user-picked avatar, ready for persistence. */
+    var avatarBytes by mutableStateOf<ByteArray?>(null)
+    /** Source URI of the picked avatar, used for inline preview. */
+    var avatarUri by mutableStateOf<Uri?>(null)
 
     fun selectGroupType(type: SEPGroupType) {
         groupType = type
@@ -87,7 +99,8 @@ class CreateGroupViewModel : ViewModel() {
                 epoch = 0,
                 salt = SEPCommitmentBuilder.generateSalt(),
                 tier = effectiveTier,
-                groupType = groupType
+                groupType = groupType,
+                avatarData = avatarBytes
             )
             // Oligarchy creator is seeded as the initial admin. Demoting this
             // member (via future on-chain flows) requires another admin's consent.
@@ -143,6 +156,38 @@ class CreateGroupViewModel : ViewModel() {
 
     fun removeParticipant(key: String) {
         participantKeys.remove(key)
+    }
+
+    /** Decode the picked image, downscale it, and store both the source URI (for
+     *  inline preview) and compressed JPEG bytes (for persistence). Caps the
+     *  long edge at [AVATAR_MAX_EDGE_PX] to keep the persisted row small. */
+    fun onAvatarPicked(context: Context, uri: Uri) {
+        val resolver = context.contentResolver
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        val longest = maxOf(bounds.outWidth, bounds.outHeight).coerceAtLeast(1)
+        var sample = 1
+        while (longest / sample > AVATAR_MAX_EDGE_PX * 2) sample *= 2
+        val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
+        val bitmap = resolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, decodeOpts)
+        } ?: return
+        val scaled = downscale(bitmap, AVATAR_MAX_EDGE_PX)
+        val buffer = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, 85, buffer)
+        if (scaled !== bitmap) scaled.recycle()
+        bitmap.recycle()
+        avatarBytes = buffer.toByteArray()
+        avatarUri = uri
+    }
+
+    private fun downscale(src: Bitmap, maxEdge: Int): Bitmap {
+        val w = src.width
+        val h = src.height
+        val longest = maxOf(w, h)
+        if (longest <= maxEdge) return src
+        val scale = maxEdge.toFloat() / longest.toFloat()
+        return Bitmap.createScaledBitmap(src, (w * scale).toInt(), (h * scale).toInt(), true)
     }
 
     fun startCreation(

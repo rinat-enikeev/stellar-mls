@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PersistedTransportBundle::class, PersistedPendingRekey::class,
         PersistedEpochSnapshot::class, PersistedInvitedContact::class
     ],
-    version = 16
+    version = 17
 )
 abstract class StellarChatDatabase : RoomDatabase() {
     abstract fun dao(): StellarChatDao
@@ -159,13 +159,21 @@ abstract class StellarChatDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Locally-set group avatar: encrypted JPEG bytes. Null for groups
+                // without an avatar and for pre-existing rows.
+                db.execSQL("ALTER TABLE groups ADD COLUMN encryptedAvatar BLOB")
+            }
+        }
+
         fun getInstance(context: Context): StellarChatDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     StellarChatDatabase::class.java,
                     "stellar_chat.db"
-                ).addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)
+                ).addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17)
                 .fallbackToDestructiveMigration()
                 .build().also { instance = it }
             }

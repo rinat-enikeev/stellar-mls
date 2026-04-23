@@ -41,6 +41,9 @@ struct ChatGroup: Identifiable, Codable {
     var lastMessageAt: Date?
     /// Whether this chat is pinned to the top of the chat list.
     var isPinned: Bool = false
+    /// JPEG bytes of a locally-set group avatar (downscaled at pick time).
+    /// Held on the creator's device only; not propagated to other members yet.
+    var avatarData: Data?
 
     /// Nostr subscription topic tag for this group.
     /// Derivation (SEP-XXXX §3.1): `topicTag = hex(SHA-256("sep-topic-v1" || groupSecret)[0..8])`

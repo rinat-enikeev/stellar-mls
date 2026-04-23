@@ -4,13 +4,19 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -74,6 +80,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -83,7 +91,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate as drawRotate
 import androidx.compose.ui.platform.LocalContext
@@ -299,6 +310,13 @@ private fun IdentityStep(
     accent: GroupAccent,
     onAccentChange: (GroupAccent) -> Unit
 ) {
+    val context = LocalContext.current
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) viewModel.onAvatarPicked(context, uri)
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -308,14 +326,25 @@ private fun IdentityStep(
     ) {
         Spacer(Modifier.height(16.dp))
 
-        // Hero avatar with camera badge
-        Box(contentAlignment = Alignment.BottomEnd) {
+        // Hero avatar with camera badge — tap anywhere on it to pick a photo.
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(54.dp))
+                .clickable {
+                    photoPickerLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                }
+                .semantics { contentDescription = "Change group photo" },
+            contentAlignment = Alignment.BottomEnd
+        ) {
             GroupAvatar(
                 size = 108.dp,
                 accent = accent,
                 name = viewModel.groupName,
                 filled = viewModel.groupName.isNotBlank(),
-                corner = 54.dp
+                corner = 54.dp,
+                avatarBytes = viewModel.avatarBytes
             )
             Box(
                 modifier = Modifier
@@ -328,7 +357,7 @@ private fun IdentityStep(
             ) {
                 Icon(
                     Icons.Filled.PhotoCamera,
-                    contentDescription = "Change photo",
+                    contentDescription = null,
                     tint = Color.White,
                     modifier = Modifier.size(18.dp)
                 )
@@ -844,8 +873,16 @@ private fun GroupAvatar(
     accent: GroupAccent,
     name: String,
     filled: Boolean,
-    corner: androidx.compose.ui.unit.Dp
+    corner: androidx.compose.ui.unit.Dp,
+    avatarBytes: ByteArray? = null
 ) {
+    val imageBitmap: ImageBitmap? = remember(avatarBytes) {
+        avatarBytes?.let { bytes ->
+            try {
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+            } catch (_: Exception) { null }
+        }
+    }
     val brush: Brush = if (filled) accent.brush() else SolidColor(MaterialTheme.colorScheme.surfaceContainerHighest)
     Box(
         modifier = Modifier
@@ -854,15 +891,20 @@ private fun GroupAvatar(
             .background(brush),
         contentAlignment = Alignment.Center
     ) {
-        if (filled) {
-            Text(
+        when {
+            imageBitmap != null -> Image(
+                bitmap = imageBitmap,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(size).clip(RoundedCornerShape(corner))
+            )
+            filled -> Text(
                 initialsFor(name),
                 color = Color.White,
                 fontSize = (size.value * 0.36f).sp,
                 fontWeight = FontWeight.Bold
             )
-        } else {
-            Icon(
+            else -> Icon(
                 Icons.Filled.PhotoCamera,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -933,7 +975,8 @@ private fun ProgressStage(
                     accent = accent,
                     name = viewModel.groupName,
                     filled = true,
-                    corner = 60.dp
+                    corner = 60.dp,
+                    avatarBytes = viewModel.avatarBytes
                 )
             }
         }
@@ -1119,7 +1162,8 @@ private fun DoneStage(
                 accent = accent,
                 name = viewModel.groupName,
                 filled = true,
-                corner = 42.dp
+                corner = 42.dp,
+                avatarBytes = viewModel.avatarBytes
             )
             Box(
                 modifier = Modifier

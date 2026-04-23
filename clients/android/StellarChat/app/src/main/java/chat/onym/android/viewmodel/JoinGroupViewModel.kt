@@ -56,7 +56,7 @@ class JoinGroupViewModel : ViewModel() {
             verificationResult = null
             error = null
         } catch (e: Exception) {
-            error = "Invalid invite code: ${e.message}"
+            error = "Invalid invite code. Please check the code and try again."
             decodedGroup = null
         }
     }

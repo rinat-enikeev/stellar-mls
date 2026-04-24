@@ -40,6 +40,19 @@ const LEDGER_THRESHOLD: u32 = 17_280;
 /// TTL bump amount for persistent storage (ledgers, ~30 days).
 const LEDGER_BUMP: u32 = 518_400;
 
+/// TTL bump for `GroupCounted` receipts (~60 days).
+///
+/// Audit re-review Finding #3: the per-group receipt that enables
+/// `reconcile_tier_count` MUST outlive the group's `GroupV2` entry so
+/// that after the group goes cold (no calls, `GroupV2` expires) there
+/// is still a window during which anyone can observe the dangling
+/// tier-count slot and clean it up. Using a bump twice the group TTL
+/// gives operators a ~30-day grace window after cold-group expiry to
+/// run reconciliation. Stored in persistent storage (not instance)
+/// so each receipt carries its own expiry and does not consume the
+/// ~64KB shared instance budget.
+const GROUP_COUNTED_LEDGER_BUMP: u32 = LEDGER_BUMP * 2;
+
 /// Maximum number of active groups allowed per tier (M-4: storage abuse prevention).
 /// The admin can increase this limit by re-deploying with a higher value.
 const MAX_GROUPS_PER_TIER: u32 = 10_000;
@@ -78,12 +91,37 @@ fn tier_capacity(tier: u32) -> u32 {
 // subsumed by `MAX_GROUPS_PER_TIER` and by the natural TTL expiry of
 // `UsedProof` entries.
 //
-// Known residual exposure (Finding #3, circuit-level): `UsedProof` TTL
-// is `LEDGER_BUMP` (~30 days). A long-lived group that never advances
-// `(commitment, epoch)` allows a create-time proof to be replayed to
-// `deactivate_group` once its nullifier expires. Fully closing this
-// requires binding epoch (or a per-group proof counter) into the
-// MembershipCircuit public inputs.
+// ── What contract-level nullifiers CANNOT close ────────────────────
+//
+// 1. Pre-inclusion mempool / front-run replay. The nullifier is only
+//    recorded after the honest caller's transaction lands. A watcher
+//    that sees the pending transaction can resubmit the same proof
+//    bytes to `deactivate_group` and win ordering. `verify_membership`
+//    itself is non-state-changing and leaks the proof to any observer
+//    of the RPC simulation. Contract-level nullifiers protect only
+//    post-inclusion replay; pre-inclusion protection requires the
+//    circuit to bind an operation tag (so a VERIFY proof is not a
+//    valid DEACTIVATE proof) plus `group_id` and the calling address.
+//
+// 2. Long-lived groups whose `UsedProof` entries expire. TTL is
+//    `LEDGER_BUMP` (~30 days). A group that never advances
+//    `(commitment, epoch)` allows a create-time proof to be replayed
+//    once its nullifier has expired. Extending per-proof TTL forever
+//    is not a contract-only fix (rent is unbounded). Enumerating
+//    per-group nullifiers grows without bound and still enables
+//    pre-inclusion replay.
+//
+// ── Real closure: MembershipCircuit v2 ─────────────────────────────
+//
+// A circuit rotation that binds — at minimum — an operation tag
+// (CREATE / VERIFY / DEACTIVATE / UPDATE / UPDATE_ADMIN), `group_id`,
+// and a per-group monotonic `proof_nonce` as public inputs would make
+// a leaked proof useless outside the exact op+group+nonce it was
+// generated for. Optional additions: `caller` (with
+// `require_auth()`), `expires_at_ledger`, and an `intent_hash` for
+// challenge-bound attestations. Tracked as the v2 circuit follow-up;
+// until then the current global nullifier is defence-in-depth, not
+// primary replay protection.
 
 // ================================================================
 // Errors
@@ -483,26 +521,29 @@ pub enum DataKey {
     RestrictedMode,
     /// Per-group "this id contributed +1 to GroupCount(tier)" receipt.
     ///
-    /// Stored in INSTANCE storage, not persistent — the audit-followup
-    /// critique (Finding #4) observed that a persistent receipt bumped
-    /// on the same cadence as `GroupV2` expires alongside the group, so
-    /// in the real cold-group path the receipt needed by
-    /// `reconcile_tier_count` has already vanished. Instance storage is
-    /// bumped by every write the contract performs, so the receipt stays
-    /// alive as long as the contract is actively used — by any group,
-    /// not just the one the receipt describes.
+    /// Stored in PERSISTENT storage with its own TTL
+    /// (`GROUP_COUNTED_LEDGER_BUMP`, ~60 days — twice `LEDGER_BUMP`).
+    /// The invariant we depend on is:
     ///
-    /// Written at every group-creation path; deleted by `deactivate_group`
-    /// or `reconcile_tier_count`. The stored value is the tier the group
-    /// was counted in, so reconciliation knows which `GroupCount(tier)`
-    /// slot to decrement without trusting caller input.
+    ///   GroupCounted(id) expiry > GroupV2(id) expiry
     ///
-    /// Capacity trade-off: instance storage is bounded (~64KB total), so
-    /// with ~40 bytes per entry the contract can track on the order of
-    /// 1500 cold-group receipts before running out. Live groups contribute
-    /// a receipt; deactivated groups do not. If that limit is approached,
-    /// operators should run `reconcile_tier_count` in batches to drain
-    /// receipts for expired groups.
+    /// An intermediate audit revision put this receipt in INSTANCE
+    /// storage to guarantee the above without a custom TTL, but
+    /// instance storage is bounded (~64KB shared across all groups),
+    /// which would have capped live groups per tier well below
+    /// `MAX_GROUPS_PER_TIER`. Persistent storage with an explicit
+    /// longer TTL gives the same reconciliation guarantee without the
+    /// capacity regression: `bump_group` extends `GroupV2` by
+    /// `LEDGER_BUMP` and the receipt by `GROUP_COUNTED_LEDGER_BUMP`,
+    /// so after a group goes cold the receipt survives for
+    /// ~`LEDGER_BUMP` longer than the group itself — the window
+    /// during which `reconcile_tier_count` can decrement the slot.
+    ///
+    /// Written at every group-creation path; deleted by
+    /// `deactivate_group` or `reconcile_tier_count`. The stored value
+    /// is the tier the group was counted in, so reconciliation knows
+    /// which `GroupCount(tier)` slot to decrement without trusting
+    /// caller input.
     GroupCounted(BytesN<32>),
 }
 
@@ -816,7 +857,7 @@ impl SepXxxxContract {
         let receipt_key = DataKey::GroupCounted(group_id.clone());
         let tier: u32 = env
             .storage()
-            .instance()
+            .persistent()
             .get(&receipt_key)
             .ok_or(Error::GroupNotFound)?;
 
@@ -830,7 +871,7 @@ impl SepXxxxContract {
                 .instance()
                 .set(&DataKey::GroupCount(tier), &(count - 1));
         }
-        env.storage().instance().remove(&receipt_key);
+        env.storage().persistent().remove(&receipt_key);
 
         TierCountReconciled {
             group_id,
@@ -1041,10 +1082,16 @@ impl SepXxxxContract {
             .set(&DataKey::GroupCount(tier), &(count + 1));
         // Audit-followup Finding #6: receipt enabling permissionless
         // `reconcile_tier_count` after cold-group expiry. Stored in
-        // instance storage so it outlives the group entry (Finding #4).
-        env.storage()
-            .instance()
-            .set(&DataKey::GroupCounted(group_id.clone()), &tier);
+        // persistent storage with its own longer TTL so the receipt
+        // outlives the group entry (re-audit Finding #3 — instance
+        // storage would cap active groups well below MAX_GROUPS_PER_TIER).
+        let receipt_key = DataKey::GroupCounted(group_id.clone());
+        env.storage().persistent().set(&receipt_key, &tier);
+        env.storage().persistent().extend_ttl(
+            &receipt_key,
+            LEDGER_THRESHOLD,
+            GROUP_COUNTED_LEDGER_BUMP,
+        );
         Self::bump_group(&env, &group_id);
 
         GroupCreated {
@@ -1195,10 +1242,16 @@ impl SepXxxxContract {
             .instance()
             .set(&DataKey::GroupCount(tier), &(count + 1));
         // Audit-followup Finding #6: reconciliation receipt for oligarchy.
-        // Instance storage so it outlives the group entry (Finding #4).
-        env.storage()
-            .instance()
-            .set(&DataKey::GroupCounted(group_id.clone()), &tier);
+        // Persistent storage with longer TTL than the group itself, so
+        // `reconcile_tier_count` still works after cold-group expiry
+        // (re-audit Finding #3).
+        let receipt_key = DataKey::GroupCounted(group_id.clone());
+        env.storage().persistent().set(&receipt_key, &tier);
+        env.storage().persistent().extend_ttl(
+            &receipt_key,
+            LEDGER_THRESHOLD,
+            GROUP_COUNTED_LEDGER_BUMP,
+        );
         Self::bump_group(&env, &group_id);
 
         GroupCreated {
@@ -1603,28 +1656,88 @@ impl SepXxxxContract {
             .unwrap_or(0u64))
     }
 
-    /// Verify a membership proof against the current group state and
-    /// burn the proof's nullifier.
+    /// Verify a membership proof against the current group state
+    /// (read-only, non-consuming).
     ///
-    /// **Semantic: this is NOT read-only.** A successful call records the
-    /// proof in the `UsedProof` nullifier set so the same proof bytes can
-    /// never be replayed — including into `deactivate_group`,
-    /// `update_commitment`, or a second `verify_membership` call. Clients
-    /// MUST generate a fresh proof per call.
+    /// **Semantic: this is read-only.** The proof is checked against
+    /// the current `(commitment, epoch)` stored for the group, but
+    /// nothing is written — no nullifier is burnt, no TTL is bumped.
+    /// Callers can safely invoke this with `--send no` / simulation-
+    /// only RPC calls; the relayer and smoke scripts rely on that.
     ///
-    /// **Why this is state-changing.** An earlier read-only design allowed
-    /// an observer to scrape a valid proof from the transaction (mempool
-    /// or history) and front-run the owner with a destructive operation
-    /// like `deactivate_group`, because the two entrypoints share the
-    /// MembershipCircuit VK and accept the same `(commitment, epoch)`
-    /// public inputs. Burning the nullifier here is the smallest
-    /// contract-level fix that closes that leak: the honest caller's
-    /// first successful verification invalidates the proof everywhere.
+    /// **What this does NOT do.** Calling `verify_membership`
+    /// successfully offers NO protection against the same proof bytes
+    /// later being replayed into a state-changing entrypoint
+    /// (`deactivate_group`, `update_commitment`, etc.) — by this
+    /// caller or by any observer of the simulation / mempool. If a
+    /// caller needs that guarantee they MUST call
+    /// `consume_membership_proof` instead, which records the
+    /// nullifier. See the module-level "Replay-nullifier scoping"
+    /// comment for the full story on what contract-level nullifiers
+    /// can and cannot close.
     ///
-    /// Full circuit-level closure (binding `group_id` and operation tag
-    /// into MembershipCircuit public inputs) would let verify_membership
-    /// return to read-only semantics; that is tracked as Finding #1-full.
+    /// **Trust model.** The bool returned is a statement about the
+    /// proof and the group state at the observed ledger. It is not a
+    /// replay-protective credential. UIs that show "you are a member"
+    /// should use this; security-sensitive attestations should use
+    /// `consume_membership_proof`.
     pub fn verify_membership(
+        env: Env,
+        group_id: BytesN<32>,
+        proof: Groth16Proof,
+        public_inputs: PublicInputs,
+    ) -> Result<bool, Error> {
+        Self::require_initialized(&env)?;
+
+        let state = Self::load_group_v2(&env, &group_id)?;
+
+        if public_inputs.commitment != state.commitment
+            || public_inputs.epoch != state.epoch
+        {
+            return Err(Error::PublicInputsMismatch);
+        }
+
+        let vk = Self::load_vk(&env, state.tier)?;
+        let valid = verify_groth16_proof(
+            &env,
+            &vk,
+            &proof,
+            &state.commitment,
+            state.epoch,
+        );
+
+        Ok(valid)
+    }
+
+    /// Verify a membership proof and burn its nullifier.
+    ///
+    /// **Semantic: this IS state-changing.** On success the proof is
+    /// recorded in the `UsedProof` set, so the same proof bytes
+    /// cannot be re-submitted to any state-changing entrypoint on any
+    /// group. Use this when the caller needs the on-chain guarantee
+    /// "this proof is mine, nobody else can reuse it" — e.g. a signed
+    /// attestation that a given address was a member at a given
+    /// ledger without exposing the proof to frontrun-style reuse
+    /// into `deactivate_group`.
+    ///
+    /// Callers MUST submit this as a real transaction (not
+    /// `--send no` / simulation); simulated calls do not persist the
+    /// nullifier and therefore confer no replay protection.
+    ///
+    /// **What this still does NOT close.**
+    ///   * Pre-inclusion mempool frontrun: an observer of the pending
+    ///     transaction can race the honest caller with the same proof
+    ///     bytes. Circuit-level fix required (bind an operation tag
+    ///     and `caller` as public inputs).
+    ///   * TTL-aged replay: once the `UsedProof` entry for a proof
+    ///     expires (~`LEDGER_BUMP` ledgers), the bytes become
+    ///     replayable again. Bounded only by ledger-level
+    ///     economics; circuit-level fix required for unconditional
+    ///     expiry protection.
+    ///
+    /// See the module-level "Replay-nullifier scoping" comment and
+    /// the deactivate_group doc for the full residual-exposure model.
+    pub fn consume_membership_proof(
         env: Env,
         group_id: BytesN<32>,
         proof: Groth16Proof,
@@ -1682,18 +1795,36 @@ impl SepXxxxContract {
     ///
     /// N-14: Uses proof-based authorization only (same rationale as `update_commitment`).
     ///
-    /// **Audit-followup Finding #3 — known residual exposure (circuit-level).**
-    /// A group that stays at `(commitment, epoch)` for longer than the
-    /// `UsedProof` TTL (`LEDGER_BUMP` ~30 days) can be deactivated by
-    /// replaying ANY earlier membership proof whose nullifier has since
-    /// expired — including the create-time proof, if the group has never
-    /// been updated. Contract-level mitigations (per-group nullifier
-    /// lists, instance-scoped nullifiers) all have unbounded-growth or
-    /// enumeration problems. The cryptographic fix is to bind `epoch` (or
-    /// a per-group monotonic proof counter) as a MembershipCircuit public
-    /// input so an old proof cannot satisfy the current verifier.
-    /// Operators can mitigate by periodically calling `update_commitment`
-    /// even for no-op state changes to advance the epoch.
+    /// **Re-audit Finding #4 — known residual exposure (circuit-level).**
+    /// Two distinct replay paths remain open that contract-level code
+    /// cannot close:
+    ///
+    ///   1. **Pre-inclusion mempool frontrun.** The deactivate proof
+    ///      is visible in the pending transaction before it is mined.
+    ///      An observer can submit `deactivate_group` with the same
+    ///      proof and may win ordering. Nullifier burning here is
+    ///      post-inclusion only. (Note: `epoch` is ALREADY bound as a
+    ///      MembershipCircuit public input, so "bind epoch" is not
+    ///      the missing piece — what is missing is an OPERATION TAG
+    ///      and `caller` binding, so a proof produced for VERIFY
+    ///      cannot be reused for DEACTIVATE and a proof produced by
+    ///      one address cannot be stolen by another.)
+    ///   2. **TTL-aged proof replay.** `UsedProof` entries expire
+    ///      after `LEDGER_BUMP` (~30 days). A group that stays at
+    ///      `(commitment, epoch)` for longer than that can be
+    ///      deactivated by replaying ANY earlier membership proof
+    ///      whose nullifier has since expired — including the
+    ///      create-time proof, if the group has never been updated.
+    ///      Contract-level mitigations (per-group nullifier lists,
+    ///      keeping the nullifier set forever) all have unbounded-
+    ///      growth or rent problems; the v2-circuit fix is a per-
+    ///      group monotonic `proof_nonce` bound as a public input so
+    ///      stale proofs stop verifying regardless of nullifier TTL.
+    ///
+    /// Operator mitigation today: periodically call
+    /// `update_commitment` even for no-op membership changes so the
+    /// epoch advances and stale proofs stop verifying via public-
+    /// input mismatch before their nullifier expires.
     pub fn deactivate_group(
         env: Env,
         group_id: BytesN<32>,
@@ -1744,14 +1875,15 @@ impl SepXxxxContract {
                 .set(&DataKey::GroupCount(current.tier), &(count - 1));
         }
         // Audit-followup Finding #6: clear the reconciliation receipt so
-        // `reconcile_tier_count` cannot double-decrement.
+        // `reconcile_tier_count` cannot double-decrement. Persistent
+        // storage per re-audit Finding #3.
         if env
             .storage()
-            .instance()
+            .persistent()
             .has(&DataKey::GroupCounted(group_id.clone()))
         {
             env.storage()
-                .instance()
+                .persistent()
                 .remove(&DataKey::GroupCounted(group_id.clone()));
         }
 
@@ -2045,11 +2177,25 @@ impl SepXxxxContract {
                 LEDGER_BUMP,
             );
         }
-        // Bump instance storage TTL. This keeps the admin key AND the
-        // `GroupCounted` reconciliation receipts alive (Finding #4: the
-        // receipt lives in instance storage so it outlives the group's
-        // persistent entries, which is the condition `reconcile_tier_count`
-        // needs to observe).
+        // Re-audit Finding #3: the `GroupCounted` reconciliation
+        // receipt lives in persistent storage with a longer TTL than
+        // the group itself, so extend it separately. The invariant
+        // `receipt_expiry > group_expiry` is what lets
+        // `reconcile_tier_count` observe the dangling tier-count slot
+        // after a cold group's `GroupV2` has expired.
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::GroupCounted(group_id.clone()))
+        {
+            env.storage().persistent().extend_ttl(
+                &DataKey::GroupCounted(group_id.clone()),
+                LEDGER_THRESHOLD,
+                GROUP_COUNTED_LEDGER_BUMP,
+            );
+        }
+        // Bump instance storage TTL (admin key, GroupCount tier
+        // counters). Does not cover per-group receipts anymore.
         env.storage()
             .instance()
             .extend_ttl(LEDGER_THRESHOLD, LEDGER_BUMP);
@@ -3142,14 +3288,14 @@ mod test {
         client.verify_membership(&group_id, &mock_proof(&env), &pi);
     }
 
-    /// Audit-followup Finding #2: `verify_membership` burns the proof
-    /// nullifier so an observed proof cannot be replayed into a
-    /// state-changing call. This test asserts that a pre-recorded
-    /// nullifier blocks `verify_membership` itself — i.e. the replay
-    /// check is wired before the verifier.
+    /// Re-audit Finding #1: `verify_membership` is now read-only
+    /// again (the split-API fix). A previously-burnt nullifier MUST
+    /// NOT block it — replay protection is the job of
+    /// `consume_membership_proof` instead. The call still returns
+    /// `false` because the mock proof doesn't verify cryptographically,
+    /// but importantly it does not panic with `ProofReplay (#12)`.
     #[test]
-    #[should_panic(expected = "Error(Contract, #12)")]
-    fn test_verify_membership_rejects_replayed_proof() {
+    fn test_verify_membership_is_read_only_ignores_nullifier() {
         let (env, client, _admin, contract_id) = setup_initialized();
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
@@ -3162,7 +3308,48 @@ mod test {
             commitment: commitment.clone(),
             epoch: 3,
         };
-        client.verify_membership(&group_id, &proof, &pi);
+        // Returns false (proof does not verify), but does not panic
+        // with ProofReplay — read-only path bypasses the nullifier check.
+        assert!(!client.verify_membership(&group_id, &proof, &pi));
+    }
+
+    /// Re-audit Finding #1: `consume_membership_proof` is the
+    /// state-changing variant that DOES enforce the nullifier. A
+    /// pre-recorded nullifier must block it before the verifier runs.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #12)")]
+    fn test_consume_membership_proof_rejects_replayed_proof() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        let commitment = BytesN::from_array(&env, &[2u8; 32]);
+        inject_group(&env, &contract_id, &group_id, &commitment, 3, 0);
+
+        let proof = mock_proof(&env);
+        inject_used_proof(&env, &contract_id, &group_id, &proof);
+
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 3,
+        };
+        client.consume_membership_proof(&group_id, &proof, &pi);
+    }
+
+    /// Re-audit Finding #1: `consume_membership_proof` must surface
+    /// the same `PublicInputsMismatch` + `GroupNotFound` error paths
+    /// as `verify_membership`, and must be callable.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #10)")]
+    fn test_consume_membership_proof_public_inputs_mismatch() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        let commitment = BytesN::from_array(&env, &[2u8; 32]);
+        inject_group(&env, &contract_id, &group_id, &commitment, 3, 0);
+
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 99,
+        };
+        client.consume_membership_proof(&group_id, &mock_proof(&env), &pi);
     }
 
     /// Regression: `verify_membership` must resolve V2-native groups (those
@@ -5110,15 +5297,15 @@ mod test {
 
         // Simulate a create-then-expire history: no `Group` / `GroupV2`
         // entry survives, but the tier counter is still +1 and the
-        // reconciliation receipt is still in instance storage (Finding
-        // #4: the receipt outlives the group because instance storage is
-        // bumped on every contract write).
+        // reconciliation receipt is still in persistent storage
+        // (re-audit Finding #3: receipt has its own longer TTL so it
+        // outlives the group entry).
         env.as_contract(&contract_id, || {
             env.storage()
                 .instance()
                 .set(&DataKey::GroupCount(tier), &3u32);
             env.storage()
-                .instance()
+                .persistent()
                 .set(&DataKey::GroupCounted(group_id.clone()), &tier);
         });
 
@@ -5133,7 +5320,7 @@ mod test {
             assert_eq!(count, 2);
             assert!(
                 !env.storage()
-                    .instance()
+                    .persistent()
                     .has(&DataKey::GroupCounted(group_id.clone())),
                 "receipt must be removed so we cannot double-decrement"
             );
@@ -5154,7 +5341,7 @@ mod test {
         // so `reconcile_tier_count` reaches the liveness check.
         env.as_contract(&contract_id, || {
             env.storage()
-                .instance()
+                .persistent()
                 .set(&DataKey::GroupCounted(group_id.clone()), &0u32);
         });
 

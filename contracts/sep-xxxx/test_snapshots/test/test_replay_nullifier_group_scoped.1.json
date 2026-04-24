@@ -359,6 +359,7 @@
       ]
     ],
     [],
+    [],
     []
   ],
   "ledger": {
@@ -381,10 +382,10 @@
               "key": {
                 "vec": [
                   {
-                    "symbol": "GroupV2"
+                    "symbol": "Group"
                   },
                   {
-                    "bytes": "5252525252525252525252525252525252525252525252525252525252525252"
+                    "bytes": "0202020202020202020202020202020202020202020202020202020202020202"
                   }
                 ]
               },
@@ -404,7 +405,7 @@
                       "symbol": "commitment"
                     },
                     "val": {
-                      "bytes": "5353535353535353535353535353535353535353535353535353535353535353"
+                      "bytes": "0303030303030303030303030303030303030303030303030303030303030303"
                     }
                   },
                   {
@@ -412,23 +413,7 @@
                       "symbol": "epoch"
                     },
                     "val": {
-                      "u64": "0"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "group_type"
-                    },
-                    "val": {
-                      "u32": 2
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "member_count"
-                    },
-                    "val": {
-                      "u32": 5
+                      "u64": "5"
                     }
                   },
                   {
@@ -465,10 +450,10 @@
               "key": {
                 "vec": [
                   {
-                    "symbol": "HistoryV2"
+                    "symbol": "History"
                   },
                   {
-                    "bytes": "5252525252525252525252525252525252525252525252525252525252525252"
+                    "bytes": "0202020202020202020202020202020202020202020202020202020202020202"
                   }
                 ]
               },
@@ -724,6 +709,33 @@
           "ext": "v0"
         },
         "live_until": 518400
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "UsedProof"
+                  },
+                  {
+                    "bytes": "5f9d6415edb4da79d5e27d00c9792e6393e37c897ec84f895e9e4c54b8a2f4bc"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "bool": true
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
       },
       {
         "entry": {

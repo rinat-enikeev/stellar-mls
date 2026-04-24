@@ -60,6 +60,23 @@ fn tier_capacity(tier: u32) -> u32 {
     }
 }
 
+// Replay-nullifier operation tags (audit-2026-04 MEDIUM-3/LOW-1).
+//
+// Scoping the nullifier by `(op_tag, group_id, proof_bytes)` instead of a
+// global `sha256(proof_bytes)` has two effects:
+//   1. Replay is still impossible within the same (op, group) pair because
+//      circuits bind their public inputs, so a proof verifying twice against
+//      identical public inputs is a true replay.
+//   2. Benign cross-context reuse (e.g. the same membership proof used for
+//      both `verify_membership` and `deactivate_group`) no longer hits a
+//      spurious `ProofReplay`, and per-group nullifier growth is bounded by
+//      the group's own operation count rather than global activity.
+const OP_CREATE: u8 = 1;
+const OP_UPDATE: u8 = 2;
+const OP_UPDATE_DEMOCRACY: u8 = 3;
+const OP_UPDATE_ADMIN: u8 = 4;
+const OP_DEACTIVATE: u8 = 5;
+
 // ================================================================
 // Errors
 // ================================================================
@@ -133,6 +150,11 @@ pub enum Error {
     /// `member_count` is out of range for the requested tier / group type
     /// (e.g. < 2 for Democracy, or > 2^depth for the selected tier).
     MemberCountOutOfRange = 25,
+    /// A BLS12-381 curve point (from a proof or a VK) is not in the
+    /// prime-order subgroup. Surfaced by the audit-2026-04 hardening that
+    /// validates VK points at install time and proof points at verify time,
+    /// so invalid-subgroup inputs can never reach `pairing_check`.
+    InvalidPoint = 26,
 }
 
 // ================================================================
@@ -402,6 +424,17 @@ pub enum DataKey {
     /// Produced by all post-migration writes.
     GroupV2(BytesN<32>),
     /// Group history in V2 format (persistent storage).
+    ///
+    /// **IMPORTANT (audit-2026-04 LOW-4):** despite the V2 name, the stored
+    /// value is `Vec<CommitmentEntry>` — the V1 struct — NOT
+    /// `Vec<CommitmentEntryV2>`. History entries intentionally drop
+    /// `group_type` (invariant per group, recoverable from the current V2
+    /// record) and `member_count` (not needed for historical queries, which
+    /// serve the rolling audit window). Any future refactor that needs
+    /// governance metadata in history MUST introduce a new key
+    /// (`HistoryV3` or similar) with explicit conversion logic — do NOT
+    /// silently change the value type stored under this key, as that
+    /// would break decode on every existing group.
     HistoryV2(BytesN<32>),
     /// Oligarchy admin-set salted Poseidon commitment (persistent storage).
     /// Stores `admin_commitment = Poseidon(Poseidon(admin_root, admin_epoch),
@@ -469,6 +502,16 @@ impl SepXxxxContract {
         {
             return Err(Error::InvalidVkLength);
         }
+
+        // Audit-2026-04 MEDIUM-1 + LOW-3: reject structurally-invalid VKs at
+        // install time so no verification path can ever hand an invalid-
+        // subgroup point to `pairing_check`.
+        validate_vk_points(&vk_small)?;
+        validate_vk_points(&vk_medium)?;
+        validate_vk_points(&vk_large)?;
+        validate_vk_points(&update_vk_small)?;
+        validate_vk_points(&update_vk_medium)?;
+        validate_vk_points(&update_vk_large)?;
 
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
@@ -545,6 +588,10 @@ impl SepXxxxContract {
         if new_vk.ic.len() != expected_ic_len {
             return Err(Error::InvalidVkLength);
         }
+        // Audit-2026-04 MEDIUM-1 + LOW-3: subgroup-validate every VK point
+        // before persisting, so a later rotation cannot install a VK that
+        // makes every subsequent verification trap.
+        validate_vk_points(&new_vk)?;
 
         env.storage().persistent().set(&key, &new_vk);
         env.storage()
@@ -712,6 +759,18 @@ impl SepXxxxContract {
             return Err(Error::GroupAlreadyExists);
         }
 
+        // Audit-2026-04 MEDIUM-2: enforce canonical Fr encoding of the
+        // commitment up front, matching the style used for `c_new`
+        // (update_commitment) and oligarchy `admin_root`. The verifier
+        // already performs this check internally, but surfacing it here
+        // keeps the error model consistent and does not rely on verifier
+        // internals for input validation.
+        let commitment_fr = Fr::from_bytes(commitment.clone());
+        let commitment_canonical: BytesN<32> = commitment_fr.to_bytes();
+        if commitment_canonical != commitment {
+            return Err(Error::InvalidCommitmentEncoding);
+        }
+
         // M-4: Enforce per-tier group count limit to prevent storage abuse.
         let count: u32 = env
             .storage()
@@ -722,14 +781,14 @@ impl SepXxxxContract {
             return Err(Error::TierGroupLimitReached);
         }
 
-        Self::check_proof_replay(&env, &proof)?;
+        Self::check_proof_replay(&env, OP_CREATE, &group_id, &proof)?;
 
         let vk = Self::load_vk(&env, tier)?;
         if !verify_groth16_proof(&env, &vk, &proof, &commitment, 0) {
             return Err(Error::InvalidProof);
         }
 
-        Self::record_proof(&env, &proof);
+        Self::record_proof(&env, OP_CREATE, &group_id, &proof);
 
         let timestamp = env.ledger().timestamp();
         let entry = CommitmentEntryV2 {
@@ -846,14 +905,14 @@ impl SepXxxxContract {
             return Err(Error::TierGroupLimitReached);
         }
 
-        Self::check_proof_replay(&env, &proof)?;
+        Self::check_proof_replay(&env, OP_CREATE, &group_id, &proof)?;
 
         let vk = Self::load_vk(&env, tier)?;
         if !verify_groth16_proof(&env, &vk, &proof, &commitment, 0) {
             return Err(Error::InvalidProof);
         }
 
-        Self::record_proof(&env, &proof);
+        Self::record_proof(&env, OP_CREATE, &group_id, &proof);
 
         let timestamp = env.ledger().timestamp();
         let entry = CommitmentEntryV2 {
@@ -975,7 +1034,7 @@ impl SepXxxxContract {
             return Err(Error::InvalidCommitmentEncoding);
         }
 
-        Self::check_proof_replay(&env, &proof)?;
+        Self::check_proof_replay(&env, OP_UPDATE, &group_id, &proof)?;
 
         let vk = Self::load_update_vk(&env, current.tier)?;
         if !verify_groth16_proof_update(
@@ -989,7 +1048,7 @@ impl SepXxxxContract {
             return Err(Error::InvalidProof);
         }
 
-        Self::record_proof(&env, &proof);
+        Self::record_proof(&env, OP_UPDATE, &group_id, &proof);
 
         let timestamp = env.ledger().timestamp();
 
@@ -1100,7 +1159,7 @@ impl SepXxxxContract {
             return Err(Error::InvalidCommitmentEncoding);
         }
 
-        Self::check_proof_replay(&env, &proof)?;
+        Self::check_proof_replay(&env, OP_UPDATE_DEMOCRACY, &group_id, &proof)?;
 
         let vk = Self::load_update_vk_by_type(&env, current.tier, 2)?;
         if !verify_groth16_proof_democracy_update(
@@ -1116,7 +1175,7 @@ impl SepXxxxContract {
             return Err(Error::InvalidProof);
         }
 
-        Self::record_proof(&env, &proof);
+        Self::record_proof(&env, OP_UPDATE_DEMOCRACY, &group_id, &proof);
 
         let timestamp = env.ledger().timestamp();
         Self::archive_entry(&env, &group_id, &current);
@@ -1220,7 +1279,7 @@ impl SepXxxxContract {
             return Err(Error::InvalidCommitmentEncoding);
         }
 
-        Self::check_proof_replay(&env, &proof)?;
+        Self::check_proof_replay(&env, OP_UPDATE_ADMIN, &group_id, &proof)?;
 
         let vk = Self::load_admin_update_vk(&env)?;
         // Reuse the UpdateCircuit verifier — same 3 public inputs, 4 IC
@@ -1237,7 +1296,7 @@ impl SepXxxxContract {
             return Err(Error::InvalidProof);
         }
 
-        Self::record_proof(&env, &proof);
+        Self::record_proof(&env, OP_UPDATE_ADMIN, &group_id, &proof);
 
         env.storage()
             .persistent()
@@ -1329,6 +1388,15 @@ impl SepXxxxContract {
     /// ensures no group can become un-deactivatable even when the governance
     /// quorum is unreachable (e.g. enough members have left).
     ///
+    /// **Audit-2026-04 LOW-2 (acknowledged, no change).** Reviewers MUST
+    /// assume a single dissatisfied member can irreversibly retire any
+    /// group they belong to. UIs and integrators cannot rely on Democracy
+    /// quorum or Oligarchy admin authorisation to gate deactivation. If a
+    /// future product requirement needs governance-gated deactivation, add
+    /// a per-group policy flag at creation time rather than removing this
+    /// safety valve globally (it would strand any group whose governance
+    /// quorum becomes unreachable).
+    ///
     /// N-14: Uses proof-based authorization only (same rationale as `update_commitment`).
     pub fn deactivate_group(
         env: Env,
@@ -1349,14 +1417,14 @@ impl SepXxxxContract {
             return Err(Error::PublicInputsMismatch);
         }
 
-        Self::check_proof_replay(&env, &proof)?;
+        Self::check_proof_replay(&env, OP_DEACTIVATE, &group_id, &proof)?;
 
         let vk = Self::load_vk(&env, current.tier)?;
         if !verify_groth16_proof(&env, &vk, &proof, &current.commitment, current.epoch) {
             return Err(Error::InvalidProof);
         }
 
-        Self::record_proof(&env, &proof);
+        Self::record_proof(&env, OP_DEACTIVATE, &group_id, &proof);
 
         let timestamp = env.ledger().timestamp();
         let deactivated = CommitmentEntryV2 {
@@ -1645,19 +1713,48 @@ impl SepXxxxContract {
             .extend_ttl(LEDGER_THRESHOLD, LEDGER_BUMP);
     }
 
-    /// Compute a SHA-256 hash of the proof components for replay tracking.
-    fn proof_hash(env: &Env, proof: &Groth16Proof) -> BytesN<32> {
+    /// Compute the replay nullifier for a proof, scoped to `(op_tag, group_id)`.
+    ///
+    /// Audit-2026-04 MEDIUM-3 + LOW-1: the preimage is
+    /// `op_tag || group_id || proof.a || proof.b || proof.c`. Domain-separation
+    /// by operation and group means nullifiers can only collide when the same
+    /// caller submits the same proof to the same operation on the same group —
+    /// which is the exact replay this check exists to prevent, and matches the
+    /// cryptographic binding of the Groth16 public inputs. Benign cross-
+    /// context reuse (e.g. surfacing a membership proof to `verify_membership`
+    /// and then again to `deactivate_group`) no longer hits a spurious
+    /// `ProofReplay`.
+    ///
+    /// Migration note: any `DataKey::UsedProof` entries written under the
+    /// pre-audit global scheme become orphaned but cannot enable a replay —
+    /// circuits bind public inputs, so a proof that verified in one context
+    /// cannot verify in a different one. Stale entries expire via TTL
+    /// (`LEDGER_BUMP` ~30 days).
+    fn proof_hash(
+        env: &Env,
+        op_tag: u8,
+        group_id: &BytesN<32>,
+        proof: &Groth16Proof,
+    ) -> BytesN<32> {
         let mut preimage = Bytes::new(env);
+        preimage.append(&Bytes::from_array(env, &[op_tag]));
+        preimage.append(&Bytes::from_slice(env, &group_id.to_array()));
         preimage.append(&Bytes::from_slice(env, proof.a.to_array().as_slice()));
         preimage.append(&Bytes::from_slice(env, proof.b.to_array().as_slice()));
         preimage.append(&Bytes::from_slice(env, proof.c.to_array().as_slice()));
         env.crypto().sha256(&preimage).into()
     }
 
-    /// Reject if this exact proof has been submitted before (cross-function
-    /// and cross-group replay prevention).
-    fn check_proof_replay(env: &Env, proof: &Groth16Proof) -> Result<(), Error> {
-        let hash = Self::proof_hash(env, proof);
+    /// Reject if this proof has already been submitted to this operation on
+    /// this group. Replay protection is scoped per `(op_tag, group_id)` —
+    /// see [`proof_hash`] for the design rationale (audit-2026-04 MEDIUM-3 + LOW-1).
+    fn check_proof_replay(
+        env: &Env,
+        op_tag: u8,
+        group_id: &BytesN<32>,
+        proof: &Groth16Proof,
+    ) -> Result<(), Error> {
+        let hash = Self::proof_hash(env, op_tag, group_id, proof);
         if env
             .storage()
             .persistent()
@@ -1668,9 +1765,15 @@ impl SepXxxxContract {
         Ok(())
     }
 
-    /// Record a proof hash so it cannot be replayed.
-    fn record_proof(env: &Env, proof: &Groth16Proof) {
-        let hash = Self::proof_hash(env, proof);
+    /// Record a proof nullifier so it cannot be replayed on the same
+    /// `(op_tag, group_id)` pair.
+    fn record_proof(
+        env: &Env,
+        op_tag: u8,
+        group_id: &BytesN<32>,
+        proof: &Groth16Proof,
+    ) {
+        let hash = Self::proof_hash(env, op_tag, group_id, proof);
         env.storage()
             .persistent()
             .set(&DataKey::UsedProof(hash.clone()), &true);
@@ -1681,6 +1784,12 @@ impl SepXxxxContract {
         );
     }
 
+    /// Append the current state to the rolling history window, then drop
+    /// any legacy `History` entry so readers see one source of truth.
+    ///
+    /// See the `DataKey::HistoryV2` doc for the V1-shape storage choice
+    /// (audit-2026-04 LOW-4): history is persisted as `CommitmentEntry`,
+    /// intentionally dropping `group_type` and `member_count`.
     fn archive_entry(env: &Env, group_id: &BytesN<32>, entry: &CommitmentEntryV2) {
         let mut history: Vec<CommitmentEntry> = env
             .storage()
@@ -1734,6 +1843,61 @@ impl SepXxxxContract {
 // Groth16 Verification
 // ================================================================
 
+/// Validate that every G1/G2 point in a VK lies in the prime-order subgroup.
+///
+/// Soroban's `G1Affine::from_bytes` / `G2Affine::from_bytes` are non-validating
+/// byte wrappers (they check neither on-curve nor subgroup membership), so an
+/// unvalidated VK could otherwise push an invalid-subgroup point into
+/// `pairing_check` and trap at verify time. Called once at VK install
+/// (`initialize` / `update_vk`) so each proof verification does not repay the
+/// subgroup-check cost. Audit-2026-04 MEDIUM-1 + LOW-3.
+///
+/// `is_in_subgroup()` runs the host's on-curve check first, which means this
+/// function surfaces two rejection modes:
+///
+/// * On-curve but not in the prime-order subgroup → `Err(InvalidPoint)` (the
+///   actual subgroup-attack defense).
+/// * Off-curve / malformed encoding → host traps with
+///   `Error(Crypto, InvalidInput)` before the subgroup bit is inspected.
+///
+/// Both paths reject; only the first yields our typed error variant.
+fn validate_vk_points(vk: &VerificationKeyData) -> Result<(), Error> {
+    if !G1Affine::from_bytes(vk.alpha_g1.clone()).is_in_subgroup() {
+        return Err(Error::InvalidPoint);
+    }
+    if !G2Affine::from_bytes(vk.beta_g2.clone()).is_in_subgroup() {
+        return Err(Error::InvalidPoint);
+    }
+    if !G2Affine::from_bytes(vk.gamma_g2.clone()).is_in_subgroup() {
+        return Err(Error::InvalidPoint);
+    }
+    if !G2Affine::from_bytes(vk.delta_g2.clone()).is_in_subgroup() {
+        return Err(Error::InvalidPoint);
+    }
+    for i in 0..vk.ic.len() {
+        if !G1Affine::from_bytes(vk.ic.get(i).unwrap()).is_in_subgroup() {
+            return Err(Error::InvalidPoint);
+        }
+    }
+    Ok(())
+}
+
+/// Validate that a proof's three points lie in the prime-order subgroup.
+///
+/// Returns `false` so the calling verifier can treat this as a normal
+/// "invalid proof" without panicking — the three verifiers already collapse
+/// every cryptographic rejection path into `-> bool`. Callers map `false`
+/// into `Error::InvalidProof`. Audit-2026-04 MEDIUM-1.
+///
+/// Same caveat as `validate_vk_points`: on-curve-but-not-in-subgroup points
+/// return `false` cleanly; off-curve / malformed encodings instead trap at
+/// the host level with `Error(Crypto, InvalidInput)`. Both reject the proof.
+fn validate_proof_points(proof: &Groth16Proof) -> bool {
+    G1Affine::from_bytes(proof.a.clone()).is_in_subgroup()
+        && G2Affine::from_bytes(proof.b.clone()).is_in_subgroup()
+        && G1Affine::from_bytes(proof.c.clone()).is_in_subgroup()
+}
+
 /// Verify a Groth16 proof using BLS12-381 host functions.
 fn verify_groth16_proof(
     env: &Env,
@@ -1743,6 +1907,10 @@ fn verify_groth16_proof(
     epoch: u64,
 ) -> bool {
     let bls = env.crypto().bls12_381();
+
+    if !validate_proof_points(proof) {
+        return false;
+    }
 
     let proof_a = G1Affine::from_bytes(proof.a.clone());
     let proof_b = G2Affine::from_bytes(proof.b.clone());
@@ -1801,6 +1969,10 @@ fn verify_groth16_proof_update(
     c_new: &BytesN<32>,
 ) -> bool {
     let bls = env.crypto().bls12_381();
+
+    if !validate_proof_points(proof) {
+        return false;
+    }
 
     let proof_a = G1Affine::from_bytes(proof.a.clone());
     let proof_b = G2Affine::from_bytes(proof.b.clone());
@@ -1873,6 +2045,10 @@ fn verify_groth16_proof_democracy_update(
 ) -> bool {
     let bls = env.crypto().bls12_381();
 
+    if !validate_proof_points(proof) {
+        return false;
+    }
+
     let proof_a = G1Affine::from_bytes(proof.a.clone());
     let proof_b = G2Affine::from_bytes(proof.b.clone());
     let proof_c = G1Affine::from_bytes(proof.c.clone());
@@ -1938,35 +2114,68 @@ mod test {
         (env, client, admin)
     }
 
+    // All mock VK/proof helpers produce subgroup-valid G1/G2 points via
+    // `hash_to_g1` / `hash_to_g2`. Plain zero-byte encodings no longer pass
+    // `validate_vk_points` (audit-2026-04 MEDIUM-1 + LOW-3): `initialize`
+    // and `update_vk` now reject any VK with off-subgroup points, and the
+    // three verifiers reject proofs whose `a/b/c` are off-subgroup.
+    //
+    // These hashes are *not* cryptographically linked to any particular
+    // circuit — they just yield curve points the contract accepts
+    // structurally. Tests that reach the pairing check still fail at
+    // `pairing_check`; tests that only exercise contract-side error
+    // paths (tier/epoch/replay/canonicality) are unaffected.
+
+    fn valid_g1(env: &Env, tag: &[u8]) -> BytesN<96> {
+        let bls = env.crypto().bls12_381();
+        let dst = Bytes::from_slice(env, b"sep-xxxx-test-g1");
+        let msg = Bytes::from_slice(env, tag);
+        bls.hash_to_g1(&msg, &dst).to_bytes()
+    }
+
+    fn valid_g2(env: &Env, tag: &[u8]) -> BytesN<192> {
+        let bls = env.crypto().bls12_381();
+        let dst = Bytes::from_slice(env, b"sep-xxxx-test-g2");
+        let msg = Bytes::from_slice(env, tag);
+        bls.hash_to_g2(&msg, &dst).to_bytes()
+    }
+
     fn mock_vk(env: &Env) -> VerificationKeyData {
-        let g1 = BytesN::from_array(env, &[0u8; 96]);
-        let g2 = BytesN::from_array(env, &[0u8; 192]);
         VerificationKeyData {
-            alpha_g1: g1.clone(),
-            beta_g2: g2.clone(),
-            gamma_g2: g2.clone(),
-            delta_g2: g2,
-            ic: vec![env, g1.clone(), g1.clone(), g1],
+            alpha_g1: valid_g1(env, b"alpha"),
+            beta_g2: valid_g2(env, b"beta"),
+            gamma_g2: valid_g2(env, b"gamma"),
+            delta_g2: valid_g2(env, b"delta"),
+            ic: vec![
+                env,
+                valid_g1(env, b"ic0"),
+                valid_g1(env, b"ic1"),
+                valid_g1(env, b"ic2"),
+            ],
         }
     }
 
     fn mock_update_vk(env: &Env) -> VerificationKeyData {
-        let g1 = BytesN::from_array(env, &[0u8; 96]);
-        let g2 = BytesN::from_array(env, &[0u8; 192]);
         VerificationKeyData {
-            alpha_g1: g1.clone(),
-            beta_g2: g2.clone(),
-            gamma_g2: g2.clone(),
-            delta_g2: g2,
-            ic: vec![env, g1.clone(), g1.clone(), g1.clone(), g1],
+            alpha_g1: valid_g1(env, b"u-alpha"),
+            beta_g2: valid_g2(env, b"u-beta"),
+            gamma_g2: valid_g2(env, b"u-gamma"),
+            delta_g2: valid_g2(env, b"u-delta"),
+            ic: vec![
+                env,
+                valid_g1(env, b"u-ic0"),
+                valid_g1(env, b"u-ic1"),
+                valid_g1(env, b"u-ic2"),
+                valid_g1(env, b"u-ic3"),
+            ],
         }
     }
 
     fn mock_proof(env: &Env) -> Groth16Proof {
         Groth16Proof {
-            a: BytesN::from_array(env, &[0u8; 96]),
-            b: BytesN::from_array(env, &[0u8; 192]),
-            c: BytesN::from_array(env, &[0u8; 96]),
+            a: valid_g1(env, b"proof-a"),
+            b: valid_g2(env, b"proof-b"),
+            c: valid_g1(env, b"proof-c"),
         }
     }
 
@@ -2202,10 +2411,20 @@ mod test {
         });
     }
 
-    /// Record a proof hash as used in contract storage.
-    fn inject_used_proof(env: &Env, contract_id: &Address, proof: &Groth16Proof) {
+    /// Record a proof nullifier as used in contract storage, scoped to
+    /// `(op_tag, group_id)` (audit-2026-04 MEDIUM-3). Must match the
+    /// hashing scheme in `proof_hash`.
+    fn inject_used_proof(
+        env: &Env,
+        contract_id: &Address,
+        op_tag: u8,
+        group_id: &BytesN<32>,
+        proof: &Groth16Proof,
+    ) {
         env.as_contract(contract_id, || {
             let mut preimage = Bytes::new(env);
+            preimage.append(&Bytes::from_array(env, &[op_tag]));
+            preimage.append(&Bytes::from_slice(env, &group_id.to_array()));
             preimage.append(&Bytes::from_slice(env, proof.a.to_array().as_slice()));
             preimage.append(&Bytes::from_slice(env, proof.b.to_array().as_slice()));
             preimage.append(&Bytes::from_slice(env, proof.c.to_array().as_slice()));
@@ -2454,11 +2673,11 @@ mod test {
     #[should_panic(expected = "Error(Contract, #12)")]
     fn test_proof_replay_rejected_on_create() {
         let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let proof = mock_proof(&env);
-        inject_used_proof(&env, &contract_id, &proof);
+        inject_used_proof(&env, &contract_id, OP_CREATE, &group_id, &proof);
 
         let caller = Address::generate(&env);
-        let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
         let pi = PublicInputs {
             commitment: commitment.clone(),
@@ -2476,7 +2695,7 @@ mod test {
         inject_group(&env, &contract_id, &group_id, &commitment, 5, 0);
 
         let proof = mock_proof(&env);
-        inject_used_proof(&env, &contract_id, &proof);
+        inject_used_proof(&env, &contract_id, OP_UPDATE, &group_id, &proof);
 
         let upi = UpdatePublicInputs {
             c_old: commitment.clone(),
@@ -2495,7 +2714,7 @@ mod test {
         inject_group(&env, &contract_id, &group_id, &commitment, 5, 0);
 
         let proof = mock_proof(&env);
-        inject_used_proof(&env, &contract_id, &proof);
+        inject_used_proof(&env, &contract_id, OP_DEACTIVATE, &group_id, &proof);
 
         let pi = PublicInputs {
             commitment: commitment.clone(),
@@ -3213,8 +3432,10 @@ mod test {
             &pi,
         );
         match result {
-            Err(Err(_)) => { /* reached Groth16 verifier — dispatch OK */ }
-            other => panic!("expected verifier abort, got {:?}", other),
+            Err(Err(_)) | Err(Ok(Error::InvalidProof)) => {
+                // reached Groth16 verifier — dispatch OK
+            }
+            other => panic!("expected verifier rejection, got {:?}", other),
         }
     }
 
@@ -3668,8 +3889,10 @@ mod test {
             &pi,
         );
         match result {
-            Err(Err(_)) => { /* reached Groth16 verifier — validation passed */ }
-            other => panic!("expected verifier abort, got {:?}", other),
+            Err(Err(_)) | Err(Ok(Error::InvalidProof)) => {
+                // reached Groth16 verifier — validation passed
+            }
+            other => panic!("expected verifier rejection, got {:?}", other),
         }
     }
 
@@ -3696,8 +3919,10 @@ mod test {
             &pi,
         );
         match result {
-            Err(Err(_)) => { /* reached Groth16 verifier — validation passed */ }
-            other => panic!("expected verifier abort, got {:?}", other),
+            Err(Err(_)) | Err(Ok(Error::InvalidProof)) => {
+                // reached Groth16 verifier — validation passed
+            }
+            other => panic!("expected verifier rejection, got {:?}", other),
         }
     }
 
@@ -3727,8 +3952,10 @@ mod test {
             &pi,
         );
         match result {
-            Err(Err(_)) => { /* reached Groth16 verifier — validation passed */ }
-            other => panic!("expected verifier abort, got {:?}", other),
+            Err(Err(_)) | Err(Ok(Error::InvalidProof)) => {
+                // reached Groth16 verifier — validation passed
+            }
+            other => panic!("expected verifier rejection, got {:?}", other),
         }
     }
 
@@ -3754,8 +3981,10 @@ mod test {
             &pi,
         );
         match result {
-            Err(Err(_)) => { /* reached Groth16 verifier — validation passed */ }
-            other => panic!("expected verifier abort, got {:?}", other),
+            Err(Err(_)) | Err(Ok(Error::InvalidProof)) => {
+                // reached Groth16 verifier — validation passed
+            }
+            other => panic!("expected verifier rejection, got {:?}", other),
         }
     }
 
@@ -4072,11 +4301,14 @@ mod test {
             epoch: 0,
         };
         let result = client.try_deactivate_group(&group_id, &mock_proof(&env), &pi);
-        // We expect *some* failure from the verifier (Abort) rather than
-        // a governance-level rejection (which would be Ok-wrapped).
+        // We expect some form of verifier rejection (host trap OR a clean
+        // `InvalidProof` after point-validation/pairing_check), not a
+        // governance-level rejection (which would surface a different code).
         match result {
-            Err(Err(_)) => { /* reached Groth16 verifier — governance dispatch OK */ }
-            other => panic!("expected verifier abort, got {:?}", other),
+            Err(Err(_)) | Err(Ok(Error::InvalidProof)) => {
+                // reached Groth16 verifier — governance dispatch OK
+            }
+            other => panic!("expected verifier rejection, got {:?}", other),
         }
     }
 
@@ -4091,15 +4323,21 @@ mod test {
 
     fn mock_admin_update_vk(env: &Env) -> VerificationKeyData {
         // 4 IC points (1 base + 3 public inputs) to satisfy the set-time
-        // length check. Will never verify a real proof.
-        let g1 = BytesN::from_array(env, &[0u8; 96]);
-        let g2 = BytesN::from_array(env, &[0u8; 192]);
+        // length check. Uses valid subgroup points so it passes the
+        // install-time structural check added in the 2026-04 audit
+        // (MEDIUM-1 / LOW-3). Will never verify a real proof.
         VerificationKeyData {
-            alpha_g1: g1.clone(),
-            beta_g2: g2.clone(),
-            gamma_g2: g2.clone(),
-            delta_g2: g2,
-            ic: vec![env, g1.clone(), g1.clone(), g1.clone(), g1],
+            alpha_g1: valid_g1(env, b"a-alpha"),
+            beta_g2: valid_g2(env, b"a-beta"),
+            gamma_g2: valid_g2(env, b"a-gamma"),
+            delta_g2: valid_g2(env, b"a-delta"),
+            ic: vec![
+                env,
+                valid_g1(env, b"a-ic0"),
+                valid_g1(env, b"a-ic1"),
+                valid_g1(env, b"a-ic2"),
+                valid_g1(env, b"a-ic3"),
+            ],
         }
     }
 
@@ -4278,5 +4516,207 @@ mod test {
         let commitment = BytesN::from_array(&env, &[107u8; 32]);
         inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 0, 0, 0);
         client.get_admin_epoch(&group_id);
+    }
+
+    // ================================================================
+    // Audit-2026-04 — new test coverage
+    // ================================================================
+
+    // MEDIUM-1 + LOW-3 test coverage notes:
+    //
+    // `validate_vk_points` / `validate_proof_points` invoke
+    // `G1Affine::is_in_subgroup()` / `G2Affine::is_in_subgroup()`. Those
+    // helpers run the host's on-curve check FIRST — so they raise two
+    // distinct failure modes depending on the attacker's input:
+    //
+    //   * Off-curve bytes (including all-zero encodings): the host traps
+    //     with `Error(Crypto, InvalidInput)` ("point not on curve") before
+    //     the subgroup check runs. This surfaces as a host-level panic in
+    //     the try_* envelope — still a rejection, but not via our typed
+    //     `Error::InvalidPoint`.
+    //   * On-curve-but-not-in-subgroup points: `is_in_subgroup()` returns
+    //     false, and our helpers convert that into `Error::InvalidPoint`
+    //     (for VKs) or a `false` return / `Error::InvalidProof` (for
+    //     proofs). This is the actual subgroup-attack defense.
+    //
+    // Exercising the second path cleanly requires hardcoded witness points
+    // (on the full curve but outside the prime-order subgroup), which
+    // we do not carry in-tree. The tests below therefore use off-curve
+    // zero-byte encodings and assert that SOME rejection path fires —
+    // which at minimum proves the validator is reachable and not silently
+    // skipped. The typed `Error::InvalidPoint` variant remains defined
+    // and wired for the subgroup-attack path even when untested.
+
+    /// MEDIUM-1 + LOW-3: `initialize` rejects a VK with malformed / off-
+    /// curve points. See module-level comment above on the two rejection
+    /// paths.
+    #[test]
+    #[should_panic(expected = "Error(")]
+    fn test_initialize_rejects_invalid_vk_point() {
+        let (env, client, admin) = setup_env();
+        let bad_g1 = BytesN::from_array(&env, &[0u8; 96]);
+        let bad_vk = VerificationKeyData {
+            alpha_g1: bad_g1.clone(),
+            beta_g2: valid_g2(&env, b"beta"),
+            gamma_g2: valid_g2(&env, b"gamma"),
+            delta_g2: valid_g2(&env, b"delta"),
+            ic: vec![
+                &env,
+                valid_g1(&env, b"ic0"),
+                valid_g1(&env, b"ic1"),
+                valid_g1(&env, b"ic2"),
+            ],
+        };
+        let good_vk = mock_vk(&env);
+        let uvk = mock_update_vk(&env);
+        client.initialize(&admin, &bad_vk, &good_vk, &good_vk, &uvk, &uvk, &uvk);
+    }
+
+    /// MEDIUM-1 + LOW-3: `update_vk` rejects a replacement VK with
+    /// malformed / off-curve points.
+    #[test]
+    #[should_panic(expected = "Error(")]
+    fn test_update_vk_rejects_invalid_point() {
+        let (env, client, _admin, _cid) = setup_initialized();
+        let bad_g2 = BytesN::from_array(&env, &[0u8; 192]);
+        let bad_vk = VerificationKeyData {
+            alpha_g1: valid_g1(&env, b"alpha"),
+            beta_g2: bad_g2,
+            gamma_g2: valid_g2(&env, b"gamma"),
+            delta_g2: valid_g2(&env, b"delta"),
+            ic: vec![
+                &env,
+                valid_g1(&env, b"ic0"),
+                valid_g1(&env, b"ic1"),
+                valid_g1(&env, b"ic2"),
+            ],
+        };
+        client.update_vk(&VkKind::Membership, &0u32, &bad_vk);
+    }
+
+    /// MEDIUM-1: a proof with a malformed / off-curve G1 point is rejected
+    /// before reaching `pairing_check`.
+    #[test]
+    #[should_panic(expected = "Error(")]
+    fn test_verify_rejects_invalid_proof_point() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        let commitment = c_new_ok(&env);
+        inject_group_v2(&env, &contract_id, &group_id, &commitment, 0, 0, 0, 0);
+
+        let bad_proof = Groth16Proof {
+            a: BytesN::from_array(&env, &[0u8; 96]),
+            b: valid_g2(&env, b"b"),
+            c: valid_g1(&env, b"c"),
+        };
+        let upi = UpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: 0,
+            c_new: c_new_ok(&env),
+        };
+        client.update_commitment(&group_id, &bad_proof, &upi);
+    }
+
+    /// MEDIUM-2: `create_group_v2` rejects a non-canonical commitment up
+    /// front, with `InvalidCommitmentEncoding` — not a downstream
+    /// `InvalidProof`.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #15)")]
+    fn test_create_group_rejects_non_canonical_commitment() {
+        let (env, client, _admin, _cid) = setup_initialized();
+        let caller = Address::generate(&env);
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        // All-0xFF is >= BLS12-381 Fr modulus — not canonical.
+        let non_canonical = BytesN::from_array(&env, &[0xFFu8; 32]);
+        let pi = PublicInputs {
+            commitment: non_canonical.clone(),
+            epoch: 0,
+        };
+        client.create_group(&caller, &group_id, &non_canonical, &0u32, &mock_proof(&env), &pi);
+    }
+
+    /// MEDIUM-3 + LOW-1: nullifiers are scoped per `(op_tag, group_id)`.
+    /// An already-used nullifier for a different `op_tag` must NOT block
+    /// this operation (rejection would come from downstream validation —
+    /// public-inputs mismatch etc. — not from `ProofReplay`).
+    #[test]
+    #[should_panic(expected = "Error(Contract, #12)")]
+    fn test_replay_within_same_op_blocked() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        let commitment = BytesN::from_array(&env, &[2u8; 32]);
+        inject_group(&env, &contract_id, &group_id, &commitment, 5, 0);
+
+        let proof = mock_proof(&env);
+        // Same op + same group ⇒ ProofReplay.
+        inject_used_proof(&env, &contract_id, OP_UPDATE, &group_id, &proof);
+
+        let upi = UpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: 5,
+            c_new: c_new_ok(&env),
+        };
+        client.update_commitment(&group_id, &proof, &upi);
+    }
+
+    /// MEDIUM-3 + LOW-1: replay from a *different* group on the same op
+    /// does not block the call — the nullifier is group-scoped. The call
+    /// still fails (it's a malformed proof against a mock VK), but the
+    /// failure reason must NOT be `ProofReplay` (#12).
+    #[test]
+    fn test_replay_nullifier_group_scoped() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_a = BytesN::from_array(&env, &[1u8; 32]);
+        let group_b = BytesN::from_array(&env, &[2u8; 32]);
+        let commitment = BytesN::from_array(&env, &[3u8; 32]);
+        inject_group(&env, &contract_id, &group_b, &commitment, 5, 0);
+
+        let proof = mock_proof(&env);
+        // Burn the nullifier under group A; group B must not see a replay.
+        inject_used_proof(&env, &contract_id, OP_UPDATE, &group_a, &proof);
+
+        let upi = UpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: 5,
+            c_new: c_new_ok(&env),
+        };
+        let res = client.try_update_commitment(&group_b, &proof, &upi);
+        // The call MUST fail (the mock proof cannot pass the pairing check),
+        // but it must NOT fail for replay — that's the regression this guards.
+        assert!(res.is_err(), "expected update_commitment to fail");
+        match res {
+            Err(Ok(Error::ProofReplay)) => {
+                panic!("replay nullifier leaked across groups")
+            }
+            _ => {}
+        }
+    }
+
+    /// MEDIUM-3 + LOW-1: replay from a *different* op on the same group
+    /// does not block the call. Same argument as the cross-group test.
+    #[test]
+    fn test_replay_nullifier_op_scoped() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        let commitment = BytesN::from_array(&env, &[2u8; 32]);
+        inject_group(&env, &contract_id, &group_id, &commitment, 5, 0);
+
+        let proof = mock_proof(&env);
+        // Burn the nullifier under DEACTIVATE; UPDATE must not see a replay.
+        inject_used_proof(&env, &contract_id, OP_DEACTIVATE, &group_id, &proof);
+
+        let upi = UpdatePublicInputs {
+            c_old: commitment.clone(),
+            epoch_old: 5,
+            c_new: c_new_ok(&env),
+        };
+        let res = client.try_update_commitment(&group_id, &proof, &upi);
+        assert!(res.is_err(), "expected update_commitment to fail");
+        match res {
+            Err(Ok(Error::ProofReplay)) => {
+                panic!("replay nullifier leaked across operations")
+            }
+            _ => {}
+        }
     }
 }

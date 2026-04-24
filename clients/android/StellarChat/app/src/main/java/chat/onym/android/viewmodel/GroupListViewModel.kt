@@ -2661,7 +2661,12 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                     Log.w("GroupListVM", "Push registration failed for group ${groupID.take(8)}")
                 }
             } else {
-                pushManager?.unregisterGroup(groupID)
+                val mgr = getOrCreatePushManager()
+                if (mgr == null) {
+                    Log.w("GroupListVM", "Cannot unregister push: no relay URL")
+                    return@launch
+                }
+                mgr.unregisterGroup(groupID)
                 if (BuildConfig.DEBUG) Log.d("GroupListVM", "Push unregistered for group ${groupID.take(8)}")
             }
         }

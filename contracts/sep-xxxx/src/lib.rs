@@ -62,26 +62,28 @@ fn tier_capacity(tier: u32) -> u32 {
 
 // Replay-nullifier scoping — see `proof_hash`.
 //
-// Audit-2026-04 scoped nullifiers by `(op_tag, group_id, proof_bytes)` to
-// allow the same proof to be reused across different operations on the
-// same group (per LOW-1). The 2026-04 post-audit critique (Finding #1)
-// showed that split re-opens a cross-entrypoint replay: a valid
-// create-time membership proof can be resubmitted to `deactivate_group`
-// because both verifiers share the `MembershipCircuit` VK and the same
-// `(commitment, epoch=0)` public inputs, while the two nullifier keys
-// are disjoint.
+// The nullifier is a global `sha256(proof.a || proof.b || proof.c)`:
+// once ANY proof bytes have been submitted to ANY state-changing
+// entrypoint, those exact bytes cannot be resubmitted to ANY entrypoint
+// on ANY group. This is intentionally the strongest available contract-
+// level scope because the MembershipCircuit does not bind `group_id` or
+// an operation tag, so two groups sharing `(commitment, epoch)` — e.g.
+// a deliberate clone of a target group's initial membership tree —
+// would otherwise accept the same proof bytes on both groups.
 //
-// The current preimage drops the op_tag and keeps `group_id`: any proof
-// burned once on any operation against a group cannot be re-submitted to
-// any other operation on that same group. Cross-group reuse is still
-// possible in principle but cannot yield a verifying proof, because the
-// circuit's commitment public input binds the tree to one specific
-// group's state.
+// An earlier revision of this contract tried `sha256(group_id || proof)`
+// to bound per-group storage growth, but that weakened cross-group
+// protection: an attacker who observed a proof against group A could
+// replay it against a cloned group B. The storage-growth concern is
+// subsumed by `MAX_GROUPS_PER_TIER` and by the natural TTL expiry of
+// `UsedProof` entries.
 //
-// Fully closing the verify_membership leak (a read-only call does not
-// burn the nullifier; an observer can then reuse the proof for a state
-// change) requires binding `op_tag` inside the circuit and is deferred
-// to the circuit-level follow-up.
+// Known residual exposure (Finding #3, circuit-level): `UsedProof` TTL
+// is `LEDGER_BUMP` (~30 days). A long-lived group that never advances
+// `(commitment, epoch)` allows a create-time proof to be replayed to
+// `deactivate_group` once its nullifier expires. Fully closing this
+// requires binding epoch (or a per-group proof counter) into the
+// MembershipCircuit public inputs.
 
 // ================================================================
 // Errors
@@ -479,13 +481,28 @@ pub enum DataKey {
     GroupCount(u32),
     /// When true, only the admin can create new groups (N-26 access control).
     RestrictedMode,
-    /// Per-group "this id contributed +1 to GroupCount(tier)" receipt
-    /// (persistent storage). Written at every group-creation path and
-    /// deleted when `deactivate_group` decrements the counter. Its presence
-    /// is the proof that permissionless `reconcile_tier_count` uses to
-    /// authorise decrementing after a group's `GroupV2` entry has expired
-    /// without an explicit deactivation (audit-followup Finding #6). The
-    /// stored value is the tier the group was counted in.
+    /// Per-group "this id contributed +1 to GroupCount(tier)" receipt.
+    ///
+    /// Stored in INSTANCE storage, not persistent — the audit-followup
+    /// critique (Finding #4) observed that a persistent receipt bumped
+    /// on the same cadence as `GroupV2` expires alongside the group, so
+    /// in the real cold-group path the receipt needed by
+    /// `reconcile_tier_count` has already vanished. Instance storage is
+    /// bumped by every write the contract performs, so the receipt stays
+    /// alive as long as the contract is actively used — by any group,
+    /// not just the one the receipt describes.
+    ///
+    /// Written at every group-creation path; deleted by `deactivate_group`
+    /// or `reconcile_tier_count`. The stored value is the tier the group
+    /// was counted in, so reconciliation knows which `GroupCount(tier)`
+    /// slot to decrement without trusting caller input.
+    ///
+    /// Capacity trade-off: instance storage is bounded (~64KB total), so
+    /// with ~40 bytes per entry the contract can track on the order of
+    /// 1500 cold-group receipts before running out. Live groups contribute
+    /// a receipt; deactivated groups do not. If that limit is approached,
+    /// operators should run `reconcile_tier_count` in batches to drain
+    /// receipts for expired groups.
     GroupCounted(BytesN<32>),
 }
 
@@ -799,7 +816,7 @@ impl SepXxxxContract {
         let receipt_key = DataKey::GroupCounted(group_id.clone());
         let tier: u32 = env
             .storage()
-            .persistent()
+            .instance()
             .get(&receipt_key)
             .ok_or(Error::GroupNotFound)?;
 
@@ -813,7 +830,7 @@ impl SepXxxxContract {
                 .instance()
                 .set(&DataKey::GroupCount(tier), &(count - 1));
         }
-        env.storage().persistent().remove(&receipt_key);
+        env.storage().instance().remove(&receipt_key);
 
         TierCountReconciled {
             group_id,
@@ -992,14 +1009,14 @@ impl SepXxxxContract {
             return Err(Error::TierGroupLimitReached);
         }
 
-        Self::check_proof_replay(&env, &group_id, &proof)?;
+        Self::check_proof_replay(&env, &proof)?;
 
         let vk = Self::load_vk(&env, tier)?;
         if !verify_groth16_proof(&env, &vk, &proof, &commitment, 0) {
             return Err(Error::InvalidProof);
         }
 
-        Self::record_proof(&env, &group_id, &proof);
+        Self::record_proof(&env, &proof);
 
         let timestamp = env.ledger().timestamp();
         let entry = CommitmentEntryV2 {
@@ -1023,9 +1040,10 @@ impl SepXxxxContract {
             .instance()
             .set(&DataKey::GroupCount(tier), &(count + 1));
         // Audit-followup Finding #6: receipt enabling permissionless
-        // `reconcile_tier_count` after cold-group expiry.
+        // `reconcile_tier_count` after cold-group expiry. Stored in
+        // instance storage so it outlives the group entry (Finding #4).
         env.storage()
-            .persistent()
+            .instance()
             .set(&DataKey::GroupCounted(group_id.clone()), &tier);
         Self::bump_group(&env, &group_id);
 
@@ -1129,14 +1147,14 @@ impl SepXxxxContract {
             return Err(Error::TierGroupLimitReached);
         }
 
-        Self::check_proof_replay(&env, &group_id, &proof)?;
+        Self::check_proof_replay(&env, &proof)?;
 
         let vk = Self::load_vk(&env, tier)?;
         if !verify_groth16_proof(&env, &vk, &proof, &commitment, 0) {
             return Err(Error::InvalidProof);
         }
 
-        Self::record_proof(&env, &group_id, &proof);
+        Self::record_proof(&env, &proof);
 
         let timestamp = env.ledger().timestamp();
         let entry = CommitmentEntryV2 {
@@ -1177,8 +1195,9 @@ impl SepXxxxContract {
             .instance()
             .set(&DataKey::GroupCount(tier), &(count + 1));
         // Audit-followup Finding #6: reconciliation receipt for oligarchy.
+        // Instance storage so it outlives the group entry (Finding #4).
         env.storage()
-            .persistent()
+            .instance()
             .set(&DataKey::GroupCounted(group_id.clone()), &tier);
         Self::bump_group(&env, &group_id);
 
@@ -1262,7 +1281,7 @@ impl SepXxxxContract {
             return Err(Error::InvalidCommitmentEncoding);
         }
 
-        Self::check_proof_replay(&env, &group_id, &proof)?;
+        Self::check_proof_replay(&env, &proof)?;
 
         let vk = Self::load_update_vk(&env, current.tier)?;
         if !verify_groth16_proof_update(
@@ -1276,7 +1295,7 @@ impl SepXxxxContract {
             return Err(Error::InvalidProof);
         }
 
-        Self::record_proof(&env, &group_id, &proof);
+        Self::record_proof(&env, &proof);
 
         let timestamp = env.ledger().timestamp();
 
@@ -1401,7 +1420,7 @@ impl SepXxxxContract {
             return Err(Error::InvalidCommitmentEncoding);
         }
 
-        Self::check_proof_replay(&env, &group_id, &proof)?;
+        Self::check_proof_replay(&env, &proof)?;
 
         let vk = Self::load_update_vk_by_type(&env, current.tier, 2)?;
         if !verify_groth16_proof_democracy_update(
@@ -1417,7 +1436,7 @@ impl SepXxxxContract {
             return Err(Error::InvalidProof);
         }
 
-        Self::record_proof(&env, &group_id, &proof);
+        Self::record_proof(&env, &proof);
 
         let timestamp = env.ledger().timestamp();
         Self::archive_entry(&env, &group_id, &current);
@@ -1521,7 +1540,7 @@ impl SepXxxxContract {
             return Err(Error::InvalidCommitmentEncoding);
         }
 
-        Self::check_proof_replay(&env, &group_id, &proof)?;
+        Self::check_proof_replay(&env, &proof)?;
 
         let vk = Self::load_admin_update_vk(&env)?;
         // Reuse the UpdateCircuit verifier — same 3 public inputs, 4 IC
@@ -1538,7 +1557,7 @@ impl SepXxxxContract {
             return Err(Error::InvalidProof);
         }
 
-        Self::record_proof(&env, &group_id, &proof);
+        Self::record_proof(&env, &proof);
 
         env.storage()
             .persistent()
@@ -1584,27 +1603,27 @@ impl SepXxxxContract {
             .unwrap_or(0u64))
     }
 
-    /// Verify a membership proof against the current group state.
+    /// Verify a membership proof against the current group state and
+    /// burn the proof's nullifier.
     ///
-    /// Read-only — does not modify contract state. Proofs submitted here
-    /// are NOT recorded, so the same proof can be re-verified and can
-    /// still be used for state-changing operations.
+    /// **Semantic: this is NOT read-only.** A successful call records the
+    /// proof in the `UsedProof` nullifier set so the same proof bytes can
+    /// never be replayed — including into `deactivate_group`,
+    /// `update_commitment`, or a second `verify_membership` call. Clients
+    /// MUST generate a fresh proof per call.
     ///
-    /// **Audit-followup Finding #1 — residual leak (deferred).** This
-    /// entrypoint runs the same MembershipCircuit VK as the state-changing
-    /// verifiers but intentionally does not mint a nullifier. A proof
-    /// verified here can later be replayed by `create_group_v2`,
-    /// `deactivate_group`, or `update_commitment` on the same group (the
-    /// replay preimage is now scoped to `group_id`, which closes cross-op
-    /// replay within a group for *state-changing* paths — see the
-    /// `proof_hash` doc). Read-only verification cannot mint because doing
-    /// so would pin durable state on a free query. Full closure depends on
-    /// the MembershipCircuit being recompiled to bind `group_id` (Finding
-    /// #1-full): once proofs are circuit-bound to one group, a proof
-    /// produced for `verify_membership` on group A cannot be reused on
-    /// any other group at all, and the remaining same-group same-state
-    /// replay window is closed by the existing `check_proof_replay`
-    /// nullifier in the state-changing paths.
+    /// **Why this is state-changing.** An earlier read-only design allowed
+    /// an observer to scrape a valid proof from the transaction (mempool
+    /// or history) and front-run the owner with a destructive operation
+    /// like `deactivate_group`, because the two entrypoints share the
+    /// MembershipCircuit VK and accept the same `(commitment, epoch)`
+    /// public inputs. Burning the nullifier here is the smallest
+    /// contract-level fix that closes that leak: the honest caller's
+    /// first successful verification invalidates the proof everywhere.
+    ///
+    /// Full circuit-level closure (binding `group_id` and operation tag
+    /// into MembershipCircuit public inputs) would let verify_membership
+    /// return to read-only semantics; that is tracked as Finding #1-full.
     pub fn verify_membership(
         env: Env,
         group_id: BytesN<32>,
@@ -1621,6 +1640,8 @@ impl SepXxxxContract {
             return Err(Error::PublicInputsMismatch);
         }
 
+        Self::check_proof_replay(&env, &proof)?;
+
         let vk = Self::load_vk(&env, state.tier)?;
         let valid = verify_groth16_proof(
             &env,
@@ -1629,6 +1650,10 @@ impl SepXxxxContract {
             &state.commitment,
             state.epoch,
         );
+
+        if valid {
+            Self::record_proof(&env, &proof);
+        }
 
         Ok(valid)
     }
@@ -1656,6 +1681,19 @@ impl SepXxxxContract {
     /// quorum becomes unreachable).
     ///
     /// N-14: Uses proof-based authorization only (same rationale as `update_commitment`).
+    ///
+    /// **Audit-followup Finding #3 — known residual exposure (circuit-level).**
+    /// A group that stays at `(commitment, epoch)` for longer than the
+    /// `UsedProof` TTL (`LEDGER_BUMP` ~30 days) can be deactivated by
+    /// replaying ANY earlier membership proof whose nullifier has since
+    /// expired — including the create-time proof, if the group has never
+    /// been updated. Contract-level mitigations (per-group nullifier
+    /// lists, instance-scoped nullifiers) all have unbounded-growth or
+    /// enumeration problems. The cryptographic fix is to bind `epoch` (or
+    /// a per-group monotonic proof counter) as a MembershipCircuit public
+    /// input so an old proof cannot satisfy the current verifier.
+    /// Operators can mitigate by periodically calling `update_commitment`
+    /// even for no-op state changes to advance the epoch.
     pub fn deactivate_group(
         env: Env,
         group_id: BytesN<32>,
@@ -1675,14 +1713,14 @@ impl SepXxxxContract {
             return Err(Error::PublicInputsMismatch);
         }
 
-        Self::check_proof_replay(&env, &group_id, &proof)?;
+        Self::check_proof_replay(&env, &proof)?;
 
         let vk = Self::load_vk(&env, current.tier)?;
         if !verify_groth16_proof(&env, &vk, &proof, &current.commitment, current.epoch) {
             return Err(Error::InvalidProof);
         }
 
-        Self::record_proof(&env, &group_id, &proof);
+        Self::record_proof(&env, &proof);
 
         let timestamp = env.ledger().timestamp();
         let deactivated = CommitmentEntryV2 {
@@ -1709,11 +1747,11 @@ impl SepXxxxContract {
         // `reconcile_tier_count` cannot double-decrement.
         if env
             .storage()
-            .persistent()
+            .instance()
             .has(&DataKey::GroupCounted(group_id.clone()))
         {
             env.storage()
-                .persistent()
+                .instance()
                 .remove(&DataKey::GroupCounted(group_id.clone()));
         }
 
@@ -2007,82 +2045,37 @@ impl SepXxxxContract {
                 LEDGER_BUMP,
             );
         }
-        // Audit-followup Finding #6: keep the tier-counter reconciliation
-        // receipt alive as long as the group itself so cold-group drift
-        // stays reconcilable via `reconcile_tier_count` even after a long
-        // quiet period.
-        if env
-            .storage()
-            .persistent()
-            .has(&DataKey::GroupCounted(group_id.clone()))
-        {
-            env.storage().persistent().extend_ttl(
-                &DataKey::GroupCounted(group_id.clone()),
-                LEDGER_THRESHOLD,
-                LEDGER_BUMP,
-            );
-        }
-        // Bump instance storage TTL to prevent admin key loss.
+        // Bump instance storage TTL. This keeps the admin key AND the
+        // `GroupCounted` reconciliation receipts alive (Finding #4: the
+        // receipt lives in instance storage so it outlives the group's
+        // persistent entries, which is the condition `reconcile_tier_count`
+        // needs to observe).
         env.storage()
             .instance()
             .extend_ttl(LEDGER_THRESHOLD, LEDGER_BUMP);
     }
 
-    /// Compute the replay nullifier for a proof, scoped to `group_id`.
+    /// Compute the global replay nullifier for a proof.
     ///
-    /// Preimage: `group_id || proof.a || proof.b || proof.c`.
-    ///
-    /// The 2026-04 audit scoped nullifiers by `(op_tag, group_id,
-    /// proof_bytes)` to permit benign cross-entrypoint reuse of membership
-    /// proofs (LOW-1). The post-audit critique (Finding #1) showed that
-    /// split re-opens a cross-entrypoint replay: `create_group_v2`,
-    /// `deactivate_group`, and `verify_membership` all run the
-    /// `MembershipCircuit` VK against `(commitment, epoch)` public
-    /// inputs, so a proof that verifies for one of them can verify for
-    /// the others whenever the public inputs coincide (e.g. immediately
-    /// after creation, before any update).
-    ///
-    /// Dropping `op_tag` closes that replay: any proof ever burned on any
-    /// operation against a group cannot be resubmitted to a different
-    /// operation on the same group. Cross-group reuse is not blocked by
-    /// the nullifier but cannot yield a verifying proof anyway — the
-    /// circuit's `commitment` public input is bound to one group's
-    /// state.
-    ///
-    /// Residual limitation: `verify_membership` is read-only and does
-    /// NOT burn the nullifier (recording on a read-only call would let
-    /// any observer grief legitimate members). An observer who scrapes a
-    /// `verify_membership` proof can still reuse it for a state-changing
-    /// call on the same group while the epoch has not advanced. Fully
-    /// closing that window requires binding an operation-tag public
-    /// input inside the circuit and is deferred to circuit-level work.
-    ///
-    /// Migration note: `DataKey::UsedProof` entries written under the
-    /// prior `(op_tag, group_id, proof)` scheme become orphaned and
-    /// cannot cause false-positive replay rejections for a proof under
-    /// the new scheme (the hash input is different). Stale entries
-    /// expire via TTL (`LEDGER_BUMP` ~30 days).
-    fn proof_hash(
-        env: &Env,
-        group_id: &BytesN<32>,
-        proof: &Groth16Proof,
-    ) -> BytesN<32> {
+    /// Preimage: `proof.a || proof.b || proof.c`. See the module-level
+    /// "Replay-nullifier scoping" comment for why this is deliberately
+    /// unscoped: the MembershipCircuit does not bind `group_id` or an
+    /// operation tag, so a proof valid for one `(commitment, epoch)`
+    /// pair is accepted by ANY entrypoint on ANY group that happens to
+    /// share those public inputs. Scoping by `group_id` would re-open
+    /// cross-group replay against deliberately-cloned groups.
+    fn proof_hash(env: &Env, proof: &Groth16Proof) -> BytesN<32> {
         let mut preimage = Bytes::new(env);
-        preimage.append(&Bytes::from_slice(env, &group_id.to_array()));
         preimage.append(&Bytes::from_slice(env, proof.a.to_array().as_slice()));
         preimage.append(&Bytes::from_slice(env, proof.b.to_array().as_slice()));
         preimage.append(&Bytes::from_slice(env, proof.c.to_array().as_slice()));
         env.crypto().sha256(&preimage).into()
     }
 
-    /// Reject if this proof has already been submitted to any operation
-    /// on this group. See [`proof_hash`] for the design rationale.
-    fn check_proof_replay(
-        env: &Env,
-        group_id: &BytesN<32>,
-        proof: &Groth16Proof,
-    ) -> Result<(), Error> {
-        let hash = Self::proof_hash(env, group_id, proof);
+    /// Reject if these proof bytes have already been submitted anywhere.
+    /// See [`proof_hash`] for the design rationale.
+    fn check_proof_replay(env: &Env, proof: &Groth16Proof) -> Result<(), Error> {
+        let hash = Self::proof_hash(env, proof);
         if env
             .storage()
             .persistent()
@@ -2093,14 +2086,10 @@ impl SepXxxxContract {
         Ok(())
     }
 
-    /// Record a proof nullifier so it cannot be replayed on the same
-    /// `group_id` (across any operation).
-    fn record_proof(
-        env: &Env,
-        group_id: &BytesN<32>,
-        proof: &Groth16Proof,
-    ) {
-        let hash = Self::proof_hash(env, group_id, proof);
+    /// Record a proof nullifier so the same bytes cannot be replayed
+    /// anywhere in the contract.
+    fn record_proof(env: &Env, proof: &Groth16Proof) {
+        let hash = Self::proof_hash(env, proof);
         env.storage()
             .persistent()
             .set(&DataKey::UsedProof(hash.clone()), &true);
@@ -2779,17 +2768,17 @@ mod test {
         });
     }
 
-    /// Record a proof nullifier as used in contract storage, scoped to
-    /// `group_id`. Must match the hashing scheme in `proof_hash`.
+    /// Record a proof nullifier as used in contract storage. Must match
+    /// the hashing scheme in `proof_hash` (global, no group_id scope).
+    /// `_group_id` is retained in the signature for call-site legibility.
     fn inject_used_proof(
         env: &Env,
         contract_id: &Address,
-        group_id: &BytesN<32>,
+        _group_id: &BytesN<32>,
         proof: &Groth16Proof,
     ) {
         env.as_contract(contract_id, || {
             let mut preimage = Bytes::new(env);
-            preimage.append(&Bytes::from_slice(env, &group_id.to_array()));
             preimage.append(&Bytes::from_slice(env, proof.a.to_array().as_slice()));
             preimage.append(&Bytes::from_slice(env, proof.b.to_array().as_slice()));
             preimage.append(&Bytes::from_slice(env, proof.c.to_array().as_slice()));
@@ -3151,6 +3140,29 @@ mod test {
             epoch: 99, // doesn't match stored epoch 3
         };
         client.verify_membership(&group_id, &mock_proof(&env), &pi);
+    }
+
+    /// Audit-followup Finding #2: `verify_membership` burns the proof
+    /// nullifier so an observed proof cannot be replayed into a
+    /// state-changing call. This test asserts that a pre-recorded
+    /// nullifier blocks `verify_membership` itself — i.e. the replay
+    /// check is wired before the verifier.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #12)")]
+    fn test_verify_membership_rejects_replayed_proof() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        let commitment = BytesN::from_array(&env, &[2u8; 32]);
+        inject_group(&env, &contract_id, &group_id, &commitment, 3, 0);
+
+        let proof = mock_proof(&env);
+        inject_used_proof(&env, &contract_id, &group_id, &proof);
+
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 3,
+        };
+        client.verify_membership(&group_id, &proof, &pi);
     }
 
     /// Regression: `verify_membership` must resolve V2-native groups (those
@@ -4991,12 +5003,14 @@ mod test {
         client.update_commitment(&group_id, &proof, &upi);
     }
 
-    /// Nullifier is group-scoped — a proof burned on group A does not
-    /// block a call on group B. The call will still fail (a mock proof
-    /// cannot pass the pairing check against the real VK), but the
-    /// failure reason must NOT be `ProofReplay`.
+    /// Finding #1 (post-fix): the nullifier is GLOBAL. A proof burned on
+    /// any group blocks re-submission of the same proof bytes on any
+    /// other group. This defeats the "clone a target group at the same
+    /// (commitment, epoch) and replay the observed proof" attack that
+    /// the earlier group-scoped preimage allowed.
     #[test]
-    fn test_replay_nullifier_group_scoped() {
+    #[should_panic(expected = "Error(Contract, #12)")]
+    fn test_replay_nullifier_blocks_cross_group() {
         let (env, client, _admin, contract_id) = setup_initialized();
         let group_a = BytesN::from_array(&env, &[1u8; 32]);
         let group_b = BytesN::from_array(&env, &[2u8; 32]);
@@ -5004,6 +5018,8 @@ mod test {
         inject_group(&env, &contract_id, &group_b, &commitment, 5, 0);
 
         let proof = mock_proof(&env);
+        // Burn the nullifier as if the proof had already been spent on
+        // group A. With a global nullifier it should also block group B.
         inject_used_proof(&env, &contract_id, &group_a, &proof);
 
         let upi = UpdatePublicInputs {
@@ -5011,14 +5027,7 @@ mod test {
             epoch_old: 5,
             c_new: c_new_ok(&env),
         };
-        let res = client.try_update_commitment(&group_b, &proof, &upi);
-        assert!(res.is_err(), "expected update_commitment to fail");
-        match res {
-            Err(Ok(Error::ProofReplay)) => {
-                panic!("replay nullifier leaked across groups")
-            }
-            _ => {}
-        }
+        client.update_commitment(&group_b, &proof, &upi);
     }
 
     /// Post-audit Finding #1: a nullifier burned on one operation on a
@@ -5101,13 +5110,15 @@ mod test {
 
         // Simulate a create-then-expire history: no `Group` / `GroupV2`
         // entry survives, but the tier counter is still +1 and the
-        // reconciliation receipt is still in persistent storage.
+        // reconciliation receipt is still in instance storage (Finding
+        // #4: the receipt outlives the group because instance storage is
+        // bumped on every contract write).
         env.as_contract(&contract_id, || {
             env.storage()
                 .instance()
                 .set(&DataKey::GroupCount(tier), &3u32);
             env.storage()
-                .persistent()
+                .instance()
                 .set(&DataKey::GroupCounted(group_id.clone()), &tier);
         });
 
@@ -5122,7 +5133,7 @@ mod test {
             assert_eq!(count, 2);
             assert!(
                 !env.storage()
-                    .persistent()
+                    .instance()
                     .has(&DataKey::GroupCounted(group_id.clone())),
                 "receipt must be removed so we cannot double-decrement"
             );
@@ -5143,7 +5154,7 @@ mod test {
         // so `reconcile_tier_count` reaches the liveness check.
         env.as_contract(&contract_id, || {
             env.storage()
-                .persistent()
+                .instance()
                 .set(&DataKey::GroupCounted(group_id.clone()), &0u32);
         });
 

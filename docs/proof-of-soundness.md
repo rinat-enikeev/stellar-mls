@@ -246,7 +246,7 @@ Two commitments $C_1 = H_P(H_P(\text{root}_1, e_1), s_1)$ and $C_2 = H_P(H_P(\te
 
 ## 6. Theorem 3: ZK Membership Soundness
 
-**Scope.** This theorem covers the *membership* circuit $R_\text{Membership}$ used by `create_group`, `verify_membership`, and `deactivate_group`. Operation-level soundness for `update_commitment` — which requires binding a *new* commitment to the proof — is the subject of Theorem 3b (§6b) and the update circuit $R_\text{Update}$.
+**Scope.** This theorem covers the *membership* circuit $R_\text{Membership}$ used by `create_group`, `verify_membership`, `consume_membership_proof`, and `deactivate_group`. Operation-level soundness for `update_commitment` — which requires binding a *new* commitment to the proof — is the subject of Theorem 3b (§6b) and the update circuit $R_\text{Update}$.
 
 ### Statement
 
@@ -344,7 +344,7 @@ Combining Steps 2–6, the only $(\pi, \text{pi})$ accepted by `update_commitmen
 
 ### Remark 6b.1: Relationship to Theorem 3
 
-Theorem 3 and Theorem 3b are independent instantiations of Assumption 3.3 applied to two different relations with two different verification keys. Theorem 3 is *not* superseded for the operations it covers (`create_group`, `verify_membership`, `deactivate_group`) — for those operations the stored commitment *is* the value the proof verifies against, and no additional new-state binding is needed. Theorem 3 *is*, however, insufficient as the sole soundness statement for `update_commitment`; that operation requires Theorem 3b.
+Theorem 3 and Theorem 3b are independent instantiations of Assumption 3.3 applied to two different relations with two different verification keys. Theorem 3 is *not* superseded for the operations it covers (`create_group`, `verify_membership`, `consume_membership_proof`, `deactivate_group`) — for those operations the stored commitment *is* the value the proof verifies against, and no additional new-state binding is needed. Theorem 3 *is*, however, insufficient as the sole soundness statement for `update_commitment`; that operation requires Theorem 3b.
 
 ### Remark 6b.2: Why `new_epoch` is not a public input
 
@@ -464,29 +464,33 @@ The `deactivate_group` function sets `active = false` irreversibly (contract lin
 
 ### Statement
 
-A proof $\pi$ accepted for one state-changing contract call (`create_group`, `update_commitment`, or `deactivate_group`) cannot be replayed to any other state-changing call.
+A proof $\pi$ accepted for one state-changing contract call (`create_group`, `update_commitment`, `deactivate_group`, or `consume_membership_proof`) cannot be replayed to any other state-changing call after inclusion.
 
 ### Proof
 
-**Proof hash construction.** For each submitted proof $\pi = (\pi_A, \pi_B, \pi_C)$, the contract computes (contract line 715–722):
+**Proof hash construction.** For each submitted proof $\pi = (\pi_A, \pi_B, \pi_C)$, the contract computes:
 
 $$h_\pi = H_S(\pi_A \| \pi_B \| \pi_C)$$
 
 where $\pi_A, \pi_B, \pi_C$ are serialized in uncompressed format (96 + 192 + 96 = 384 bytes total).
 
-**Recording.** After successful verification in any state-changing function, the contract stores $h_\pi$ in persistent storage under key `DataKey::UsedProof(h_\pi)` (contract line 738–745).
+**Recording.** After successful verification in any state-changing function, the contract stores $h_\pi$ in persistent storage under key `DataKey::UsedProof(h_\pi)`.
 
-**Checking.** Before verification, every state-changing function calls `check_proof_replay` (contract line 726–736), which returns an error if $h_\pi$ is already stored.
+**Checking.** Before verification, every state-changing function calls `check_proof_replay`, which returns an error if $h_\pi$ is already stored.
 
-**Cross-function replay prevention.** The hash $h_\pi$ is independent of which function accepted the proof. A proof accepted by `create_group` is recorded, and any subsequent submission to `update_commitment` or `deactivate_group` with the same $\pi$ will be rejected.
+**Cross-function replay prevention.** The hash $h_\pi$ is independent of which function accepted the proof. A proof accepted by `create_group` is recorded, and any subsequent submission to `update_commitment`, `deactivate_group`, or `consume_membership_proof` with the same $\pi$ will be rejected.
 
 **Cross-group replay prevention.** Even if an adversary submits the same proof to a different group, the proof is bound to specific public inputs $(C, e)$. For a different group with commitment $C' \neq C$, the Groth16 verification equation would fail because the proof was generated for $(C, e)$, not $(C', e')$. Additionally, the proof hash check provides a second layer of defense.
 
 **Hash collision resistance.** Two distinct proofs $\pi \neq \pi'$ producing the same hash $h_\pi = h_{\pi'}$ would constitute a SHA-256 collision, which contradicts the collision resistance of SHA-256.
 
-**Read-only exception.** The `verify_membership` function does not record the proof hash, allowing the same proof to be verified multiple times without state changes. This is safe because `verify_membership` is read-only and does not modify group state.
+**Read-only exception.** The `verify_membership` function does not record the proof hash, allowing the same proof to be verified multiple times without state changes. This is safe for the read-only path but means a proof observed only through `verify_membership` remains replayable by any observer. Callers that need on-chain replay protection MUST use `consume_membership_proof` instead, which burns the nullifier and returns `Err(InvalidProof)` rather than `Ok(false)` so transaction inclusion is equivalent to successful attestation.
 
-**Therefore:** each proof can be used in at most one state-changing contract call. $\square$
+**Residual exposure — circuit-level.** Theorem 6 covers post-inclusion replay only. It does NOT close:
+1. *Pre-inclusion mempool frontrun.* An observer of a pending state-changing transaction can resubmit the same proof and potentially win ordering. Closing this requires the membership circuit to bind an operation tag and the caller's address as public inputs (see the v2-circuit roadmap in §3.7).
+2. *TTL-aged replay.* `UsedProof` entries expire after `LEDGER_BUMP` (~30 days). A group that stays at $(C, e)$ longer than that period allows a previously-used proof to become replayable once its nullifier expires. Closing this cryptographically requires binding a per-group monotonic `proof_nonce` as a public input. Operators can mitigate by periodically advancing the epoch via a no-op `update_commitment`.
+
+**Therefore:** each proof can be used in at most one state-changing contract call within the lifetime of its `UsedProof` nullifier, subject to the pre-inclusion residual exposure above. $\square$
 
 ---
 

@@ -12,6 +12,7 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "create_oligarchy_group",
     "update_commitment",
     "verify_membership",
+    "consume_membership_proof",
     "deactivate_group",
     "get_state",
     "get_state_v2",
@@ -20,6 +21,11 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
 ];
 
 /// Functions that are read-only (use `--send no`).
+///
+/// `verify_membership` is read-only and non-consuming; it does not
+/// record a proof nullifier and offers no replay protection. Callers
+/// that need replay protection must use `consume_membership_proof`,
+/// which is state-changing and submitted as a real transaction.
 pub const READ_ONLY_FUNCTIONS: &[&str] = &[
     "verify_membership",
     "get_state",
@@ -35,6 +41,7 @@ const PROOF_FUNCTIONS: &[&str] = &[
     "create_oligarchy_group",
     "update_commitment",
     "verify_membership",
+    "consume_membership_proof",
     "deactivate_group",
 ];
 

@@ -137,14 +137,26 @@ for f in vk-small.json vk-medium.json vk-large.json \
     fi
 done
 
-# ── Step 4: Deploy contract ────────────────────────────────────────
+# ── Step 4: Deploy + construct contract atomically ────────────────
+# Audit-followup Finding #5: pass VKs as constructor arguments so deploy
+# and initialisation are a single transaction. Closes the front-running
+# window where a third party could observe the deployed contract ID and
+# race the legitimate `initialize` call with their own keys.
 echo ""
-echo "==> Deploying contract to $NETWORK"
+echo "==> Deploying contract to $NETWORK with constructor args"
 CONTRACT_ID="$(
     stellar contract deploy \
         --network "$NETWORK" \
         --source-account "$IDENTITY" \
         --wasm "$WASM_PATH" \
+        -- \
+        --admin "$DEPLOYER_ADDRESS" \
+        --vk-small-file-path "$VK_DIR/vk-small.json" \
+        --vk-medium-file-path "$VK_DIR/vk-medium.json" \
+        --vk-large-file-path "$VK_DIR/vk-large.json" \
+        --update-vk-small-file-path "$VK_DIR/vk-update-small.json" \
+        --update-vk-medium-file-path "$VK_DIR/vk-update-medium.json" \
+        --update-vk-large-file-path "$VK_DIR/vk-update-large.json" \
         | tr -d '\n'
 )"
 
@@ -153,24 +165,7 @@ if [ -z "$CONTRACT_ID" ]; then
     exit 1
 fi
 echo "    Contract ID: $CONTRACT_ID"
-
-# ── Step 5: Initialize contract with VKs ───────────────────────────
-echo ""
-echo "==> Initializing contract with verification keys"
-stellar contract invoke \
-    --network "$NETWORK" \
-    --id "$CONTRACT_ID" \
-    --source-account "$IDENTITY" \
-    -- initialize \
-    --admin "$DEPLOYER_ADDRESS" \
-    --vk-small-file-path "$VK_DIR/vk-small.json" \
-    --vk-medium-file-path "$VK_DIR/vk-medium.json" \
-    --vk-large-file-path "$VK_DIR/vk-large.json" \
-    --update-vk-small-file-path "$VK_DIR/vk-update-small.json" \
-    --update-vk-medium-file-path "$VK_DIR/vk-update-medium.json" \
-    --update-vk-large-file-path "$VK_DIR/vk-update-large.json" >/dev/null
-
-echo "    Initialized successfully"
+echo "    Constructor ran atomically; no separate initialize call needed."
 
 # ── Step 6: Verify contract is live ────────────────────────────────
 echo ""

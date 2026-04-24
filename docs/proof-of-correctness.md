@@ -255,7 +255,7 @@ The test suite is organized in four layers, from unit tests to integration tests
 
 2. **Public inputs match (C-10).** Lines 483--486 verify that the caller-supplied public inputs match the on-chain state: `public_inputs.commitment == current.commitment` and `public_inputs.epoch == current.epoch`.
 
-3. **Proof replay prevention (C-11).** `proof_hash()` (line 716) computes `SHA-256(piA || piB || piC)` where components are in uncompressed format (384 bytes total). `check_proof_replay()` (line 726) queries persistent storage for the hash. `record_proof()` (line 739) stores the hash after successful verification. This applies to all three state-changing functions (`create_group`, `update_commitment`, `deactivate_group`).
+3. **Proof replay prevention (C-11).** `proof_hash()` (line 716) computes `SHA-256(piA || piB || piC)` where components are in uncompressed format (384 bytes total: π_A 96 + π_B 192 + π_C 96). `check_proof_replay()` (line 726) queries persistent storage for the hash. `record_proof()` (line 739) stores the hash after successful verification. This applies to all four state-changing functions that consume a proof: `create_group`, `update_commitment`, `deactivate_group`, and `consume_membership_proof`. The read-only `verify_membership` deliberately does not burn a nullifier.
 
 4. **Groth16 verification (C-12).** The `verify_groth16_proof()` function (line 780) implements the pairing equation:
    - Computes `vk_x = IC[0] + commitment_fr * IC[1] + epoch_fr * IC[2]` via `g1_msm()` and `g1_add()` (lines 812--815)
@@ -285,9 +285,9 @@ The test suite is organized in four layers, from unit tests to integration tests
 
 2. **Contract whitelist.** `validate_request()` (line 33 of `validation.rs`) rejects requests targeting any contract other than the configured `RELAYER_CONTRACT_ID`. This prevents the relayer from being used as a general-purpose transaction submitter.
 
-3. **Function whitelist.** Only the six SEP-XXXX contract functions are allowed (line 9 of `validation.rs`): `create_group`, `update_commitment`, `verify_membership`, `deactivate_group`, `get_state`, `get_history`.
+3. **Function whitelist.** Only the SEP-XXXX contract functions enumerated in `ALLOWED_FUNCTIONS` (validation.rs:9) are accepted: `create_group`, `create_group_v2`, `create_oligarchy_group`, `update_commitment`, `verify_membership`, `consume_membership_proof`, `deactivate_group`, `get_state`, `get_state_v2`, `get_admin_root`, `get_history`. The allowlist is exhaustive and prevents the relayer from acting as a general-purpose transaction submitter.
 
-4. **Read-only detection.** Read-only functions (`verify_membership`, `get_state`, `get_history`) are submitted with `--send no` (line 19 of `validation.rs`), preventing unnecessary on-chain state changes.
+4. **Read-only detection.** Read-only functions (`verify_membership`, `get_state`, `get_state_v2`, `get_admin_root`, `get_history`) are submitted with `--send no` (see `READ_ONLY_FUNCTIONS` in validation.rs), preventing unnecessary on-chain state changes. `consume_membership_proof` is deliberately NOT read-only: it is the state-changing twin of `verify_membership` that burns a nullifier, and must be submitted as a real transaction.
 
 5. **Rate limiting.** Per-IP rate limiting prevents denial-of-service against the relayer's fee-paying account.
 

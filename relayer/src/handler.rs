@@ -124,6 +124,7 @@ fn success_response(function: &str, output: String) -> Result<Response, String> 
         | "create_group_v2"
         | "create_oligarchy_group"
         | "update_commitment"
+        | "consume_membership_proof"
         | "deactivate_group" => Ok((
             StatusCode::OK,
             Json(RelayerResponse {
@@ -282,7 +283,7 @@ async fn invoke_contract(config: &Config, request: &RelayerRequest) -> Result<St
             add_proof_arg(&mut cmd, payload)?;
             add_update_public_inputs_arg(&mut cmd, payload)?;
         }
-        "verify_membership" => {
+        "verify_membership" | "consume_membership_proof" => {
             add_hex_arg(&mut cmd, "--group-id", payload, GROUP_ID_KEYS)?;
             add_proof_arg(&mut cmd, payload)?;
             add_membership_public_inputs_arg(&mut cmd, payload)?;

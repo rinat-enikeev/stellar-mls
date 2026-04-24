@@ -40,7 +40,7 @@ const LEDGER_THRESHOLD: u32 = 17_280;
 /// TTL bump amount for persistent storage (ledgers, ~30 days).
 const LEDGER_BUMP: u32 = 518_400;
 
-/// TTL bump for `GroupCounted` receipts (~60 days).
+/// TTL bump target for `GroupCounted` receipts (~60 days).
 ///
 /// Audit re-review Finding #3: the per-group receipt that enables
 /// `reconcile_tier_count` MUST outlive the group's `GroupV2` entry so
@@ -52,6 +52,22 @@ const LEDGER_BUMP: u32 = 518_400;
 /// so each receipt carries its own expiry and does not consume the
 /// ~64KB shared instance budget.
 const GROUP_COUNTED_LEDGER_BUMP: u32 = LEDGER_BUMP * 2;
+
+/// TTL threshold for `GroupCounted` receipt refreshes.
+///
+/// Round-3 audit: Soroban `extend_ttl(threshold, extend_to)` only
+/// extends when `current_ttl < threshold`. If we used the default
+/// `LEDGER_THRESHOLD` here, a `bump_group` call made shortly before
+/// `GroupV2` expiry would refresh the group to `LEDGER_BUMP` but
+/// skip the receipt (its remaining TTL is still comfortably above
+/// `LEDGER_THRESHOLD`). If the group is then abandoned, the receipt
+/// and the group could expire within a handful of ledgers of each
+/// other — collapsing the reconciliation grace window we are trying
+/// to guarantee. Setting the receipt's threshold to
+/// `LEDGER_BUMP + LEDGER_THRESHOLD` means every bump that refreshes
+/// the group also refreshes the receipt's margin, restoring the
+/// full `LEDGER_BUMP` grace window after cold-group expiry.
+const GROUP_COUNTED_LEDGER_THRESHOLD: u32 = LEDGER_BUMP + LEDGER_THRESHOLD;
 
 /// Maximum number of active groups allowed per tier (M-4: storage abuse prevention).
 /// The admin can increase this limit by re-deploying with a higher value.
@@ -525,7 +541,7 @@ pub enum DataKey {
     /// (`GROUP_COUNTED_LEDGER_BUMP`, ~60 days — twice `LEDGER_BUMP`).
     /// The invariant we depend on is:
     ///
-    ///   GroupCounted(id) expiry > GroupV2(id) expiry
+    ///   GroupCounted(id) expiry > GroupV2(id) expiry + LEDGER_BUMP
     ///
     /// An intermediate audit revision put this receipt in INSTANCE
     /// storage to guarantee the above without a custom TTL, but
@@ -533,11 +549,17 @@ pub enum DataKey {
     /// which would have capped live groups per tier well below
     /// `MAX_GROUPS_PER_TIER`. Persistent storage with an explicit
     /// longer TTL gives the same reconciliation guarantee without the
-    /// capacity regression: `bump_group` extends `GroupV2` by
-    /// `LEDGER_BUMP` and the receipt by `GROUP_COUNTED_LEDGER_BUMP`,
-    /// so after a group goes cold the receipt survives for
-    /// ~`LEDGER_BUMP` longer than the group itself — the window
-    /// during which `reconcile_tier_count` can decrement the slot.
+    /// capacity regression.
+    ///
+    /// The refresh cadence matters: round-3 audit observed that
+    /// `extend_ttl(threshold, extend_to)` only extends when the
+    /// current TTL is below `threshold`, so the receipt uses a
+    /// *larger* threshold (`GROUP_COUNTED_LEDGER_THRESHOLD =
+    /// LEDGER_BUMP + LEDGER_THRESHOLD`) than the group. This means
+    /// every `bump_group` call that extends `GroupV2` also extends
+    /// the receipt, keeping the reconciliation grace window at a
+    /// full `LEDGER_BUMP` rather than collapsing it when a bump
+    /// lands shortly before group expiry.
     ///
     /// Written at every group-creation path; deleted by
     /// `deactivate_group` or `reconcile_tier_count`. The stored value
@@ -1089,7 +1111,7 @@ impl SepXxxxContract {
         env.storage().persistent().set(&receipt_key, &tier);
         env.storage().persistent().extend_ttl(
             &receipt_key,
-            LEDGER_THRESHOLD,
+            GROUP_COUNTED_LEDGER_THRESHOLD,
             GROUP_COUNTED_LEDGER_BUMP,
         );
         Self::bump_group(&env, &group_id);
@@ -1249,7 +1271,7 @@ impl SepXxxxContract {
         env.storage().persistent().set(&receipt_key, &tier);
         env.storage().persistent().extend_ttl(
             &receipt_key,
-            LEDGER_THRESHOLD,
+            GROUP_COUNTED_LEDGER_THRESHOLD,
             GROUP_COUNTED_LEDGER_BUMP,
         );
         Self::bump_group(&env, &group_id);
@@ -1711,11 +1733,15 @@ impl SepXxxxContract {
 
     /// Verify a membership proof and burn its nullifier.
     ///
-    /// **Semantic: this IS state-changing.** On success the proof is
-    /// recorded in the `UsedProof` set, so the same proof bytes
-    /// cannot be re-submitted to any state-changing entrypoint on any
-    /// group. Use this when the caller needs the on-chain guarantee
-    /// "this proof is mine, nobody else can reuse it" — e.g. a signed
+    /// **Semantic: this IS state-changing and fails-closed.** On
+    /// success the proof is recorded in the `UsedProof` set, so the
+    /// same proof bytes cannot be re-submitted to any state-changing
+    /// entrypoint on any group. On verification failure the call
+    /// returns `Err(InvalidProof)` — there is no `Ok(false)` branch,
+    /// so off-chain consumers can treat a successful inclusion as an
+    /// on-chain attestation and do not need to parse a bool return.
+    /// Use this when the caller needs the on-chain guarantee "this
+    /// proof is mine, nobody else can reuse it" — e.g. a signed
     /// attestation that a given address was a member at a given
     /// ledger without exposing the proof to frontrun-style reuse
     /// into `deactivate_group`.
@@ -1742,7 +1768,7 @@ impl SepXxxxContract {
         group_id: BytesN<32>,
         proof: Groth16Proof,
         public_inputs: PublicInputs,
-    ) -> Result<bool, Error> {
+    ) -> Result<(), Error> {
         Self::require_initialized(&env)?;
 
         let state = Self::load_group_v2(&env, &group_id)?;
@@ -1756,19 +1782,18 @@ impl SepXxxxContract {
         Self::check_proof_replay(&env, &proof)?;
 
         let vk = Self::load_vk(&env, state.tier)?;
-        let valid = verify_groth16_proof(
+        if !verify_groth16_proof(
             &env,
             &vk,
             &proof,
             &state.commitment,
             state.epoch,
-        );
-
-        if valid {
-            Self::record_proof(&env, &proof);
+        ) {
+            return Err(Error::InvalidProof);
         }
 
-        Ok(valid)
+        Self::record_proof(&env, &proof);
+        Ok(())
     }
 
     /// Deactivate a group (requires membership proof).
@@ -2180,9 +2205,14 @@ impl SepXxxxContract {
         // Re-audit Finding #3: the `GroupCounted` reconciliation
         // receipt lives in persistent storage with a longer TTL than
         // the group itself, so extend it separately. The invariant
-        // `receipt_expiry > group_expiry` is what lets
+        // `receipt_expiry > group_expiry + LEDGER_BUMP` is what lets
         // `reconcile_tier_count` observe the dangling tier-count slot
-        // after a cold group's `GroupV2` has expired.
+        // after a cold group's `GroupV2` has expired. Round-3 audit:
+        // the receipt uses `GROUP_COUNTED_LEDGER_THRESHOLD` — not the
+        // default `LEDGER_THRESHOLD` — so every bump that extends
+        // `GroupV2` also refreshes the receipt, preventing the case
+        // where a late bump refreshes the group but skips the receipt
+        // and collapses the reconciliation window.
         if env
             .storage()
             .persistent()
@@ -2190,7 +2220,7 @@ impl SepXxxxContract {
         {
             env.storage().persistent().extend_ttl(
                 &DataKey::GroupCounted(group_id.clone()),
-                LEDGER_THRESHOLD,
+                GROUP_COUNTED_LEDGER_THRESHOLD,
                 GROUP_COUNTED_LEDGER_BUMP,
             );
         }
@@ -3348,6 +3378,27 @@ mod test {
         let pi = PublicInputs {
             commitment: commitment.clone(),
             epoch: 99,
+        };
+        client.consume_membership_proof(&group_id, &mock_proof(&env), &pi);
+    }
+
+    /// Round-3 audit Finding #2: `consume_membership_proof` MUST
+    /// fail-closed on an invalid proof. Previously it returned
+    /// `Ok(false)` — a successful transaction that burnt no
+    /// nullifier and silently attested nothing. With the fix, an
+    /// unverifiable proof panics with `Error::InvalidProof (#7)`,
+    /// so tx inclusion is equivalent to a valid attestation.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #7)")]
+    fn test_consume_membership_proof_rejects_invalid_proof() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        let commitment = BytesN::from_array(&env, &[2u8; 32]);
+        inject_group(&env, &contract_id, &group_id, &commitment, 3, 0);
+
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 3,
         };
         client.consume_membership_proof(&group_id, &mock_proof(&env), &pi);
     }

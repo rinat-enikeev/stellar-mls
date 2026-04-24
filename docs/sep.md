@@ -500,7 +500,7 @@ Backward-incompatible change from v0.0.5: prior revisions exposed `new_commitmen
 
 #### `verify_membership`
 
-A read-only call that verifies a ZK proof of membership against the current state.
+A read-only, non-consuming call that verifies a ZK proof of membership against the current state.
 
 Parameters:
 
@@ -512,7 +512,33 @@ Parameters:
 
 Returns: `bool`
 
-This function is a pure verification — no state change, no XLM cost when called via `simulateTransaction`. Implementations SHOULD NOT consume or blacklist the proof when used through `verify_membership`; the same proof may later be presented to a state-changing operation.
+This function is a pure verification — no state change, no XLM cost when called via `simulateTransaction`. Implementations MUST NOT consume or blacklist the proof when used through `verify_membership`; the same proof may later be presented to a state-changing operation.
+
+**Security note.** Because `verify_membership` does not burn a nullifier, the proof bytes observed in this call remain replayable. Any party that observes the simulation, the mempool, or transaction history can resubmit the same proof to another operation that accepts the same `(commitment, epoch)` public inputs — including `deactivate_group`. Integrators that need an on-chain attestation "the caller holds this proof and nobody else can reuse it" MUST use `consume_membership_proof` instead.
+
+#### `consume_membership_proof`
+
+A state-changing variant of `verify_membership` that records the proof's replay nullifier.
+
+Parameters:
+
+| Name | Type | Description |
+|------|------|-------------|
+| `group_id` | `BytesN<32>` | Identifies the group |
+| `proof` | `Bytes` | ZK proof |
+| `public_inputs` | `PublicInputs` | `{commitment, epoch}` |
+
+Returns: unit. The function fails-closed: on verification success the contract records `SHA-256(π_A ‖ π_B ‖ π_C)` in the replay nullifier set and returns success; on verification failure it returns an `InvalidProof` error. There is no `false` return — tx inclusion is equivalent to a successful attestation.
+
+Invariants:
+- `group_id` MUST exist and MUST be active
+- `public_inputs` MUST match the current on-chain `(commitment, epoch)`
+- The proof's nullifier MUST NOT have been burnt before
+- On success the proof MUST NOT be accepted by any subsequent state-changing call
+
+Callers MUST submit this as a real transaction; invoking it via `simulateTransaction` or `--send no` does NOT persist the nullifier and therefore provides no replay protection.
+
+**What this does not close.** Even `consume_membership_proof` cannot protect the honest caller from a mempool front-runner that submits the same proof bytes with a competing transaction. Closing pre-inclusion frontrun requires the membership circuit to bind an operation tag and the caller's address as public inputs; see §3 / §3.7 for the circuit rotation roadmap.
 
 #### `deactivate_group`
 
@@ -578,7 +604,7 @@ These operations do not affect proof format or client interoperability, but they
 
 #### Proof replay hardening
 
-Implementations SHOULD reject any state-changing operation (`create_group`, `update_commitment`, `deactivate_group`) that reuses an identical serialized proof previously accepted by the contract. This prevents exact-proof replay across groups and functions. A proof presented only to `verify_membership` SHOULD remain reusable because that call is read-only.
+Implementations SHOULD reject any state-changing operation (`create_group`, `update_commitment`, `deactivate_group`, `consume_membership_proof`) that reuses an identical serialized proof previously accepted by the contract. This prevents exact-proof replay across groups and functions. A proof presented only to `verify_membership` SHOULD remain reusable because that call is read-only and explicitly non-consuming.
 
 **Note on replay-hash scope.** The replay key is `SHA-256(π_A ‖ π_B ‖ π_C)` — computed over the 192-byte compressed proof only. It does not cover the transaction envelope or the public inputs. Values outside the proof's public-input scope are freely mutable by anyone observing the proof; this is why `update_commitment` MUST use `R_Update` with `c_new` as a public input (§3.7). Without that binding, replay protection alone is insufficient to fix the v0.0.5 gap.
 
@@ -983,7 +1009,7 @@ The Rust cryptographic core uses:
 6. **Ceremony API stops at public Phase 1 output.** The `ceremony` module implements Powers of Tau initialization, sequential contributions with pairing-based verification, SRS consistency checks, transcript verification, and circuit identification. The public `run_ceremony` function returns only the final SRS, transcript, and `circuit_id`; the old scalar-based Groth16 key derivation remains test-only because it does not preserve the 1-of-N trust guarantee.
 7. **Contract boundary uses uncompressed proofs.** The SDKs and FFI/JNI bridges convert the prover's 192-byte compressed Groth16 proof into the contract's 384-byte uncompressed `(A, B, C)` format before submission, avoiding decompression work on-chain.
 8. **The deployed contract fixes `group_id` at 32 bytes.** Applications derive a canonical 32-byte identifier off-chain and submit that value consistently to the contract, relayer, and SDKs.
-9. **State-changing proofs are replay-tracked.** The Soroban contract records a SHA-256 hash of each accepted `(A, B, C)` proof and rejects exact reuse for create, update, and deactivate operations.
+9. **State-changing proofs are replay-tracked.** The Soroban contract records a SHA-256 hash of each accepted `(A, B, C)` proof and rejects exact reuse for `create_group`, `update_commitment`, `deactivate_group`, and `consume_membership_proof`. `verify_membership` is read-only and explicitly non-consuming; callers that need on-chain replay protection MUST use `consume_membership_proof` instead.
 10. **Operational hooks are part of the implementation.** The contract includes one-time initialization, admin-controlled verification-key rotation, restricted create mode, and TTL bump maintenance in addition to the interoperable group operations.
 11. **Proof size confirmed at 192 bytes** (48 + 96 + 48 compressed BLS12-381 points).
 

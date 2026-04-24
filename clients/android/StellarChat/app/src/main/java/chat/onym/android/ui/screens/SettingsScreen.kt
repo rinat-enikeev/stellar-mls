@@ -86,6 +86,7 @@ fun SettingsScreen(
     onOpenStellarContract: () -> Unit = {},
     onOpenAdvanced: () -> Unit = {},
     onJoinGroup: () -> Unit = {},
+    onScanInvite: () -> Unit = onJoinGroup,
 ) {
     var tab by remember { mutableStateOf(SettingsTab.Invite) }
     var showAbout by remember { mutableStateOf(false) }
@@ -132,7 +133,7 @@ fun SettingsScreen(
             when (tab) {
                 SettingsTab.Invite -> InviteKeyTab(
                     viewModel = viewModel,
-                    onScan = onJoinGroup,
+                    onScan = onScanInvite,
                     onPaste = onJoinGroup
                 )
                 SettingsTab.Preferences -> PreferencesTab(

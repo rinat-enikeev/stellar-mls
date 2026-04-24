@@ -2647,6 +2647,14 @@ final class AppState {
         }
     }
 
+    /// Update a group's locally-held avatar image. Held on this device only;
+    /// not propagated to other members.
+    func setGroupAvatar(groupID: String, avatarData: Data?) {
+        guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        groups[index].avatarData = avatarData
+        store.saveGroup(groups[index])
+    }
+
     func setPushNotifications(enabled: Bool, forGroup groupID: String) {
         guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
 

@@ -234,13 +234,21 @@ struct GroupRow: View {
         HStack(spacing: 12) {
             // Avatar
             ZStack {
-                Circle()
-                    .fill(avatarColor.gradient)
-                    .frame(width: 48, height: 48)
-                Text(avatarInitial)
-                    .font(.title3)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.white)
+                if let data = group.avatarData, let uiImage = UIImage(data: data) {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 48, height: 48)
+                        .clipShape(Circle())
+                } else {
+                    Circle()
+                        .fill(avatarColor.gradient)
+                        .frame(width: 48, height: 48)
+                    Text(avatarInitial)
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.white)
+                }
             }
             .overlay(alignment: .bottomTrailing) {
                 if group.isPublishedOnChain {

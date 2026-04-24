@@ -4,7 +4,14 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -83,6 +90,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -109,6 +119,7 @@ fun GroupInfoScreen(
     onRemoveMember: (ByteArray, (Result<Unit>) -> Unit) -> Unit,
     onRotateKey: () -> Unit = {},
     onRenameGroup: (String) -> Unit = {},
+    onSetGroupAvatar: (ByteArray?) -> Unit = {},
     epochSnapshots: Map<Long, EpochSnapshot> = emptyMap(),
     onPinEpoch: (Long) -> Unit = {},
     onUnpinEpoch: () -> Unit = {},
@@ -195,10 +206,10 @@ fun GroupInfoScreen(
                 group = group,
                 accent = accent,
                 isMember = isMember,
-                onEditName = {
+                onPickAvatar = { uri ->
                     if (isMember) {
-                        newGroupName = group.name
-                        showRenameDialog = true
+                        val bytes = decodeAndDownscaleAvatar(context, uri)
+                        if (bytes != null) onSetGroupAvatar(bytes)
                     }
                 }
             )
@@ -682,8 +693,25 @@ private fun Hero(
     group: ChatGroup,
     accent: GroupAccent,
     isMember: Boolean,
-    onEditName: () -> Unit
+    onPickAvatar: (Uri) -> Unit
 ) {
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) onPickAvatar(uri)
+    }
+    val launchPicker: () -> Unit = {
+        photoPickerLauncher.launch(
+            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+        )
+    }
+    val avatarBitmap: ImageBitmap? = remember(group.avatarData) {
+        group.avatarData?.let { bytes ->
+            try {
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+            } catch (_: Exception) { null }
+        }
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -703,15 +731,24 @@ private fun Hero(
                     .size(96.dp)
                     .clip(CircleShape)
                     .background(accent.brush())
-                    .clickable(enabled = isMember, onClick = onEditName),
+                    .clickable(enabled = isMember, onClick = launchPicker),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    initialsForGroup(group.name),
-                    color = Color.White,
-                    fontSize = 36.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                if (avatarBitmap != null) {
+                    Image(
+                        bitmap = avatarBitmap,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(96.dp).clip(CircleShape)
+                    )
+                } else {
+                    Text(
+                        initialsForGroup(group.name),
+                        color = Color.White,
+                        fontSize = 36.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
             if (isMember) {
                 Box(
@@ -721,12 +758,12 @@ private fun Hero(
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.surface)
                         .border(3.dp, MaterialTheme.colorScheme.background, CircleShape)
-                        .clickable(onClick = onEditName),
+                        .clickable(onClick = launchPicker),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         Icons.Filled.Edit,
-                        contentDescription = "Edit",
+                        contentDescription = "Change group photo",
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(16.dp)
                     )
@@ -1527,6 +1564,34 @@ private fun InviteSheetContent(
 }
 
 // MARK: - Helpers
+
+private const val GROUP_AVATAR_MAX_EDGE_PX = 256
+
+/** Decode the picked image URI, downscale it to a max edge of
+ *  [GROUP_AVATAR_MAX_EDGE_PX], and re-encode as JPEG for compact storage. */
+private fun decodeAndDownscaleAvatar(context: Context, uri: Uri): ByteArray? {
+    val resolver = context.contentResolver
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+    val longest = maxOf(bounds.outWidth, bounds.outHeight).coerceAtLeast(1)
+    var sample = 1
+    while (longest / sample > GROUP_AVATAR_MAX_EDGE_PX * 2) sample *= 2
+    val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
+    val bitmap = resolver.openInputStream(uri)?.use {
+        BitmapFactory.decodeStream(it, null, decodeOpts)
+    } ?: return null
+    val w = bitmap.width
+    val h = bitmap.height
+    val scale = maxOf(w, h).let { if (it > GROUP_AVATAR_MAX_EDGE_PX) GROUP_AVATAR_MAX_EDGE_PX.toFloat() / it else 1f }
+    val scaled = if (scale < 1f) {
+        Bitmap.createScaledBitmap(bitmap, (w * scale).toInt(), (h * scale).toInt(), true)
+    } else bitmap
+    val buffer = java.io.ByteArrayOutputStream()
+    scaled.compress(Bitmap.CompressFormat.JPEG, 85, buffer)
+    if (scaled !== bitmap) scaled.recycle()
+    bitmap.recycle()
+    return buffer.toByteArray()
+}
 
 private fun initialsForGroup(name: String): String {
     val parts = name.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }

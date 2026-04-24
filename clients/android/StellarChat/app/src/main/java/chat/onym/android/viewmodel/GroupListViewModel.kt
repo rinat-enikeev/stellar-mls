@@ -2694,6 +2694,18 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         transport.sendProtocolMessage(group, json.toString())
     }
 
+    /** Update a group's locally-held avatar image. Held on this device only;
+     *  not propagated to other members. */
+    fun setGroupAvatar(groupID: String, avatarData: ByteArray?) {
+        val index = groups.indexOfFirst { it.id == groupID }
+        if (index < 0) return
+        val updated = groups[index].copy(avatarData = avatarData)
+        groups[index] = updated
+        viewModelScope.launch {
+            try { store.saveGroup(updated) } catch (_: Exception) { }
+        }
+    }
+
     /** Send an invitation for a group to a recipient identified by their X25519 inbox key hex.
      *  Fire-and-forget: validates inputs synchronously, then sends in background. */
     fun sendInvitation(groupID: String, recipientKeyHex: String, onResult: (Result<Unit>) -> Unit) {

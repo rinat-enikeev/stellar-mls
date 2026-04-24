@@ -475,6 +475,9 @@ fun StellarChatNavHost(
                     onRenameGroup = { newName ->
                         groupListViewModel.renameGroup(groupId, newName)
                     },
+                    onSetGroupAvatar = { avatarBytes ->
+                        groupListViewModel.setGroupAvatar(groupId, avatarBytes)
+                    },
                     epochSnapshots = groupListViewModel.epochSnapshots[groupId] ?: emptyMap(),
                     onPinEpoch = { epoch ->
                         groupListViewModel.pinEpoch(groupId, epoch)

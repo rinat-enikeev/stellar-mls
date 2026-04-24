@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 import SwiftMLS
 
@@ -46,6 +47,9 @@ struct GroupInfoView: View {
 
     // Search
     @State private var showSearch = false
+
+    // Avatar
+    @State private var selectedAvatarItem: PhotosPickerItem?
 
     private var currentGroup: ChatGroup {
         appState.groups.first(where: { $0.id == group.id }) ?? group
@@ -539,6 +543,7 @@ struct GroupInfoView: View {
 
     private var hero: some View {
         let (c1, c2) = groupGradient(seed: currentGroup.id)
+        let avatarUIImage: UIImage? = currentGroup.avatarData.flatMap { UIImage(data: $0) }
         return VStack(spacing: 14) {
             ZStack {
                 // soft halo
@@ -547,25 +552,31 @@ struct GroupInfoView: View {
                     .frame(width: 240, height: 240)
                     .blur(radius: 40)
                     .offset(y: -30)
-                // avatar
-                Button {
-                    guard isMember else { return }
-                    newGroupName = currentGroup.name
-                    showRenameAlert = true
-                } label: {
+                // avatar — tap anywhere to pick a new photo
+                PhotosPicker(selection: $selectedAvatarItem, matching: .images) {
                     ZStack(alignment: .bottomTrailing) {
-                        Circle()
-                            .fill(
-                                LinearGradient(colors: [c1, c2], startPoint: .topLeading, endPoint: .bottomTrailing)
-                            )
-                            .frame(width: 96, height: 96)
-                            .shadow(color: c1.opacity(0.35), radius: 14, y: 8)
-                            .overlay(
-                                Text(initials(currentGroup.name))
-                                    .font(.system(size: 38, weight: .semibold))
-                                    .foregroundStyle(.white)
-                                    .minimumScaleFactor(0.6)
-                            )
+                        Group {
+                            if let avatarUIImage {
+                                Image(uiImage: avatarUIImage)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 96, height: 96)
+                                    .clipShape(Circle())
+                            } else {
+                                Circle()
+                                    .fill(
+                                        LinearGradient(colors: [c1, c2], startPoint: .topLeading, endPoint: .bottomTrailing)
+                                    )
+                                    .frame(width: 96, height: 96)
+                                    .overlay(
+                                        Text(initials(currentGroup.name))
+                                            .font(.system(size: 38, weight: .semibold))
+                                            .foregroundStyle(.white)
+                                            .minimumScaleFactor(0.6)
+                                    )
+                            }
+                        }
+                        .shadow(color: c1.opacity(0.35), radius: 14, y: 8)
                         if isMember {
                             ZStack {
                                 Circle()
@@ -583,6 +594,18 @@ struct GroupInfoView: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .disabled(!isMember)
+                .onChange(of: selectedAvatarItem) { _, newItem in
+                    guard let newItem else { return }
+                    Task {
+                        if let data = try? await newItem.loadTransferable(type: Data.self),
+                           let image = UIImage(data: data) {
+                            let processed = Self.downscaleAvatar(image)
+                            appState.setGroupAvatar(groupID: currentGroup.id, avatarData: processed.data)
+                        }
+                        selectedAvatarItem = nil
+                    }
+                }
             }
             .padding(.top, 20)
 
@@ -603,6 +626,24 @@ struct GroupInfoView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.bottom, 14)
+    }
+
+    /// Downscale the picked image so the long edge is at most 256 px and re-encode
+    /// as JPEG quality 0.85 so the persisted row stays small.
+    private static func downscaleAvatar(_ source: UIImage) -> (image: UIImage, data: Data) {
+        let maxEdge: CGFloat = 256
+        let longest = max(source.size.width, source.size.height)
+        let scale = longest > maxEdge ? maxEdge / longest : 1
+        let targetSize = CGSize(
+            width: source.size.width * scale,
+            height: source.size.height * scale
+        )
+        let renderer = UIGraphicsImageRenderer(size: targetSize)
+        let resized = renderer.image { _ in
+            source.draw(in: CGRect(origin: .zero, size: targetSize))
+        }
+        let data = resized.jpegData(compressionQuality: 0.85) ?? Data()
+        return (resized, data)
     }
 
     private func chip(icon: String, text: String, tint: Color, bgAlpha: Double = 0.06) -> some View {

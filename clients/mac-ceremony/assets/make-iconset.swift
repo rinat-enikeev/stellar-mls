@@ -95,11 +95,13 @@ guard args.count == 2 else {
 let outDir = URL(fileURLWithPath: args[1])
 try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
-// Resolve clients/assets/app-icon/source.png relative to this script:
+// Resolve clients/assets/app-icon/source.png relative to this source file.
+// #filePath is literal-expanded at compile time to the canonical path of this
+// file, so the lookup works regardless of CWD, symlinks, or how the script
+// is invoked (relative, absolute, via `swift run`).
 //   clients/mac-ceremony/assets/make-iconset.swift
 //   → clients/assets/app-icon/source.png
-let scriptURL = URL(fileURLWithPath: args[0])
-let sourceURL = scriptURL
+let sourceURL = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()   // clients/mac-ceremony/assets
     .deletingLastPathComponent()   // clients/mac-ceremony
     .deletingLastPathComponent()   // clients

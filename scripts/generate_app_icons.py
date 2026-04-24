@@ -4,8 +4,8 @@
 Reads `clients/assets/app-icon/source.png` (the canonical square artwork)
 and produces every derived asset consumed by iOS, Android, and the
 marketing website. The macOS ceremony tool has its own generator
-(`clients/mac-ceremony/assets/make-iconset.swift`) which also sources
-from the same `source.png`.
+(`clients/mac-ceremony/assets/make-iconset.swift`) which sources the
+same `source.png`.
 
 Requires Pillow: `python3 -m pip install Pillow`.
 """
@@ -29,7 +29,11 @@ WEBSITE_ICON = ROOT / "deploy" / "website" / "icon.png"
 MASTER_SIZE = 1024
 ANDROID_LAYER_SIZE = 432
 WEBSITE_SIZE = 512
-WHITE_THRESHOLD = 240  # RGB channel cutoff for turning background transparent
+
+# Android adaptive-icon safe zone is the inner 66dp of 108dp ≈ 61.1%.
+# Target 58% so the mark clears the safe-zone boundary with a small margin
+# on any launcher mask (circle, squircle, rounded-square, teardrop).
+ANDROID_SAFE_FRACTION = 0.58
 
 
 def load_source() -> Image.Image:
@@ -52,34 +56,60 @@ def make_master(source: Image.Image) -> Image.Image:
     return white.convert("RGB")
 
 
-def strip_white_to_transparent(img: Image.Image) -> Image.Image:
-    img = img.convert("RGBA")
-    pixels = img.load()
-    w, h = img.size
-    for y in range(h):
-        for x in range(w):
-            r, g, b, _ = pixels[x, y]
-            if r >= WHITE_THRESHOLD and g >= WHITE_THRESHOLD and b >= WHITE_THRESHOLD:
-                pixels[x, y] = (255, 255, 255, 0)
-    return img
+def alpha_from_luminance(source: Image.Image) -> Image.Image:
+    """Derive RGBA from a light-background source so near-white is transparent.
+
+    alpha = 255 − L (ITU-R 601-2 luma). This preserves anti-aliased edges
+    of the mark — pure-white pixels become fully transparent, pure-black
+    pixels become fully opaque, and AA edge pixels retain fractional alpha.
+    """
+    rgba = source.convert("RGBA")
+    luma = rgba.convert("L")
+    alpha = luma.point(lambda v: 255 - v)
+    r, g, b, _ = rgba.split()
+    return Image.merge("RGBA", (r, g, b, alpha))
+
+
+def force_rgb_black(img: Image.Image) -> Image.Image:
+    """Flatten RGB to pure black while preserving the alpha channel."""
+    _, _, _, a = img.split()
+    zero = a.point(lambda _v: 0)
+    return Image.merge("RGBA", (zero, zero, zero, a))
+
+
+def fit_to_safe_zone(layer: Image.Image, size: int, safe_fraction: float) -> Image.Image:
+    """Crop layer to its content bbox, scale the longer side to
+    `safe_fraction * size`, and paste centered on a transparent `size × size`
+    canvas. Keeps the mark inside Android's adaptive-icon safe zone."""
+    bbox = layer.getbbox()
+    if bbox is None:
+        return Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    cropped = layer.crop(bbox)
+    cw, ch = cropped.size
+    target = max(1, int(round(size * safe_fraction)))
+    if cw >= ch:
+        new_w = target
+        new_h = max(1, int(round(ch * target / cw)))
+    else:
+        new_h = target
+        new_w = max(1, int(round(cw * target / ch)))
+    scaled = cropped.resize((new_w, new_h), Image.LANCZOS)
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    offset = ((size - new_w) // 2, (size - new_h) // 2)
+    canvas.alpha_composite(scaled, dest=offset)
+    return canvas
 
 
 def make_android_foreground(source: Image.Image) -> Image.Image:
-    resized = source.resize((ANDROID_LAYER_SIZE, ANDROID_LAYER_SIZE), Image.LANCZOS)
-    return strip_white_to_transparent(resized)
+    return fit_to_safe_zone(alpha_from_luminance(source), ANDROID_LAYER_SIZE, ANDROID_SAFE_FRACTION)
 
 
-def make_android_monochrome(foreground: Image.Image) -> Image.Image:
-    mono = foreground.copy()
-    pixels = mono.load()
-    w, h = mono.size
-    for y in range(h):
-        for x in range(w):
-            r, g, b, a = pixels[x, y]
-            if a == 0:
-                continue
-            pixels[x, y] = (0, 0, 0, a)
-    return mono
+def make_android_monochrome(source: Image.Image) -> Image.Image:
+    return fit_to_safe_zone(
+        force_rgb_black(alpha_from_luminance(source)),
+        ANDROID_LAYER_SIZE,
+        ANDROID_SAFE_FRACTION,
+    )
 
 
 def make_website_icon(master: Image.Image) -> Image.Image:
@@ -91,7 +121,7 @@ def main() -> None:
 
     master = make_master(source)
     foreground = make_android_foreground(source)
-    monochrome = make_android_monochrome(foreground)
+    monochrome = make_android_monochrome(source)
     website_icon = make_website_icon(master)
 
     for d in (SHARED_DIR, IOS_DIR, ANDROID_DRAWABLE_DIR, WEBSITE_ICON.parent):

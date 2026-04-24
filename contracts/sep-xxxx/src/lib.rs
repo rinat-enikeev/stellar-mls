@@ -1773,6 +1773,10 @@ impl SepXxxxContract {
 
         let state = Self::load_group_v2(&env, &group_id)?;
 
+        if !state.active {
+            return Err(Error::GroupInactive);
+        }
+
         if public_inputs.commitment != state.commitment
             || public_inputs.epoch != state.epoch
         {
@@ -1793,6 +1797,7 @@ impl SepXxxxContract {
         }
 
         Self::record_proof(&env, &proof);
+        Self::bump_group(&env, &group_id);
         Ok(())
     }
 
@@ -3395,6 +3400,26 @@ mod test {
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
         inject_group(&env, &contract_id, &group_id, &commitment, 3, 0);
+
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 3,
+        };
+        client.consume_membership_proof(&group_id, &mock_proof(&env), &pi);
+    }
+
+    /// Round-3 audit Finding #1: `consume_membership_proof` MUST
+    /// reject proofs against deactivated groups. The docs promise a
+    /// membership *in an active group*; without the active-check the
+    /// contract would still burn a nullifier and return `Ok(())` on a
+    /// retired group, violating that invariant.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #6)")]
+    fn test_consume_membership_proof_rejects_inactive_group() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        let commitment = BytesN::from_array(&env, &[2u8; 32]);
+        inject_inactive_group(&env, &contract_id, &group_id, &commitment, 3, 0);
 
         let pi = PublicInputs {
             commitment: commitment.clone(),

@@ -606,7 +606,7 @@ These operations do not affect proof format or client interoperability, but they
 
 Implementations SHOULD reject any state-changing operation (`create_group`, `update_commitment`, `deactivate_group`, `consume_membership_proof`) that reuses an identical serialized proof previously accepted by the contract. This prevents exact-proof replay across groups and functions. A proof presented only to `verify_membership` SHOULD remain reusable because that call is read-only and explicitly non-consuming.
 
-**Note on replay-hash scope.** The replay key is `SHA-256(π_A ‖ π_B ‖ π_C)` — computed over the 192-byte compressed proof only. It does not cover the transaction envelope or the public inputs. Values outside the proof's public-input scope are freely mutable by anyone observing the proof; this is why `update_commitment` MUST use `R_Update` with `c_new` as a public input (§3.7). Without that binding, replay protection alone is insufficient to fix the v0.0.5 gap.
+**Note on replay-hash scope.** The replay key is `SHA-256(π_A ‖ π_B ‖ π_C)` — computed over the 384-byte uncompressed proof (π_A 96 + π_B 192 + π_C 96). It does not cover the transaction envelope or the public inputs. Values outside the proof's public-input scope are freely mutable by anyone observing the proof; this is why `update_commitment` MUST use `R_Update` with `c_new` as a public input (§3.7). Without that binding, replay protection alone is insufficient to fix the v0.0.5 gap.
 
 ---
 

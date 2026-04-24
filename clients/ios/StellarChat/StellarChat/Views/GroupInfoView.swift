@@ -47,6 +47,10 @@ struct GroupInfoView: View {
     // Search
     @State private var showSearch = false
 
+    // Push notifications
+    @State private var isRequestingPushPermission = false
+    @State private var pushDeniedAlertShown = false
+
     private var currentGroup: ChatGroup {
         appState.groups.first(where: { $0.id == group.id }) ?? group
     }
@@ -204,6 +208,34 @@ struct GroupInfoView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("You'll no longer receive messages. The group key will be rotated so future messages stay private from you.")
+            }
+            .alert("Notifications Disabled", isPresented: $pushDeniedAlertShown) {
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Enable notifications for Onym in Settings to receive push notifications for this chat.")
+            }
+        }
+    }
+
+    private func requestEnablePush() {
+        guard !isRequestingPushPermission else { return }
+        isRequestingPushPermission = true
+        let groupID = currentGroup.id
+        Task {
+            let outcome = await appState.enablePushNotifications(forGroup: groupID)
+            await MainActor.run {
+                isRequestingPushPermission = false
+                switch outcome {
+                case .enabled:
+                    break
+                case .deniedJustNow, .deniedPreviously, .failed:
+                    pushDeniedAlertShown = true
+                }
             }
         }
     }
@@ -406,7 +438,11 @@ struct GroupInfoView: View {
         Binding(
             get: { currentGroup.pushNotificationsEnabled },
             set: { enabled in
-                appState.setPushNotifications(enabled: enabled, forGroup: currentGroup.id)
+                if enabled {
+                    requestEnablePush()
+                } else {
+                    appState.setPushNotifications(enabled: false, forGroup: currentGroup.id)
+                }
             }
         )
     }
@@ -649,10 +685,11 @@ struct GroupInfoView: View {
                 tint: currentGroup.pushNotificationsEnabled ? .orange : .gray,
                 invertedLabel: true
             ) {
-                appState.setPushNotifications(
-                    enabled: !currentGroup.pushNotificationsEnabled,
-                    forGroup: currentGroup.id
-                )
+                if currentGroup.pushNotificationsEnabled {
+                    appState.setPushNotifications(enabled: false, forGroup: currentGroup.id)
+                } else {
+                    requestEnablePush()
+                }
             }
             QuickActionTile(
                 icon: "magnifyingglass",

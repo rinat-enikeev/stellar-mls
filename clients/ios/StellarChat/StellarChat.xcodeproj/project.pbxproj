@@ -51,6 +51,7 @@
 		8403CC60E770407C27CF89ED /* SwiftMLS in Frameworks */ = {isa = PBXBuildFile; productRef = 93FDE6A85EACB5AD144480F3 /* SwiftMLS */; };
 		865234AA099329B7E4D41789 /* JoinGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 005C04E920D6B0FC3423EE24 /* JoinGroupView.swift */; };
 		8682AD241895109FD0E1BC81 /* StellarChatNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D93193C84699A94AF7090C64 /* StellarChatNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		903843F4CA3343FB8DDA9C5F /* DemoFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13C4507E8D81E64D00A507C /* DemoFixtures.swift */; };
 		90B7D2930C07431EB75DBFB3 /* VoiceRecordButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E76AF13A26CCEC2E75C8310 /* VoiceRecordButton.swift */; };
 		937D869A12C0A4EB6FB6F851 /* TelegramInvitePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C31C8811C803208CFB18E4E /* TelegramInvitePickerView.swift */; };
 		95489626E5CAD02D3CDB0207 /* StellarStrKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B047EE5C149FF06AF592DEB /* StellarStrKey.swift */; };
@@ -173,6 +174,7 @@
 		8DCBEF2B216C8C9F10B6DDF4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		955C0B70B70469EAFE1DF3B6 /* RecoveryPhraseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryPhraseView.swift; sourceTree = "<group>"; };
 		A02EB9B039C7C1DD45272FD1 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A13C4507E8D81E64D00A507C /* DemoFixtures.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DemoFixtures.swift; sourceTree = "<group>"; };
 		A6F02E498BC2C9FAA6780F2F /* SettingsIconBox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsIconBox.swift; sourceTree = "<group>"; };
 		B0884F32E9A807B2566DD234 /* NostrRelayConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NostrRelayConnection.swift; sourceTree = "<group>"; };
 		B0EA74F19D71BB7C486F8B09 /* vk-update-medium.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "vk-update-medium.json"; sourceTree = "<group>"; };
@@ -361,6 +363,7 @@
 				056862ECA5D7EE101A9A0D11 /* Resources */,
 				93C6D05F9E220C987CC0880A /* ViewModels */,
 				156F9CE2E835AC03BD150D68 /* Views */,
+				A13C4507E8D81E64D00A507C /* DemoFixtures.swift */,
 			);
 			path = StellarChat;
 			sourceTree = "<group>";
@@ -473,8 +476,6 @@
 			dependencies = (
 			);
 			name = StellarChatNotificationService;
-			packageProductDependencies = (
-			);
 			productName = StellarChatNotificationService;
 			productReference = D93193C84699A94AF7090C64 /* StellarChatNotificationService.appex */;
 			productType = "com.apple.product-type.app-extension";
@@ -512,7 +513,7 @@
 			mainGroup = 237EA72C7CEF1AD9196D281B;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				F33EE2A00CAA98337DB93D99 /* XCLocalSwiftPackageReference "../../../swift-mls" */,
+				F33EE2A00CAA98337DB93D99 /* XCLocalSwiftPackageReference "swift-mls" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E290D72BA448D601D86C5E67 /* Products */;
@@ -648,6 +649,7 @@
 				CFC4BB79BE2BD8A37F35D9D2 /* VerificationBadgeView.swift in Sources */,
 				1567BD34990CE37FB89521DF /* VideoCache.swift in Sources */,
 				90B7D2930C07431EB75DBFB3 /* VoiceRecordButton.swift in Sources */,
+				903843F4CA3343FB8DDA9C5F /* DemoFixtures.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -985,7 +987,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		F33EE2A00CAA98337DB93D99 /* XCLocalSwiftPackageReference "../../../swift-mls" */ = {
+		F33EE2A00CAA98337DB93D99 /* XCLocalSwiftPackageReference "swift-mls" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "../../../swift-mls";
 		};

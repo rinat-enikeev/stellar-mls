@@ -69,6 +69,9 @@ class MainActivity : ComponentActivity() {
     private val groupListViewModel: GroupListViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Demo flag must be set BEFORE the lazy `viewModels()` delegate
+        // resolves (which happens at first access in `setContent`).
+        GroupListViewModel.isDemoMode = intent?.getBooleanExtra("demo", false) == true
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 

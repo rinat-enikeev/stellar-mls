@@ -288,6 +288,11 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             onNewPushToken(token)
         }
 
+        if (isDemoMode) {
+            chat.onym.android.DemoFixtures.seed(this)
+            return
+        }
+
         // Load contact aliases
         viewModelScope.launch {
             try {
@@ -1019,6 +1024,12 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     companion object {
+        /** True when launched for screenshot capture (Maestro `demo=true` extra).
+         *  Set by `MainActivity.onCreate` BEFORE the viewModel is referenced.
+         *  When true, the viewModel skips relay/push startup and seeds synthetic
+         *  groups via `DemoFixtures` so the chat list renders immediately. */
+        var isDemoMode: Boolean = false
+
         /** Known-good Soroban RPC endpoints (M-13). */
         val KNOWN_RPC_ENDPOINTS = listOf(
             "https://soroban-testnet.stellar.org",
@@ -2669,6 +2680,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Called when push token is refreshed — re-register all push-enabled groups. */
     fun onNewPushToken(token: String) {
+        if (isDemoMode) return
         viewModelScope.launch {
             val mgr = getOrCreatePushManager() ?: return@launch
             val pushGroups = groups.filter { it.pushNotificationsEnabled }

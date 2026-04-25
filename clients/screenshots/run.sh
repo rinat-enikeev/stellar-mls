@@ -8,11 +8,18 @@ FLOW_FILE="$FLOWS_DIR/screenshots.yaml"
 IOS_APP_ID="chat.onym.ios"
 ANDROID_APP_ID="chat.onym.android"
 
-IOS_SCREENSHOTS_BASE="$ROOT_DIR/fastlane/screenshots/en-US"
+IOS_SCREENSHOTS_DIR="$ROOT_DIR/fastlane/screenshots/en-US"
 ANDROID_SCREENSHOTS_DIR="$ROOT_DIR/fastlane/metadata/android/en-US/images/phoneScreenshots"
 
 DEFAULT_IPHONE_DEVICE="iPhone 17 Pro Max"
 DEFAULT_IPAD_DEVICE="iPad Pro 13-inch (M5) (16GB)"
+
+# fastlane deliver's Loader scans <screenshots_path>/<lang>/*.png — direct
+# children only, no recursion. Device routing is by image dimensions, not
+# folder name. So all PNGs (iPhone + iPad) live flat under en-US/, with a
+# device prefix in the filename to keep them grouped and ordered. Anything
+# in a subfolder is silently ignored — that's how 10 prior uploads "succeeded"
+# without ever reaching ASC. Keep this layout.
 
 usage() {
   cat <<'EOF'
@@ -20,10 +27,10 @@ Usage:
   ./run.sh <target>
 
 Targets:
-  ios-iphone     Capture flow on iPhone Air simulator
-                 -> fastlane/screenshots/en-US/iPhone-6.9/
-  ios-ipad       Capture flow on iPad Pro 13-inch (M4) simulator
-                 -> fastlane/screenshots/en-US/iPad-13/
+  ios-iphone     Capture flow on iPhone 17 Pro Max simulator (1320x2868)
+                 -> fastlane/screenshots/en-US/iphone-*.png
+  ios-ipad       Capture flow on iPad Pro 13" (M5) simulator (2064x2752)
+                 -> fastlane/screenshots/en-US/ipad-*.png
   android-phone  Capture flow on a connected/booted Android device or emulator
                  -> fastlane/metadata/android/en-US/images/phoneScreenshots/
 
@@ -49,8 +56,15 @@ run_flow() {
   local app_id="$1"
   local out_dir="$2"
   local device_id="${3:-}"
+  # Optional filename prefix. iOS uses "iphone-" / "ipad-" so the flat
+  # en-US/ folder stays grouped per device and ordered.
+  local prefix="${4:-}"
 
   mkdir -p "$out_dir"
+  # Drop any previous run with this prefix so reruns don't accumulate stale files.
+  if [ -n "$prefix" ]; then
+    rm -f "$out_dir/${prefix}"*.png
+  fi
   local tmp_dir
   tmp_dir="$(mktemp -d -t onym-screenshots.XXXXXX)"
   # Expand $tmp_dir now (single quotes would defer until trap fires, by which
@@ -61,6 +75,7 @@ run_flow() {
   echo "  app:    $app_id"
   echo "  flow:   $FLOW_FILE"
   echo "  out:    $out_dir"
+  [ -n "$prefix" ] && echo "  prefix: $prefix"
   [ -n "$device_id" ] && echo "  device: $device_id"
 
   local maestro_args=()
@@ -74,7 +89,9 @@ run_flow() {
   shopt -u nullglob
   [ "${#pngs[@]}" -gt 0 ] || fail "Maestro produced no PNGs — flow may have failed silently"
 
-  cp -f "${pngs[@]}" "$out_dir/"
+  for png in "${pngs[@]}"; do
+    cp -f "$png" "$out_dir/${prefix}$(basename "$png")"
+  done
   echo "Copied ${#pngs[@]} screenshot(s) to $out_dir"
   ls -1 "$out_dir"
 }
@@ -153,15 +170,14 @@ case "$target" in
   ios-iphone)
     require_cmd xcrun
     boot_ios_simulator "$DEFAULT_IPHONE_DEVICE"
-    # fastlane maps 1320x2868 to APP_IPHONE_67 ("iPhone 14 Pro Max" folder).
-    run_flow "$IOS_APP_ID" "$IOS_SCREENSHOTS_BASE/iPhone 14 Pro Max" "$IOS_UDID"
+    # 1320x2868 → APP_IPHONE_67. fastlane buckets by image size, not folder.
+    run_flow "$IOS_APP_ID" "$IOS_SCREENSHOTS_DIR" "$IOS_UDID" "iphone-"
     ;;
   ios-ipad)
     require_cmd xcrun
     boot_ios_simulator "$DEFAULT_IPAD_DEVICE"
-    # fastlane maps 2064x2752 to APP_IPAD_PRO_3GEN_129
-    # ("iPad Pro (12.9-inch) (3rd generation)" folder).
-    run_flow "$IOS_APP_ID" "$IOS_SCREENSHOTS_BASE/iPad Pro (12.9-inch) (3rd generation)" "$IOS_UDID"
+    # 2064x2752 → APP_IPAD_PRO_3GEN_129.
+    run_flow "$IOS_APP_ID" "$IOS_SCREENSHOTS_DIR" "$IOS_UDID" "ipad-"
     ;;
   android-phone)
     require_cmd adb

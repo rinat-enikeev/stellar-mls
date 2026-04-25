@@ -1,1 +1,1 @@
-End-to-end encrypted group chat with zero-knowledge proofs. No phone number needed.
+End-to-end encrypted group chat with zero-knowledge proofs. No phone number.

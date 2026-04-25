@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$ROOT_DIR/google.env"
-PLAY_JSON_PATH="$ROOT_DIR/fastlane/.google_play_service_account.json"
+PLAY_JSON_PATH="$ROOT_DIR/android/StellarChat/google-play-secret.json"
 
 fail() {
   echo "setup-android-deliver.sh: $1" >&2

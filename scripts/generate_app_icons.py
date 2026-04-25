@@ -25,10 +25,14 @@ ANDROID_DRAWABLE_DIR = (
     ROOT / "clients" / "android" / "StellarChat" / "app" / "src" / "main" / "res" / "drawable-nodpi"
 )
 WEBSITE_ICON = ROOT / "deploy" / "website" / "icon.png"
+PLAY_STORE_ICON = (
+    ROOT / "clients" / "fastlane" / "metadata" / "android" / "en-US" / "images" / "icon.png"
+)
 
 MASTER_SIZE = 1024
 ANDROID_LAYER_SIZE = 432
 WEBSITE_SIZE = 512
+PLAY_STORE_ICON_SIZE = 512
 
 # Android adaptive-icon safe zone is the inner 66dp of 108dp ≈ 61.1%.
 # Target 58% so the mark clears the safe-zone boundary with a small margin
@@ -116,6 +120,10 @@ def make_website_icon(master: Image.Image) -> Image.Image:
     return master.resize((WEBSITE_SIZE, WEBSITE_SIZE), Image.LANCZOS)
 
 
+def make_play_store_icon(master: Image.Image) -> Image.Image:
+    return master.resize((PLAY_STORE_ICON_SIZE, PLAY_STORE_ICON_SIZE), Image.LANCZOS)
+
+
 def main() -> None:
     source = load_source()
 
@@ -123,8 +131,9 @@ def main() -> None:
     foreground = make_android_foreground(source)
     monochrome = make_android_monochrome(source)
     website_icon = make_website_icon(master)
+    play_store_icon = make_play_store_icon(master)
 
-    for d in (SHARED_DIR, IOS_DIR, ANDROID_DRAWABLE_DIR, WEBSITE_ICON.parent):
+    for d in (SHARED_DIR, IOS_DIR, ANDROID_DRAWABLE_DIR, WEBSITE_ICON.parent, PLAY_STORE_ICON.parent):
         d.mkdir(parents=True, exist_ok=True)
 
     master.save(SHARED_DIR / "master.png", optimize=True)
@@ -134,6 +143,7 @@ def main() -> None:
     monochrome.save(SHARED_DIR / "android-monochrome.png", optimize=True)
     monochrome.save(ANDROID_DRAWABLE_DIR / "ic_launcher_monochrome.png", optimize=True)
     website_icon.save(WEBSITE_ICON, optimize=True)
+    play_store_icon.save(PLAY_STORE_ICON, optimize=True)
 
 
 if __name__ == "__main__":

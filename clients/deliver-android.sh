@@ -4,11 +4,12 @@ set +x
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$ROOT_DIR/google.env"
-PLAY_JSON_PATH="$ROOT_DIR/fastlane/.google_play_service_account.json"
+PLAY_JSON_PATH="$ROOT_DIR/android/StellarChat/google-play-secret.json"
 
 METADATA_PATH_DEFAULT="$ROOT_DIR/fastlane/metadata/android"
 METADATA_PATH="$METADATA_PATH_DEFAULT"
 SKIP_SCREENSHOTS=true
+SKIP_IMAGES=true
 DRY_RUN=false
 
 usage() {
@@ -22,6 +23,7 @@ Binary upload is always skipped.
 Options:
   --metadata-path=<path>   Metadata folder (default: fastlane/metadata/android)
   --with-screenshots       Upload screenshots too (skipped by default)
+  --with-images            Upload store icon + featureGraphic (skipped by default)
   --dry-run                Print commands without executing fastlane
   -h, --help               Show this help
 EOF
@@ -34,6 +36,9 @@ for arg in "$@"; do
       ;;
     --with-screenshots)
       SKIP_SCREENSHOTS=false
+      ;;
+    --with-images)
+      SKIP_IMAGES=false
       ;;
     --dry-run)
       DRY_RUN=true
@@ -117,6 +122,11 @@ if [ -z "$PLAY_TRACK" ]; then
   PLAY_TRACK="production"
 fi
 
+GRADLE_FILE="$ROOT_DIR/android/StellarChat/app/build.gradle.kts"
+[ -f "$GRADLE_FILE" ] || fail "gradle build file not found: $GRADLE_FILE"
+PLAY_VERSION_CODE="$(awk -F '=' '/versionCode[[:space:]]*=/ { gsub(/[^0-9]/, "", $2); print $2; exit }' "$GRADLE_FILE")"
+[ -n "$PLAY_VERSION_CODE" ] || fail "could not parse versionCode from $GRADLE_FILE"
+
 run_in_dir "$ROOT_DIR" bundle config set --local path 'vendor/bundle'
 run_in_dir "$ROOT_DIR" bundle install
 
@@ -124,15 +134,20 @@ supply_cmd=(
   bundle exec fastlane supply
   --json_key "$PLAY_JSON_PATH"
   --package_name "$PLAY_PACKAGE_NAME"
-  --track internal
+  --track "$PLAY_TRACK"
   --metadata_path "$METADATA_PATH"
   --skip_upload_aab true
   --skip_upload_apk true
   --skip_upload_metadata false
   --skip_upload_changelogs true
-  --skip_upload_images true
-  --version_code 1
+  --version_code "$PLAY_VERSION_CODE"
 )
+
+if $SKIP_IMAGES; then
+  supply_cmd+=(--skip_upload_images true)
+else
+  supply_cmd+=(--skip_upload_images false)
+fi
 
 if $SKIP_SCREENSHOTS; then
   supply_cmd+=(--skip_upload_screenshots true)

@@ -21,9 +21,6 @@ Record and send encrypted voice messages directly in your chats.
 <b>Media Sharing</b>
 Share photos and images with the same end-to-end encryption applied to all media.
 
-<b>Voice and Video Calls</b>
-Make encrypted voice and video calls to your group members via WebRTC.
-
 <b>Cross-Platform</b>
 Onym works across iOS and Android. Both platforms use identical encryption and wire formats, so you can chat with anyone regardless of their device.
 

@@ -290,79 +290,78 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
         if (isDemoMode) {
             chat.onym.android.DemoFixtures.seed(this)
-            return
-        }
-
-        // Load contact aliases
-        viewModelScope.launch {
-            try {
-                contactAliasStore.load(store.dao)
-            } catch (e: Exception) {
-                Log.e("GroupListVM", "Failed to load contact aliases", e)
-            }
-        }
-
-        // Load invited contacts (Telegram-invite tracking)
-        viewModelScope.launch {
-            try {
-                invitedContactStore.load(store.dao)
-            } catch (e: Exception) {
-                Log.e("GroupListVM", "Failed to load invited contacts", e)
-            }
-        }
-
-        // Load persisted groups, messages, and initialize salt history
-        viewModelScope.launch {
-            try {
-                val loaded = store.loadGroups().map { applyLocalPushState(it) }
-                Log.d("GroupListVM", "Loaded ${loaded.size} groups from store")
-                groups.addAll(loaded)
-                // Populate push states from local preferences
-                for (g in loaded) { pushEnabledStates[g.id] = g.pushNotificationsEnabled }
-                // Populate currentMembers from all persisted groups
-                transport.currentMembers.addAll(loaded.flatMap { it.members })
-                for (group in loaded) {
-                    storeSalt(group.id, group.epoch, group.salt)
-                    // Load persisted chat messages
-                    try {
-                        val msgs = store.loadMessages(group.id)
-                        chatMessages[group.id] = msgs
-                        seenMessageIDs[group.id] = java.util.Collections.synchronizedSet(msgs.map { it.id }.toMutableSet())
-                    } catch (e: Exception) {
-                        Log.e("GroupListVM", "Failed to load messages for group ${group.id.take(8)}", e)
-                    }
-                    // Load transport bundles
-                    try {
-                        val bundles = store.loadTransportBundles(group.id)
-                        if (bundles.isNotEmpty()) {
-                            transportBundles[group.id] = bundles.toMutableMap()
-                        }
-                    } catch (_: Exception) { }
-                    // Load epoch snapshots
-                    try {
-                        val snapshots = store.loadEpochSnapshots(group.id)
-                        if (snapshots.isNotEmpty()) {
-                            epochSnapshots[group.id] = java.util.concurrent.ConcurrentHashMap(snapshots)
-                        }
-                    } catch (_: Exception) { }
+        } else {
+            // Load contact aliases
+            viewModelScope.launch {
+                try {
+                    contactAliasStore.load(store.dao)
+                } catch (e: Exception) {
+                    Log.e("GroupListVM", "Failed to load contact aliases", e)
                 }
-            } catch (e: Exception) {
-                Log.e("GroupListVM", "Failed to load groups from store", e)
             }
-            // Clean up expired pending rekeys (>24h) on startup
-            try {
-                val allPending = store.loadAllPendingRekeys()
-                val now = System.currentTimeMillis()
-                val expiryMs = 24 * 60 * 60 * 1000L
-                for (record in allPending) {
-                    if (now - record.createdAt > expiryMs) {
-                        store.deletePendingRekey(record.groupID, record.epoch)
-                    }
-                }
-            } catch (_: Exception) { }
 
-            // Always connect to relays, even if group loading fails
-            connectIfNeeded()
+            // Load invited contacts (Telegram-invite tracking)
+            viewModelScope.launch {
+                try {
+                    invitedContactStore.load(store.dao)
+                } catch (e: Exception) {
+                    Log.e("GroupListVM", "Failed to load invited contacts", e)
+                }
+            }
+
+            // Load persisted groups, messages, and initialize salt history
+            viewModelScope.launch {
+                try {
+                    val loaded = store.loadGroups().map { applyLocalPushState(it) }
+                    Log.d("GroupListVM", "Loaded ${loaded.size} groups from store")
+                    groups.addAll(loaded)
+                    // Populate push states from local preferences
+                    for (g in loaded) { pushEnabledStates[g.id] = g.pushNotificationsEnabled }
+                    // Populate currentMembers from all persisted groups
+                    transport.currentMembers.addAll(loaded.flatMap { it.members })
+                    for (group in loaded) {
+                        storeSalt(group.id, group.epoch, group.salt)
+                        // Load persisted chat messages
+                        try {
+                            val msgs = store.loadMessages(group.id)
+                            chatMessages[group.id] = msgs
+                            seenMessageIDs[group.id] = java.util.Collections.synchronizedSet(msgs.map { it.id }.toMutableSet())
+                        } catch (e: Exception) {
+                            Log.e("GroupListVM", "Failed to load messages for group ${group.id.take(8)}", e)
+                        }
+                        // Load transport bundles
+                        try {
+                            val bundles = store.loadTransportBundles(group.id)
+                            if (bundles.isNotEmpty()) {
+                                transportBundles[group.id] = bundles.toMutableMap()
+                            }
+                        } catch (_: Exception) { }
+                        // Load epoch snapshots
+                        try {
+                            val snapshots = store.loadEpochSnapshots(group.id)
+                            if (snapshots.isNotEmpty()) {
+                                epochSnapshots[group.id] = java.util.concurrent.ConcurrentHashMap(snapshots)
+                            }
+                        } catch (_: Exception) { }
+                    }
+                } catch (e: Exception) {
+                    Log.e("GroupListVM", "Failed to load groups from store", e)
+                }
+                // Clean up expired pending rekeys (>24h) on startup
+                try {
+                    val allPending = store.loadAllPendingRekeys()
+                    val now = System.currentTimeMillis()
+                    val expiryMs = 24 * 60 * 60 * 1000L
+                    for (record in allPending) {
+                        if (now - record.createdAt > expiryMs) {
+                            store.deletePendingRekey(record.groupID, record.epoch)
+                        }
+                    }
+                } catch (_: Exception) { }
+
+                // Always connect to relays, even if group loading fails
+                connectIfNeeded()
+            }
         }
     }
 

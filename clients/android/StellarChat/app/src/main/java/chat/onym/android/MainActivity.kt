@@ -72,6 +72,12 @@ class MainActivity : ComponentActivity() {
         // Demo flag must be set BEFORE the lazy `viewModels()` delegate
         // resolves (which happens at first access in `setContent`).
         GroupListViewModel.isDemoMode = intent?.getBooleanExtra("demo", false) == true
+        if (GroupListViewModel.isDemoMode) {
+            getSharedPreferences("stellar_chat", MODE_PRIVATE)
+                .edit()
+                .putBoolean("has_seen_onboarding", true)
+                .apply()
+        }
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 

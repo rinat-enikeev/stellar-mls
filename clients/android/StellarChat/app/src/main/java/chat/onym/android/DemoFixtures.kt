@@ -26,18 +26,24 @@ object DemoFixtures {
         vm.contactAliasStore.aliases[CAROL] = "Carol"
         vm.contactAliasStore.aliases[DAVE]  = "Dave"
 
+        // Include the local user's actual member leaf so canSendInGroup returns
+        // true and the "You were removed from this group" footer doesn't show.
+        val selfLeaf = runCatching { vm.keyManager.memberLeaf() }.getOrNull()
+
         val now = System.currentTimeMillis()
         val groupA = makeGroup(
             id = "a1b2c3d4e5f60718293a4b5c6d7e8f9001112233445566778899aabbccddeeff",
             name = "Climbing Crew",
             createdAtMs = now - 7L * 86_400_000L,
-            memberPubkeyTags = listOf(0x01, 0x02, 0x03)
+            memberPubkeyTags = listOf(0x01, 0x02, 0x03),
+            selfLeaf = selfLeaf
         )
         val groupB = makeGroup(
             id = "1122334455667788990aabbccddeeff0a1b2c3d4e5f60718293a4b5c6d7e8f99",
             name = "Family",
             createdAtMs = now - 30L * 86_400_000L,
-            memberPubkeyTags = listOf(0x04, 0x05)
+            memberPubkeyTags = listOf(0x04, 0x05),
+            selfLeaf = selfLeaf
         )
 
         val messagesA = makeMessages(
@@ -88,7 +94,8 @@ object DemoFixtures {
         id: String,
         name: String,
         createdAtMs: Long,
-        memberPubkeyTags: List<Int>
+        memberPubkeyTags: List<Int>,
+        selfLeaf: SEPGroupMemberLeaf?
     ): ChatGroup {
         val members = memberPubkeyTags.mapIndexed { idx, tag ->
             SEPGroupMemberLeaf(
@@ -96,6 +103,7 @@ object DemoFixtures {
                 leafHash = ByteArray(32) { (0x80 + idx).toByte() }
             )
         }.toMutableList()
+        if (selfLeaf != null) members.add(selfLeaf)
         return ChatGroup(
             id = id,
             name = name,

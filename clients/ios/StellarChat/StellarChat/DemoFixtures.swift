@@ -19,17 +19,23 @@ enum DemoFixtures {
         appState.contactAliasStore.setAlias(pubkey: carol, name: "Carol")
         appState.contactAliasStore.setAlias(pubkey: dave,  name: "Dave")
 
+        // Include the local user's actual member leaf so canSend(in:) returns
+        // true and the "You were removed from this group" banner doesn't show.
+        let selfLeaf = (try? appState.keyManager.memberLeaf).flatMap { Optional.some($0) }
+
         let groupA = makeGroup(
             id: "a1b2c3d4e5f60718293a4b5c6d7e8f9001112233445566778899aabbccddeeff",
             name: "Climbing Crew",
             createdAt: now.addingTimeInterval(-7 * 86_400),
-            members: [alice, bob, carol]
+            members: [alice, bob, carol],
+            selfLeaf: selfLeaf
         )
         let groupB = makeGroup(
             id: "1122334455667788990aabbccddeeff0a1b2c3d4e5f60718293a4b5c6d7e8f99",
             name: "Family",
             createdAt: now.addingTimeInterval(-30 * 86_400),
-            members: [alice, dave]
+            members: [alice, dave],
+            selfLeaf: selfLeaf
         )
 
         let messagesA = makeMessages(
@@ -83,20 +89,23 @@ enum DemoFixtures {
         id: String,
         name: String,
         createdAt: Date,
-        members: [String]
+        members: [String],
+        selfLeaf: SEPGroupMemberLeaf?
     ) -> ChatGroup {
-        ChatGroup(
+        var leaves: [SEPGroupMemberLeaf] = members.enumerated().map { idx, _ in
+            SEPGroupMemberLeaf(
+                publicKeyCompressed: Data(repeating: UInt8(idx + 1), count: 48),
+                leafHash: Data(repeating: UInt8(idx + 0x80), count: 32)
+            )
+        }
+        if let selfLeaf { leaves.append(selfLeaf) }
+        return ChatGroup(
             id: id,
             name: name,
             groupSecret: Data(repeating: 0xAB, count: 32),
             createdAt: createdAt,
             relayHints: [],
-            members: members.enumerated().map { idx, _ in
-                SEPGroupMemberLeaf(
-                    publicKeyCompressed: Data(repeating: UInt8(idx + 1), count: 48),
-                    leafHash: Data(repeating: UInt8(idx + 0x80), count: 32)
-                )
-            },
+            members: leaves,
             epoch: 0,
             salt: Data(repeating: 0, count: 32),
             tier: .medium

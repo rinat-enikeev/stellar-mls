@@ -290,6 +290,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
         if (isDemoMode) {
             chat.onym.android.DemoFixtures.seed(this)
+            isRelayConnected = true
         } else {
             // Load contact aliases
             viewModelScope.launch {

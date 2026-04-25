@@ -1,0 +1,9 @@
+appId: ${APP_ID}
+name: store-screenshots
+---
+- launchApp:
+    arguments:
+      demo: true
+- waitForAnimationToEnd:
+    timeout: 5000
+- takeScreenshot: 01-launch

@@ -1,14 +1,14 @@
 appId: ${APP_ID}
 name: store-screenshots
 ---
-# Capture five screens in one flow:
+# Capture five screens. Between chat-detail screens we relaunch the app
+# (demo data re-seeds deterministically) instead of fighting the iOS
+# back gesture, which Maestro can't reliably trigger on this UI.
 #   01-chats     — populated chat list (demo seed)
-#   02-chat      — open conversation with messages
-#   03-create    — "create group" sheet
-#   04-settings  — settings screen
-#
-# All taps use visible-text matchers so the same flow works on both
-# iOS and Android (labels are identical across platforms).
+#   02-chat      — Climbing Crew conversation
+#   03-family    — Family conversation
+#   04-settings  — settings tab
+#   05-contacts  — contacts tab
 
 - launchApp:
     arguments:
@@ -21,11 +21,28 @@ name: store-screenshots
 - waitForAnimationToEnd:
     timeout: 3000
 - takeScreenshot: 02-chat
-- back
-- waitForAnimationToEnd:
-    timeout: 2000
 
+- launchApp:
+    arguments:
+      demo: true
+- waitForAnimationToEnd:
+    timeout: 5000
+- tapOn: "Family"
+- waitForAnimationToEnd:
+    timeout: 3000
+- takeScreenshot: 03-family
+
+- launchApp:
+    arguments:
+      demo: true
+- waitForAnimationToEnd:
+    timeout: 5000
 - tapOn: "Settings"
 - waitForAnimationToEnd:
     timeout: 2000
-- takeScreenshot: 03-settings
+- takeScreenshot: 04-settings
+
+- tapOn: "Contacts"
+- waitForAnimationToEnd:
+    timeout: 2000
+- takeScreenshot: 05-contacts

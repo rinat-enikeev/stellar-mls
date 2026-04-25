@@ -31,7 +31,8 @@ struct ChatView: View {
             // Anarchy is surfaced as a warning (any member can kick/invite);
             // 1v1 / Democracy / Oligarchy get an informational notice.
             if let group = viewModel.group,
-               governanceBannerDismissed[group.id] != true {
+               governanceBannerDismissed[group.id] != true,
+               !AppState.isDemoMode {
                 GovernanceBanner(
                     groupType: group.groupType,
                     onDismiss: { governanceBannerDismissed[group.id] = true }

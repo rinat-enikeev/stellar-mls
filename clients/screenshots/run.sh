@@ -153,12 +153,15 @@ case "$target" in
   ios-iphone)
     require_cmd xcrun
     boot_ios_simulator "$DEFAULT_IPHONE_DEVICE"
-    run_flow "$IOS_APP_ID" "$IOS_SCREENSHOTS_BASE/iPhone-6.9" "$IOS_UDID"
+    # fastlane maps 1320x2868 to APP_IPHONE_67 ("iPhone 14 Pro Max" folder).
+    run_flow "$IOS_APP_ID" "$IOS_SCREENSHOTS_BASE/iPhone 14 Pro Max" "$IOS_UDID"
     ;;
   ios-ipad)
     require_cmd xcrun
     boot_ios_simulator "$DEFAULT_IPAD_DEVICE"
-    run_flow "$IOS_APP_ID" "$IOS_SCREENSHOTS_BASE/iPad-13" "$IOS_UDID"
+    # fastlane maps 2064x2752 to APP_IPAD_PRO_3GEN_129
+    # ("iPad Pro (12.9-inch) (3rd generation)" folder).
+    run_flow "$IOS_APP_ID" "$IOS_SCREENSHOTS_BASE/iPad Pro (12.9-inch) (3rd generation)" "$IOS_UDID"
     ;;
   android-phone)
     require_cmd adb

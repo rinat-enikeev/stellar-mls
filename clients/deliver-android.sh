@@ -122,14 +122,14 @@ if [ -z "$PLAY_TRACK" ]; then
   PLAY_TRACK="production"
 fi
 
-GRADLE_FILE="$ROOT_DIR/android/StellarChat/app/build.gradle.kts"
-[ -f "$GRADLE_FILE" ] || fail "gradle build file not found: $GRADLE_FILE"
-PLAY_VERSION_CODE="$(awk -F '=' '/versionCode[[:space:]]*=/ { gsub(/[^0-9]/, "", $2); print $2; exit }' "$GRADLE_FILE")"
-[ -n "$PLAY_VERSION_CODE" ] || fail "could not parse versionCode from $GRADLE_FILE"
-
 run_in_dir "$ROOT_DIR" bundle config set --local path 'vendor/bundle'
 run_in_dir "$ROOT_DIR" bundle install
 
+# We never upload binaries from this script (--skip_upload_aab/--skip_upload_apk
+# are always true), and changelogs are skipped, so we don't pin --version_code.
+# Letting supply auto-discover the latest live release means the listing
+# metadata can be refreshed even before a new build for the bumped version is
+# published.
 supply_cmd=(
   bundle exec fastlane supply
   --json_key "$PLAY_JSON_PATH"
@@ -140,7 +140,6 @@ supply_cmd=(
   --skip_upload_apk true
   --skip_upload_metadata false
   --skip_upload_changelogs true
-  --version_code "$PLAY_VERSION_CODE"
 )
 
 if $SKIP_IMAGES; then

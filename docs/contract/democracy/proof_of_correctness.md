@@ -17,7 +17,7 @@
 
 ### 1.1 Storage layout
 
-The on-chain `CommitmentEntry` (`lib.rs:166-189`) carries exactly the fields the design's §A.2 storage-layout pin requires for v2:
+The on-chain `CommitmentEntry` (`lib.rs:168-189`) carries exactly the fields the design's §A.2 storage-layout pin requires for v2:
 
 | Field | Type | Source-of-truth | Mutation surface |
 |---|---|---|---|
@@ -33,7 +33,7 @@ The on-chain `CommitmentEntry` (`lib.rs:166-189`) carries exactly the fields the
 - `group_type` — implicit in contract address.
 - `member_count` — replaced by `occupancy_commitment` (Poseidon-hashed bitmap).
 
-The `DataKey` enum (`lib.rs:255-275`) covers the design's required keys:
+The `DataKey` enum (`lib.rs:258-276`) covers the design's required keys:
 
 | `DataKey` variant | Storage class | Purpose | Spec ref |
 |---|---|---|---|
@@ -46,7 +46,7 @@ The `DataKey` enum (`lib.rs:255-275`) covers the design's required keys:
 | `UsedProof(proof_hash)` | persistent (TTL ≈ `LEDGER_BUMP`) | replay nullifier | §11 |
 | `GroupCount(tier)` | instance | active-group counter for `MAX_GROUPS_PER_TIER` gate | impl_plan §B.5 |
 
-CI-asserted by `test_vectors_consistency` (`test.rs:1112-1186`).
+CI-asserted by `test_vectors_consistency` (`test.rs:1152-1224`).
 
 ### 1.2 Constants
 
@@ -62,7 +62,7 @@ CI-asserted by `test_vectors_consistency` (`test.rs:1112-1186`).
 
 ### 1.3 Errors
 
-The `Error` enum (`lib.rs:91-118`) pins 19 reachable variants plus `Reserved3` and `GroupStillActive` (slot-continuity placeholders documented in `test-vectors.json`). `UnknownVkKind=16` was removed in PR #148 review (chunk 1 #4).
+The `Error` enum (`lib.rs:91-119`) pins 16 reachable variants plus `Reserved3` and `GroupStillActive` (slot-continuity placeholders documented in `test-vectors.json`), for 18 total. `UnknownVkKind=16` was removed in PR #148 review (chunk 1 #4).
 
 CI-asserted by `test_vectors_consistency`'s error-code loop.
 
@@ -76,7 +76,7 @@ Three events match the design's audit-trail expectation:
 | `CommitmentUpdated` | `group_id` | `commitment, epoch, timestamp` | `update_commitment` |
 | `GroupDeactivated` | `group_id` | `final_epoch, timestamp` | `deactivate_group` |
 
-Events are emitted **after** all storage writes (`lib.rs:561-568`, `:644-650`, `:715-720`). On any error path, no event is emitted (Soroban transaction revert).
+Events are emitted **after** all storage writes (`lib.rs:538-545`, `:627-633`, `:715-720`). On any error path, no event is emitted (Soroban transaction revert).
 
 ---
 
@@ -196,7 +196,7 @@ For each public entrypoint, the spec's input class → output behavior mapping i
 | Group inactive | `Ok(false)` (read-only verifier intentionally allows post-deactivation attestation) | `test_verify_membership_rejects_inactive_group` |
 | Group missing | `Err(GroupNotFound)` | (gated at `lib.rs:645`) |
 
-**Note:** the function name is misleading on the inactive case — `test_verify_membership_rejects_inactive_group` actually asserts `Ok(false)`, not `Err(GroupInactive)`. This is **intentional**: read-only attestations against the final pre-deactivation state must remain verifiable forever. Documented at `lib.rs:911-915`.
+**Note:** the function name is misleading on the inactive case — `test_verify_membership_rejects_inactive_group` actually asserts `Ok(false)`, not `Err(GroupInactive)`. This is **intentional**: read-only attestations against the final pre-deactivation state must remain verifiable forever. Rationale documented in the test comment at `test.rs:913-916`; the entrypoint itself (`lib.rs:638-660`) does not gate on `state.active`.
 
 ### 3.8 `deactivate_group(env, group_id, proof, public_inputs: PublicInputs) -> Result<(), Error>`
 
@@ -232,7 +232,7 @@ For each public entrypoint, the spec's input class → output behavior mapping i
 
 ## 4. Verifier semantics
 
-### 4.1 Membership proof (`verify_membership_proof`, `lib.rs:939-984`)
+### 4.1 Membership proof (`verify_membership_proof`, `lib.rs:927-972`)
 
 Public-input vector: `[commitment, epoch]` (in order). Computes:
 
@@ -248,7 +248,7 @@ e(-π_A, π_B) · e(α, β) · e(vk_x, γ) · e(π_C, δ) =? 1_GT
 
 This is the test-vectors `vk_kind_enum.Membership.ic_layout` ordering: `["base", "commitment", "epoch"]`. Pinned by `test_vectors_consistency`.
 
-### 4.2 Update proof (`verify_update_proof`, `lib.rs:998-1072`)
+### 4.2 Update proof (`verify_update_proof`, `lib.rs:986-1060`)
 
 Public-input vector: `[c_old, epoch_old, c_new, occupancy_commitment_old, occupancy_commitment_new, threshold_numerator]` (in order, **6 elements**, supplied to a 7-IC-point VK with IC[0] as base). Computes:
 
@@ -269,8 +269,8 @@ The 6th input (`threshold_numerator`) is read from `current.threshold_numerator`
 ### 4.3 Field-element conversions
 
 - `Fr::from_bytes` is called on already-canonical `BytesN<32>` (canonicalization checked upstream by `is_canonical_fr`). Out-of-range bytes round-trip to a different value — the upstream check rejects non-canonical inputs.
-- `epoch: u64` is widened to `U256` big-endian-padded with leading zeros (`u64_to_u256_be`, `lib.rs:924-928`). The high 192 bits are zero; the low 64 bits carry the epoch. `Fr::from_u256` reduces (always within Fr's range, so no reduction occurs for `epoch ≤ u64::MAX`).
-- `threshold_numerator: u32` is widened similarly via `u32_to_fr` (`lib.rs:930-933`). `1 ≤ threshold ≤ 100` always fits.
+- `epoch: u64` is widened to `U256` big-endian-padded with leading zeros (`u64_to_u256_be`, `lib.rs:912-916`). The high 192 bits are zero; the low 64 bits carry the epoch. `Fr::from_u256` reduces (always within Fr's range, so no reduction occurs for `epoch ≤ u64::MAX`).
+- `threshold_numerator: u32` is widened similarly via `u32_to_fr` (`lib.rs:918-921`). `1 ≤ threshold ≤ 100` always fits.
 
 ---
 
@@ -295,8 +295,8 @@ The 43 inline tests cover the named entries in `test-vectors.json#tests_to_imple
 | `test_initialize` | constructor happy path |
 | `test_invalid_membership_vk_length_rejected` | constructor IC arity guard (membership) |
 | `test_invalid_update_vk_length_rejected` | constructor IC arity guard (update) |
-| `test_create_group_*` (15 tests) | every `create_group` validation gate listed in §3.5 |
-| `test_update_commitment_*` (13 tests) | every `update_commitment` validation gate + threshold-from-storage behaviors |
+| `test_create_group_*` (13 tests) | every `create_group` validation gate listed in §3.5 |
+| `test_update_commitment_*` (12 tests) | every `update_commitment` validation gate + threshold-from-storage behaviors |
 | `test_verify_membership_*` (4 tests) | every `verify_membership` branch |
 | `test_deactivate_group_*` (3 tests) | every `deactivate_group` branch |
 | `test_update_vk_*` (3 tests) | admin auth + both rotation paths |

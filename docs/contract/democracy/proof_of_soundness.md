@@ -32,7 +32,7 @@ Three actors interact with the contract:
 The contract takes the following as oracles. Soundness arguments below are conditional on these:
 
 1. **Soroban BLS host functions** (`env.crypto().bls12_381()`) — `g1_add`, `g1_msm`, `pairing_check`, `G{1,2}Affine::is_in_subgroup`, `Fr::from_bytes`, `Fr::to_bytes`, `Fr::from_u256`, `U256::from_be_bytes` — implement the BLS12-381 group operations correctly. (Stellar SEP-0046 / soroban-sdk 25.3.0.)
-2. **Groth16 verifier formula** as implemented in `verify_membership_proof` (`lib.rs:939-984`) and `verify_update_proof` (`lib.rs:998-1072`) — `e(-π_A, π_B) · e(α, β) · e(vk_x, γ) · e(π_C, δ) = 1_GT` is sound under the q-PKE / generic-group assumption used by Groth16, given a trusted setup.
+2. **Groth16 verifier formula** as implemented in `verify_membership_proof` (`lib.rs:927-972`) and `verify_update_proof` (`lib.rs:986-1060`) — `e(-π_A, π_B) · e(α, β) · e(vk_x, γ) · e(π_C, δ) = 1_GT` is sound under the q-PKE / generic-group assumption used by Groth16, given a trusted setup.
 3. **Poseidon collision-resistance / preimage-resistance** is used by the *prover* (off-chain) to compute `commitment` and `occupancy_commitment`. The contract is value-agnostic to Poseidon — it sees only 32-byte field elements. This proof does not cover prover-side Poseidon misuse.
 4. **`env.crypto().sha256`** is collision-resistant over short inputs (used for the proof-replay nullifier).
 5. **The admin's installed VKs correspond to a real ceremony / dev-keyset that fixes the circuit constraint system.** A malicious admin who installs a VK with a known toxic-waste secret can forge proofs; this is the ceremony threat model documented in design §6 Phase E.
@@ -61,16 +61,16 @@ Enforced by `lib.rs:620` — the new entry inherits `current.threshold_numerator
 ### 3.2 Cryptographic invariants
 
 **SI-5: All curve points stored in a VK are subgroup-valid.**
-`validate_vk_points` (`lib.rs:891-910`) runs `is_in_subgroup` on `α_g1`, `β_g2`, `γ_g2`, `δ_g2`, and every `IC[i]`. Called at `__constructor` (`lib.rs:343-348`) and `update_vk` (`lib.rs:406`). A small-subgroup VK is rejected with `Error::InvalidPoint`.
+`validate_vk_points` (`lib.rs:879-898`) runs `is_in_subgroup` on `α_g1`, `β_g2`, `γ_g2`, `δ_g2`, and every `IC[i]`. Called at `__constructor` (`lib.rs:343-348`) and `update_vk` (`lib.rs:406`). A small-subgroup VK is rejected with `Error::InvalidPoint`.
 
 **SI-6: All proof points are subgroup-valid.**
-`validate_proof_points` (`lib.rs:912-916`) runs `is_in_subgroup` on `proof.a`, `proof.b`, `proof.c`. Called at the start of `verify_membership_proof` (`lib.rs:949-951`) and `verify_update_proof` (`lib.rs:1012-1014`). A small-subgroup proof returns `false` (→ `Error::InvalidProof` upstream).
+`validate_proof_points` (`lib.rs:900-904`) runs `is_in_subgroup` on `proof.a`, `proof.b`, `proof.c`. Called at the start of `verify_membership_proof` (`lib.rs:937-939`) and `verify_update_proof` (`lib.rs:1000-1002`). A small-subgroup proof returns `false` (→ `Error::InvalidProof` upstream).
 
 **SI-7: All field-element commitments use canonical Fr encoding.**
-`is_canonical_fr` (`lib.rs:918-922`) round-trips `Fr::from_bytes ∘ Fr::to_bytes` and rejects any 32-byte value whose `Fr::from_bytes` reduces (i.e., the wire bytes are NOT the canonical representation of the resulting Fr element). Called at `create_group` for `commitment` and `occupancy_commitment_initial` (`lib.rs:490-495`), at `update_commitment` for `c_new` and `occupancy_commitment_new` (`lib.rs:582-587`), and inside the verifier helpers as defense-in-depth (`lib.rs:952-953`, `:1015-1026`). A non-canonical value is rejected with `InvalidCommitmentEncoding`. The canonicalization closes the malleability hole where `Fr` reduction can produce two distinct 32-byte preimages of the same field element.
+`is_canonical_fr` (`lib.rs:906-910`) round-trips `Fr::from_bytes ∘ Fr::to_bytes` and rejects any 32-byte value whose `Fr::from_bytes` reduces (i.e., the wire bytes are NOT the canonical representation of the resulting Fr element). Called at `create_group` for `commitment` and `occupancy_commitment_initial` (`lib.rs:490-495`), at `update_commitment` for `c_new` and `occupancy_commitment_new` (`lib.rs:582-587`), and inside the verifier helpers as defense-in-depth (`lib.rs:940-942`, `:1003-1014`). A non-canonical value is rejected with `InvalidCommitmentEncoding`. The canonicalization closes the malleability hole where `Fr` reduction can produce two distinct 32-byte preimages of the same field element.
 
 **SI-8: VK IC-vector length matches the circuit's public-input arity.**
-`MEMBERSHIP_IC_POINTS = 3` (base + commitment + epoch); `UPDATE_IC_POINTS = 7` (base + 5 wire scalars + threshold). Enforced at `__constructor` (`lib.rs:328-341`) and `update_vk` (`lib.rs:399-405`) and re-asserted inside the verifiers (`lib.rs:946-948`, `:1009-1011`). A wrong-arity VK can never be installed; even if storage were corrupted, the verifier guards it.
+`MEMBERSHIP_IC_POINTS = 3` (base + commitment + epoch); `UPDATE_IC_POINTS = 7` (base + 5 wire scalars + threshold). Enforced at `__constructor` (`lib.rs:328-341`) and `update_vk` (`lib.rs:399-405`) and re-asserted inside the verifiers (`lib.rs:934-936`, `:997-999`). A wrong-arity VK can never be installed; even if storage were corrupted, the verifier guards it.
 
 ### 3.3 Replay protection
 

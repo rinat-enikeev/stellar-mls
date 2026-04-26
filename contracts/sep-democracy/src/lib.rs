@@ -162,7 +162,7 @@ pub struct GroupDeactivated {
 ///   * No `group_type` field — single-type contract.
 ///   * No `member_count` field — replaced by `occupancy_commitment`
 ///     (design §3.4 hidden-counts requirement).
-///   * Adds `threshold_numerator: u8` (design §4.7.6).
+///   * Adds `threshold_numerator: u32` (design §4.7.6).
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitmentEntry {

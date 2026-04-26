@@ -1,5 +1,5 @@
-#!/bin/sh
-set -eu
+#!/bin/bash
+set -euo pipefail
 
 # Deploy the per-type Democracy Soroban contract to Stellar testnet.
 #
@@ -7,6 +7,19 @@ set -eu
 # Democracy-only contract at contracts/sep-democracy/. Per
 # docs/contract/democracy/impl_plan.md §E and design v0.5.1 §4.6
 # (contract redeploy + VK install).
+#
+# Shebang note: bash (not /bin/sh) so we can rely on `set -o pipefail`
+# without dash-incompatibility worries. The deploy pipeline at the
+# bottom captures `stellar contract deploy | tr -d '\n'` and would
+# silently absorb `stellar`'s exit code under plain POSIX sh — see
+# PR #148 review chunk 3 #2.
+#
+# Alias state note: this script registers `--alias $ALIAS` (default
+# `sep-democracy-testnet`) inside CONFIG_DIR. When PERSIST_IDENTITY=1
+# the alias survives between runs in $HOME/.config/stellar; iterating
+# locally with the same alias may collide with stellar's prior-deploy
+# bookkeeping. Override ALIAS or set PERSIST_IDENTITY=0 (default) for
+# ephemeral runs.
 #
 # Scope of this script (PR landing the contract):
 #   * Build sep_democracy_contract.wasm
@@ -81,6 +94,7 @@ require_cmd() {
 
 require_cmd cargo
 require_cmd stellar
+require_cmd jq
 
 echo "==> Building Democracy Soroban contract"
 mkdir -p "$ARTIFACT_DIR"
@@ -98,14 +112,44 @@ if [ ! -d "$FIXTURE_DIR" ]; then
     echo "FIXTURE_DIR=$FIXTURE_DIR does not exist; supply v2 democracy dev VKs (design §4.6)" >&2
     exit 1
 fi
-for f in vk-membership-small.json vk-membership-medium.json vk-membership-large.json \
-         vk-update-small.json vk-update-medium.json vk-update-large.json; do
+# Validate IC-point counts up front: membership=3, update=7. If a
+# v1-shaped (4-IC-point) `vk-update-*.json` slips in, deploy succeeds
+# at first but the constructor's validate_vk_points returns a contract
+# error; surfacing the mismatch with the actual filename is much more
+# debuggable. Per PR #148 review chunk 3 #1.
+expect_ic_count() {
+    expected="$1"
+    file="$2"
+    actual="$(jq '.ic | length' "$file" 2>/dev/null || echo "")"
+    if [ -z "$actual" ]; then
+        echo "  unable to parse IC array from $file (jq returned empty)" >&2
+        exit 1
+    fi
+    if [ "$actual" != "$expected" ]; then
+        echo "VK shape mismatch: $file has $actual IC points, expected $expected" >&2
+        echo "  membership VKs need 3 IC points (commitment, epoch + base)" >&2
+        echo "  update VKs need 7 IC points (5 wire scalars + threshold + base)" >&2
+        echo "  v1-democracy-shaped files have 4 IC points and will be rejected by the contract" >&2
+        exit 1
+    fi
+}
+for f in vk-membership-small.json vk-membership-medium.json vk-membership-large.json; do
     if [ ! -f "$FIXTURE_DIR/$f" ]; then
         echo "missing $FIXTURE_DIR/$f" >&2
         echo "  Phase A's fixture generator hasn't shipped yet. Until then, supply the v2 dev VKs manually" >&2
         echo "  per design §4.6 (contract redeploy + VK install) and §10.1 Q1/Q2 (Phase-A blockers)." >&2
         exit 1
     fi
+    expect_ic_count 3 "$FIXTURE_DIR/$f"
+done
+for f in vk-update-small.json vk-update-medium.json vk-update-large.json; do
+    if [ ! -f "$FIXTURE_DIR/$f" ]; then
+        echo "missing $FIXTURE_DIR/$f" >&2
+        echo "  Phase A's fixture generator hasn't shipped yet. Until then, supply the v2 dev VKs manually" >&2
+        echo "  per design §4.6 (contract redeploy + VK install) and §10.1 Q1/Q2 (Phase-A blockers)." >&2
+        exit 1
+    fi
+    expect_ic_count 7 "$FIXTURE_DIR/$f"
 done
 
 if [ "$PERSIST_IDENTITY" = "1" ] && stellar keys public-key "$IDENTITY" --config-dir "$CONFIG_DIR" >/dev/null 2>&1; then
@@ -119,17 +163,31 @@ else
 fi
 
 DEPLOYER_ADDRESS="$(stellar keys public-key "$IDENTITY" --config-dir "$CONFIG_DIR" | tr -d '\n')"
+if [ -z "$DEPLOYER_ADDRESS" ]; then
+    echo "failed to resolve deployer public key for identity '$IDENTITY' in $CONFIG_DIR" >&2
+    exit 1
+fi
 
 echo "==> Funding deployer via Friendbot-backed testnet funding"
 if ! stellar keys fund "$IDENTITY" --config-dir "$CONFIG_DIR" --network "$NETWORK" >/dev/null 2>&1; then
     if [ "$PERSIST_IDENTITY" = "1" ]; then
-        echo "    (fund skipped — $IDENTITY likely already funded; continuing)"
+        # Persistent identity: most likely already funded, but if Friendbot
+        # is throttled and the key is also under-funded, the deploy below
+        # will fail with a confusing 'insufficient balance' or auth error.
+        # Operators who hit that should retry after a Friendbot cooldown.
+        echo "    (fund skipped — $IDENTITY likely already funded; if deploy fails on balance, retry after Friendbot cooldown)"
     else
         stellar keys fund "$IDENTITY" --config-dir "$CONFIG_DIR" --network "$NETWORK" >/dev/null
     fi
 fi
 
 echo "==> Deploying contract to $NETWORK with constructor args (atomic deploy+init)"
+# Constructor arg names below (--admin, --vk-small-file-path, …) come
+# from `SepDemocracyContract::__constructor` parameter names in
+# contracts/sep-democracy/src/lib.rs. If that signature changes, this
+# block needs to track. The flag-style mapping is:
+#   `param_name: T`  →  `--param-name <value>`
+#   `*_file_path`    →  reads the file off disk into the contract type
 CONTRACT_ID="$(
     stellar contract deploy \
         --config-dir "$CONFIG_DIR" \

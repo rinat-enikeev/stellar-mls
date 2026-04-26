@@ -27,7 +27,7 @@
       { "name": "InvalidPoint", "code": 26 },
       { "name": "GroupStillActive", "code": 27 },
       { "name": "InvalidThreshold", "code": 28, "note": "create_oligarchy_group rejects admin_threshold_numerator < 1 || > 100; per design v0.1.4 §4.7.6" },
-      { "name": "InvalidInitialMembership", "code": 30, "note": "reserved for the in-circuit floor `popcount(member_bitmap_initial) >= 1 && popcount(admin_bitmap_initial) >= 1` per §4.8. Not contract-enforced (the contract has no Poseidon host); the create proof's circuit binds bitmaps to roots and rejects bogus initial states. Documented for ABI discoverability so cross-platform clients know this code is reserved." }
+      { "name": "InvalidInitialMembership", "code": 30, "note": "Reserved slot in the error number-space for symmetry with the prover-side `BelowMinMember` / `BelowMinAdmin` errors per design §4.8. The contract does NOT surface this code: circuit-level rejections from in-circuit popcount floors collapse to `InvalidProof=7` at the contract boundary (the contract has no Poseidon host and cannot recompute floors itself). Reserved purely as a placeholder so a future revision that promotes the floor check to contract-side enforcement (e.g., if the design grows a separate `member_count_initial` / `admin_count_initial` wire field) has a stable error code waiting." }
     ],
     "dropped_from_sep_xxxx": [
       { "name": "UnknownVkKind", "code": 16, "reason": "VkKind is exhaustively matched in update_vk; the variant was unreachable. Same elision as sep-democracy." },

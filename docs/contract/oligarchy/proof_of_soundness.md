@@ -34,7 +34,7 @@ Three actors interact with the contract:
 The contract takes the following as oracles. Soundness arguments below are conditional on these:
 
 1. **Soroban BLS host functions** (`env.crypto().bls12_381()`) — `g1_add`, `g1_msm`, `pairing_check`, `G{1,2}Affine::is_in_subgroup`, `Fr::from_bytes`, `Fr::to_bytes`, `Fr::from_u256`, `U256::from_be_bytes` — implement the BLS12-381 group operations correctly. (Stellar SEP-0046 / soroban-sdk 25.3.0.)
-2. **Groth16 verifier formula** as implemented in `verify_membership_proof` (`lib.rs:944-989`), `verify_create_proof` (`lib.rs:1000-1075`), and `verify_update_proof` (`lib.rs:1080-1170`) — `e(-π_A, π_B) · e(α, β) · e(vk_x, γ) · e(π_C, δ) = 1_GT` is sound under the q-PKE / generic-group assumption used by Groth16, given a trusted setup.
+2. **Groth16 verifier formula** as implemented in `verify_membership_proof` (`lib.rs:1088-1145`), `verify_create_proof` (`lib.rs:1147-1230`), and `verify_update_proof` (`lib.rs:1232-1326`) — `e(-π_A, π_B) · e(α, β) · e(vk_x, γ) · e(π_C, δ) = 1_GT` is sound under the q-PKE / generic-group assumption used by Groth16, given a trusted setup.
 3. **Poseidon collision-resistance / preimage-resistance** is used by the *prover* (off-chain) to compute `commitment` and `occupancy_commitment`. The contract is value-agnostic to Poseidon — it sees only 32-byte field elements. This proof does not cover prover-side Poseidon misuse.
 4. **`env.crypto().sha256`** is collision-resistant over short inputs (used for the proof-replay nullifier).
 5. **The admin's installed VKs correspond to a real ceremony / dev-keyset that fixes the circuit constraint system.** A malicious admin who installs a VK with a known toxic-waste secret can forge proofs; this is the ceremony threat model documented in design §6 Phase E. In v0.1.4 the surface is larger than Democracy because the contract holds 9 VKs (3 per tier × 3 families); each is a separate ceremony output.
@@ -49,16 +49,16 @@ The contract enforces the following invariants. Each is checked at every state-c
 ### 3.1 State-binding invariants
 
 **SI-1: `current.commitment` is bound by a Groth16 proof against the create VK at create time and against the update VK at every subsequent epoch.**
-Established at `create_oligarchy_group` (`lib.rs:570`) — a successful create verifies the verbose-binding proof relating `(commitment, 0, occupancy_commitment, member_root, admin_root, salt_initial)` under the create VK at `member_tier`. Re-established at every `update_commitment` (`lib.rs:660`) — a successful update verifies a proof relating `c_old → c_new` under the v0.1.4 oligarchy update VK, transitively binding `c_new` to the chain of all prior epochs' two-tree state.
+Established at `create_oligarchy_group` (`lib.rs:627`) — a successful create verifies the verbose-binding proof relating `(commitment, 0, occupancy_commitment, member_root, admin_root, salt_initial)` under the create VK at `member_tier`. Re-established at every `update_commitment` (`lib.rs:721`) — a successful update verifies a proof relating `c_old → c_new` under the v0.1.4 oligarchy update VK, transitively binding `c_new` to the chain of all prior epochs' two-tree state.
 
 **SI-2: `c_old` and `epoch_old` on the wire equal `current.commitment` and `current.epoch` at the moment of `update_commitment`.**
-Enforced at `lib.rs:643-648`. A wire payload that doesn't bind to current state is rejected with `PublicInputsMismatch` before the proof is even loaded — no race-condition window.
+Enforced at `lib.rs:704-709`. A wire payload that doesn't bind to current state is rejected with `PublicInputsMismatch` before the proof is even loaded — no race-condition window.
 
 **SI-3: `occupancy_commitment_old` on the wire equals `current.occupancy_commitment`.**
-Same guard (`lib.rs:645`). Pins the salted combined-bitmap-derived value to chain state, preventing a relayer from advancing to an arbitrary new commitment by routing the proof through a different prior state.
+Same guard (`lib.rs:706`). Pins the salted combined-bitmap-derived value to chain state, preventing a relayer from advancing to an arbitrary new commitment by routing the proof through a different prior state.
 
 **SI-4: `admin_threshold_numerator` is fixed at `create_oligarchy_group` and never mutated.**
-Enforced by `lib.rs:684` — the new entry inherits `current.admin_threshold_numerator`. Verified at `update_commitment` by reading `current.admin_threshold_numerator` from storage (`lib.rs:668`) rather than from the wire. Test pin: `test_update_commitment_admin_threshold_pinned_to_storage` — code-level inspection that builds `IC[6] · 50` and `IC[6] · 67` via the BLS host directly and asserts the resulting G1 shifts differ. This proves the threshold scalar is being absorbed into the MSM (a regression that drops the threshold from the verifier's `vk_x` would make the shifts collide).
+Enforced by `lib.rs:748` — the new entry inherits `current.admin_threshold_numerator`. Verified at `update_commitment` by reading `current.admin_threshold_numerator` from storage (`lib.rs:733`) rather than from the wire. Test pin: `test_update_commitment_admin_threshold_pinned_to_storage` — code-level inspection that builds `IC[6] · 50` and `IC[6] · 67` via the BLS host directly and asserts the resulting G1 shifts differ. This proves the threshold scalar is being absorbed into the MSM (a regression that drops the threshold from the verifier's `vk_x` would make the shifts collide).
 
 **SI-5 (Oligarchy-specific): The verbose Create proof binds `occupancy_commitment_initial` to the actual member + admin bitmaps.**
 Unlike sep-democracy (where the create proof's only public inputs are commitment + epoch and occupancy_commitment_initial is supplied by the wire and stored without verification), sep-oligarchy's Create VK has 7 IC points and the proof binds `occupancy_commitment` as IC[3]. A creator cannot supply a bogus value: the circuit recomputes the salted combined commitment from witnessed bitmaps and salt_occ_initial, and the proof would fail. **Closes the create-time self-DoS** that sep-democracy still carries. Test pin: `test_create_oligarchy_group_rejects_non_canonical_occupancy_commitment` (canonical-Fr gate runs before verification; but the verbose binding ensures verification itself catches semantic mismatches).
@@ -66,34 +66,34 @@ Unlike sep-democracy (where the create proof's only public inputs are commitment
 ### 3.2 Cryptographic invariants
 
 **SI-6: All curve points stored in any of the 9 VKs are subgroup-valid.**
-`validate_vk_points` (`lib.rs:899-918`) runs `is_in_subgroup` on `α_g1`, `β_g2`, `γ_g2`, `δ_g2`, and every `IC[i]`. Called at `__constructor` for all 9 VKs (`lib.rs:359-368`) and at `update_vk` (`lib.rs:413`). A small-subgroup VK is rejected with `Error::InvalidPoint`.
+`validate_vk_points` (`lib.rs:1040-1059`) runs `is_in_subgroup` on `α_g1`, `β_g2`, `γ_g2`, `δ_g2`, and every `IC[i]`. Called at `__constructor` for all 9 VKs (`lib.rs:412-420`) and at `update_vk` (`lib.rs:492`). A small-subgroup VK is rejected with `Error::InvalidPoint`.
 
 **SI-7: All proof points are subgroup-valid.**
-`validate_proof_points` (`lib.rs:920-924`) runs `is_in_subgroup` on `proof.a`, `proof.b`, `proof.c`. Called at the start of `verify_membership_proof` (`lib.rs:954-956`), `verify_create_proof` (`lib.rs:1014-1016`), and `verify_update_proof` (`lib.rs:1095-1097`). A small-subgroup proof returns `false` (→ `Error::InvalidProof` upstream).
+`validate_proof_points` (`lib.rs:1061-1065`) runs `is_in_subgroup` on `proof.a`, `proof.b`, `proof.c`. Called at the start of `verify_membership_proof` (`lib.rs:1098-1100`), `verify_create_proof` (`lib.rs:1161-1163`), and `verify_update_proof` (`lib.rs:1246-1248`). A small-subgroup proof returns `false` (→ `Error::InvalidProof` upstream).
 
 **SI-8: All field-element commitments use canonical Fr encoding.**
-`is_canonical_fr` (`lib.rs:926-930`) round-trips `Fr::from_bytes ∘ Fr::to_bytes` and rejects any 32-byte value whose `Fr::from_bytes` reduces. Called at `create_oligarchy_group` for all five wire-supplied scalars (`lib.rs:541-558`) and at `update_commitment` for `c_new` and `occupancy_commitment_new` (`lib.rs:651-656`), and inside the verifier helpers as defense-in-depth (`lib.rs:957`, `:1017-1023`, `:1098-1110`). Non-canonical inputs are rejected with `InvalidCommitmentEncoding`. Closes the malleability hole where `Fr` reduction can produce two distinct 32-byte preimages of the same field element.
+`is_canonical_fr` (`lib.rs:1067-1071`) round-trips `Fr::from_bytes ∘ Fr::to_bytes` and rejects any 32-byte value whose `Fr::from_bytes` reduces. Called at `create_oligarchy_group` for all five wire-supplied scalars (`lib.rs:599-613`) and at `update_commitment` for `c_new` and `occupancy_commitment_new` (`lib.rs:711-716`), and inside the verifier helpers as defense-in-depth (`lib.rs:1101`, `:1164-1170`, `:1249-1262`). Non-canonical inputs are rejected with `InvalidCommitmentEncoding`. Closes the malleability hole where `Fr` reduction can produce two distinct 32-byte preimages of the same field element.
 
 **SI-9: VK IC-vector length matches each circuit's public-input arity.**
-`MEMBERSHIP_IC_POINTS = 3`, `CREATE_IC_POINTS = 7`, `UPDATE_IC_POINTS = 7`. Enforced at `__constructor` (`lib.rs:339-358`) and `update_vk` (`lib.rs:406-412`) and re-asserted inside the verifiers (`lib.rs:951`, `:1011`, `:1092`). A wrong-arity VK can never be installed; even if storage were corrupted, the verifier guards it.
+`MEMBERSHIP_IC_POINTS = 3`, `CREATE_IC_POINTS = 7`, `UPDATE_IC_POINTS = 7`. Enforced at `__constructor` (`lib.rs:393-410`) and `update_vk` (`lib.rs:485-490`) and re-asserted inside the verifiers (`lib.rs:1095`, `:1158`, `:1243`). A wrong-arity VK can never be installed; even if storage were corrupted, the verifier guards it.
 
 ### 3.3 Replay protection
 
 **SI-10: A proof's bytes (`a || b || c`) cannot be reused at any state-changing entrypoint within `LEDGER_BUMP` (~30 days).**
-`proof_hash` (`lib.rs:835-841`) = `sha256(a.to_array() || b.to_array() || c.to_array())`. `check_proof_replay` (`lib.rs:843-853`) is called BEFORE proof verification at `create_oligarchy_group` (`lib.rs:564`), `update_commitment` (`lib.rs:658`), and `deactivate_group` (`lib.rs:738`). `record_proof` (`lib.rs:855-863`) is called only after the proof verifies, so a failed entrypoint does not consume the nullifier (transactional revert).
+`proof_hash` (`lib.rs:984-990`) = `sha256(a.to_array() || b.to_array() || c.to_array())`. `check_proof_replay` (`lib.rs:992-1002`) is called BEFORE proof verification at `create_oligarchy_group` (`lib.rs:624`), `update_commitment` (`lib.rs:718`), and `deactivate_group` (`lib.rs:825`). `record_proof` (`lib.rs:1004-1012`) is called only after the proof verifies, so a failed entrypoint does not consume the nullifier (transactional revert).
 
 The scope is **contract-global** — not per-group. Two distinct groups cannot accept byte-identical proofs. Because Groth16 proofs are randomized (the prover samples fresh `r, s` per proof), two honest provers producing proofs at the same time will produce distinct bytes; the nullifier only blocks a literal byte-replay attack.
 
 ### 3.4 Authorization
 
 **SI-11: Admin-gated entrypoints require Soroban auth from the stored admin address.**
-`update_vk` (`lib.rs:389-419`) and `set_restricted_mode` (`lib.rs:423-435`) both load `Admin` from instance storage and call `admin.require_auth()`. Without a matching auth entry, Soroban panics with "Unauthorized" before any state mutation. Test pin: `test_update_vk_requires_auth`.
+`update_vk` (`lib.rs:467-499`) and `set_restricted_mode` (`lib.rs:502-514`) both load `Admin` from instance storage and call `admin.require_auth()`. Without a matching auth entry, Soroban panics with "Unauthorized" before any state mutation. Test pin: `test_update_vk_requires_auth`.
 
 **SI-12: `create_oligarchy_group` requires `caller.require_auth()` and, in restricted mode, `caller == admin`.**
-The `caller.require_auth()` call (`lib.rs:506`) prevents one address from creating a group on behalf of another. In restricted mode (admin-toggled), `caller != admin` returns `AdminOnly` (`lib.rs:519-521`). Test pin: `test_create_oligarchy_group_restricted_mode_rejects_non_admin`.
+The `caller.require_auth()` call (`lib.rs:563`) prevents one address from creating a group on behalf of another. In restricted mode (admin-toggled), `caller != admin` returns `AdminOnly` (`lib.rs:573-577`). Test pin: `test_create_oligarchy_group_restricted_mode_rejects_non_admin`.
 
 **SI-13: `update_commitment`, `verify_membership`, `deactivate_group` do NOT require Soroban-level auth.**
-The proof IS the authorization. Documented at `lib.rs:632-637`. Specifically:
+The proof IS the authorization. Documented at `lib.rs:683-687`. Specifically:
 - `update_commitment` requires a proof with K admin signers satisfying the admin-quorum threshold (in-circuit constraint per design §4.7.6).
 - `verify_membership` and `deactivate_group` require a member-tree membership proof (chat-capacity).
 
@@ -102,27 +102,27 @@ This is **not** a soundness gap: an attacker without a valid proof cannot constr
 ### 3.5 State-machine invariants
 
 **SI-14: Epoch is monotonic and increments by exactly 1 per successful `update_commitment`.**
-Enforced at `lib.rs:641` (`current.epoch.checked_add(1)`) and `lib.rs:680` (`new_epoch` written to storage). The `checked_add` returns `InvalidEpoch` if `current.epoch == u64::MAX` — unreachable in practice but defensively gated. SI-2 chains the epoch forward.
+Enforced at `lib.rs:702` (`current.epoch.checked_add(1)`) and `lib.rs:742` (`new_epoch` written to storage). The `checked_add` returns `InvalidEpoch` if `current.epoch == u64::MAX` — unreachable in practice but defensively gated. SI-2 chains the epoch forward.
 
 **SI-15: A group transitions `active=true → false` exactly once and irreversibly.**
-`create_oligarchy_group` writes `active: true` (`lib.rs:580`). `update_commitment` preserves `active: true` on the new entry (`lib.rs:683`). `deactivate_group` rejects if `current.active == false` (`lib.rs:725-727`) and sets `active: false` (`lib.rs:752`). No entrypoint flips `active` from `false` back to `true`.
+`create_oligarchy_group` writes `active: true` (`lib.rs:649`). `update_commitment` preserves `active: true` on the new entry (`lib.rs:745`). `deactivate_group` rejects if `current.active == false` (`lib.rs:817-819`) and sets `active: false` (`lib.rs:840`). No entrypoint flips `active` from `false` back to `true`.
 
 **SI-16: `tier` is fixed at create and never mutated.**
-`update_commitment`'s new entry inherits `tier: current.tier` (`lib.rs:682`); `deactivate_group`'s deactivated entry uses `..current.clone()` which preserves `tier`. No entrypoint takes `tier` as a wire input post-create.
+`update_commitment`'s new entry inherits `tier: current.tier` (`lib.rs:744`); `deactivate_group`'s deactivated entry uses `..current.clone()` which preserves `tier`. No entrypoint takes `tier` as a wire input post-create.
 
 **SI-17: `GroupCount(member_tier)` is bounded by `MAX_GROUPS_PER_TIER = 10000`.**
-`create_oligarchy_group` (`lib.rs:560-565`) reads the count and rejects with `TierGroupLimitReached` if `count >= MAX_GROUPS_PER_TIER`. `deactivate_group` (`lib.rs:760-769`) decrements with an underflow guard. Test pin: `test_create_oligarchy_group_enforces_tier_group_limit`.
+`create_oligarchy_group` (`lib.rs:616-621`) reads the count and rejects with `TierGroupLimitReached` if `count >= MAX_GROUPS_PER_TIER`. `deactivate_group` (`lib.rs:850-859`) decrements with an underflow guard. Test pin: `test_create_oligarchy_group_enforces_tier_group_limit`.
 
 **SI-18: `__constructor` is callable exactly once.**
-`do_initialize` (`lib.rs:331-333`) returns `AlreadyInitialized` if `DataKey::Admin` is already set. Called at deploy time by Soroban; cannot be re-invoked. Same idempotency pattern as sep-democracy (with no separate `initialize` entrypoint).
+`do_initialize` (`lib.rs:385-387`) returns `AlreadyInitialized` if `DataKey::Admin` is already set. Called at deploy time by Soroban; cannot be re-invoked. Same idempotency pattern as sep-democracy (with no separate `initialize` entrypoint).
 
 ### 3.6 History invariants
 
 **SI-19: History is a rolling FIFO window of at most `HISTORY_WINDOW = 64` entries.**
-`archive_entry` (`lib.rs:865-884`) appends and prunes from the front. Test pin: `test_archive_entry_appends_and_prunes`. Entries pruned from contract storage are still present in contract events (`CommitmentUpdated`).
+`archive_entry` (`lib.rs:1014-1033`) appends and prunes from the front. Test pin: `test_archive_entry_appends_and_prunes`. Entries pruned from contract storage are still present in contract events (`CommitmentUpdated`).
 
 **SI-20: History captures the prior active state, not the post-update state.**
-`update_commitment` calls `archive_entry(env, &group_id, &current)` BEFORE writing the new entry (`lib.rs:678-686`). `deactivate_group` likewise archives `&current` before flipping inactive (`lib.rs:747-753`). The "next" state is in `Group(group_id)`; "previous" states are in `History(group_id)`.
+`update_commitment` calls `archive_entry(env, &group_id, &current)` BEFORE writing the new entry (`lib.rs:738-749`). `deactivate_group` likewise archives `&current` before flipping inactive (`lib.rs:838-846`). The "next" state is in `Group(group_id)`; "previous" states are in `History(group_id)`.
 
 ---
 
@@ -200,7 +200,7 @@ Read-only. No state mutation. Cannot violate any invariant.
 ## 5. Out-of-scope (acknowledged, not closed by this contract)
 
 - **Pre-inclusion mempool replay.** A relayer observing a not-yet-included transaction can submit the same proof bytes first. The circuit-level operation-tag binding (design §10) would close this; the contract-level nullifier doesn't.
-- **Admin-key compromise.** A compromised admin can rotate any of the 9 VKs to a malicious circuit, accept fake proofs, and effectively forge group state. Mitigated by ceremony for production (design §6 Phase E).
+- **Admin-key compromise.** A compromised admin can rotate any of the 9 VKs to a malicious circuit, accept fake proofs, and effectively forge group state. Mitigated by ceremony for production (design §6 Phase E). Note (per PR #149 review releaseng chunk 1 #1): there is **no admin-rotation entrypoint** — `update_vk` requires `admin.require_auth()` from the SAME admin that was set at `__constructor`. If the admin key is lost or compromised, VK rotation becomes impossible until a fresh contract is redeployed at a new address (and existing groups are abandoned). This is a deliberate parity with sep-democracy's testnet custody model; for production, an admin-rotation entrypoint is a §11 follow-up gated on the ceremony's key-management story.
 - **Soroban host-side storage tampering.** If the host runtime is compromised, all contract state is suspect. Out of any contract-level analysis.
 - **Resource exhaustion.** A determined attacker submitting many failed proofs consumes contract budget on each call. Soroban's per-tx fee model bounds this economically.
 - **`salt_occ` loss bricks future updates** (design §9). Salt is private and distributed only via `SEPSaltResponse.occupancySalt`. If a group loses its current `salt_occ`, no member can produce the next valid update proof. Mitigated by Phase D operability requirements (clients replicate salt to all members on every broadcast). The `deactivate_group` safety valve still works since membership proofs don't require the salt.

@@ -139,17 +139,20 @@ Verbatim from sep-democracy:
 
 Mirrors sep-democracy's pattern: `setup_env()` helper, `mock_*` constructors, `inject_group`, `#[contracttest]` snapshots. The `tests_to_implement` JSON section is the canonical list.
 
-### C.1 Test count: 48
+### C.1 Test count: 51 (post-PR-#149-review-chunk-2 expansion)
 
 | Category | Test count |
 |---|---|
 | Initialization | 4 (initialize + 3 IC-arity rejection) |
 | `create_oligarchy_group` | 16 (happy path + 15 rejection / threshold / canonical-Fr / restricted-mode / tier-cap) |
-| `update_commitment` | 13 |
+| `update_commitment` | 11 (3 over-claiming "v2 threshold" tests collapsed into 1 IC[6]-inspection per chunk-2 review) |
 | `verify_membership` | 4 |
 | `deactivate_group` | 3 |
-| `update_vk` | 4 (requires_auth + 3 rotation paths) |
-| Queries | 4 |
+| `update_vk` | 6 (requires_auth + 3 rotation paths + invalid-tier + create-vk-arity-mismatch) |
+| Queries | 6 (get_commitment {happy, GroupNotFound} + get_history {happy, GroupNotFound} + archive_entry + bump_group_ttl {happy, GroupNotFound}) |
+| ABI pin | 1 (`test_vectors_consistency`) |
+
+Note: `test_archive_entry_appends_and_prunes` is folded into the Queries row (it exercises the History write path that `update_commitment` and `deactivate_group` both rely on). Total: 50 named entries in `tests_to_implement.tests` + `test_vectors_consistency` = 51 inline `#[test] fn`s.
 
 ### C.2 Mock proof strategy
 

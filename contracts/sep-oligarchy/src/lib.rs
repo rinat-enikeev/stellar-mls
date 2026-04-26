@@ -177,6 +177,18 @@ pub struct GroupDeactivated {
     pub timestamp: u64,
 }
 
+/// Emitted when admin toggles restricted mode. Lets chain observers
+/// detect mode flips without inspecting instance storage. Per PR #149
+/// review (releaseng chunk 1 note #2) — audit transparency.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RestrictedModeChanged {
+    #[topic]
+    pub admin: Address,
+    pub restricted: bool,
+    pub timestamp: u64,
+}
+
 // ================================================================
 // Types
 // ================================================================
@@ -498,7 +510,8 @@ impl SepOligarchyContract {
     }
 
     /// Admin toggles restricted mode. When `restricted == true`,
-    /// only the admin may call `create_oligarchy_group`.
+    /// only the admin may call `create_oligarchy_group`. Emits
+    /// `RestrictedModeChanged` for audit transparency.
     pub fn set_restricted_mode(env: Env, restricted: bool) -> Result<(), Error> {
         Self::require_initialized(&env)?;
         let admin: Address = env
@@ -510,6 +523,14 @@ impl SepOligarchyContract {
         env.storage()
             .instance()
             .set(&DataKey::RestrictedMode, &restricted);
+
+        let timestamp = env.ledger().timestamp();
+        RestrictedModeChanged {
+            admin,
+            restricted,
+            timestamp,
+        }
+        .publish(&env);
         Ok(())
     }
 

@@ -3,7 +3,8 @@
 **Date:** 2026-04-26
 **Status:** Draft (Proposal — pre-implementation)
 **Author:** Onym contributors
-**Version:** 0.1.1 — addresses @gramyzer REQUEST_CHANGES on v0.1: §4.4 admin_root claim corrected (Poseidon is one-way; admin_root is stored separately, not derived from c_old; wire payload extended to 9 scalars to carry admin_root_old/new explicitly); §4.2 single-signer cutoff generalized for non-default thresholds (parallel to Democracy v0.5.1 fix); §7.1 constraint reference renumbered to #12; §6 Phase A LOC arithmetic corrected to ~1190; §4.8 zero-member create disallowed (would brick on first update); §10.2 Q6 self-removal workaround corrected to four steps (was three, but skipped a step that violated the member floor); §4.7.7 "Defeats:" renamed to "Threat-model limitation"
+**Version:** 0.1.2 — addresses @gramyzer REQUEST_CHANGES on v0.1.1 plus self-review: stale "7-scalar" references in §6 D1, §7.3, §7.5 steps 4 and 8 corrected to 9-scalar (the v0.1.1 wire-payload bump was missed in those four spots — and §7.5 step 9's "identical scalar count" privacy assertion depends on the count being right); §7.1 gains two tests for the new `admin_root_old/new` wire fields (`prove_oligarchy_v2_admin_root_old_mismatch_rejected`, `prove_oligarchy_v2_admin_root_bundling_rejected`); §7.3 additionally asserts `admin_root_old/new` are forwarded to stellar CLI without re-shaping; §4.6 D1 storage list clarifies `admin_root` is preserved in schema shape (carried over from abandoned contract design), not state; §4.4 deduplicated — the redundant "Updated:" repeat of the same `case oligarchy(…)` definition is removed; §4.7.7 clarifies "192-byte proof" refers to Groth16 proof bytes, not public-input wire scalars
+**v0.1.1 — addresses @gramyzer REQUEST_CHANGES on v0.1:** §4.4 admin_root claim corrected (Poseidon is one-way; admin_root is stored separately, not derived from c_old; wire payload extended to 9 scalars to carry admin_root_old/new explicitly); §4.2 single-signer cutoff generalized for non-default thresholds (parallel to Democracy v0.5.1 fix); §7.1 constraint reference renumbered to #12; §6 Phase A LOC arithmetic corrected to ~1190; §4.8 zero-member create disallowed (would brick on first update); §10.2 Q6 self-removal workaround corrected to four steps (was three, but skipped a step that violated the member floor); §4.7.7 "Defeats:" renamed to "Threat-model limitation"
 **Supersedes:** (none — first iteration)
 **Related:**
 - [`democracy-update-testnet-design.md`](democracy-update-testnet-design.md) — sibling design; many mechanisms (slot-index convention, occupancy commitment, polymorphic dispatch, testnet gating, ceremony) are inherited verbatim and cross-referenced rather than duplicated below.
@@ -188,18 +189,9 @@ public enum UpdateCommitmentPublicInputs: Codable, Equatable, Sendable {
 }
 ```
 
-Note on `admin_root` storage: the contract continues to store `admin_root` as a separate field (preserved across the v2 redeploy so the existing `get_admin_root` getter keeps working as a read-only query path). **`admin_root` is NOT a derivative of `c_old`** — Poseidon is one-way, so the bundled commitment doesn't recover the unbundled root. Instead, `admin_root` is stored redundantly alongside `commitment` (= `c_old`); both must be updated in lockstep on every successful `update_commitment`.
+Note on `admin_root` storage: the contract stores `admin_root` as a separate field on the redeployed contract (the schema shape is carried over from the abandoned-contract design so the existing `get_admin_root` getter keeps working as a read-only query path on the new address). **`admin_root` is NOT a derivative of `c_old`** — Poseidon is one-way, so the bundled commitment doesn't recover the unbundled root. Instead, `admin_root` is stored redundantly alongside `commitment` (= `c_old`); both must be updated in lockstep on every successful `update_commitment`.
 
-To make the in-lockstep update verifiable, the wire payload carries `admin_root_old` and `admin_root_new` as **separate fields** (not bundled into `c_old`/`c_new`). The contract on receive: (1) checks `admin_root_old == current.admin_root` (same kind of state-binding as `c_old == current.commitment`), (2) supplies both `admin_root_old` and `admin_root_new` as Groth16 public inputs to the verifier — the circuit binds them into `c_old`/`c_new` via Poseidon and verifies the bundling matches the wire's `c_old`/`c_new` claims, (3) on success writes both `admin_root = admin_root_new` and `commitment = c_new` to storage atomically. The wire-format `oligarchy` variant therefore carries 9 scalars (the 7 from earlier in this section plus `admin_root_old`, `admin_root_new`), not 7. Updated:
-
-```swift
-case oligarchy(
-    cOld: Data, epochOld: UInt64, cNew: Data,
-    memberOccupancyCommitmentOld: Data, memberOccupancyCommitmentNew: Data,
-    adminOccupancyCommitmentOld: Data, adminOccupancyCommitmentNew: Data,
-    adminRootOld: Data, adminRootNew: Data
-)
-```
+To make the in-lockstep update verifiable, the wire payload carries `admin_root_old` and `admin_root_new` as **separate fields** (not bundled into `c_old`/`c_new`) — the two trailing scalars in the 9-scalar enum case shown above. The contract on receive: (1) checks `admin_root_old == current.admin_root` (same kind of state-binding as `c_old == current.commitment`), (2) supplies both `admin_root_old` and `admin_root_new` as Groth16 public inputs to the verifier — the circuit binds them into `c_old`/`c_new` via Poseidon and verifies the bundling matches the wire's `c_old`/`c_new` claims, (3) on success writes both `admin_root = admin_root_new` and `commitment = c_new` to storage atomically.
 
 §3.4 entrypoint-selector residual: Oligarchy is now 9 scalars on the wire (vs. Anarchy's 3 and Democracy's 5). The same "uniform-shape padding" structural fix that's deferred for Democracy/Anarchy applies; Oligarchy is the most-distinguishable variant on payload size. §9 risks track this. §4.7.3 R1CS estimate gets a small bump for the additional public-input range checks (~30 constraints; absorbed into the existing ~9060 estimate without changing the order-of-magnitude).
 
@@ -226,7 +218,7 @@ This design inherits [Democracy §4.6](democracy-update-testnet-design.md#46-con
 
 `create_oligarchy_group_v2(group_id, member_root, member_occupancy_commitment, admin_root, admin_occupancy_commitment, member_tier, admin_threshold_numerator, …)`. Storage gains, per Oligarchy group:
 
-- `admin_root: BytesN<32>` — Poseidon root of the admin tree. (Existing field, preserved; computation now bundles into `commitment` per §4.7.2.)
+- `admin_root: BytesN<32>` — Poseidon root of the admin tree. **Preserved in schema shape** (carried over from the abandoned-contract design — the redeploy is a fresh address with no migrated state, so there's nothing to "preserve" in the storage-state sense). Computation now bundles into `commitment` per §4.7.2; on every `update_commitment`, `admin_root` is updated in lockstep with `commitment` from the wire's `admin_root_new` field (§4.4).
 - `admin_occupancy_commitment: BytesN<32>` — new field, parallel to `member_occupancy_commitment`.
 - `admin_threshold_numerator: u8` — new field, range `1..=100`. Validated at `create_oligarchy_group_v2`.
 - `admin_count: u8` — implicit from `popcount(admin_bitmap)` but cached for getter convenience. **Caveat**: caching `admin_count` on chain *as a separate readable field* would partially defeat the §3.5 hiding property — a chain observer reading the cached count gets exact admin-set size. So `admin_count` is NOT stored as a separate field; it's only computable in-circuit. Public getters for "is this group still alive" use `admin_occupancy_commitment ≠ commitment_to_empty_bitmap` instead.
@@ -342,7 +334,7 @@ There is **no separate** `member_threshold_numerator` for Oligarchy. Member chan
 Constraint #7 above lets `target_tree ∈ {0, 1}` be a private witness. Every Oligarchy update produces:
 
 - The same wire-format public-inputs payload (9 scalars: c_old, epoch_old, c_new, member_occ_old, member_occ_new, admin_occ_old, admin_occ_new, admin_root_old, admin_root_new).
-- The same proof byte length (192 bytes canonical Groth16).
+- The same proof byte length (192 bytes canonical Groth16). **Note**: this 192-byte figure refers to the Groth16 proof object itself (three group elements: `A` ∈ G1, `B` ∈ G2, `C` ∈ G1, totaling 48+96+48 bytes). It does *not* include the 9 public-input scalars carried alongside on the wire — those are separate ~32-byte fields per scalar. The §3.4 residual ("Oligarchy is the most-distinguishable variant on payload size — 9 vs 5 vs 3") is about the public-input wire scalar count, not the proof byte length; both are simultaneously true for distinct reasons.
 - The same on-chain operation (`update_commitment` polymorphic entrypoint, same selector).
 
 The only observable signals are the occupancy-commitment values themselves (which change per update) and the bundled `c_new` (which advances per epoch). A chain observer sees occupancy commitments updating but cannot distinguish:
@@ -479,7 +471,7 @@ Total: ~595 LOC.
 
 | Step | Files | LOC | Output |
 |---|---|---|---|
-| D1 | `relayer/src/handler.rs` Oligarchy variant in the public-inputs translation | ~30 | Polymorphic dispatch already handles the new variant — minor extension to recognize the 7-scalar payload. |
+| D1 | `relayer/src/handler.rs` Oligarchy variant in the public-inputs translation | ~30 | Polymorphic dispatch already handles the new variant — minor extension to recognize the 9-scalar payload (includes `admin_root_old`/`admin_root_new` per §4.4 lockstep-update). |
 | D2 | `swift-mls/.../ContractClient.swift` `updateCommitment` overload accepting Oligarchy variant | ~30 | |
 | D3 | `kotlin-mls/.../ContractClient.kt` parallel | ~30 | |
 | D4 | iOS `OnChainService.publishCommitmentUpdate` Oligarchy dispatch | ~180 | Branches on `group.groupType == .oligarchy`; assembles both bitmaps; chooses `target_tree` based on which roster changed; calls `generateOligarchyUpdateProofV2`; honors §4.3 Layer 2 fingerprint check. Slot-index assignment for both trees in `applyStateUpdate`. Rollback path extension for both bitmaps per §4.1.4. |
@@ -535,6 +527,8 @@ Inherits all of [Democracy §7](democracy-update-testnet-design.md#7-test-plan)'
 - `prove_oligarchy_v2_admin_tier_cap_exhaustion` — 33rd lifetime admin promotion attempt. Prover rejects (admin slot space exhausted; no never-used slot available).
 - `prove_oligarchy_v2_member_tombstone_collision` and `prove_oligarchy_v2_admin_tombstone_collision` — paired domain-tag-disabled / enabled regression tests for both trees independently. Same shape as Democracy's `prove_democracy_v2_domain_tags_block_tombstone_collision`.
 - `prove_oligarchy_v2_bundled_roots_consistency` — verifier recomputes `c_old` from `(root_member, root_admin, epoch_old, salt_old)` and confirms it matches the public-input value.
+- `prove_oligarchy_v2_admin_root_old_mismatch_rejected` — wire `admin_root_old` is set to a value other than `current.admin_root` (with `c_old` and other fields still bundling against the *real* `current.admin_root`). Contract-side check rejects with `Error::AdminRootMismatch` before reaching the verifier. Regression for the §4.4 lockstep-update state-binding.
+- `prove_oligarchy_v2_admin_root_bundling_rejected` — wire `admin_root_old`/`admin_root_new` claim values that don't match the `c_old`/`c_new` they're supposed to bundle into. The circuit's in-Poseidon binding (§4.7.2) detects the inconsistency and Groth16 verification fails. Soundness regression for "wire admin_root must equal the admin_root that was hashed into the commitment."
 
 ### 7.2 Cross-platform vectors
 
@@ -542,7 +536,7 @@ Inherits all of [Democracy §7](democracy-update-testnet-design.md#7-test-plan)'
 
 ### 7.3 Relayer integration
 
-Polymorphic `update_commitment` already accepts arbitrary `UpdateCommitmentPublicInputs` variants — Oligarchy adds one test asserting the relayer forwards a 7-scalar Oligarchy payload to stellar CLI without re-shaping it.
+Polymorphic `update_commitment` already accepts arbitrary `UpdateCommitmentPublicInputs` variants — Oligarchy adds one test asserting the relayer forwards a 9-scalar Oligarchy payload to stellar CLI without re-shaping it. The test additionally asserts `admin_root_old` and `admin_root_new` are passed through verbatim (these are the new fields the §4.4 lockstep-update guarantee depends on; truncation or reordering by the relayer would silently break the contract-side `admin_root_old == current.admin_root` check).
 
 ### 7.4 iOS / Android integration
 
@@ -562,11 +556,11 @@ Steps (member-add + admin-promote sequenced):
 1. iOS creates an Oligarchy group at medium tier with `admin_threshold_numerator = 50`. Verify on Soroban testnet that `current.group_type == 3`, `current.admin_threshold_numerator == 50`, `admin_root` is set, both occupancy commitments are set.
 2. iOS sends an invitation to Android.
 3. Android accepts. Android sends `SEPMemberJoined`.
-4. iOS as the only admin processes the SMJ, runs Oligarchy v2 path, polymorphic `update_commitment` with `target_tree=member` private witness. Verify relayer log shows `function=update_commitment` with 7-scalar Oligarchy variant payload, status 200.
+4. iOS as the only admin processes the SMJ, runs Oligarchy v2 path, polymorphic `update_commitment` with `target_tree=member` private witness. Verify relayer log shows `function=update_commitment` with 9-scalar Oligarchy variant payload, status 200.
 5. iOS local state advances: epoch 1, 2 members (slots 0, 1), 1 admin (slot 0).
 6. Android receives broadcast; persists its member-slot index = 1; sees admin set unchanged.
 7. iOS chat to Android works; Android chat to iOS works (both members, BLS auth passes).
-8. iOS as admin promotes Android: sends `SEPAdminPromoted`. iOS runs Oligarchy v2 path with `target_tree=admin`. Member tree unchanged; admin tree gains Android at admin-slot 1. Verify relayer log: same 7-scalar payload shape, no observable difference from step 4 except the occupancy-commitment values.
+8. iOS as admin promotes Android: sends `SEPAdminPromoted`. iOS runs Oligarchy v2 path with `target_tree=admin`. Member tree unchanged; admin tree gains Android at admin-slot 1. Verify relayer log: same 9-scalar payload shape, no observable difference from step 4 except the occupancy-commitment values and `admin_root_old`/`admin_root_new`.
 9. **Privacy verification**: read the contract storage entry for this group via Soroban testnet RPC. Assert no `admin_count` or `member_count` field is present. Compare the on-chain trace of the two `update_commitment` calls (steps 4 and 8); assert the call payloads have **identical scalar count and byte length**. A chain observer cannot distinguish "added a member" from "promoted an admin" from these calls alone.
 
 Failure-mode tests:

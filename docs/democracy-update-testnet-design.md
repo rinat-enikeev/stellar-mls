@@ -3,7 +3,7 @@
 **Date:** 2026-04-26
 **Status:** Draft (Proposal — pre-implementation)
 **Author:** Onym contributors
-**Version:** 0.4.1 — addresses PR #146 review feedback on v0.4 (table/duplicate fixes; LOC reconciled to ~2555; `_v2` test naming made consistent; old-contract abandonment claim tightened; Phase A1 rename spelled out)
+**Version:** 0.4.2 — addresses @releaseng review on v0.4 (Phase B LOC arithmetic reconciled to 420; B6 rebuild process clarified; §4.4 leaf-hash scope made normative; §3.4 payload-size signal acknowledged as residual; §9 acceptor-crash split into single-leg vs compound; §1 motivation framed as historical bug-of-record; `prove_democracy_v2_handles_remove` renamed to `_rejects_below_floor` for accuracy)
 **Supersedes:** (none — first iteration)
 **Related:**
 - [`group-governance-types-design.md`](group-governance-types-design.md) — the parent design that introduces `groupType ∈ {Anarchy, 1v1, Democracy, Oligarchy}`
@@ -29,6 +29,8 @@ match current.group_type {
 ```
 
 The Soroban contract surfaces this as `Error::UnknownGroupType` (#18). The relayer returns HTTP 502 with the diagnostic event, the chain publish is rejected, and the iOS code path at `clients/ios/StellarChat/StellarChat/StellarChatApp.swift:1027-1034` returns `chainRejected`. Local state is not advanced; subsequent chat events from the new member fail BLS sender authentication on the existing peer (the new member is not in the local `currentMembers` list), and chat is silently broken.
+
+This snapshot of the broken behavior is preserved here as the **historical bug-of-record** — the motivation that triggered the design. Phase C of §6 redeploys the contract with a polymorphic `update_commitment` (no `_democracy` arm exists) so the broken `match` arm above no longer runs against any post-Phase-C client. The old testnet contract `CC6N…RWWKE` retains the broken arm forever, but no Phase-D-or-later client points at it.
 
 The contract already exposes a Democracy-specific entrypoint:
 
@@ -111,7 +113,7 @@ Strict "no metadata" is impossible — Soroban itself carries some signals. The 
 | Epoch counter advances | Chain stores `current.epoch`, observable | None — intrinsic to "newest state wins" |
 | Tier (chosen at create time, fixed) | `create_group_v3` argument | Choose tier conservatively at create; tier upgrades are a separate concern (next row) |
 | Tier upgrades visible | Different VK / different storage layout | **Partial**: tombstone permanence (§4.1.2) means tier capacity is the **lifetime** join cap, so operators size for the 95th-percentile join count and tier upgrades become rare. Eliminating entirely requires a universal-circuit redesign — out of scope. |
-| Group type from per-call entrypoint selector | `update_commitment_democracy` selector visible in tx | **Solved in this design**: §4.7.4 polymorphic `update_commitment` dispatches all governance types through one entrypoint; group_type is read from contract storage but not from the call selector. |
+| Group type from per-call entrypoint selector | `update_commitment_democracy` selector visible in tx | **Partially solved**: §4.7.4 polymorphic `update_commitment` dispatches all governance types through one entrypoint, eliminating the *selector* leak. **Residual**: the public-inputs payload size still differs by variant — Anarchy is 3 scalars, Democracy is 5 scalars (`c_old`, `epoch_old`, `c_new`, `occupancy_commitment_old`, `occupancy_commitment_new`), Oligarchy will add an `admin_root` scalar. A chain observer that doesn't witness `create_group_v3` can read `group_type` either from contract storage (one storage-load operation per group) OR derive it from the public-inputs scalar count on any update call. Same fundamental signal, two extraction paths. Eliminating both would require padding all variants to a uniform N-scalar shape with circuit-side dummy commitments — non-trivial circuit-side change, deferred. The `group_type` itself is already stored in the contract from `create_group_v3`, so a determined observer always has at least one extraction path; the polymorphic-dispatch fix narrows the convenience of extraction (no longer in the call selector indexed by block explorers by default), not the information itself. |
 | `slotIndex` reveals join order to current members | §4.4 wire-format addition | Lateral: current members already see each other. Acknowledged for future pseudonymous-author features. |
 | `SEPSaltResponse` size varies with member-list length | §4.4 wire addition | **Solved**: pad to tier-uniform size (see §4.7.5). |
 | Update cadence visible via chain timestamps | Inherent to public ledger | None — same as Anarchy |
@@ -295,6 +297,11 @@ The contract reads `current.group_type` from storage to discriminate; the public
 
 `SEPGroupMemberLeaf` gains an optional `slotIndex: UInt32?`. Codable shape adds the field with `nil` allowed; clients that have never seen this field decode messages without error and treat the field as absent. **No version byte is bumped** at the `SEPGroupMemberLeaf` level — the addition is wire-compatible at the parser level.
 
+**Normative: `slotIndex` is NOT part of the per-leaf hash.** The Poseidon leaf hash that feeds the Merkle tree is `Poseidon(DOMAIN_MEMBER, Poseidon(sk))` (per §4.1.1) — it does not include `slotIndex`. Slot index is the tree *position*, not part of the leaf *value*. Two consequences:
+
+1. The same member moving slots (which §4.1's "permanent slot assignment" rule forbids, but a buggy client could attempt) would not change the leaf hash, only the tree position — this is the property that makes the position vs. value distinction load-bearing.
+2. A client that re-derives the leaf hash from `(secretKey, publicKeyCompressed)` alone produces the same value any other client would, regardless of whether `slotIndex` is `nil` or set. This keeps the cross-platform test vectors stable across the v0.3 → v0.4 transition (members with no `slotIndex` produce the same leaf hash as members with `slotIndex = 0`).
+
 Compatibility rules:
 
 - Anarchy / 1v1 / Oligarchy state updates: `slotIndex` is always `nil` on send. New clients that observe a non-nil `slotIndex` on a non-Democracy member ignore it.
@@ -477,8 +484,10 @@ Within each phase, every numbered step is a discrete PR — small enough to revi
 | B3 | `swift-mls/Sources/SwiftMLS/RustBridge.swift` + `ProofGenerator.swift` | ~80 | `generateDemocracyUpdateProofV2(input:)` |
 | B4 | `kotlin-mls/.../Types.kt` | ~40 | Parallel to B2 |
 | B5 | `kotlin-mls/.../RustBridge.kt` + `SEPProofGenerator.kt` | ~80 | Parallel to B3; removes `DemocracyProofNotImplementedException` stub |
-| B6 | XCFramework + Android NDK rebuild | (script run) | `build/SEPMLSFFI.xcframework` and Android `.so` carry the new export when feature is on |
+| B6 | XCFramework + Android NDK rebuild | (script run, no LOC) | Triggered automatically on B1 merge by the existing CI pipeline (`scripts/build-xcframework.sh` and the Android NDK build steps in `.github/workflows/pr.yml`). The committed binary artifacts under `build/` are refreshed in the same PR as B1 if the engineer runs the script locally; otherwise the next CI run produces them. Phase B exit criteria below depend on the committed artifacts carrying the new export, so the merge sequence is "B1 + B6 in one commit" or "B1 then B6 in a follow-up commit before B7." |
 | B7 | Bridge round-trip tests | ~100 | Swift and Kotlin tests that match the §4.7's cross-platform test vectors from A6 |
+
+Phase B per-step LOC: `80 + 40 + 80 + 40 + 80 + 0 + 100 = 420`. The cumulative-scope summary at the end of §6 lists Phase B as **~420 LOC** to match (see "Cumulative scope estimate").
 
 **Phase B exit criteria**: from a Swift / Kotlin call site, `generateDemocracyUpdateProofV2` produces bytes whose Rust-side `verify_democracy_v2` accepts them, and whose serialized public inputs match the cross-platform test vectors. No contract or relayer touched.
 
@@ -548,10 +557,10 @@ Phase F is **explicitly out of scope** for this design doc. Without it, Democrac
 | Phase | Engineering LOC (approx) | Calendar (engineer-weeks) |
 |---|---|---|
 | A — circuit + prover | ~750 | 2–3 (R1CS review is the gate) |
-| B — FFI + bindings | ~360 | 1 |
+| B — FFI + bindings | ~420 (sums B1–B7; B6 is a CI rebuild, no LOC) | 1 |
 | C — contract redeploy | ~565 | 1 |
 | D — relayer + clients | ~880 | 2 |
-| **A–D total (testnet-functional)** | **~2555** | **6–7** |
+| **A–D total (testnet-functional)** | **~2615** | **6–7** |
 | E — ceremony | (mostly process) | 4–8 (calendar; coordination + MPC sessions) |
 | F — multi-signer | (separate design) | not estimated; multi-month |
 
@@ -567,7 +576,7 @@ The "no live users" position lets Phase D land while Phase E is in flight: the t
 - `prove_democracy_v2_round_trip_two_to_three` — single signer, 2 → 3 member insert, valid proof, verifier passes.
 - `prove_democracy_v2_errors_on_quorum_required` — single signer, 3 → 4 member insert, returns `QuorumRequired` without attempting proof generation.
 - `prove_democracy_v2_handles_replace` — single signer, key rotation at member's own slot.
-- `prove_democracy_v2_handles_remove` — single signer, 1 → 0 transition. With v2's in-circuit `m_new ≥ 2` floor, the prover **rejects** at proof generation time, returning `BelowMinCount`. The contract-side check is now defense-in-depth, not the only enforcer. Asserts the v2 improvement: `prove_democracy_v2_handles_remove` matches `update_commitment` rejection — the circuit accepts only proofs the contract will also accept (§4.2.1 second consequence).
+- `prove_democracy_v2_rejects_below_floor` — single signer, 1 → 0 transition. With v2's in-circuit `m_new ≥ 2` floor, the prover **rejects** at proof generation time, returning `BelowMinCount`. The contract-side check is now defense-in-depth, not the only enforcer. Asserts the v2 improvement: prover-side rejection matches `update_commitment` rejection — the circuit accepts only proofs the contract will also accept (§4.2.1 second consequence). (The previous draft of this test was named `..._handles_remove`, which was misleading — the test asserts rejection, not handling.)
 - `prove_democracy_v2_rejects_tombstone_collision` — manually constructs a member whose `Poseidon(sk)` collides with `Poseidon(0)` (forced via a chosen test scalar). With §4.1.1 domain tags applied, the collision lifts to disjoint Poseidon inputs and the test passes; without domain tags, the test would expose the soundness break. Regression test for the §4.1.1 normative rule.
 - `prove_democracy_v2_slot_exhaustion` — at tier capacity (Small=32 for the test), drive cumulative joins past `2^depth - 1` (never-used slots run out due to tombstones). Asserts the prover returns `SlotExhausted`, not a malformed proof.
 - `prove_democracy_v2_bitmap_mismatch_rejected` — manually feed the prover a bitmap that disagrees with the actual leaf array (e.g., `bitmap[5] = 1` but `leaf[5] = tombstone`). Asserts proof generation fails at the bitmap-to-leaf binding constraint (§4.7.3 step 2). Soundness regression test.
@@ -610,7 +619,7 @@ Privacy verification (the §3.4 "no metadata leaks" claim):
 
 - Read the contract storage entry for this group via Soroban testnet RPC. Assert `member_count` is **not present** anywhere in the entry (would be a layout regression).
 - Inspect the relayer log for the `update_commitment` call: assert no field named `member_count_*` appears in the request body or stellar CLI args. Only `c_old`, `epoch_old`, `c_new`, `occupancy_commitment_old`, `occupancy_commitment_new`.
-- Run a second 2 → 3 transition. Assert the on-chain trace for the second `update_commitment` call is byte-equivalent in shape to the first (no count field appears). A chain observer cannot tell from these calls whether the group went 1→2 or 5→6 (both produce a 5-scalar public-inputs payload of the same size).
+- Run a second 2 → 3 transition. Assert the on-chain trace for the second `update_commitment` call carries the same 5-scalar public-inputs shape as the first (no count field appears). A chain observer **cannot tell from these calls** whether the group went 1→2 or 5→6 — both produce a 5-scalar payload with hash-shaped occupancy commitments. The observer **can** still distinguish a Democracy update call from an Anarchy update call by the scalar count (5 vs 3); see §3.4 residual on entrypoint-selector partial-solution. The privacy claim is "no count or trajectory leakage *within* a group's update history," not "no group-type leakage" — the latter is acknowledged residual.
 
 Failure-mode tests:
 
@@ -690,7 +699,8 @@ Phase E ends with a mainnet release. The existing `breaking-changes-release-proc
 | Testnet contract loses VK across redeploys | High (per existing memory of testnet rotations) | Medium (feature breaks until script re-run + client release) | §8.3 spells out the coordinated triplet (install → regenerate fingerprints → release client). Acceptor restart re-broadcast (§4.1.3) covers the in-flight case. Rotations are now expected to be rare since the v2 circuit is the design target. |
 | Old clients in the field after Phase D ships | Low (no live users today; only contributor builds) | Low (old clients pointing at the abandoned contract see "this group's contract was abandoned" UX) | §3.4 residual: tier upgrades visible. Acknowledged. The contract-redeploy banner is the user-facing recovery path. |
 | Tier upgrades remain visible on chain | Medium | Low (one-bit-per-upgrade signal; weaker than count-public but still observable) | Operators size tiers conservatively at create time so upgrades are infrequent. Universal-circuit redesign that hides tier is a research project deferred indefinitely. |
-| Acceptor crashes after chain publish but before broadcast | Low | Medium (recoverable via §4.1.3 acceptor restart re-broadcast; manual peer recovery if state is permanently lost) | Acceptor persists `lastBroadcastEpoch` marker before chain submit; on next launch detects "I committed but didn't broadcast" and re-publishes. Manual support recovery procedure documented for the unrecoverable case. |
+| Acceptor crashes after chain publish but before broadcast (single-leg) | Medium (a crash can happen between any two operations; the window is small but not vanishing) | Low (auto-recoverable on acceptor restart via the `lastBroadcastEpoch` marker, no peer involvement needed) | Acceptor persists `lastBroadcastEpoch` marker before chain submit; on next launch detects "I committed but didn't broadcast" and re-publishes. Tested in §7.4. |
+| Acceptor crashes AND joiner is offline at the same time (compound, "permanent loss" case) | Low (requires both legs to occur within the broadcast window) | Medium (recoverable only via manual peer reconstruction from the on-chain `occupancy_commitment` + persisted bootstrap state) | Manual support recovery procedure documented; acceptor restart re-broadcast (§4.1.3) is the primary defense, the manual procedure is the safety net. |
 | Two acceptors race the same `SEPMemberJoined` | Medium | Low (rollback path in §4.1.4 handles this; loser reverts local state to baseline before broadcast) | §4.1.4 rollback path; tested in §7.4 `DemocracyConcurrentAcceptorRollbackTests`. Loser MUST hold broadcast until chain confirms. |
 | Domain-tag collision across circuits | Low | High (cross-circuit proof reuse if `DOMAIN_MEMBER`/`DOMAIN_TOMBSTONE`/`DOMAIN_OCCUPANCY` collide with values used in `MembershipCircuit` or `UpdateCircuit`) | §10 Q3 — explicit cross-circuit audit pass before circuit lock-in. Domain tag values pinned in a single header file (`src/circuit/domain_tags.rs`) with collision-detection assertions in each circuit's setup. |
 | Bitmap-derivation desync (client computes bitmap from member list, but two clients disagree on whether a slot is "active" or "tombstoned") | Low | High (desync produces incompatible occupancy commitments) | Bitmap derivation rule is normative (§4.7.1): `bitmap[i] = 1 iff leaf[i] is `Poseidon(DOMAIN_MEMBER, ...)` after domain-tag check`. Single-source helper (`canonicalizeBitmap` in `swift-mls`/`kotlin-mls`/Rust). Cross-platform test vectors (A6) cover the boundary cases. |

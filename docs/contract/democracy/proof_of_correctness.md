@@ -196,7 +196,7 @@ For each public entrypoint, the spec's input class → output behavior mapping i
 | Group inactive | `Ok(false)` (read-only verifier intentionally allows post-deactivation attestation) | `test_verify_membership_rejects_inactive_group` |
 | Group missing | `Err(GroupNotFound)` | (gated at `lib.rs:645`) |
 
-**Note:** the function name is misleading on the inactive case — `test_verify_membership_rejects_inactive_group` actually asserts `Ok(false)`, not `Err(GroupInactive)`. This is **intentional**: read-only attestations against the final pre-deactivation state must remain verifiable forever. Rationale documented in the test comment at `test.rs:913-916`; the entrypoint itself (`lib.rs:638-660`) does not gate on `state.active`.
+**Note:** the test name is misleading on the inactive case — `test_verify_membership_rejects_inactive_group` actually asserts `Ok(false)`, since `verify_membership` does not gate on `state.active` (`lib.rs:638-660`). This is **intentional**: read-only attestations against the final pre-deactivation state must remain verifiable forever. Rationale documented in the test comment at `test.rs:913-916`.
 
 ### 3.8 `deactivate_group(env, group_id, proof, public_inputs: PublicInputs) -> Result<(), Error>`
 
@@ -296,7 +296,11 @@ The 43 inline tests cover the named entries in `test-vectors.json#tests_to_imple
 | `test_invalid_membership_vk_length_rejected` | constructor IC arity guard (membership) |
 | `test_invalid_update_vk_length_rejected` | constructor IC arity guard (update) |
 | `test_create_group_*` (13 tests) | every `create_group` validation gate listed in §3.5 |
+| `test_create_group_accepts_threshold_50` | threshold acceptance at the §4.7.6 50% boundary |
+| `test_create_group_accepts_threshold_67` | threshold acceptance at the 67% (2/3) boundary |
+| `test_create_group_accepts_threshold_100` | threshold acceptance at the 100% (unanimous) boundary |
 | `test_update_commitment_*` (12 tests) | every `update_commitment` validation gate + threshold-from-storage behaviors |
+| `test_update_commitment_threshold_tie_passes_v2` | tie semantics: `100·K ≥ T·m_old` non-strict (verifier reached) |
 | `test_verify_membership_*` (4 tests) | every `verify_membership` branch |
 | `test_deactivate_group_*` (3 tests) | every `deactivate_group` branch |
 | `test_update_vk_*` (3 tests) | admin auth + both rotation paths |
@@ -344,7 +348,7 @@ These are deliberate, acknowledged deviations or simplifications:
 
 4. **`update_commitment` doesn't call `caller.require_auth()`.** Intentional — the proof IS the authorization (relayer model). Documented at `lib.rs:555-559`.
 
-5. **History entries pruned from contract storage at `HISTORY_WINDOW=64`** but contract events (`CommitmentUpdated`) preserve the full audit trail. Operators querying ancient state should consume events from the chain log.
+5. **History entries pruned from contract storage at `HISTORY_WINDOW=64`** are only partially recoverable from contract events. `CommitmentUpdated` carries `commitment, epoch, timestamp` — enough to reconstruct the membership-commitment chain past the window from the chain log — but it does NOT carry `occupancy_commitment`, so the occupancy-commitment chain past `HISTORY_WINDOW` is not recoverable from events alone. Full off-chain reconstruction of occupancy state past the window would require amending `CommitmentUpdated` to include `occupancy_commitment`. (`tier` is immutable post-create and so is preserved by `GroupCreated` alone; `threshold_numerator` is also immutable but not in any event payload.)
 
 6. **`deactivate_group` decrements `GroupCount(tier)` but never reactivates a group, so the same `group_id` slot is permanently consumed.** The `MAX_GROUPS_PER_TIER` cap counts active+inactive together at the moment of `create_group`, but deactivated groups free up a slot via the decrement. This means: a contract that has gone through 10000 active+deactivated groups CAN still accept new creates as long as the live count is below 10000. This matches the design's "per-tier cap on simultaneously active groups" reading.
 
@@ -360,6 +364,7 @@ The following correctness arguments are **not directly verified** by this codeba
 2. **Cross-platform vector agreement.** Phase A6 will pin Swift / Kotlin / Rust prover outputs against this contract. Until then, prover-vs-contract drift on field-element encoding, IC ordering, or domain tags is conceivable but unmeasured.
 3. **End-to-end testnet deploy.** `scripts/deploy_sep_democracy_testnet.sh` is operational but gated on having pre-generated v2 dev VKs in `keyset-democracy-dev/`. Until those exist, the contract has only been built and tested locally; the on-chain side has not been exercised against a real testnet instance of the v2 verifier.
 4. **Observability of `MAX_GROUPS_PER_TIER` decrement.** No test exercises the deactivate→re-create-after-cap path; the decrement is a one-line correctness claim that should be covered by an integration test once Phase A's real proofs let `deactivate_group` succeed.
+5. **`create_group` proof-replay coverage.** §3.5's "Replayed proof | `Err(ProofReplay)`" row has no dedicated test. The `Self::check_proof_replay(&env, &proof)?` call at `lib.rs:506` is the same invocation as in `update_commitment`, where `test_update_commitment_rejects_replayed_proof` pins the behavior; the soundness argument therefore carries to the create path. A `test_create_group_rejects_replayed_proof` analogue would close this directly.
 
 ---
 

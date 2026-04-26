@@ -11,6 +11,9 @@ crate-type = ["cdylib"]
 doctest = false
 
 [dependencies]
+# Pinned with `=` (not `^=`) because soroban-sdk 25.3.1 raised its rustc
+# floor to 1.91, which the dev-toolchain doesn't currently meet. Bumping
+# this needs a coordinated rustup update — don't loosen casually.
 soroban-sdk = "=25.3.0"
 
 [dev-dependencies]

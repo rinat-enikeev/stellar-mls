@@ -109,7 +109,8 @@ pub enum Error {
     TierGroupLimitReached = 13,
     AdminOnly = 14,
     InvalidCommitmentEncoding = 15,
-    UnknownVkKind = 16,
+    // Error code 16 (UnknownVkKind) was removed in PR #148 review:
+    // VkKind is exhaustively matched, so the variant was unreachable.
     InvalidPoint = 26,
     GroupStillActive = 27,
     /// `create_group` rejects `threshold_numerator < 1 || > 100`
@@ -288,30 +289,6 @@ impl SepDemocracyContract {
     /// Atomic constructor: takes admin and the per-tier VKs for both
     /// the membership and update circuits. Runs at deploy time.
     pub fn __constructor(
-        env: Env,
-        admin: Address,
-        vk_small: VerificationKeyData,
-        vk_medium: VerificationKeyData,
-        vk_large: VerificationKeyData,
-        update_vk_small: VerificationKeyData,
-        update_vk_medium: VerificationKeyData,
-        update_vk_large: VerificationKeyData,
-    ) -> Result<(), Error> {
-        Self::do_initialize(
-            &env,
-            admin,
-            vk_small,
-            vk_medium,
-            vk_large,
-            update_vk_small,
-            update_vk_medium,
-            update_vk_large,
-        )
-    }
-
-    /// Post-deploy initializer for instances created without
-    /// `__constructor`. Idempotency-rejected after first call.
-    pub fn initialize(
         env: Env,
         admin: Address,
         vk_small: VerificationKeyData,
@@ -574,6 +551,12 @@ impl SepDemocracyContract {
     /// The verifier consumes 6 Groth16 public inputs in canonical
     /// order: 5 from the wire payload, 1 (`threshold_numerator`) from
     /// `current.threshold_numerator` per design §4.7.6.
+    ///
+    /// No `caller.require_auth()` — the membership Groth16 proof IS
+    /// the authorization (the prover demonstrated knowledge of a
+    /// secret key behind a member leaf at `c_old`). Any address can
+    /// submit on behalf of the group; the proof carries the auth.
+    /// Same convention as `sep-xxxx`'s update entrypoints.
     pub fn update_commitment(
         env: Env,
         group_id: BytesN<32>,
@@ -703,6 +686,11 @@ impl SepDemocracyContract {
         Self::record_proof(&env, &proof);
 
         let timestamp = env.ledger().timestamp();
+        // Archive the final active state to history before flipping
+        // the live entry inactive — mirrors the update_commitment
+        // pattern (history holds prior states; current state is in
+        // Group). Without this the freeze snapshot is lost.
+        Self::archive_entry(&env, &group_id, &current);
         let deactivated = CommitmentEntry {
             active: false,
             timestamp,

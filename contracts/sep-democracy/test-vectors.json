@@ -7,7 +7,7 @@
   "architecture_note": "This contract is the per-type Democracy contract — one of the eventual four (Anarchy, OneOnOne, Democracy, Oligarchy). The `group_type` discriminator is implicit in the contract address; there is no polymorphic `update_commitment` dispatch, no `group_type` field in storage, no `UpdateByType(u32)` VK kind. The §4.7.4 design-doc privacy benefit (selector hiding) collapses for the per-type architecture — chain observers learn the group type from the contract address itself, the same publicness class as `tier`.",
 
   "error_codes": {
-    "description": "Numeric values of `Error` variants (`#[contracterror] #[repr(u32)]`). Per-type Democracy contract drops everything tied to multi-type dispatch (UnknownGroupType, GroupTypeMismatch), 1v1 (OneOnOneImmutable, Invalid1v1Tier), Oligarchy (MissingAdminRoot, AdminRootMismatch, Reserved22), and v1 democracy artifacts (MemberCountMismatch, MemberCountOutOfRange, DemocracyInputMissing). Adds InvalidThreshold per design v0.5.1 §4.7.6.",
+    "description": "Numeric values of `Error` variants (`#[contracterror] #[repr(u32)]`). Per-type Democracy contract drops everything tied to multi-type dispatch (UnknownGroupType, GroupTypeMismatch), 1v1 (OneOnOneImmutable, Invalid1v1Tier), Oligarchy (MissingAdminRoot, AdminRootMismatch, Reserved22), v1 democracy artifacts (MemberCountMismatch, MemberCountOutOfRange, DemocracyInputMissing), and the unreachable UnknownVkKind=16 (VkKind is exhaustively matched). Adds InvalidThreshold per design v0.5.1 §4.7.6.",
     "vectors": [
       { "name": "NotInitialized", "code": 1 },
       { "name": "AlreadyInitialized", "code": 2 },
@@ -22,14 +22,14 @@
       { "name": "InvalidEpoch", "code": 11 },
       { "name": "ProofReplay", "code": 12 },
       { "name": "TierGroupLimitReached", "code": 13 },
-      { "name": "AdminOnly", "code": 14 },
+      { "name": "AdminOnly", "code": 14, "note": "create_group in restricted mode rejects non-admin callers (caller != admin after caller.require_auth)" },
       { "name": "InvalidCommitmentEncoding", "code": 15 },
-      { "name": "UnknownVkKind", "code": 16 },
       { "name": "InvalidPoint", "code": 26 },
       { "name": "GroupStillActive", "code": 27 },
       { "name": "InvalidThreshold", "code": 28, "note": "create_group rejects threshold_numerator < 1 || > 100; per design v0.5.1 §4.7.6" }
     ],
     "dropped_from_sep_xxxx": [
+      { "name": "UnknownVkKind", "code": 16, "reason": "VkKind is exhaustively matched in update_vk; the variant was unreachable. Removed in PR #148 review (chunk 1 #4)." },
       { "name": "OneOnOneImmutable", "code": 17, "reason": "no 1v1 in this contract" },
       { "name": "UnknownGroupType", "code": 18, "reason": "single-type contract" },
       { "name": "MissingAdminRoot", "code": 19, "reason": "no Oligarchy in this contract" },
@@ -44,7 +44,7 @@
   },
 
   "tier": {
-    "description": "Tier index → tree depth → leaf capacity. The contract MUST reject `tier > 2` with `InvalidTier`. Tier capacity is the total slot space (cumulative-joins ceiling per design §4.1's tombstone-permanence rule).",
+    "description": "Tier index → tree depth → leaf capacity (per-tier bitmap slot count, NOT the per-tier group cap). The contract MUST reject `tier > 2` with `InvalidTier`. Per-tier slot capacity is the total in-tree slot space (cumulative-joins ceiling per design §4.1's tombstone-permanence rule). Pinned by `tier_capacity()` in the contract; orthogonal to the cross-group `MAX_GROUPS_PER_TIER` cap (see `create_group_validation` rules).",
     "vectors": [
       { "tier": 0, "name": "Small", "depth": 5, "capacity": 32 },
       { "tier": 1, "name": "Medium", "depth": 8, "capacity": 256 },
@@ -55,6 +55,12 @@
       { "tier": 100, "expected_error": "InvalidTier" },
       { "tier": 4294967295, "expected_error": "InvalidTier" }
     ]
+  },
+
+  "max_groups_per_tier": {
+    "description": "Cross-group cap enforced by create_group: per-tier active-group count must be < MAX_GROUPS_PER_TIER, else TierGroupLimitReached. Per-tier slot capacity (32/256/2048) caps members within a single group; this caps the number of groups at each tier on the contract.",
+    "value": 10000,
+    "rule": "GroupCount(tier) MUST be < 10000 at create_group; exceeded → TierGroupLimitReached"
   },
 
   "vk_kind_enum": {
@@ -84,7 +90,8 @@
       "threshold_numerator ∈ [1, 100]; out of range → InvalidThreshold",
       "group_id MUST NOT already be assigned to a live or inactive group; collision → GroupAlreadyExists",
       "commitment and occupancy_commitment_initial MUST be canonical Fr encodings (Fr::from_bytes ∘ Fr::to_bytes round-trip); non-canonical → InvalidCommitmentEncoding",
-      "tier_count(tier) MUST be < tier_capacity(tier); exceeded → TierGroupLimitReached",
+      "GroupCount(tier) MUST be < MAX_GROUPS_PER_TIER (10000); exceeded → TierGroupLimitReached",
+      "if RestrictedMode is true: caller MUST equal Admin, else AdminOnly (caller.require_auth() runs first)",
       "proof MUST verify under the membership VK at `tier` against the supplied (commitment, epoch=0) public inputs; failure → InvalidProof",
       "proof_hash(proof) MUST NOT be in UsedProof storage; collision → ProofReplay"
     ],
@@ -253,7 +260,7 @@
         { "name": "tier", "type": "u32", "rule": "0=Small, 1=Medium, 2=Large; fixed at create_group, never mutated" },
         { "name": "active", "type": "bool", "rule": "false after deactivate_group; rejects update_commitment with GroupInactive" },
         { "name": "occupancy_commitment", "type": "BytesN<32>", "rule": "Poseidon hash of the slot bitmap; canonical Fr encoding; replaces v1's member_count" },
-        { "name": "threshold_numerator", "type": "u8", "rule": "1..=100; fixed at create_group, never mutated by update_commitment per design §4.7.6" }
+        { "name": "threshold_numerator", "type": "u32", "rule": "1..=100; fixed at create_group, never mutated by update_commitment per design §4.7.6. Stored as u32 (matches contract); the value range fits in u8 but the storage type matches the wire-supplied tier type for consistency." }
       ]
     },
     "removed_vs_sep_xxxx": [
@@ -261,13 +268,46 @@
       { "field": "member_count", "rationale": "v1 democracy artifact; v2 commits to the bitmap via occupancy_commitment instead, hiding the count" }
     ],
     "data_keys": [
-      { "name": "Admin", "value_type": "Address", "storage": "instance", "note": "contract admin; required for update_vk" },
+      { "name": "Admin", "value_type": "Address", "storage": "instance", "note": "contract admin; required for update_vk and set_restricted_mode" },
+      { "name": "RestrictedMode", "value_type": "bool", "storage": "instance", "note": "when true, only the admin may call create_group; toggled by set_restricted_mode (admin-only). Default false." },
       { "name": "VK(tier)", "value_type": "VerificationKeyData", "storage": "persistent", "note": "membership-circuit VK for tier 0/1/2; 3 IC points" },
       { "name": "UpdateVK(tier)", "value_type": "VerificationKeyData", "storage": "persistent", "note": "v2 democracy update VK for tier 0/1/2; 7 IC points. NO `group_type` second key — single-type contract." },
       { "name": "Group(group_id)", "value_type": "CommitmentEntry", "storage": "persistent", "note": "current group state" },
-      { "name": "History(group_id)", "value_type": "Vec<CommitmentEntry>", "storage": "persistent", "note": "rolling-window history of past entries" },
+      { "name": "History(group_id)", "value_type": "Vec<CommitmentEntry>", "storage": "persistent", "note": "rolling-window history of past entries; capped at HISTORY_WINDOW=64; pruned FIFO" },
       { "name": "UsedProof(proof_hash)", "value_type": "()", "storage": "persistent (TTL ~30 days via LEDGER_BUMP)", "note": "global-nullifier scope per design §11" },
-      { "name": "TierCount(tier)", "value_type": "u32", "storage": "instance", "note": "active group count per tier; checked against tier_capacity in create_group" }
+      { "name": "GroupCount(tier)", "value_type": "u32", "storage": "instance", "note": "active group count per tier; checked against MAX_GROUPS_PER_TIER (10000) in create_group; decremented on deactivate_group" }
+    ]
+  },
+
+  "admin_entrypoints": {
+    "description": "Admin-gated entrypoints. All require admin.require_auth(); panic on unauth. There is no separate `set_admin` entrypoint — admin is fixed at __constructor.",
+    "vectors": [
+      {
+        "name": "update_vk",
+        "args": [
+          { "name": "kind", "type": "VkKind", "values": ["Membership", "Update"] },
+          { "name": "tier", "type": "u32", "rule": "must be ≤ 2 else InvalidTier" },
+          { "name": "new_vk", "type": "VerificationKeyData", "rule": "IC length matches `kind` (3 / 7); subgroup-valid; else InvalidVkLength / InvalidPoint" }
+        ],
+        "purpose": "design §4.6 fingerprint-coordination triplet — rotate Membership or Update VK at a tier"
+      },
+      {
+        "name": "set_restricted_mode",
+        "args": [
+          { "name": "restricted", "type": "bool" }
+        ],
+        "purpose": "when restricted=true, create_group rejects non-admin callers with AdminOnly. Storage: DataKey::RestrictedMode (instance). Default value (key absent) is treated as false."
+      }
+    ]
+  },
+
+  "queries": {
+    "description": "Read-only entrypoints. None require auth. All return Result<_, Error>.",
+    "vectors": [
+      { "name": "get_commitment", "args": [{"name": "group_id", "type": "BytesN<32>"}], "returns": "CommitmentEntry", "errors": ["GroupNotFound"] },
+      { "name": "get_history", "args": [{"name": "group_id", "type": "BytesN<32>"}, {"name": "max_entries", "type": "u32", "rule": "tail-truncated to most-recent `max_entries`; if max_entries ≥ history.len() returns all entries"}], "returns": "Vec<CommitmentEntry>", "errors": ["GroupNotFound"] },
+      { "name": "verify_membership", "args": [{"name": "group_id", "type": "BytesN<32>"}, {"name": "proof", "type": "Groth16Proof"}, {"name": "public_inputs", "type": "PublicInputs"}], "returns": "bool", "errors": ["GroupNotFound", "PublicInputsMismatch"], "note": "returns Ok(false) on bad proof rather than InvalidProof — read-only verifier semantics" },
+      { "name": "bump_group_ttl", "args": [{"name": "group_id", "type": "BytesN<32>"}], "returns": "()", "errors": ["GroupNotFound"], "note": "permissionless TTL bump for long-lived groups" }
     ]
   },
 
@@ -308,9 +348,9 @@
       "test_create_group_rejects_non_canonical_commitment",
       "test_create_group_rejects_non_canonical_occupancy_commitment",
       "test_create_group_rejects_invalid_proof",
+      "test_create_group_restricted_mode_rejects_non_admin",
       "test_create_group_enforces_tier_group_limit",
       "test_update_commitment_happy_path",
-      "test_update_commitment_threshold_unchanged_after_update",
       "test_update_commitment_rejects_stale_c_old",
       "test_update_commitment_rejects_stale_occupancy_commitment_old",
       "test_update_commitment_rejects_wrong_epoch_old",
@@ -329,11 +369,12 @@
       "test_deactivate_group_happy_path",
       "test_deactivate_group_rejects_non_member_proof",
       "test_deactivate_already_inactive_group",
-      "test_update_vk_admin_only",
+      "test_update_vk_requires_auth",
       "test_update_vk_rotates_membership_vk",
       "test_update_vk_rotates_update_vk",
       "test_get_commitment_returns_current_state",
       "test_get_history_returns_chronological_entries",
+      "test_archive_entry_appends_and_prunes",
       "test_bump_group_ttl_extends_used_proof_lifetime",
       "test_vectors_consistency"
     ]

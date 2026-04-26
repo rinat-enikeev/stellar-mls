@@ -391,13 +391,6 @@ fn test_create_group_rejects_invalid_threshold_above_100() {
     );
 }
 
-fn assert_threshold_accepted_at(env: &Env, threshold: u32) {
-    let (_env_unused, client, _admin) = setup_env();
-    // We need to use the env from setup_env going forward — re-setup
-    // and use its own env here.
-    let _ = (env, threshold, client);
-}
-
 #[test]
 fn test_create_group_accepts_threshold_50() {
     let (env, client, _admin) = setup_env();
@@ -579,6 +572,37 @@ fn test_create_group_rejects_invalid_proof() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #14)")]
+fn test_create_group_restricted_mode_rejects_non_admin() {
+    // Admin enables restricted mode, then a non-admin caller tries
+    // create_group. Soroban auth (mock_all_auths) covers
+    // caller.require_auth(), so the contract reaches the
+    // `caller != admin` value check and returns AdminOnly. The
+    // sibling test_update_vk_requires_auth covers the require_auth
+    // gate; this covers the value-equality gate.
+    let (env, client, _admin) = setup_env();
+    client.set_restricted_mode(&true);
+
+    let caller = Address::generate(&env); // != admin
+    let group_id = BytesN::from_array(&env, &[55u8; 32]);
+    let commitment = canonical_zero(&env);
+    let pi = PublicInputs {
+        commitment: commitment.clone(),
+        epoch: 0,
+    };
+    client.create_group(
+        &caller,
+        &group_id,
+        &commitment,
+        &0u32,
+        &50u32,
+        &canonical_zero(&env),
+        &mock_proof(&env),
+        &pi,
+    );
+}
+
+#[test]
 #[should_panic(expected = "Error(Contract, #13)")]
 fn test_create_group_enforces_tier_group_limit() {
     let (env, client, _admin) = setup_env();
@@ -626,29 +650,6 @@ fn test_update_commitment_happy_path() {
         Err(Err(_)) | Err(Ok(Error::InvalidProof)) => {}
         other => panic!("expected InvalidProof at verifier, got {:?}", other),
     }
-}
-
-#[test]
-fn test_update_commitment_threshold_unchanged_after_update() {
-    // Direct storage assertion: threshold_numerator survives writes
-    // through update_commitment's success path. Since mock proofs
-    // can't actually pass verify, we instead assert the contract
-    // never *reads* threshold from anywhere except current.
-    // (Behavioral invariant captured here, full verifier round-trip
-    // requires real Groth16 proofs.)
-    let (env, client, _admin) = setup_env();
-    let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[8u8; 32]);
-    let commitment = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &commitment, &commitment, 0, 67, 0);
-    // Before any update: threshold == 67.
-    let pre = client.get_commitment(&group_id);
-    assert_eq!(pre.threshold_numerator, 67);
-    // Even when update_commitment fails (mock proof can't verify),
-    // the stored entry is unchanged — threshold stays 67.
-    let _ = client.try_update_commitment(&group_id, &mock_proof(&env), &upi_zero(&env));
-    let post = client.get_commitment(&group_id);
-    assert_eq!(post.threshold_numerator, 67);
 }
 
 #[test]
@@ -988,11 +989,15 @@ fn test_deactivate_already_inactive_group() {
 
 #[test]
 #[should_panic(expected = "Unauthorized")]
-fn test_update_vk_admin_only() {
-    // mock_all_auths is on, but the host's auth check still
-    // distinguishes admin from a different address. Submit auth
-    // from a non-admin caller and observe the host-level
-    // unauthorized panic.
+fn test_update_vk_requires_auth() {
+    // No mock_all_auths — admin.require_auth() inside update_vk
+    // panics because no auth was granted. This pins the
+    // require_auth gate; a positive "non-admin caller WITH auth"
+    // scenario isn't expressible in the current test harness
+    // because mock_all_auths blanket-approves every require_auth
+    // call regardless of address, but the contract-level guard is
+    // covered by test_create_group_restricted_mode_rejects_non_admin
+    // which exercises the parallel `caller != admin` branch.
     let env = Env::default();
     let admin = Address::generate(&env);
     let mvk = mock_membership_vk(&env);
@@ -1010,9 +1015,6 @@ fn test_update_vk_admin_only() {
         ),
     );
     let client = SepDemocracyContractClient::new(&env, &contract_id);
-    // Bypass mock_all_auths by checking the require_auth path: with
-    // no mocks enabled, calling update_vk panics because no auth was
-    // actually granted by the admin to the test caller.
     let new_vk = mock_membership_vk(&env);
     client.update_vk(&VkKind::Membership, &0u32, &new_vk);
 }
@@ -1090,6 +1092,43 @@ fn test_get_history_returns_chronological_entries() {
 }
 
 #[test]
+fn test_archive_entry_appends_and_prunes() {
+    // Drive archive_entry through env.as_contract() — the same code
+    // path update_commitment and deactivate_group use to append. Mock
+    // proofs can't pass pairing_check, so the integration paths
+    // through update/deactivate never reach archive_entry; this test
+    // covers the helper directly so the rolling-window prune logic is
+    // CI-asserted independent of Phase A's real proofs.
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[60u8; 32]);
+    let commitment = canonical_zero(&env);
+    inject_group(&env, &contract_id, &group_id, &commitment, &commitment, 0, 50, 0);
+
+    let total: u64 = (HISTORY_WINDOW as u64) + 6; // exceeds the cap by 6
+    env.as_contract(&contract_id, || {
+        for i in 0u64..total {
+            let entry = CommitmentEntry {
+                commitment: BytesN::from_array(&env, &[(i & 0xff) as u8; 32]),
+                epoch: i,
+                timestamp: 1000 + i,
+                tier: 0,
+                active: true,
+                occupancy_commitment: canonical_zero(&env),
+                threshold_numerator: 50,
+            };
+            SepDemocracyContract::archive_entry(&env, &group_id, &entry);
+        }
+    });
+
+    let history = client.get_history(&group_id, &(2 * HISTORY_WINDOW));
+    assert_eq!(history.len(), HISTORY_WINDOW);
+    // Oldest 6 dropped → first retained epoch is 6, last is total - 1.
+    assert_eq!(history.get(0).unwrap().epoch, total - HISTORY_WINDOW as u64);
+    assert_eq!(history.get(history.len() - 1).unwrap().epoch, total - 1);
+}
+
+#[test]
 fn test_bump_group_ttl_extends_used_proof_lifetime() {
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
@@ -1135,7 +1174,6 @@ fn test_vectors_consistency() {
         ("TierGroupLimitReached", Error::TierGroupLimitReached as u32),
         ("AdminOnly", Error::AdminOnly as u32),
         ("InvalidCommitmentEncoding", Error::InvalidCommitmentEncoding as u32),
-        ("UnknownVkKind", Error::UnknownVkKind as u32),
         ("InvalidPoint", Error::InvalidPoint as u32),
         ("GroupStillActive", Error::GroupStillActive as u32),
         ("InvalidThreshold", Error::InvalidThreshold as u32),

@@ -17,7 +17,7 @@
 
 ### 1.1 Storage layout
 
-The on-chain `CommitmentEntry` (`lib.rs:195-220`) carries exactly the fields the design's §A storage-layout pin requires for v0.1.4:
+The on-chain `CommitmentEntry` (`lib.rs:207-231`) carries exactly the fields the design's §A storage-layout pin requires for v0.1.4:
 
 | Field | Type | Source-of-truth | Mutation surface |
 |---|---|---|---|
@@ -35,7 +35,7 @@ The on-chain `CommitmentEntry` (`lib.rs:195-220`) carries exactly the fields the
 - `admin_root` — v0.1.3 §3.5 fix; circuit-internal private witness reconstructed off-chain.
 - `salt_occ` — v0.1.4; per-epoch private witness, not stored, distributed via `SEPSaltResponse.occupancySalt`.
 
-The `DataKey` enum (`lib.rs:308-328`) covers the design's required keys:
+The `DataKey` enum (`lib.rs:320-339`) covers the design's required keys:
 
 | `DataKey` variant | Storage class | Purpose | Spec ref |
 |---|---|---|---|
@@ -68,7 +68,7 @@ Admin tier is fixed at Small (depth=5, 32 slots) per design §4.6 and is NOT a c
 
 ### 1.3 Errors
 
-The `Error` enum (`lib.rs:111-138`) pins 19 reachable variants plus `Reserved3`, `GroupStillActive`, and `InvalidInitialMembership=30` (slot reservations documented in `test-vectors.json`). `UnknownVkKind=16` removed (parallel to sep-democracy).
+The `Error` enum (`lib.rs:111-144`) pins 19 reachable variants plus `Reserved3`, `GroupStillActive`, and `InvalidInitialMembership=30` (slot reservations documented in `test-vectors.json`). `UnknownVkKind=16` removed (parallel to sep-democracy).
 
 CI-asserted by `test_vectors_consistency`'s error-code loop.
 
@@ -124,10 +124,10 @@ For each public entrypoint, the spec's input class → output behavior mapping i
 |---|---|---|
 | Admin auth + valid `(kind, tier ≤ 2, IC arity matches kind)` + subgroup-valid points | `VK(tier)`, `CreateVK(tier)`, or `UpdateVK(tier)` overwritten; TTL bumped; `Ok(())` | `test_update_vk_rotates_membership_vk`, `test_update_vk_rotates_create_vk`, `test_update_vk_rotates_update_vk` |
 | No auth granted | Soroban-level "Unauthorized" panic | `test_update_vk_requires_auth` |
-| `tier > 2` | `Err(InvalidTier)` | `test_update_vk_rejects_invalid_tier` (gated at `lib.rs:482`) |
-| `IC arity mismatch` | `Err(InvalidVkLength)` | `test_update_vk_rejects_create_vk_arity_mismatch` (gated at `lib.rs:490`) |
-| Non-subgroup VK point | `Err(InvalidPoint)` | (gated at `lib.rs:492`) |
-| Pre-init | `Err(NotInitialized)` | (gated at `lib.rs:475`) |
+| `tier > 2` | `Err(InvalidTier)` | `test_update_vk_rejects_invalid_tier` (gated at `lib.rs:494`) |
+| `IC arity mismatch` | `Err(InvalidVkLength)` | `test_update_vk_rejects_create_vk_arity_mismatch` (gated at `lib.rs:502`) |
+| Non-subgroup VK point | `Err(InvalidPoint)` | (gated at `lib.rs:504`) |
+| Pre-init | `Err(NotInitialized)` | (gated at `lib.rs:485`) |
 
 ### 3.3 `set_restricted_mode(env, restricted: bool) -> Result<(), Error>`
 
@@ -162,7 +162,7 @@ For each public entrypoint, the spec's input class → output behavior mapping i
 | `admin_threshold_numerator == 0` | `Err(InvalidThreshold)` | `test_create_oligarchy_group_rejects_invalid_threshold_zero` |
 | `admin_threshold_numerator > 100` | `Err(InvalidThreshold)` | `test_create_oligarchy_group_rejects_invalid_threshold_above_100` |
 | Threshold 50 / 67 / 100 | accepted (reaches verifier) | `test_create_oligarchy_group_accepts_threshold_50/67/100` |
-| `public_inputs` mismatch any wire field | `Err(PublicInputsMismatch)` | (gated at `lib.rs:588-595`) |
+| `public_inputs` mismatch any wire field | `Err(PublicInputsMismatch)` | (gated at `lib.rs:608-616`) |
 | Group already exists | `Err(GroupAlreadyExists)` | `test_create_oligarchy_group_rejects_duplicate_group_id` |
 | Non-canonical `commitment` | `Err(InvalidCommitmentEncoding)` | `test_create_oligarchy_group_rejects_non_canonical_commitment` |
 | Non-canonical `occupancy_commitment_initial` | `Err(InvalidCommitmentEncoding)` | `test_create_oligarchy_group_rejects_non_canonical_occupancy_commitment` |
@@ -213,7 +213,7 @@ For each public entrypoint, the spec's input class → output behavior mapping i
 | All checks pass + valid membership proof | `Group(group_id).active = false`; prior `current` archived to history; `GroupCount(current.tier) -= 1`; `UsedProof(proof_hash) := true`; `GroupDeactivated` event | `test_deactivate_group_happy_path` |
 | Group missing | `Err(GroupNotFound)` | (gated at `load_group`) |
 | `current.active == false` | `Err(GroupInactive)` | `test_deactivate_already_inactive_group` |
-| `public_inputs.commitment != current.commitment OR epoch != current.epoch` | `Err(PublicInputsMismatch)` | (gated at `lib.rs:820-824`) |
+| `public_inputs.commitment != current.commitment OR epoch != current.epoch` | `Err(PublicInputsMismatch)` | (gated at `lib.rs:841-845`) |
 | Replayed proof | `Err(ProofReplay)` | (gated at `check_proof_replay`) |
 | Bad proof | `Err(InvalidProof)` | `test_deactivate_group_rejects_non_member_proof` |
 
@@ -230,7 +230,7 @@ For each public entrypoint, the spec's input class → output behavior mapping i
 |---|---|---|
 | Existing group, `max_entries >= history.len()` | full history returned in chronological order | `test_get_history_returns_chronological_entries` |
 | Existing group, `max_entries < history.len()` | last `max_entries` entries returned | (covered by `test_archive_entry_appends_and_prunes`'s assertion) |
-| Missing group | `Err(GroupNotFound)` | `test_get_history_rejects_unknown_group` (gated at `lib.rs:880`) |
+| Missing group | `Err(GroupNotFound)` | `test_get_history_rejects_unknown_group` (gated at `lib.rs:905`) |
 
 ---
 
@@ -258,7 +258,7 @@ Pairing check identical to membership. Critical for design §4.8: the verbose bi
 
 ### 4.3 Update proof (`verify_update_proof`)
 
-Public-input vector: `[c_old, epoch_old, c_new, occupancy_commitment_old, occupancy_commitment_new, admin_threshold_numerator]`. 7 IC points. The 6th input is read from `current.admin_threshold_numerator` in `update_commitment` (`lib.rs:733`), NOT from the wire. Critical for design §4.7.6: a chain observer cannot distinguish two groups with different thresholds by call-payload analysis.
+Public-input vector: `[c_old, epoch_old, c_new, occupancy_commitment_old, occupancy_commitment_new, admin_threshold_numerator]`. 7 IC points. The 6th input is read from `current.admin_threshold_numerator` in `update_commitment` (`lib.rs:751`), NOT from the wire. Critical for design §4.7.6: a chain observer cannot distinguish two groups with different thresholds by call-payload analysis.
 
 ### 4.4 Field-element conversions
 
@@ -337,7 +337,7 @@ These are deliberate, acknowledged deviations or simplifications:
 
 3. **`Reserved3 = 3`**, **`GroupStillActive = 27`**, and **`InvalidInitialMembership = 30`** are present in the `Error` enum but **unreachable by any current code path** (the contract NEVER returns these codes). Reserved3 is documented as a placeholder. GroupStillActive is reserved for a possible future "delete inactive group" entrypoint. InvalidInitialMembership is a slot reservation for symmetry with the prover-side `BelowMinMember` / `BelowMinAdmin` floors per design §4.8 — circuit-level rejections collapse to `InvalidProof=7` at the contract boundary (the contract has no Poseidon host and cannot recompute floors itself). The reservation exists purely so a future revision that promotes the floor check to contract-side enforcement has a stable error code waiting; today no client will ever observe code 30 from this contract.
 
-4. **`update_commitment` doesn't call `caller.require_auth()`.** Intentional — the proof IS the authorization (relayer model). Documented at `lib.rs:683-687`.
+4. **`update_commitment` doesn't call `caller.require_auth()`.** Intentional — the proof IS the authorization (relayer model). Documented at `lib.rs:704-709`.
 
 5. **History entries pruned at `HISTORY_WINDOW=64`** but contract events (`CommitmentUpdated`) preserve the full audit trail.
 

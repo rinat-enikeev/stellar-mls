@@ -40,9 +40,21 @@ final class NostrMessageTransport {
     var onError: ((String) -> Void)?
     /// Callback for relay OK responses: (eventID, accepted). Used for delivery status.
     var onOK: ((String, Bool) -> Void)?
+    /// Callback fired when an incoming event carries an `epoch` tag higher
+    /// than the resolver knows about (i.e. our local salt history has a hole).
+    /// Parameters: (groupID, eventEpoch, event). AppState wires this to the
+    /// salt-resync flow: buffer the event, send `SEPSaltRequest`, replay once
+    /// the matching `SEPSaltResponse` lands.
+    var onEpochAhead: ((String, UInt64, NostrEvent) -> Void)?
 
     /// Current group members used for sender authentication (H-4).
     var currentMembers: [SEPGroupMemberLeaf] = []
+
+    /// Per-group cache of the latest `keyResolver` + `defaultKey` passed to
+    /// `subscribe()`. Used by `replayEvents` so AppState can re-feed buffered
+    /// events through `handleIncomingEvent` once a missing salt arrives,
+    /// without needing to re-issue a subscription.
+    private var perGroupResolvers: [String: ((UInt64) -> SymmetricKey?, SymmetricKey)] = [:]
 
     /// Number of connected relays — observable for connection status UI.
     var connectedRelayCount: Int { connections.count }
@@ -85,6 +97,10 @@ final class NostrMessageTransport {
         sinceTimestamp: Int64? = nil
     ) {
         let topicKey = "chat-\(topic)"
+
+        // Stash latest resolvers for replayEvents — AppState re-feeds buffered
+        // events here once a missing-salt SEPSaltResponse lands.
+        perGroupResolvers[groupID] = (keyResolver, defaultKey)
 
         // Cancel existing subscription task for this topic
         activeSubscriptions[topicKey]?.cancel()
@@ -139,13 +155,24 @@ final class NostrMessageTransport {
             return
         }
 
-        // Resolve decryption key: prefer epoch-tagged key, fall back to default
+        // Resolve decryption key: prefer epoch-tagged key, fall back to default.
+        // Track when the event names an epoch we lack a salt for — that signals
+        // a desync (a peer is ahead of us) and needs to trigger a salt-resync,
+        // not just a silent decrypt-with-wrong-key fallback.
         let epochTag = event.tags.first(where: { $0.first == "epoch" }).flatMap { $0.dropFirst().first }
+        let parsedEpoch: UInt64? = epochTag.flatMap { UInt64($0) }
         let key: SymmetricKey
-        if let epochStr = epochTag, let epoch = UInt64(epochStr), let resolved = keyResolver(epoch) {
+        let unknownEpoch: UInt64?
+        if let epoch = parsedEpoch, let resolved = keyResolver(epoch) {
             key = resolved
+            unknownEpoch = nil
+        } else if let epoch = parsedEpoch {
+            // Resolver returned nil for a parseable epoch tag — desync.
+            key = defaultKey
+            unknownEpoch = epoch
         } else {
             key = defaultKey
+            unknownEpoch = nil
         }
 
         do {
@@ -212,7 +239,27 @@ final class NostrMessageTransport {
                 }
             }
         } catch {
-            SecurityLog.decryptionFailed(context: "group message")
+            if let epoch = unknownEpoch {
+                // Don't burn the SecurityLog noise — this is a recoverable
+                // desync, not an attacker-driven decrypt failure. AppState will
+                // request the missing salt and replay this event.
+                onEpochAhead?(groupID, epoch, event)
+            } else {
+                SecurityLog.decryptionFailed(context: "group message")
+            }
+        }
+    }
+
+    /// Re-feed a batch of previously-buffered events through the decrypt
+    /// pipeline, using the resolver/defaultKey cached from the most recent
+    /// `subscribe()` call for this group. AppState calls this from
+    /// `drainEventsAwaitingSalt` once a missing-salt `SEPSaltResponse` lands.
+    /// Events for groups never subscribed (or unsubscribed) are silently
+    /// dropped — no per-event resolver to apply.
+    func replayEvents(_ events: [NostrEvent], groupID: String) {
+        guard let (keyResolver, defaultKey) = perGroupResolvers[groupID] else { return }
+        for event in events {
+            handleIncomingEvent(event, groupID: groupID, keyResolver: keyResolver, defaultKey: defaultKey)
         }
     }
 

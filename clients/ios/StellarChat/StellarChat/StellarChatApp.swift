@@ -29,6 +29,47 @@ enum PendingTransitionState: Equatable {
     case awaitingChainConfirmation(targetEpoch: UInt64)
 }
 
+/// Why a group is currently sync-locked. Surface for the input-disabled banner.
+enum SyncReason: Equatable {
+    /// A peer-broadcast `SEPGroupStateUpdate` was rejected by chain verification
+    /// (race against Soroban ledger close, or RPC unavailable). The update is
+    /// queued and retried until the chain catches up.
+    case awaitingChainConfirmation
+    /// A chat event arrived tagged with an epoch we don't have a salt for.
+    /// We've sent `SEPSaltRequest` and are buffering events until the response.
+    case awaitingSaltResponse
+    /// The user (or a delegated chain publish) is mid-flight; mirrors the
+    /// existing `PendingTransitionState.awaitingChainConfirmation`.
+    case localChainSubmitInFlight
+}
+
+enum SyncState: Equatable {
+    case idle
+    case pending(reason: SyncReason, since: Date, attempts: Int)
+    case failed(reason: SyncReason, lastError: String)
+
+    var isLocked: Bool {
+        switch self {
+        case .idle: return false
+        case .pending, .failed: return true
+        }
+    }
+}
+
+/// One state-update queued for retry after chain verification failed. Persisted
+/// to UserDefaults so a crash mid-sync doesn't strand the group at an old epoch.
+struct QueuedStateUpdate: Codable, Equatable {
+    /// Encoded `SEPGroupStateUpdate` payload — re-decoded on each retry.
+    let updateJSON: Data
+    /// Cached epoch from the encoded update; used for queue ordering and dedup
+    /// without re-decoding on every comparison.
+    let epoch: UInt64
+    let firstAttemptAt: Date
+    var lastAttemptAt: Date
+    var attempts: Int
+    var lastError: String?
+}
+
 /// AppDelegate handles APNs registration callbacks and notification tap handling.
 class StellarChatAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     weak var pushManager: PushNotificationManager?
@@ -228,6 +269,25 @@ final class AppState {
     private var chainPublishTasks: [String: Task<Void, Never>] = [:]
     /// Last successfully published on-chain state per group — used as proof baseline for the next chain publish.
     private var chainBaseline: [String: (members: [SEPGroupMemberLeaf], epoch: UInt64, salt: Data)] = [:]
+    /// Per-group sync-lock state surfaced to the UI. Mutated whenever any of the
+    /// underlying sources (`pendingChainVerifications`, `eventsAwaitingSalt`,
+    /// `pendingTransitions`) changes via the `recomputeSyncStatus` helper.
+    var syncStatus: [String: SyncState] = [:]
+    /// Per-group queue of state updates that failed chain verification on first
+    /// receive. Drained by `processChainVerificationQueue()` on a timer until
+    /// the chain catches up or the entry hits its max age. Persisted so a
+    /// crash mid-sync doesn't strand the group at an old epoch.
+    private var pendingChainVerifications: [String: [QueuedStateUpdate]] = [:]
+    /// In-memory buffer of received chat events whose epoch tag exceeded our
+    /// local epoch. Drained when the matching `SEPSaltResponse` lands. Capped
+    /// per group; older entries dropped when the cap is hit.
+    private var eventsAwaitingSalt: [String: [(epoch: UInt64, event: NostrEvent)]] = [:]
+    /// Driver task for `processChainVerificationQueue()`. Lives for the AppState
+    /// lifetime; spun up in `init` after persisted queues are loaded.
+    private var chainVerificationDriverTask: Task<Void, Never>?
+    /// In-flight `SEPSaltRequest` dedupe: per-group, per-epoch — prevents flooding
+    /// the relay with one request per failed event in a stuck-at-old-epoch group.
+    private var saltRequestsInFlight: Set<String> = []
     private static let maxDedupSetSize = 10_000
     /// Pending incoming messages awaiting batch insertion into chatMessages.
     private var pendingIncomingMessages: [(msg: ChatMessage, groupID: String, event: NostrEvent)] = []
@@ -290,6 +350,23 @@ final class AppState {
     private var transportBundles: [String: [String: SEPMemberTransportBundle]] = [:]
 
     private static let saltHistoryKey = "chat.onym.ios.saltHistory"
+    private static let pendingChainVerificationsKey = "chat.onym.ios.pendingChainVerifications"
+
+    // MARK: - Sync-lock tunables
+
+    /// Per-entry max age before `pendingChainVerifications` gives up and marks
+    /// the group `.failed`. Matches Stellar testnet ledger close (~5s) plus
+    /// ample headroom for protracted RPC outages.
+    nonisolated static let chainVerificationMaxAge: TimeInterval = 5 * 60
+    /// Min interval between retry passes over the queue. Cheap on local cost;
+    /// the bound on chain RPC traffic is `fetchOnChainStateAwaitingEpoch`'s
+    /// internal 4-attempt budget per call.
+    nonisolated static let chainVerificationRetryInterval: TimeInterval = 5
+    /// Max events buffered awaiting a `SEPSaltResponse` per group. Sized to
+    /// cover a few minutes of typical group chatter — beyond this the events
+    /// are dropped (sender will resend ACK or retry; we recover via the next
+    /// successful state update).
+    nonisolated static let eventsAwaitingSaltCap = 50
 
     private static let defaultRelays: [URL] = {
         var relays: [URL] = []
@@ -392,6 +469,16 @@ final class AppState {
         chatTransport.currentMembers = groups.flatMap(\.members)
         setupChatHandler()
         setupProtocolHandler()
+
+        // Load persisted chain-verification queue and seed initial sync status
+        // before any background work starts. recomputeSyncStatus is then driven
+        // by enqueue/dequeue and SEPSaltRequest/Response lifecycles.
+        pendingChainVerifications = Self.loadPendingChainVerifications()
+        for groupID in pendingChainVerifications.keys {
+            recomputeSyncStatus(groupID: groupID)
+        }
+        startChainVerificationDriver()
+
         if !Self.isDemoMode {
             Task { await connectAndSubscribeAllGroups() }
         }
@@ -1782,6 +1869,270 @@ final class AppState {
         )
     }
 
+    // MARK: - Sync-lock & retry
+
+    /// Tracks the wall-clock instant when the active `SEPSaltRequest` for a
+    /// group was sent, so the UI banner can show an elapsed-time counter and
+    /// `recomputeSyncStatus` has a stable "since" for `awaitingSaltResponse`.
+    private var saltRequestSince: [String: Date] = [:]
+
+    /// Recompute `syncStatus[groupID]` from the union of underlying sources.
+    /// Precedence (failed > pending > idle, and within pending: chain-verify
+    /// retry > salt-response wait > local-submit). Called whenever any source
+    /// mutates so the UI always reflects the live state.
+    private func recomputeSyncStatus(groupID: String) {
+        if let queue = pendingChainVerifications[groupID], let head = queue.first {
+            syncStatus[groupID] = .pending(
+                reason: .awaitingChainConfirmation,
+                since: head.firstAttemptAt,
+                attempts: head.attempts
+            )
+            return
+        }
+        if let buffer = eventsAwaitingSalt[groupID], !buffer.isEmpty {
+            syncStatus[groupID] = .pending(
+                reason: .awaitingSaltResponse,
+                since: saltRequestSince[groupID] ?? Date(),
+                attempts: 0
+            )
+            return
+        }
+        if case .awaitingChainConfirmation = pendingTransitions[groupID] {
+            syncStatus[groupID] = .pending(
+                reason: .localChainSubmitInFlight,
+                since: Date(),
+                attempts: 0
+            )
+            return
+        }
+        syncStatus[groupID] = .idle
+    }
+
+    /// Mark a group `.failed`. Used by the retry driver when an entry exceeds
+    /// `chainVerificationMaxAge`. The user can manually retry via the banner.
+    private func markSyncFailed(groupID: String, reason: SyncReason, error: String) {
+        syncStatus[groupID] = .failed(reason: reason, lastError: error)
+    }
+
+    /// Pure dedup/insert logic for the chain-verification queue. Extracted so
+    /// it's covered by `SyncStateTests` without a full AppState fixture.
+    nonisolated static func mergeQueuedUpdate(
+        existing: [QueuedStateUpdate],
+        newEntry: QueuedStateUpdate
+    ) -> [QueuedStateUpdate] {
+        var queue = existing
+        // Drop any older queued entries — the chain only keeps the latest
+        // commitment, so anything with epoch <= newEntry.epoch is stale.
+        queue.removeAll { $0.epoch <= newEntry.epoch }
+        queue.append(newEntry)
+        queue.sort { $0.epoch < $1.epoch }
+        return queue
+    }
+
+    /// Enqueue a `SEPGroupStateUpdate` for retry after chain verification failed.
+    /// Dedupes against existing entries: a newer epoch supersedes older queued
+    /// entries (the chain only keeps the latest commitment, so older updates
+    /// for the same group are stale by definition).
+    private func enqueueChainVerification(
+        _ update: SEPGroupStateUpdate,
+        groupID: String,
+        lastError: String
+    ) {
+        guard let json = try? JSONEncoder().encode(update) else {
+            #if DEBUG
+            print("[Sync] enqueue failed: cannot encode update group=\(groupID.prefix(8))")
+            #endif
+            return
+        }
+        let now = Date()
+        let entry = QueuedStateUpdate(
+            updateJSON: json,
+            epoch: update.epoch,
+            firstAttemptAt: now,
+            lastAttemptAt: now,
+            attempts: 1,
+            lastError: lastError
+        )
+        pendingChainVerifications[groupID] = Self.mergeQueuedUpdate(
+            existing: pendingChainVerifications[groupID] ?? [],
+            newEntry: entry
+        )
+        persistPendingChainVerifications()
+        recomputeSyncStatus(groupID: groupID)
+        #if DEBUG
+        print("[Sync] enqueued chain-verification group=\(groupID.prefix(8)) epoch=\(update.epoch) reason=\(lastError)")
+        #endif
+    }
+
+    /// Single retry pass over `pendingChainVerifications`. Process at most the
+    /// oldest entry per group per pass — one retry tick = one chain RPC per
+    /// stuck group, which is the rate `fetchOnChainStateAwaitingEpoch` budgets
+    /// internally with its 4-attempt backoff.
+    private func processChainVerificationQueue() async {
+        let now = Date()
+        // Snapshot keys — iterating while we mutate the dict is unsafe.
+        let groupIDs = Array(pendingChainVerifications.keys)
+        for groupID in groupIDs {
+            guard var queue = pendingChainVerifications[groupID], let entry = queue.first else {
+                continue
+            }
+            // Drop entries the live group has already passed (e.g. a fork or rekey
+            // advanced us past this epoch via a different code path).
+            if let group = groups.first(where: { $0.id == groupID }), group.epoch >= entry.epoch {
+                queue.removeFirst()
+                pendingChainVerifications[groupID] = queue.isEmpty ? nil : queue
+                persistPendingChainVerifications()
+                recomputeSyncStatus(groupID: groupID)
+                continue
+            }
+            // Age out — give up and surface .failed for the UI retry button.
+            if now.timeIntervalSince(entry.firstAttemptAt) > Self.chainVerificationMaxAge {
+                queue.removeFirst()
+                pendingChainVerifications[groupID] = queue.isEmpty ? nil : queue
+                persistPendingChainVerifications()
+                markSyncFailed(
+                    groupID: groupID,
+                    reason: .awaitingChainConfirmation,
+                    error: entry.lastError ?? "Sync timed out — chain not confirming"
+                )
+                continue
+            }
+            // Decode and retry. enqueueOnFailure: false so we manage the queue
+            // here based on whether the live epoch actually advanced.
+            guard let update = try? JSONDecoder().decode(SEPGroupStateUpdate.self, from: entry.updateJSON) else {
+                queue.removeFirst()
+                pendingChainVerifications[groupID] = queue.isEmpty ? nil : queue
+                persistPendingChainVerifications()
+                recomputeSyncStatus(groupID: groupID)
+                continue
+            }
+            await applyStateUpdate(update, to: groupID, enqueueOnFailure: false)
+            // Did it land?
+            if let group = groups.first(where: { $0.id == groupID }), group.epoch >= update.epoch {
+                queue.removeFirst()
+                pendingChainVerifications[groupID] = queue.isEmpty ? nil : queue
+                persistPendingChainVerifications()
+                recomputeSyncStatus(groupID: groupID)
+                #if DEBUG
+                print("[Sync] resolved group=\(groupID.prefix(8)) at epoch=\(update.epoch) after \(entry.attempts + 1) attempts")
+                #endif
+            } else {
+                queue[0].attempts += 1
+                queue[0].lastAttemptAt = now
+                pendingChainVerifications[groupID] = queue
+                persistPendingChainVerifications()
+                recomputeSyncStatus(groupID: groupID)
+            }
+        }
+    }
+
+    /// Long-lived driver that wakes every `chainVerificationRetryInterval` and
+    /// runs one queue pass. Lives for the AppState lifetime.
+    private func startChainVerificationDriver() {
+        chainVerificationDriverTask?.cancel()
+        chainVerificationDriverTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.chainVerificationRetryInterval))
+                guard let self else { return }
+                await self.processChainVerificationQueue()
+            }
+        }
+    }
+
+    /// User-initiated retry from the UI banner when sync is `.failed`. Re-enqueues
+    /// any entries cleared during the age-out and triggers an immediate retry pass.
+    func retrySync(groupID: String) {
+        // If the group was just marked failed, the queue is already drained;
+        // the user can recover by sending a fresh state update from a peer.
+        // For the event-buffer case, we re-emit the SEPSaltRequest.
+        if let buffer = eventsAwaitingSalt[groupID], let oldest = buffer.first {
+            saltRequestsInFlight.remove("\(groupID):\(oldest.epoch)")
+            triggerSaltResync(groupID: groupID, eventEpoch: oldest.epoch, event: oldest.event)
+        }
+        // Kick the queue immediately rather than waiting for the next tick.
+        Task { @MainActor [weak self] in
+            await self?.processChainVerificationQueue()
+        }
+    }
+
+    /// Buffer a chat event whose epoch tag exceeds our local epoch and emit a
+    /// `SEPSaltRequest` so peers can fill in the missing salt. Drained when the
+    /// matching `SEPSaltResponse` lands.
+    func triggerSaltResync(groupID: String, eventEpoch: UInt64, event: NostrEvent) {
+        guard let group = groups.first(where: { $0.id == groupID }) else { return }
+        // Buffer the event for later re-decrypt; cap per-group.
+        var buffer = eventsAwaitingSalt[groupID] ?? []
+        buffer.append((epoch: eventEpoch, event: event))
+        if buffer.count > Self.eventsAwaitingSaltCap {
+            buffer.removeFirst(buffer.count - Self.eventsAwaitingSaltCap)
+        }
+        eventsAwaitingSalt[groupID] = buffer
+        if saltRequestSince[groupID] == nil {
+            saltRequestSince[groupID] = Date()
+        }
+        recomputeSyncStatus(groupID: groupID)
+        // Dedupe in-flight requests so a stuck-at-old-epoch group doesn't
+        // emit one SEPSaltRequest per failed event.
+        let inflightKey = "\(groupID):\(eventEpoch)"
+        guard !saltRequestsInFlight.contains(inflightKey) else { return }
+        saltRequestsInFlight.insert(inflightKey)
+        let request = SEPSaltRequest(epoch: eventEpoch)
+        let groupSnapshot = group
+        let km = keyManager
+        let transport = chatTransport
+        Task {
+            try? await transport.sendProtocolMessage(
+                request,
+                topic: groupSnapshot.topicTag,
+                key: groupSnapshot.encryptionKey,
+                keyManager: km
+            )
+        }
+        #if DEBUG
+        print("[Sync] SEPSaltRequest sent group=\(groupID.prefix(8)) epoch=\(eventEpoch) buffered=\(buffer.count)")
+        #endif
+    }
+
+    /// Drain `eventsAwaitingSalt[groupID]` for entries at the given epoch. Called
+    /// from the SEPSaltResponse handler after `storeSalt` lands the new salt;
+    /// re-injects the buffered events through the chat transport so they decrypt
+    /// with the now-available key.
+    func drainEventsAwaitingSalt(groupID: String, epoch: UInt64) {
+        guard var buffer = eventsAwaitingSalt[groupID] else { return }
+        let toReplay = buffer.filter { $0.epoch == epoch }
+        buffer.removeAll { $0.epoch == epoch }
+        if buffer.isEmpty {
+            eventsAwaitingSalt[groupID] = nil
+            saltRequestSince[groupID] = nil
+        } else {
+            eventsAwaitingSalt[groupID] = buffer
+        }
+        saltRequestsInFlight.remove("\(groupID):\(epoch)")
+        recomputeSyncStatus(groupID: groupID)
+        guard !toReplay.isEmpty else { return }
+        chatTransport.replayEvents(toReplay.map(\.event), groupID: groupID)
+        #if DEBUG
+        print("[Sync] drained group=\(groupID.prefix(8)) epoch=\(epoch) events=\(toReplay.count)")
+        #endif
+    }
+
+    private static func loadPendingChainVerifications() -> [String: [QueuedStateUpdate]] {
+        guard let data = UserDefaults.standard.data(forKey: pendingChainVerificationsKey) else {
+            return [:]
+        }
+        return (try? JSONDecoder().decode([String: [QueuedStateUpdate]].self, from: data)) ?? [:]
+    }
+
+    private func persistPendingChainVerifications() {
+        if pendingChainVerifications.isEmpty {
+            UserDefaults.standard.removeObject(forKey: Self.pendingChainVerificationsKey)
+            return
+        }
+        if let data = try? JSONEncoder().encode(pendingChainVerifications) {
+            UserDefaults.standard.set(data, forKey: Self.pendingChainVerificationsKey)
+        }
+    }
+
     /// Apply a received state update to a local group.
     /// Handles three cases:
     /// Apply a received state update. For published groups, chain-confirm-first:
@@ -1793,7 +2144,12 @@ final class AppState {
     /// - update.epoch == local + different salt: epoch fork — for published groups, adopt
     ///   chain-confirmed state; for unpublished, discard local pending and accept remote
     /// - update.epoch < local: stale update, ignored
-    func applyStateUpdate(_ update: SEPGroupStateUpdate, to groupID: String) async {
+    ///
+    /// When chain verification fails (RPC race or commitment mismatch), the
+    /// update is enqueued in `pendingChainVerifications` and retried by the
+    /// driver task — unless `enqueueOnFailure` is false, which the driver
+    /// itself uses to manage queue lifecycle without re-enqueueing.
+    func applyStateUpdate(_ update: SEPGroupStateUpdate, to groupID: String, enqueueOnFailure: Bool = true) async {
         guard let index = groups.firstIndex(where: { $0.id == groupID }) else { return }
         var group = groups[index]
 
@@ -1970,12 +2326,26 @@ final class AppState {
                         #if DEBUG
                         print("[AppState] Remote update REJECTED: chain epoch=\(entry.epoch) active=\(entry.active) updateEpoch=\(update.epoch) group=\(groupID.prefix(8))")
                         #endif
+                        if enqueueOnFailure {
+                            enqueueChainVerification(
+                                update,
+                                groupID: groupID,
+                                lastError: "chain epoch \(entry.epoch) < update epoch \(update.epoch)"
+                            )
+                        }
                         return
                     }
                 } catch {
                     #if DEBUG
                     print("[AppState] Remote update DROPPED: chain fetch failed: \(error) group=\(groupID.prefix(8))")
                     #endif
+                    if enqueueOnFailure {
+                        enqueueChainVerification(
+                            update,
+                            groupID: groupID,
+                            lastError: "chain fetch failed: \(error.localizedDescription)"
+                        )
+                    }
                     return
                 }
             }
@@ -2790,6 +3160,12 @@ final class AppState {
 
     /// Set up the chat message handler on the persistent transport (runs once at init).
     private func setupChatHandler() {
+        chatTransport.onEpochAhead = { [weak self] groupID, eventEpoch, event in
+            guard let self else { return }
+            Task { @MainActor in
+                self.triggerSaltResync(groupID: groupID, eventEpoch: eventEpoch, event: event)
+            }
+        }
         chatTransport.onMessage = { [weak self] groupID, plaintext, senderBlsHex, event, replyToID in
             guard let self else { return }
             Task { @MainActor in
@@ -3416,6 +3792,9 @@ final class AppState {
                 case SEPSaltResponse.messageType:
                     if let response = try? decoder.decode(SEPSaltResponse.self, from: data) {
                         self.storeSalt(groupID: groupID, epoch: response.epoch, salt: response.salt)
+                        // Replay any chat events buffered while the salt for this
+                        // epoch was missing; the resolver now resolves it.
+                        self.drainEventsAwaitingSalt(groupID: groupID, epoch: response.epoch)
                     }
                 case SEPRekey.messageType:
                     if let rekey = try? decoder.decode(SEPRekey.self, from: data) {

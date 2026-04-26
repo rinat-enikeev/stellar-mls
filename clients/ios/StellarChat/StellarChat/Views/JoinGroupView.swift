@@ -8,11 +8,15 @@ struct JoinGroupView: View {
     @State private var errorMessage: String?
     @State private var joined = false
     @State private var isSyncing = false
-    @State private var showScanner = false
+    @State private var showScanner: Bool
     @State private var clipboardDetected = false
     @State private var decodedGroup: ChatGroup?
     @State private var verificationResult: OnChainVerificationResult?
     @State private var isVerifying = false
+
+    init(startInScanner: Bool = false) {
+        _showScanner = State(initialValue: startInScanner)
+    }
 
     var body: some View {
         NavigationStack {

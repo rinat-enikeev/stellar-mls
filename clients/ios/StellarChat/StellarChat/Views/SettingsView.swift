@@ -5,6 +5,7 @@ struct SettingsView: View {
     @Environment(AppState.self) private var appState
     @State private var tab: SettingsTab = .invite
     @State private var showJoin = false
+    @State private var joinStartInScanner = false
     @State private var showAbout = false
     @State private var showShareSheet = false
     @State private var showRecoveryPhrase = false
@@ -35,7 +36,7 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .sheet(isPresented: $showJoin) {
-            JoinGroupView()
+            JoinGroupView(startInScanner: joinStartInScanner)
         }
         .sheet(isPresented: $showAbout) {
             OnboardingView(hasSeenOnboarding: .constant(true), isRevisit: true)
@@ -87,7 +88,7 @@ struct SettingsView: View {
             }
 
             Section {
-                Button(action: { showJoin = true }) {
+                Button(action: { joinStartInScanner = true; showJoin = true }) {
                     HStack(spacing: 12) {
                         SettingsIconBox(systemImage: "qrcode.viewfinder", background: .green)
                         Text("Scan invite QR")
@@ -98,7 +99,7 @@ struct SettingsView: View {
                             .foregroundStyle(.tertiary)
                     }
                 }
-                Button(action: { showJoin = true }) {
+                Button(action: { joinStartInScanner = false; showJoin = true }) {
                     HStack(spacing: 12) {
                         SettingsIconBox(systemImage: "key.fill", background: .purple)
                         Text("Paste invite key")

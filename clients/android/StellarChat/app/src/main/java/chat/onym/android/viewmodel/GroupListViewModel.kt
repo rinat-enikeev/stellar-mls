@@ -2702,7 +2702,11 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         val updated = groups[index].copy(avatarData = avatarData)
         groups[index] = updated
         viewModelScope.launch {
-            try { store.saveGroup(updated) } catch (_: Exception) { }
+            try {
+                store.saveGroup(updated)
+            } catch (e: Exception) {
+                if (BuildConfig.DEBUG) Log.e("GroupListVM", "setGroupAvatar persist failed: ${e.message}")
+            }
         }
     }
 

@@ -108,8 +108,10 @@ import chat.onym.android.ui.components.GroupAccent
 import chat.onym.android.ui.components.QRScannerView
 import chat.onym.android.ui.components.SettingsIconBox
 import com.stellarmls.mls.SEPGroupMemberLeaf
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -208,8 +210,12 @@ fun GroupInfoScreen(
                 isMember = isMember,
                 onPickAvatar = { uri ->
                     if (isMember) {
-                        val bytes = decodeAndDownscaleAvatar(context, uri)
-                        if (bytes != null) onSetGroupAvatar(bytes)
+                        scope.launch {
+                            val bytes = withContext(Dispatchers.IO) {
+                                decodeAndDownscaleAvatar(context, uri)
+                            }
+                            if (bytes != null) onSetGroupAvatar(bytes)
+                        }
                     }
                 }
             )

@@ -1,3 +1,4 @@
+import ImageIO
 import PhotosUI
 import SwiftUI
 import SwiftMLS
@@ -599,9 +600,8 @@ struct GroupInfoView: View {
                     guard let newItem else { return }
                     Task {
                         if let data = try? await newItem.loadTransferable(type: Data.self),
-                           let image = UIImage(data: data) {
-                            let processed = Self.downscaleAvatar(image)
-                            appState.setGroupAvatar(groupID: currentGroup.id, avatarData: processed.data)
+                           let processed = Self.downscaleAvatar(data) {
+                            appState.setGroupAvatar(groupID: currentGroup.id, avatarData: processed)
                         }
                         selectedAvatarItem = nil
                     }
@@ -628,22 +628,20 @@ struct GroupInfoView: View {
         .padding(.bottom, 14)
     }
 
-    /// Downscale the picked image so the long edge is at most 256 px and re-encode
-    /// as JPEG quality 0.85 so the persisted row stays small.
-    private static func downscaleAvatar(_ source: UIImage) -> (image: UIImage, data: Data) {
-        let maxEdge: CGFloat = 256
-        let longest = max(source.size.width, source.size.height)
-        let scale = longest > maxEdge ? maxEdge / longest : 1
-        let targetSize = CGSize(
-            width: source.size.width * scale,
-            height: source.size.height * scale
-        )
-        let renderer = UIGraphicsImageRenderer(size: targetSize)
-        let resized = renderer.image { _ in
-            source.draw(in: CGRect(origin: .zero, size: targetSize))
-        }
-        let data = resized.jpegData(compressionQuality: 0.85) ?? Data()
-        return (resized, data)
+    /// ImageIO thumbnail path so a 50+ MP HEIC is never fully decoded; returns nil rather than 0-byte data.
+    private static func downscaleAvatar(_ data: Data) -> Data? {
+        let maxEdge = 256
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxEdge,
+        ]
+        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        guard let jpeg = UIImage(cgImage: thumbnail).jpegData(compressionQuality: 0.85),
+              !jpeg.isEmpty else { return nil }
+        return jpeg
     }
 
     private func chip(icon: String, text: String, tint: Color, bgAlpha: Double = 0.06) -> some View {

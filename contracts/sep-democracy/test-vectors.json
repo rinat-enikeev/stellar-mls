@@ -1,0 +1,341 @@
+{
+  "description": "Canonical test vectors for the SEP Democracy Soroban contract (`contracts/sep-democracy`). This file is the single source of truth for the contract's ABI: every error code, enum value, validation boundary, wire shape, dispatch routing, and bitmap-to-field-element packing rule below MUST match the contract's source. The `test_vectors_consistency` inline test loads this file and asserts the contract's `Error` enum, `tier_capacity`, and IC-point constants match these values byte-for-byte. Vectors that depend on Poseidon / Groth16 outputs are deliberately omitted: those are produced by the Phase A `prove_democracy_v2` reference implementation (per `docs/democracy-update-testnet-design.md` §6) and added to a future `cross-platform-test-vectors.json` extension. The vectors here cover the contract surface only.",
+  "version": 1,
+  "design_doc": "docs/democracy-update-testnet-design.md",
+  "design_doc_version": "0.5.1",
+  "contract_source": "contracts/sep-democracy/src/lib.rs",
+  "architecture_note": "This contract is the per-type Democracy contract — one of the eventual four (Anarchy, OneOnOne, Democracy, Oligarchy). The `group_type` discriminator is implicit in the contract address; there is no polymorphic `update_commitment` dispatch, no `group_type` field in storage, no `UpdateByType(u32)` VK kind. The §4.7.4 design-doc privacy benefit (selector hiding) collapses for the per-type architecture — chain observers learn the group type from the contract address itself, the same publicness class as `tier`.",
+
+  "error_codes": {
+    "description": "Numeric values of `Error` variants (`#[contracterror] #[repr(u32)]`). Per-type Democracy contract drops everything tied to multi-type dispatch (UnknownGroupType, GroupTypeMismatch), 1v1 (OneOnOneImmutable, Invalid1v1Tier), Oligarchy (MissingAdminRoot, AdminRootMismatch, Reserved22), and v1 democracy artifacts (MemberCountMismatch, MemberCountOutOfRange, DemocracyInputMissing). Adds InvalidThreshold per design v0.5.1 §4.7.6.",
+    "vectors": [
+      { "name": "NotInitialized", "code": 1 },
+      { "name": "AlreadyInitialized", "code": 2 },
+      { "name": "Reserved3", "code": 3, "note": "previously Unauthorized; admin checks now use require_auth() which panics" },
+      { "name": "GroupAlreadyExists", "code": 4 },
+      { "name": "GroupNotFound", "code": 5 },
+      { "name": "GroupInactive", "code": 6 },
+      { "name": "InvalidProof", "code": 7 },
+      { "name": "InvalidTier", "code": 8 },
+      { "name": "InvalidVkLength", "code": 9 },
+      { "name": "PublicInputsMismatch", "code": 10 },
+      { "name": "InvalidEpoch", "code": 11 },
+      { "name": "ProofReplay", "code": 12 },
+      { "name": "TierGroupLimitReached", "code": 13 },
+      { "name": "AdminOnly", "code": 14 },
+      { "name": "InvalidCommitmentEncoding", "code": 15 },
+      { "name": "UnknownVkKind", "code": 16 },
+      { "name": "InvalidPoint", "code": 26 },
+      { "name": "GroupStillActive", "code": 27 },
+      { "name": "InvalidThreshold", "code": 28, "note": "create_group rejects threshold_numerator < 1 || > 100; per design v0.5.1 §4.7.6" }
+    ],
+    "dropped_from_sep_xxxx": [
+      { "name": "OneOnOneImmutable", "code": 17, "reason": "no 1v1 in this contract" },
+      { "name": "UnknownGroupType", "code": 18, "reason": "single-type contract" },
+      { "name": "MissingAdminRoot", "code": 19, "reason": "no Oligarchy in this contract" },
+      { "name": "AdminRootMismatch", "code": 20, "reason": "no Oligarchy in this contract" },
+      { "name": "DemocracyInputMissing", "code": 21, "reason": "v2 has no count public inputs that could be missing" },
+      { "name": "Reserved22", "code": 22, "reason": "Oligarchy NotAdmin reservation" },
+      { "name": "Invalid1v1Tier", "code": 23, "reason": "no 1v1 in this contract" },
+      { "name": "MemberCountMismatch", "code": 24, "reason": "v1 democracy artifact; v2 uses occupancy_commitment" },
+      { "name": "MemberCountOutOfRange", "code": 25, "reason": "v1 democracy artifact; v2 internalises count constraints in-circuit" },
+      { "name": "GroupTypeMismatch", "code": 29, "reason": "no polymorphic dispatch in single-type contract" }
+    ]
+  },
+
+  "tier": {
+    "description": "Tier index → tree depth → leaf capacity. The contract MUST reject `tier > 2` with `InvalidTier`. Tier capacity is the total slot space (cumulative-joins ceiling per design §4.1's tombstone-permanence rule).",
+    "vectors": [
+      { "tier": 0, "name": "Small", "depth": 5, "capacity": 32 },
+      { "tier": 1, "name": "Medium", "depth": 8, "capacity": 256 },
+      { "tier": 2, "name": "Large", "depth": 11, "capacity": 2048 }
+    ],
+    "rejected_tiers": [
+      { "tier": 3, "expected_error": "InvalidTier" },
+      { "tier": 100, "expected_error": "InvalidTier" },
+      { "tier": 4294967295, "expected_error": "InvalidTier" }
+    ]
+  },
+
+  "vk_kind_enum": {
+    "description": "Two VK kinds for this contract. No `UpdateByType(u32)` because group_type is constant (Democracy). Membership VK is reused across create + verify_membership + deactivate_group; Update VK is used only by update_commitment.",
+    "vectors": [
+      {
+        "name": "Membership",
+        "ic_count": 3,
+        "ic_layout": ["base", "commitment", "epoch"],
+        "used_by": ["create_group", "verify_membership", "deactivate_group"]
+      },
+      {
+        "name": "Update",
+        "ic_count": 7,
+        "ic_layout": ["base", "c_old", "epoch_old", "c_new", "occupancy_commitment_old", "occupancy_commitment_new", "threshold_numerator"],
+        "used_by": ["update_commitment"],
+        "note": "v2 democracy update circuit per design §4.7.3. The 6 actual public inputs (positions 1-6) include 5 wire-supplied scalars and 1 contract-supplied scalar (threshold_numerator, read from current.threshold_numerator at verify time per §4.7.6)."
+      }
+    ],
+    "ic_ordering_canonical": "MUST match the v2 democracy circuit's allocation order. Any drift between client prover and contract verifier on this ordering produces silent verify failures. Pinned per design §4.7.6."
+  },
+
+  "create_group_validation": {
+    "description": "Per-call validation in `create_group`. Single-type contract — no per-type dispatch. Threshold must be present (this is Democracy) and in [1, 100].",
+    "rules": [
+      "tier ∈ {0, 1, 2}; out of range → InvalidTier",
+      "threshold_numerator ∈ [1, 100]; out of range → InvalidThreshold",
+      "group_id MUST NOT already be assigned to a live or inactive group; collision → GroupAlreadyExists",
+      "commitment and occupancy_commitment_initial MUST be canonical Fr encodings (Fr::from_bytes ∘ Fr::to_bytes round-trip); non-canonical → InvalidCommitmentEncoding",
+      "tier_count(tier) MUST be < tier_capacity(tier); exceeded → TierGroupLimitReached",
+      "proof MUST verify under the membership VK at `tier` against the supplied (commitment, epoch=0) public inputs; failure → InvalidProof",
+      "proof_hash(proof) MUST NOT be in UsedProof storage; collision → ProofReplay"
+    ],
+    "threshold_numerator_validation": {
+      "valid_vectors": [
+        { "threshold_numerator": 1, "semantics": "single-vote-passes (degenerate; allowed by spec)" },
+        { "threshold_numerator": 50, "semantics": "simple majority (default per UI; non-strict — ties pass per §4.7.6)" },
+        { "threshold_numerator": 51, "semantics": "strict majority (ties fail)" },
+        { "threshold_numerator": 67, "semantics": "two-thirds supermajority" },
+        { "threshold_numerator": 75, "semantics": "three-quarters supermajority" },
+        { "threshold_numerator": 100, "semantics": "unanimous" }
+      ],
+      "invalid_vectors": [
+        { "threshold_numerator": 0, "expected_error": "InvalidThreshold" },
+        { "threshold_numerator": 101, "expected_error": "InvalidThreshold" },
+        { "threshold_numerator": 200, "expected_error": "InvalidThreshold" },
+        { "threshold_numerator": 255, "expected_error": "InvalidThreshold" }
+      ]
+    }
+  },
+
+  "domain_tags": {
+    "description": "Field-element domain tags used inside Poseidon hash inputs. Pinned per design §10.1 (Phase-A blocker). Codified in the planned `src/circuit/domain_tags.rs` (in the prover repo, NOT in this contract — the contract verifies proofs but doesn't compute Poseidon hashes itself). The contract is value-agnostic to these tags; they're listed here for cross-implementation reference. Future Anarchy / 1v1 / Oligarchy contracts MUST use disjoint values for their leaf and occupancy domain tags.",
+    "vectors": [
+      { "name": "DOMAIN_MEMBER", "value_decimal": 1, "value_hex": "0000000000000000000000000000000000000000000000000000000000000001", "used_for": "Poseidon(DOMAIN_MEMBER, Poseidon(sk)) — member leaf" },
+      { "name": "DOMAIN_TOMBSTONE", "value_decimal": 2, "value_hex": "0000000000000000000000000000000000000000000000000000000000000002", "used_for": "Poseidon(DOMAIN_TOMBSTONE, 0) — tombstone leaf constant" },
+      { "name": "DOMAIN_OCCUPANCY", "value_decimal": 3, "value_hex": "0000000000000000000000000000000000000000000000000000000000000003", "used_for": "Poseidon(DOMAIN_OCCUPANCY, fold(bitmap)) — occupancy commitment" }
+    ]
+  },
+
+  "occupancy_bitmap_fold": {
+    "description": "Per design §4.7.2, the occupancy bitmap is folded into Fr scalar field elements at BITS_PER_FELT = 252 bits per scalar. Each scalar packs 252 bitmap bits in little-endian order: bit i of the bitmap is bit (i mod 252) of scalar (i div 252). The high bits 252-255 of every scalar MUST be zero (Fr modulus is ~2^254.86, so the high 3 bits cannot all be 1). The contract is value-agnostic to the bitmap encoding (it sees only the 32-byte occupancy_commitment hash output); these vectors are reference for cross-implementation testing of provers against this contract.",
+    "bits_per_felt": 252,
+    "scalar_count_by_tier": [
+      { "tier": 0, "depth": 5, "bitmap_bits": 32, "scalar_count": 1 },
+      { "tier": 1, "depth": 8, "bitmap_bits": 256, "scalar_count": 2, "note": "256 bits / 252 = 2 scalars; 4 high bits of scalar 1 are zero-padded" },
+      { "tier": 2, "depth": 11, "bitmap_bits": 2048, "scalar_count": 9, "note": "2048 bits / 252 = 9 scalars; 220 high bits of scalar 8 are zero-padded" }
+    ],
+    "bit_packing_rule": "bitmap[i] occupies bit position (i mod 252) of scalar (i div 252), little-endian within the scalar. Bits 252-255 of every produced scalar MUST be 0.",
+    "tier_0_examples": [
+      { "description": "All slots empty (pre-creation reference)", "bitmap_decimal": 0, "expected_scalars_be_hex": ["0000000000000000000000000000000000000000000000000000000000000000"] },
+      { "description": "Slot 0 active (creator-only state at create_group time)", "bitmap_decimal": 1, "expected_scalars_be_hex": ["0000000000000000000000000000000000000000000000000000000000000001"] },
+      { "description": "Slots 0 and 1 active (after first member join, no tombstones)", "bitmap_decimal": 3, "expected_scalars_be_hex": ["0000000000000000000000000000000000000000000000000000000000000003"] },
+      { "description": "Slots 0, 1, 3 active; slot 2 tombstoned", "bitmap_decimal": 11, "expected_scalars_be_hex": ["000000000000000000000000000000000000000000000000000000000000000b"] },
+      { "description": "All 32 slots active (Small tier maximum)", "bitmap_decimal": 4294967295, "expected_scalars_be_hex": ["00000000000000000000000000000000000000000000000000000000ffffffff"] }
+    ],
+    "tier_1_examples": [
+      { "description": "Slot 0 active (creator-only state, Medium tier)", "bitmap_bit_indices_set": [0], "expected_scalars_be_hex": ["0000000000000000000000000000000000000000000000000000000000000001", "0000000000000000000000000000000000000000000000000000000000000000"] },
+      { "description": "Slot 251 active (last bit of scalar 0)", "bitmap_bit_indices_set": [251], "expected_scalars_be_hex": ["0800000000000000000000000000000000000000000000000000000000000000", "0000000000000000000000000000000000000000000000000000000000000000"] },
+      { "description": "Slot 252 active (first bit of scalar 1; the boundary case that wedges if BITS_PER_FELT is misimplemented as 256)", "bitmap_bit_indices_set": [252], "expected_scalars_be_hex": ["0000000000000000000000000000000000000000000000000000000000000000", "0000000000000000000000000000000000000000000000000000000000000001"] },
+      { "description": "Slots 0 and 252 active (one bit per scalar; tests the cross-scalar boundary)", "bitmap_bit_indices_set": [0, 252], "expected_scalars_be_hex": ["0000000000000000000000000000000000000000000000000000000000000001", "0000000000000000000000000000000000000000000000000000000000000001"] },
+      { "description": "Slot 255 active (last bit of bitmap; bit position 3 of scalar 1)", "bitmap_bit_indices_set": [255], "expected_scalars_be_hex": ["0000000000000000000000000000000000000000000000000000000000000000", "0000000000000000000000000000000000000000000000000000000000000008"] }
+    ],
+    "tier_2_examples": [
+      { "description": "Slot 2047 active (last bit of bitmap; bit position (2047 mod 252) = 31 of scalar 8)", "bitmap_bit_indices_set": [2047], "scalar_index_for_bit_2047": 8, "bit_offset_within_scalar_for_bit_2047": 31, "expected_scalar_8_be_hex": "0000000000000000000000000000000000000000000000000000000080000000" }
+    ],
+    "high_bits_zero_assertion": {
+      "description": "Every produced scalar MUST have bits 252-255 equal to 0 (canonical-Fr requirement). Implementations MUST reject (or refuse to produce) any scalar where the top byte (BE) has any of the high 4 bits set.",
+      "rejection_examples_be_hex": [
+        "f000000000000000000000000000000000000000000000000000000000000000",
+        "1000000000000000000000000000000000000000000000000000000000000000",
+        "8000000000000000000000000000000000000000000000000000000000000000"
+      ]
+    }
+  },
+
+  "membership_count_constraints": {
+    "description": "v2 internalises all count-derived rules into the circuit (design §4.7.3 step 3). The contract no longer reads `member_count` from storage on the update path. The values below describe what the v2 democracy circuit is required to enforce, expressed as bitmap popcount conditions; they are reproduced as test vectors so the inline `prove_democracy_v2_*` cases (in the prover repo) and the contract integration tests have a single source of truth.",
+    "popcount_constraints": [
+      {
+        "rule": "popcount(bitmap_new) ≥ 2 (floor)",
+        "rationale": "preserves democracy-of-≥2 invariant; was contract-only in v1, now in-circuit per §4.2.1",
+        "valid_examples": [
+          { "popcount_old": 2, "popcount_new": 2, "valid": true, "context": "no-op epoch advance / key rotation" },
+          { "popcount_old": 2, "popcount_new": 3, "valid": true, "context": "single member added" },
+          { "popcount_old": 3, "popcount_new": 2, "valid": true, "context": "single member removed; floor preserved" }
+        ],
+        "invalid_examples": [
+          { "popcount_old": 2, "popcount_new": 1, "valid": false, "expected_outcome": "BelowMinCount (prover-side); InvalidProof (contract-side)" },
+          { "popcount_old": 2, "popcount_new": 0, "valid": false, "expected_outcome": "BelowMinCount (prover-side); InvalidProof (contract-side)" }
+        ]
+      },
+      {
+        "rule": "|popcount(bitmap_new) − popcount(bitmap_old)| ≤ 1 (single-leaf delta)",
+        "rationale": "matches the single-signer-subset proof shape from §4.2; multi-signer transitions are deferred to Phase F",
+        "valid_examples": [
+          { "popcount_old": 5, "popcount_new": 5, "valid": true, "context": "key rotation, no membership change" },
+          { "popcount_old": 5, "popcount_new": 6, "valid": true, "context": "single insert" },
+          { "popcount_old": 5, "popcount_new": 4, "valid": true, "context": "single remove" }
+        ],
+        "invalid_examples": [
+          { "popcount_old": 5, "popcount_new": 7, "valid": false, "expected_outcome": "InvalidProof (delta > 1)" },
+          { "popcount_old": 5, "popcount_new": 3, "valid": false, "expected_outcome": "InvalidProof (delta > 1)" },
+          { "popcount_old": 10, "popcount_new": 0, "valid": false, "expected_outcome": "InvalidProof (delta > 1)" }
+        ]
+      },
+      {
+        "rule": "popcount(bitmap) ≤ 2^depth (ceiling)",
+        "rationale": "implicit in the bitmap's fixed length; no explicit constraint required",
+        "tier_0_max_popcount": 32,
+        "tier_1_max_popcount": 256,
+        "tier_2_max_popcount": 2048
+      },
+      {
+        "rule": "100·K ≥ threshold_numerator · popcount(bitmap_old) (quorum, non-strict — ties pass)",
+        "rationale": "configurable per group (§4.7.6); K is the number of signers in the proof. K=1 is the single-signer subset baseline (§4.2). Non-strict >= means threshold=50 with m_old=4, K=2 (200 ≥ 200) passes — natural reading of 'simple majority = at least half'.",
+        "single_signer_examples": [
+          { "threshold_numerator": 50, "popcount_old": 1, "K": 1, "valid": true, "calc": "100·1 ≥ 50·1 ⟺ 100 ≥ 50" },
+          { "threshold_numerator": 50, "popcount_old": 2, "K": 1, "valid": true, "calc": "100·1 ≥ 50·2 ⟺ 100 ≥ 100", "note": "tie passes" },
+          { "threshold_numerator": 50, "popcount_old": 3, "K": 1, "valid": false, "calc": "100·1 ≥ 50·3 ⟺ 100 ≥ 150 false", "note": "single-signer subset hits the limit at popcount_old ≥ 3" },
+          { "threshold_numerator": 51, "popcount_old": 2, "K": 1, "valid": false, "calc": "100·1 ≥ 51·2 ⟺ 100 ≥ 102 false", "note": "strict-majority threshold rejects the tie" },
+          { "threshold_numerator": 67, "popcount_old": 1, "K": 1, "valid": true, "calc": "100·1 ≥ 67·1 ⟺ 100 ≥ 67" },
+          { "threshold_numerator": 67, "popcount_old": 2, "K": 1, "valid": false, "calc": "100·1 ≥ 67·2 ⟺ 100 ≥ 134 false" },
+          { "threshold_numerator": 67, "popcount_old": 3, "K": 2, "valid": false, "calc": "100·2 ≥ 67·3 ⟺ 200 ≥ 201 false" },
+          { "threshold_numerator": 67, "popcount_old": 3, "K": 3, "valid": true, "calc": "100·3 ≥ 67·3 ⟺ 300 ≥ 201" },
+          { "threshold_numerator": 100, "popcount_old": 1, "K": 1, "valid": true, "calc": "100·1 ≥ 100·1 ⟺ 100 ≥ 100" },
+          { "threshold_numerator": 100, "popcount_old": 2, "K": 1, "valid": false, "calc": "100·1 ≥ 100·2 ⟺ 100 ≥ 200 false" },
+          { "threshold_numerator": 100, "popcount_old": 3, "K": 3, "valid": true, "calc": "100·3 ≥ 100·3 ⟺ 300 ≥ 300" }
+        ],
+        "single_signer_max_m_old_by_threshold": {
+          "comment": "For K=1, max popcount_old supported is floor(100 / threshold_numerator)",
+          "table": [
+            { "threshold_numerator": 50, "max_popcount_old_for_k1": 2, "covers_transitions": ["1→2", "2→3"] },
+            { "threshold_numerator": 51, "max_popcount_old_for_k1": 1, "covers_transitions": ["1→2"] },
+            { "threshold_numerator": 67, "max_popcount_old_for_k1": 1, "covers_transitions": ["1→2"] },
+            { "threshold_numerator": 75, "max_popcount_old_for_k1": 1, "covers_transitions": ["1→2"] },
+            { "threshold_numerator": 100, "max_popcount_old_for_k1": 1, "covers_transitions": ["1→2"] }
+          ]
+        }
+      }
+    ]
+  },
+
+  "update_commitment_public_inputs_wire_format": {
+    "description": "Wire encoding of `UpdateCommitmentPublicInputs`. Single Democracy variant (no discriminated union — the contract is Democracy-only). Encoded as a Soroban `#[contracttype]` struct. Five wire-supplied scalars; the verifier consumes a 6-public-input vector at proof verification — the 6th input (threshold_numerator) is supplied by the contract from current.threshold_numerator.",
+    "wire_fields": [
+      { "name": "c_old", "type": "BytesN<32>", "fr_canonical": true, "rule": "MUST equal current.commitment, else PublicInputsMismatch" },
+      { "name": "epoch_old", "type": "u64", "rule": "MUST equal current.epoch, else PublicInputsMismatch" },
+      { "name": "c_new", "type": "BytesN<32>", "fr_canonical": true, "rule": "non-canonical → InvalidCommitmentEncoding" },
+      { "name": "occupancy_commitment_old", "type": "BytesN<32>", "fr_canonical": true, "rule": "MUST equal current.occupancy_commitment, else PublicInputsMismatch" },
+      { "name": "occupancy_commitment_new", "type": "BytesN<32>", "fr_canonical": true, "rule": "non-canonical → InvalidCommitmentEncoding" }
+    ],
+    "groth16_public_inputs": [
+      "c_old (from wire)",
+      "epoch_old (from wire)",
+      "c_new (from wire)",
+      "occupancy_commitment_old (from wire)",
+      "occupancy_commitment_new (from wire)",
+      "threshold_numerator (from current.threshold_numerator; NOT on the wire — design §4.7.6)"
+    ],
+    "vk_kind": "Update (7 IC points: base + 6 public inputs)",
+    "canonical_encoding_rules": [
+      "Every BytesN<32> commitment field MUST round-trip through Fr::from_bytes ∘ Fr::to_bytes; non-canonical encodings are rejected with InvalidCommitmentEncoding.",
+      "u64 epoch_old uses Soroban's native big-endian XDR encoding.",
+      "Public-input ordering for Groth16 verification is fixed: positions 1-5 from wire (in the listed order), position 6 from contract storage."
+    ]
+  },
+
+  "storage_layout": {
+    "description": "Storage entries written by the contract. Per-type Democracy means `group_type` is implicit in the contract address (not a stored field), and v2's occupancy_commitment replaces v1's member_count.",
+    "commitment_entry": {
+      "fields": [
+        { "name": "commitment", "type": "BytesN<32>", "rule": "Poseidon commitment; canonical Fr encoding" },
+        { "name": "epoch", "type": "u64", "rule": "starts at 0, increments by 1 per successful update_commitment" },
+        { "name": "timestamp", "type": "u64", "rule": "ledger timestamp when this state was recorded" },
+        { "name": "tier", "type": "u32", "rule": "0=Small, 1=Medium, 2=Large; fixed at create_group, never mutated" },
+        { "name": "active", "type": "bool", "rule": "false after deactivate_group; rejects update_commitment with GroupInactive" },
+        { "name": "occupancy_commitment", "type": "BytesN<32>", "rule": "Poseidon hash of the slot bitmap; canonical Fr encoding; replaces v1's member_count" },
+        { "name": "threshold_numerator", "type": "u8", "rule": "1..=100; fixed at create_group, never mutated by update_commitment per design §4.7.6" }
+      ]
+    },
+    "removed_vs_sep_xxxx": [
+      { "field": "group_type", "rationale": "single-type contract; the contract address IS the discriminator" },
+      { "field": "member_count", "rationale": "v1 democracy artifact; v2 commits to the bitmap via occupancy_commitment instead, hiding the count" }
+    ],
+    "data_keys": [
+      { "name": "Admin", "value_type": "Address", "storage": "instance", "note": "contract admin; required for update_vk" },
+      { "name": "VK(tier)", "value_type": "VerificationKeyData", "storage": "persistent", "note": "membership-circuit VK for tier 0/1/2; 3 IC points" },
+      { "name": "UpdateVK(tier)", "value_type": "VerificationKeyData", "storage": "persistent", "note": "v2 democracy update VK for tier 0/1/2; 7 IC points. NO `group_type` second key — single-type contract." },
+      { "name": "Group(group_id)", "value_type": "CommitmentEntry", "storage": "persistent", "note": "current group state" },
+      { "name": "History(group_id)", "value_type": "Vec<CommitmentEntry>", "storage": "persistent", "note": "rolling-window history of past entries" },
+      { "name": "UsedProof(proof_hash)", "value_type": "()", "storage": "persistent (TTL ~30 days via LEDGER_BUMP)", "note": "global-nullifier scope per design §11" },
+      { "name": "TierCount(tier)", "value_type": "u32", "storage": "instance", "note": "active group count per tier; checked against tier_capacity in create_group" }
+    ]
+  },
+
+  "epoch_invariant": {
+    "description": "v2 keeps v1's monotonic-by-1 epoch rule. update_commitment increments stored.epoch by exactly 1 on success.",
+    "vectors": [
+      { "stored_epoch": 0, "wire_epoch_old": 0, "valid": true, "post_epoch": 1 },
+      { "stored_epoch": 5, "wire_epoch_old": 5, "valid": true, "post_epoch": 6 },
+      { "stored_epoch": 5, "wire_epoch_old": 4, "valid": false, "expected_error": "PublicInputsMismatch" },
+      { "stored_epoch": 5, "wire_epoch_old": 6, "valid": false, "expected_error": "PublicInputsMismatch" },
+      { "stored_epoch": 18446744073709551615, "wire_epoch_old": 18446744073709551615, "valid": false, "expected_error": "InvalidEpoch", "note": "u64 overflow on checked_add" }
+    ]
+  },
+
+  "proof_replay_protection": {
+    "description": "Global nullifier scope. The nullifier is sha256(proof.a || proof.b || proof.c) over the 384-byte uncompressed proof bytes. Scope is global per contract: the same 384 bytes used at any state-changing entrypoint on any group consume the nullifier.",
+    "rules": [
+      "Once a proof's bytes have been recorded by record_proof, any subsequent entrypoint call with byte-identical proof.a||proof.b||proof.c is rejected with ProofReplay.",
+      "TTL of UsedProof entries is LEDGER_BUMP (~30 days). After expiry the same proof bytes can be re-used; long-lived groups require periodic state advancement to keep nullifiers alive (mitigated in part by bump_group_ttl).",
+      "Pre-inclusion mempool replay is NOT closed by the contract-level nullifier — see existing notes in `contracts/sep-xxxx/src/lib.rs` for the circuit-level v2 (operation tag binding) that would close that."
+    ]
+  },
+
+  "tests_to_implement": {
+    "description": "Inline test names that the `#[cfg(test)] mod test` block in `contracts/sep-democracy/src/lib.rs` MUST cover. The `test_vectors_consistency` test loads this very file and asserts the contract's `Error` enum / tier mapping / IC-point constants match the values pinned above. Every other entry in this list maps 1:1 to a `#[test] fn` in the inline module.",
+    "tests": [
+      "test_initialize",
+      "test_invalid_membership_vk_length_rejected",
+      "test_invalid_update_vk_length_rejected",
+      "test_create_group_happy_path",
+      "test_create_group_rejects_invalid_tier",
+      "test_create_group_rejects_invalid_threshold_zero",
+      "test_create_group_rejects_invalid_threshold_above_100",
+      "test_create_group_accepts_threshold_50",
+      "test_create_group_accepts_threshold_67",
+      "test_create_group_accepts_threshold_100",
+      "test_create_group_rejects_duplicate_group_id",
+      "test_create_group_rejects_non_canonical_commitment",
+      "test_create_group_rejects_non_canonical_occupancy_commitment",
+      "test_create_group_rejects_invalid_proof",
+      "test_create_group_enforces_tier_group_limit",
+      "test_update_commitment_happy_path",
+      "test_update_commitment_threshold_unchanged_after_update",
+      "test_update_commitment_rejects_stale_c_old",
+      "test_update_commitment_rejects_stale_occupancy_commitment_old",
+      "test_update_commitment_rejects_wrong_epoch_old",
+      "test_update_commitment_rejects_non_canonical_c_new",
+      "test_update_commitment_rejects_non_canonical_occupancy_commitment_new",
+      "test_update_commitment_rejects_replayed_proof",
+      "test_update_commitment_rejects_inactive_group",
+      "test_update_commitment_rejects_unknown_group",
+      "test_update_commitment_threshold_supplied_from_storage",
+      "test_update_commitment_threshold_mismatch_rejected_v2",
+      "test_update_commitment_threshold_tie_passes_v2",
+      "test_verify_membership_happy_path",
+      "test_verify_membership_rejects_wrong_commitment",
+      "test_verify_membership_rejects_wrong_epoch",
+      "test_verify_membership_rejects_inactive_group",
+      "test_deactivate_group_happy_path",
+      "test_deactivate_group_rejects_non_member_proof",
+      "test_deactivate_already_inactive_group",
+      "test_update_vk_admin_only",
+      "test_update_vk_rotates_membership_vk",
+      "test_update_vk_rotates_update_vk",
+      "test_get_commitment_returns_current_state",
+      "test_get_history_returns_chronological_entries",
+      "test_bump_group_ttl_extends_used_proof_lifetime",
+      "test_vectors_consistency"
+    ]
+  }
+}

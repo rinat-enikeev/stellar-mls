@@ -123,6 +123,13 @@ fi
 expect_ic_count() {
     expected="$1"
     file="$2"
+    # Guard: jq's `null | length` prints `null`, masking a structurally
+    # invalid VK (no `.ic` key, or `.ic` not an array) as a mere count
+    # mismatch. Reject those up-front with a distinct diagnostic.
+    if ! jq -e '.ic | type == "array"' "$file" >/dev/null 2>&1; then
+        echo "VK shape error: $file is missing the .ic field or .ic is not an array" >&2
+        exit 1
+    fi
     actual="$(jq '.ic | length' "$file" 2>/dev/null || echo "")"
     if [ -z "$actual" ]; then
         echo "  unable to parse IC array from $file (jq returned empty)" >&2
@@ -186,7 +193,8 @@ if ! stellar keys fund "$IDENTITY" --config-dir "$CONFIG_DIR" --network "$NETWOR
         # is throttled and the key is also under-funded, the deploy below
         # will fail with a confusing 'insufficient balance' or auth error.
         # Operators who hit that should retry after a Friendbot cooldown.
-        echo "    (fund skipped — $IDENTITY likely already funded; if deploy fails on balance, retry after Friendbot cooldown)"
+        echo "    fund attempted but Friendbot returned non-zero (possible throttle); deploy may fail on balance" >&2
+        echo "    (likely cause: $IDENTITY is already funded under PERSIST_IDENTITY=1; if deploy fails on balance, retry after Friendbot cooldown)" >&2
     else
         stellar keys fund "$IDENTITY" --config-dir "$CONFIG_DIR" --network "$NETWORK" >/dev/null
     fi
@@ -231,6 +239,7 @@ echo "Contract ID: $CONTRACT_ID"
 echo "Stellar config dir: $CONFIG_DIR"
 echo "Temporary artifacts dir: $WORK_DIR"
 echo
+# TODO(phase-A4): post-deploy smoke (create_oligarchy_group → update_commitment → verify_membership → deactivate_group); blocked on prove_oligarchy_v2 + fixture generator (design §6 Phase A4)
 echo "Next: smoke-test create_oligarchy_group → update_commitment → verify_membership → deactivate_group"
 echo "      requires Phase A's prove_oligarchy_v2 + a v0.1.4 fixture generator (design §6 Phase A)."
 echo "      Bake those, then drop in the post-deploy smoke-test block from"

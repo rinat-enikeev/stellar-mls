@@ -3,7 +3,7 @@
 **Date:** 2026-04-26
 **Status:** Draft (Proposal — pre-implementation)
 **Author:** Onym contributors
-**Version:** 0.5 — bakes Path B (configurable Democracy quorum threshold) into the design. New §4.7.6 specifies `threshold_numerator ∈ [1, 100]` as a per-group public input set at `create_group_v3` time; the circuit's quorum constraint becomes `100·K ≥ threshold_numerator · m_old`. Wire format unchanged on the update path (contract reads threshold from storage); `BootstrapPayload` extended. Tier-1 R1CS estimate ~6298 (+22 from v0.4.4's ~6276). A–D total ~2710.
+**Version:** 0.5.1 — addresses @releaseng review on v0.5: §4.2 single-signer cutoff generalized for non-default thresholds (table per `threshold_numerator`); §4.6 Large-tier `k_max=256` cap spelled out (was a §10 dangling reference); §4.7.6 tie semantics pinned (`100·K ≥ T·m_old` is non-strict — ties pass at threshold=50, strict majority requires 51); §4.7.6 IC-vector public-input ordering pinned to `docs/soroban-contract-test-vectors.json`; §7.1 floor test corrected to 2→1, threshold-tie + strict-majority cases added, contract-side companion tests for chain-mismatch and tie added under §6 step C2; §7.4 BootstrapPayload threshold-validation tests added (MissingThreshold, out-of-range, default-50); §7.5 manual e2e gains a non-default-threshold sub-flow; §9 risks gain rows for IC-ordering drift and storage-layout drift, both backed by `soroban-contract-test-vectors.json`. Companion test-vectors file checked in at commit 526d7a0 (verified accurate against design).
 **Supersedes:** (none — first iteration)
 **Related:**
 - [`group-governance-types-design.md`](group-governance-types-design.md) — the parent design that introduces `groupType ∈ {Anarchy, 1v1, Democracy, Oligarchy}`
@@ -199,18 +199,32 @@ The rollback path is a §7.4 integration test (`DemocracyConcurrentAcceptorRollb
 
 ### 4.2 Single-signer subset (multi-signer quorum is future work)
 
-The Democracy circuit accepts up to `k_max` signer witnesses. Constraint #4 requires `2·K ≥ member_count_old`, so for `member_count_old ∈ {1, 2}` a single signer suffices, but for `member_count_old ≥ 3` at least two signers must contribute their secret keys to the proof. Coordinating a multi-signer proof requires a quorum-collection UX (vote, gather signatures, aggregate proof) that does not yet exist on the clients.
+The Democracy circuit accepts up to `k_max` signer witnesses. Constraint #4 requires `100·K ≥ threshold_numerator · member_count_old` (per §4.7.6's parameterized formulation; recovered to the original `2·K ≥ m_old` when `threshold_numerator = 50`). For a single signer (`K = 1`), this collapses to `m_old ≤ 100 / threshold_numerator`. Coordinating a multi-signer proof requires a quorum-collection UX (vote, gather signatures, aggregate proof) that does not yet exist on the clients.
 
-Scope for this iteration: implement only **single-signer democracy proofs**. Concretely:
+Scope for this iteration: implement only **single-signer democracy proofs**. The prover errors with `Error::QuorumRequired` (a new error type) when `min_K(threshold_numerator, m_old) > 1`, where `min_K = ⌈threshold_numerator · m_old / 100⌉`.
+
+The single-signer-supported size depends on the group's chosen threshold:
+
+| `threshold_numerator` | Max `m_old` for K=1 | Covers transitions |
+|---|---|---|
+| 50 (default — simple majority, ties pass per §4.7.6) | 2 | 1→2, 2→3 |
+| 51 (strict majority) | 1 | 1→2 only |
+| 67 (two-thirds supermajority) | 1 | 1→2 only |
+| 75 | 1 | 1→2 only |
+| 100 (unanimous) | 1 | 1→2 only |
+
+The bootstrap case (1→2) works for any `threshold_numerator ≤ 100`. The 2→3 case works only when the group is on default 50%. Groups created with stricter thresholds therefore hit `QuorumRequired` at the second-member-add boundary, with a UX message routing the user to the (not-yet-built) multi-signer flow.
+
+Concretely:
 
 - The FFI prover input takes one secret key, not a vector.
 - The proof is generated with `K = 1` active signer slot; the remaining `k_max - 1` slots are zero-padded.
-- The prover errors with `Error::QuorumRequired` (a new error type) when `member_count_old ≥ 3`, indicating that the caller must use the (not-yet-built) multi-signer flow.
+- The prover errors with `Error::QuorumRequired` when `⌈threshold_numerator · m_old / 100⌉ > 1`. This computation is included in the prover's preflight; no malformed proof is ever generated.
 
-This covers:
+For the user's motivating case (default 50% threshold, 1→2 bootstrap), this covers:
 
 - 1 → 2 (group bootstrap; the user's broken case)
-- 2 → 3 (one peer adding a third)
+- 2 → 3 (one peer adding a third) — only at default `threshold_numerator = 50`
 
 It does not cover `≥3` member transitions. Those require quorum collection, tracked as follow-up work in §11.
 
@@ -328,9 +342,13 @@ This design ships against a **fresh contract address**. The existing testnet con
 
 `scripts/install-democracy-vks-testnet.sh` (extended to all three tiers and to install the v2 VKs) is invoked once against the new contract, after deploy. It installs:
 
-- `keyset-democracy-dev/tier0-k32/verifying_key.bin` (Small, capacity 32, depth 5)
-- `keyset-democracy-dev/tier1-k256/verifying_key.bin` (Medium, capacity 256, depth 8)
-- `keyset-democracy-dev/tier2-k2048/verifying_key.bin` (Large, capacity 2048, depth 11) — **new** in this design; previously out of scope, now in scope per project direction (ceremony for all three tiers at Phase 1 dev-key stage)
+- `keyset-democracy-dev/tier0-k32/verifying_key.bin` (Small, depth 5, capacity 32 members; circuit `k_max = 32`)
+- `keyset-democracy-dev/tier1-k256/verifying_key.bin` (Medium, depth 8, capacity 256 members; circuit `k_max = 256`)
+- `keyset-democracy-dev/tier2-k256/verifying_key.bin` (Large, depth 11, **capacity 2048 members but circuit `k_max = 256`**) — **new** in this design; previously out of scope, now in scope per project direction (ceremony for all three tiers at Phase 1 dev-key stage)
+
+**Large tier `k_max` cap (testnet-only-with-cap).** The Large tier's circuit is compiled with `k_max = 256` rather than `k_max = 2048`. The bitmap and slot machinery still cover the full 2048 slots — the cap is on the *signer* count witnessable in a single proof, not on the membership count. Consequence: at the default `threshold_numerator = 50`, a Large group of size > 512 members (i.e., needing K ≥ 257 to clear `100·K ≥ 50·m_old`) cannot produce a proof under this VK. At higher thresholds the boundary tightens further. For testnet — where Large groups in the dev cycle are unlikely to exceed a few hundred members — this is acceptable. A future ceremony cycle that wants to support full-quorum Large updates regenerates the Large VK with `k_max = 1024` (separate, expensive ceremony round); §10.1 Q2's recommendation defers this. The cap is part of the binding contract test in §7.5 (operator UI surfaces "Large group exceeds single-VK signer cap; multi-aggregation proof required" once Phase F lands and the membership grows past the boundary).
+
+The directory name `tier2-k256` (rather than `tier2-k2048` from earlier drafts) reflects the cap.
 
 These VKs are regenerated from the v2 circuit (§4.7), not the v1 dev circuit currently in `src/circuit/democracy.rs`. The §6 phasing ensures the circuit lands before the VK install.
 
@@ -444,6 +462,10 @@ The democracy circuit accepts a `threshold_numerator ∈ [1, 100]` public input.
 
 The denominator is implicit (always 100); thresholds are integer percentages. This covers the common cases; thresholds requiring finer granularity (e.g., `60.5%`) are not supported (deliberately — fixing the denominator simplifies the circuit and the UX).
 
+**Tie semantics: ≥ threshold passes (ties favor the proposal).** The constraint `100·K ≥ threshold_numerator · m_old` is non-strict. Concretely, with `threshold_numerator = 50` and `m_old = 4`, `K = 2` satisfies (`200 ≥ 200`) — exactly half the members suffices for "simple majority." This matches the natural reading of "50% threshold = at least half" and Robert's-Rules common-law tie convention. Operators who want strict majority (`> 50%`, ties fail) must pick `threshold_numerator = 51`; the doc's default is 50 for the simpler reading. The §7.1 `prove_democracy_v2_threshold_tie_passes` test pins this semantics with the `threshold=50, m_old=4, K=2` boundary case.
+
+**Public-input ordering (canonical).** The circuit's IC vector for `UpdateByType(2)` has 7 elements in this fixed order: `[base, c_old, epoch_old, c_new, occupancy_commitment_old, occupancy_commitment_new, threshold_numerator]`. Pinned in `docs/soroban-contract-test-vectors.json` (`vk_kind_enum.UpdateByType(2).ic_layout_v2`) — that file is the single source of truth. Any client / contract / cross-reimplementation that disagrees on this ordering produces proofs that fail verify silently. The §7.2 cross-platform test vectors include a fixture covering this layout end-to-end.
+
 **Per-group, fixed at create.** The threshold is set when the group is published via `create_group_v3` and stored in contract state alongside the other group metadata (`group_type`, `tier`, `commitment`, `epoch`, `occupancy_commitment`). It cannot change for the lifetime of the group — there is no `update_threshold` entrypoint and no path through `update_commitment` that mutates it. A group whose members later want a different threshold must recreate as a new group. (Threshold rotation is a §11 follow-up.)
 
 **Wire format unchanged on the update path.** The threshold isn't carried in `UpdateCommitmentPublicInputs::Democracy` — the contract reads it from storage (`current.threshold_numerator`) and supplies it to the Groth16 verifier as a public input alongside the wire-supplied `(c_old, epoch_old, c_new, occupancy_commitment_old, occupancy_commitment_new)`. The prover must construct the proof with the same threshold value (which it learns from the group's local state, populated at create or via the bootstrap payload). Any mismatch surfaces as proof-verification failure on chain.
@@ -516,7 +538,7 @@ Within each phase, every numbered step is a discrete PR — small enough to revi
 | A1 | `src/circuit/democracy_v2.rs` (new file). `src/circuit/democracy.rs` is **renamed** to `src/circuit/democracy_v1.rs` in the same commit. The renamed file is gated `#[cfg(test)]` so it stays available for v0.3-vs-v0.4 differential tests but is excluded from the production build and the FFI. Imports in non-test code are migrated to `democracy_v2`; `mod democracy_v1` is declared only inside `#[cfg(test)]` blocks. After the v2 ceremony lands and the differential tests are no longer useful, `democracy_v1.rs` is deleted in a follow-up cleanup. | ~425 | Empty + populated circuit; bitmap witness; popcount; bitmap-to-leaf binding (§4.7.3); occupancy-commitment Poseidon; all count-derived constraints internalized; domain tags from §4.1.1 + new `DOMAIN_OCCUPANCY`; **threshold_numerator public input + parameterized quorum constraint per §4.7.6** (~25 LOC over the fixed-50% formulation) |
 | A2 | `src/circuit/democracy_v2.rs` tests | ~225 | Round-trip 1→2, 2→3, 2→4 (Insert), 3→2 (Remove via floor rejection), key rotation, **bitmap-mismatch attack rejection**, **tombstone-collision regression** (§4.1.1), slot-exhaustion at tier ceiling, **threshold sweep** (50/67/75/100 each pass for K satisfying, fail for K below quorum) |
 | A3 | `src/prover/mod.rs` `prove_democracy_v2` + `verify_democracy_v2` | ~165 | Bitmap derivation from rosters, occupancy-commitment computation, single-leaf-delta inference, `QuorumRequired` error for `m_old ≥ 3` (single-signer subset per §4.2). Prover reads `threshold_numerator` from group state and supplies it as a public input. Verify-side helper inlines the chain-stored threshold for unit-test convenience. |
-| A4 | `scripts/generate-democracy-vk-dev.sh` extension; `keyset-democracy-dev/{tier0-k32,tier1-k256,tier2-k2048}/` | (script + bin output) | All three tier dev VKs regenerated against the v2 circuit; checked-in `verifying_key.bin` + fingerprint hashes |
+| A4 | `scripts/generate-democracy-vk-dev.sh` extension; `keyset-democracy-dev/{tier0-k32,tier1-k256,tier2-k256}/` (Large reuses k_max=256 per the §4.6 cap) | (script + bin output) | All three tier dev VKs regenerated against the v2 circuit; checked-in `verifying_key.bin` + fingerprint hashes |
 | A5 | Cargo feature `democracy-v2-dev-vks` (off by default) | `Cargo.toml`, `src/lib.rs` | Feature gate per §4.3 Layer 1 |
 | A6 | Cross-platform test vectors | `docs/cross-platform-test-vectors.json` | New `democracy_v2` section: 1→2 and 2→3 reference proofs with expected `occupancy_commitment_old`/`occupancy_commitment_new` |
 
@@ -627,7 +649,8 @@ The "no live users" position lets Phase D land while Phase E is in flight: the t
 - `prove_democracy_v2_round_trip_two_to_three` — single signer, 2 → 3 member insert, valid proof, verifier passes.
 - `prove_democracy_v2_errors_on_quorum_required` — single signer, 3 → 4 member insert, returns `QuorumRequired` without attempting proof generation.
 - `prove_democracy_v2_handles_replace` — single signer, key rotation at member's own slot.
-- `prove_democracy_v2_rejects_below_floor` — single signer, 1 → 0 transition. With v2's in-circuit `m_new ≥ 2` floor, the prover **rejects** at proof generation time, returning `BelowMinCount`. The contract-side check is now defense-in-depth, not the only enforcer. Asserts the v2 improvement: prover-side rejection matches `update_commitment` rejection — the circuit accepts only proofs the contract will also accept (§4.2.1 second consequence). (The previous draft of this test was named `..._handles_remove`, which was misleading — the test asserts rejection, not handling.)
+- `prove_democracy_v2_rejects_below_floor` — single signer, **2 → 1** transition (the realistic "remove member from a 2-member group" case; 1 → 0 is unreachable from any valid create state since `create_group_v3` already establishes the creator at member-slot 0 with member_count ≥ 1, and the §4.2 single-signer subset cannot remove the sole member without violating the floor in any case). With v2's in-circuit `m_new ≥ 2` floor, the prover **rejects** at proof generation time, returning `BelowMinCount`. The contract-side check is now defense-in-depth, not the only enforcer. Asserts the v2 improvement: prover-side rejection matches `update_commitment` rejection — the circuit accepts only proofs the contract will also accept (§4.2.1 second consequence). The earlier draft cited 1 → 0; that scenario is not reachable from any legitimate group state and was a mis-spec.
+- `prove_democracy_v2_rejects_two_to_one` — explicit fixture for the practical floor-violating case: a 2-member Democracy group, one member tries to leave (single-signer demote-self attempt). The prover detects `m_new = 1 < 2` and returns `BelowMinCount`. UX-equivalent of "you can't be the second-to-last member of a Democracy group; either invite a third or recreate as Anarchy/1v1." This is the practical companion to the abstract `_rejects_below_floor` case.
 - `prove_democracy_v2_domain_tags_block_tombstone_collision` — paired test exercising the §4.1.1 normative rule. The "domain-tags-on" build (default) is the production path; the "domain-tags-off" build is a `#[cfg(test)]` toggle (`#[cfg(feature = "no-domain-tags-for-test")]` on the leaf-hash function) that strips the outer `Poseidon(DOMAIN_*, …)` wrapping. The test pair:
   - **Domain-tags-off variant**: construct an attack scenario where a member's `Poseidon(sk)` happens to equal the all-zero leaf used as the tombstone constant in the unwrapped scheme (forced via a hand-picked test scalar). Drive a transition that relies on slot disambiguation between this member and a tombstone slot. Assert the prover **succeeds** in producing a malicious proof — i.e., without domain tags, the soundness break is real.
   - **Domain-tags-on variant**: same scenario, default build. Assert the prover either rejects the input (the bitmap-to-leaf binding from §4.7.3 step 2 detects the inconsistency because `domain-tagged member leaf ≠ domain-tagged tombstone constant`) or produces a proof that fails the bitmap-binding constraint at proof-gen time.
@@ -640,7 +663,16 @@ The "no live users" position lets Phase D land while Phase E is in flight: the t
 - `prove_democracy_v2_threshold_supermajority` — `threshold_numerator = 67`, group of size 3, K = 2 (need `100·2 ≥ 67·3 ⟺ 200 ≥ 201` → false; should fail). Then K = 3 (`300 ≥ 201` → true; should pass). Both asserted.
 - `prove_democracy_v2_threshold_unanimous` — `threshold_numerator = 100`, group of size 3, K = 2 (need `200 ≥ 300` → false; should fail). Then K = 3 (`300 ≥ 300` → true; should pass).
 - `prove_democracy_v2_threshold_out_of_range_rejected` — `threshold_numerator = 0` and `threshold_numerator = 101` both must be rejected at proof generation by the §4.7.6 range-check constraint. Asserts the in-circuit `1 ≤ numerator ≤ 100` enforcement is active.
-- `prove_democracy_v2_threshold_mismatch_with_chain_rejected` — prover constructs a proof with `threshold_numerator = 50` but the (mocked) on-chain group has `current.threshold_numerator = 67`. Asserts the proof verifies as a free-standing Groth16 proof (the circuit doesn't know what the chain stores) but **fails** when the verifier supplies the chain-stored value (67) instead of the prover's claimed value (50). This is the verifier-supplied public-input binding from §4.7.6 — exercised at the prover's `verify_democracy_v2` helper level since the contract integration test is C2.
+- `prove_democracy_v2_threshold_mismatch_with_chain_rejected` — prover constructs a proof with `threshold_numerator = 50` but the (mocked) on-chain group has `current.threshold_numerator = 67`. Asserts the proof verifies as a free-standing Groth16 proof (the circuit doesn't know what the chain stores) but **fails** when the verifier supplies the chain-stored value (67) instead of the prover's claimed value (50). This is the verifier-supplied public-input binding from §4.7.6 — exercised at the prover's `verify_democracy_v2` helper level. **The contract-side companion test lives in §6 step C2** (see `update_commitment_threshold_mismatch_rejected_v2` below) so the same binding is verified end-to-end against a real Soroban harness.
+- `prove_democracy_v2_threshold_tie_passes` — `threshold_numerator = 50`, group of size 4, K = 2 (`100·2 = 200`, `50·4 = 200`, exact tie passes per §4.7.6). Asserts the proof verifies. The non-strict-`≥` semantics from §4.7.6 is asserted here — the boundary case that distinguishes "≥ 50%" from "> 50%."
+- `prove_democracy_v2_threshold_strict_majority_tie_rejects` — `threshold_numerator = 51`, group of size 4, K = 2 (`100·2 = 200`, `51·4 = 204`, fail). Asserts the proof is rejected — the canonical fixture for "operator wants strict majority" semantics. Pairs with the previous test to nail down the choice between non-strict (`50`) and strict (`51`) thresholds.
+
+### Contract integration tests (live under §6 step C2; cross-referenced here for visibility)
+
+The following contract-side tests live in `contracts/sep-xxxx/src/lib.rs` (§6 step C2) but are listed here so the `update_commitment_v2` test plan stays grep-able by the test name across layers:
+
+- `update_commitment_threshold_mismatch_rejected_v2` — contract integration. Stored `current.threshold_numerator = 67`. Submit a Groth16 proof valid under `threshold_numerator = 50`. Assert the contract's `update_commitment` (Democracy variant dispatch) rejects with `InvalidProof` (the verifier-side binding from §4.7.6 — chain-stored value is the authoritative one supplied to the Groth16 verify, the prover-side claim is moot once it diverges). Companion to the prover-side `prove_democracy_v2_threshold_mismatch_with_chain_rejected`. The two together exercise §4.2.1's "contract-only state binding" row end-to-end.
+- `update_commitment_threshold_tie_passes_v2` — contract integration. Stored `current.threshold_numerator = 50`, `m_old = 4`, valid 4 → 5 proof with K = 2. Assert the contract accepts and advances the epoch. Companion to `prove_democracy_v2_threshold_tie_passes`.
 
 ### 7.2 Cross-platform vectors
 
@@ -661,6 +693,12 @@ The "no live users" position lets Phase D land while Phase E is in flight: the t
 - **Concurrent-acceptor rollback.** iOS: `StellarChatTests/DemocracyConcurrentAcceptorRollbackTests.swift` — two `OnChainService` mocks both processing the same `SEPMemberJoined`, only one chain publish allowed to win. Assert loser reverts to baseline, persists winner's slot assignment via the eventual `SEPGroupStateUpdate` broadcast, no double-counted member, no premature broadcast from loser before chain publish settled. Android parallel. Covers §4.1.4.
 - **Bitmap derivation determinism.** iOS: `StellarChatTests/DemocracyBitmapDerivationTests.swift` — given a fixed `[SEPGroupMemberLeaf]` (with mixed active/tombstone slots), assert `canonicalizeBitmap(members)` produces the byte-identical bitmap as the Rust prover and the Kotlin client (cross-checked via the §7.2 vector). Regression test for the bitmap-derivation desync risk in §9.
 - **`UpdateCommitmentPublicInputs` discriminator serialization.** iOS: `StellarChatTests/UpdateCommitmentDiscriminatorTests.swift` — for each governance type (Anarchy, Democracy, Oligarchy-when-it-lands), construct a `ChatGroup` instance and call the relayer-payload serializer. Assert: the discriminant in the encoded JSON matches `group.groupType.rawValue` byte-for-byte. Specifically, a Democracy group MUST NOT emit an `Anarchy` variant payload (which would surface as `chainRejected` from §4.7.4's contract-side type-confusion guard, costing a chain round-trip and bad UX). Android parallel test in `app/src/test/kotlin/.../UpdateCommitmentDiscriminatorTest.kt`. The §6 step C2 contract test covers contract-side rejection if a malformed discriminant slips through; this client-side test ensures the discriminant is well-formed at the source.
+- **BootstrapPayload threshold validation.** iOS: `StellarChatTests/BootstrapPayloadThresholdTests.swift` — three cases:
+  1. *Democracy bootstrap with `thresholdNumerator == nil`*: payload received from a peer (or a malformed local construction) lacking the required field. Assert the parser rejects with `Error::MissingThreshold` (a normative client-side error per §4.4) and the local group is **not** persisted. UX surfaces "incoming Democracy invitation is malformed; cannot accept."
+  2. *Democracy bootstrap with `thresholdNumerator` out of range* (e.g., `0` or `101`): assert rejection with the same error. Validates the `1..=100` parser-side check.
+  3. *Default-50 path*: a Democracy group created via the client UI without explicitly choosing a threshold. Assert that the constructed `BootstrapPayload.thresholdNumerator == 50` (the default per §4.7.6) — the C1 contract spec accepts default-50 as the API-level fallback, and clients consistently emit 50 rather than `nil` for Democracy bootstraps.
+
+  Android parallel: `BootstrapPayloadThresholdTest.kt`.
 
 ### 7.5 Manual testnet end-to-end
 
@@ -680,8 +718,16 @@ Steps:
 Privacy verification (the §3.4 "no metadata leaks" claim):
 
 - Read the contract storage entry for this group via Soroban testnet RPC. Assert `member_count` is **not present** anywhere in the entry (would be a layout regression).
-- Inspect the relayer log for the `update_commitment` call: assert no field named `member_count_*` appears in the request body or stellar CLI args. Only `c_old`, `epoch_old`, `c_new`, `occupancy_commitment_old`, `occupancy_commitment_new`.
-- Run a second 2 → 3 transition. Assert the on-chain trace for the second `update_commitment` call carries the same 5-scalar public-inputs shape as the first (no count field appears). A chain observer **cannot tell from these calls** whether the group went 1→2 or 5→6 — both produce a 5-scalar payload with hash-shaped occupancy commitments. The observer **can** still distinguish a Democracy update call from an Anarchy update call by the scalar count (5 vs 3); see §3.4 residual on entrypoint-selector partial-solution. The privacy claim is "no count or trajectory leakage *within* a group's update history," not "no group-type leakage" — the latter is acknowledged residual.
+- Assert `threshold_numerator` IS present in storage (`current.threshold_numerator == 50` for the default), so the verifier can read it on the next update. This is the §4.7.6 contract-supplied public input — the chain stores it, doesn't expose it on call payloads.
+- Inspect the relayer log for the `update_commitment` call: assert no field named `member_count_*` or `threshold_*` appears in the request body or stellar CLI args. Only `c_old`, `epoch_old`, `c_new`, `occupancy_commitment_old`, `occupancy_commitment_new` (5 scalars).
+- Run a second 2 → 3 transition. Assert the on-chain trace for the second `update_commitment` call carries the same 5-scalar public-inputs shape as the first (no count field, no threshold field, only occupancy commitments). A chain observer **cannot tell from these calls** whether the group went 1→2 or 5→6 — both produce a 5-scalar payload with hash-shaped occupancy commitments. The observer **can** still distinguish a Democracy update call from an Anarchy update call by the scalar count (5 vs 3); see §3.4 residual on entrypoint-selector partial-solution. The privacy claim is "no count or trajectory leakage *within* a group's update history," not "no group-type leakage" — the latter is acknowledged residual.
+
+**Non-default threshold path (extension of the above):**
+
+9. Create a *second* Democracy group at medium tier with `threshold_numerator = 67` (two-thirds supermajority). Verify on Soroban testnet that `current.threshold_numerator == 67`. The group is created with member_count = 1 (creator only).
+10. Add a second member (1 → 2). Single-signer subset works (`100·1 ≥ 67·1` passes). Verify chain advance.
+11. Attempt to add a third member (2 → 3). Per §4.2's table, this requires `K ≥ ⌈67·2/100⌉ = 2`, but only K=1 is available in the single-signer subset. Assert the prover returns `QuorumRequired` *before* generating a proof (no chain round-trip wasted). UX surfaces "this group's threshold of 67% requires at least 2 admin signatures for groups of size 2; multi-signer not yet supported."
+12. Privacy assertion specific to the threshold path: read the on-chain trace for the 1 → 2 transition above. Assert that the call's public-inputs payload is **byte-equivalent in shape** to the same transition under default 50% from steps 1-8 — the threshold is in storage, not on the wire, so a chain observer cannot tell from these two transactions which group runs at 50% vs 67%. Only direct storage inspection reveals the threshold value.
 
 Failure-mode tests:
 
@@ -768,6 +814,8 @@ Phase E ends with a mainnet release. The existing `breaking-changes-release-proc
 | Two acceptors race the same `SEPMemberJoined` | Medium | Low (rollback path in §4.1.4 handles this; loser reverts local state to baseline before broadcast) | §4.1.4 rollback path; tested in §7.4 `DemocracyConcurrentAcceptorRollbackTests`. Loser MUST hold broadcast until chain confirms. |
 | Domain-tag collision across circuits | Low | High (cross-circuit proof reuse if `DOMAIN_MEMBER`/`DOMAIN_TOMBSTONE`/`DOMAIN_OCCUPANCY` collide with values used in `MembershipCircuit` or `UpdateCircuit`) | §10 Q3 — explicit cross-circuit audit pass before circuit lock-in. Domain tag values pinned in a single header file (`src/circuit/domain_tags.rs`) with collision-detection assertions in each circuit's setup. |
 | Bitmap-derivation desync (client computes bitmap from member list, but two clients disagree on whether a slot is "active" or "tombstoned") | Low | High (desync produces incompatible occupancy commitments) | Bitmap derivation rule is normative (§4.7.1): `bitmap[i] = 1 iff leaf[i] is `Poseidon(DOMAIN_MEMBER, ...)` after domain-tag check`. Single-source helper (`canonicalizeBitmap` in `swift-mls`/`kotlin-mls`/Rust). Cross-platform test vectors (A6) cover the boundary cases. |
+| Public-input ordering drift between client prover and contract verifier (the IC-vector position of `threshold_numerator`, occupancy commitments, etc.) | Low | High (silent verify failure on every Democracy update; impossible to debug without diffing IC vectors) | Single source of truth: `docs/soroban-contract-test-vectors.json` `vk_kind_enum.UpdateByType(2).ic_layout_v2` pins the canonical 7-element IC layout `[base, c_old, epoch_old, c_new, occupancy_commitment_old, occupancy_commitment_new, threshold_numerator]`. Phase A6 cross-platform test vectors include a fixture that exercises the full IC layout end-to-end. CI assertion compares the Rust prover's emitted public-input vector against the contract's expected layout per the test-vector fixture. |
+| `threshold_numerator` storage layout differs between contract redeploys (e.g., different operators independently deploy v2 with subtly different `CommitmentEntryV3` shapes) | Low | High (cross-deployment incompatibility; clients pointed at the wrong contract see opaque verify failures) | Storage layout pinned in `docs/soroban-contract-test-vectors.json` `storage_layout_v2.commitment_entry_v3`. Future contract revisions that reorder or rename fields require a doc update + a new test vector entry; CI's `cargo expand` on the contract crate is grep-asserted against the pinned layout to catch silent drift. |
 
 ---
 

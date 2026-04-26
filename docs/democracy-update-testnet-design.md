@@ -3,7 +3,7 @@
 **Date:** 2026-04-26
 **Status:** Draft (Proposal — pre-implementation)
 **Author:** Onym contributors
-**Version:** 0.4.3 — addresses @gramyzer second-pass review on v0.4.2 (§5.4 LOC reconciled to 2615; §4.2.1 constraint-numbering convention spelled out; §4.1.2 monotonic-slot-map claim foreshadows §10 Q1 group-reset exception; §7.4 mainnet release-config CI-assertion meta-test added; §4.4 SEPSaltResponse normative end-to-end opacity)
+**Version:** 0.4.4 — addresses @releaseng REQUEST_CHANGES on v0.4.2: load-bearing fix to §4.7.3 step 2 bitmap-to-leaf binding gadget (was a single broken constraint, now a correct two-constraint pair); §7.1 tombstone-collision test re-spec'd as paired domain-tags-disabled/enabled builds; §4.7.3 R1CS estimate corrected (~6276 for tier 1, popcount no longer double-counted); §7.6 renamed "VK-mismatch handling, end-to-end" with §7.4 fidelity overlap explicit; client-side discriminator-serializer test added; §10 split into Phase-A blockers (with recommendations to ratify) vs other open questions
 **Supersedes:** (none — first iteration)
 **Related:**
 - [`group-governance-types-design.md`](group-governance-types-design.md) — the parent design that introduces `groupType ∈ {Anarchy, 1v1, Democracy, Oligarchy}`
@@ -365,7 +365,21 @@ where `fold` packs every `BITS_PER_FELT = 252` consecutive bits into one BLS12-3
 The circuit no longer takes counts as public inputs. Instead it:
 
 1. **Witnesses the bitmap** — `2^D` boolean wires per side (old + new). Adds `2 · 2^D` boolean constraints.
-2. **Binds the bitmap to the leaf array** — for each slot `i`, prove `bitmap[i] = 1 ⟺ leaf[i] ≠ tombstone_constant`. Done via a non-equality gadget: `(leaf[i] - tombstone) · is_active_inv = 1 - bitmap[i]` plus auxiliary witness `is_active_inv`. The §4.1.1 domain separation is what makes this a soundness-preserving check: the circuit doesn't have to discriminate two random Poseidon outputs, only "domain-tagged member leaf" vs "domain-tagged tombstone constant."
+2. **Binds the bitmap to the leaf array** — for each slot `i`, prove `bitmap[i] = 1 ⟺ leaf[i] ≠ tombstone_constant`. This is a standard "is-zero" boolean gadget on `d := leaf[i] - tombstone` and requires **two constraints** plus an auxiliary witness `is_active_inv`:
+
+   ```
+   (a)  d · is_active_inv = bitmap[i]      // forces bitmap = 1 when d ≠ 0 (witness inv = d⁻¹) and allows bitmap = 0 when d = 0
+   (b)  (1 - bitmap[i]) · d = 0             // forces d = 0 when bitmap = 0, blocking the malicious case where leaf ≠ tombstone but bitmap = 0
+   ```
+
+   plus the boolean constraint `bitmap[i] · (1 - bitmap[i]) = 0` from witness allocation. **A single constraint is insufficient** — the binding has to be checked in both directions:
+
+   - Without constraint (b), a malicious prover with `leaf ≠ tombstone` can witness `is_active_inv = 0` and bitmap = 0; constraint (a) becomes `d · 0 = 0` (satisfied), and the prover has unwound the binding.
+   - Without constraint (a), a tombstone slot with `d = 0` is unconstrained on bitmap.
+
+   With both constraints active, the only satisfying assignments are `(d = 0, bitmap = 0)` (any `is_active_inv`, vacuously) and `(d ≠ 0, bitmap = 1, is_active_inv = d⁻¹)`. The §4.1.1 domain separation is what makes this a soundness-preserving check: the circuit doesn't have to discriminate two random Poseidon outputs, only "domain-tagged member leaf" vs "domain-tagged tombstone constant."
+
+   This gadget is the load-bearing soundness link between the witnessed bitmap and the actual Merkle tree contents — if it's wrong, the entire occupancy-commitment privacy claim collapses (the prover could commit to a bitmap that disagrees with the tree, breaking the popcount-derived count constraints). Any future re-derivation (e.g., during ceremony review) MUST verify both constraints are present and the polarity is correct.
 3. **Computes popcount** as a private witness — sum of the bitmap booleans. Used internally for:
    - Quorum: `2·K ≥ popcount(bitmap_old)` (replaces the old constraint #4 that referenced the public `member_count_old`).
    - Count-delta: `|popcount(bitmap_new) − popcount(bitmap_old)| ≤ 1` (replaces public-input constraint #6).
@@ -377,17 +391,19 @@ R1CS-constraint impact estimate (for tier 1 / depth 8 / 256 slots, the testnet b
 
 | Constraint family | v1 count-public | v2 occupancy commitment |
 |---|---|---|
-| Bitmap booleans (2 sides) | 0 | 512 |
-| Bitmap-to-leaf binding (2 sides × 256 slots) | 0 | ~1500 (multiplication + auxiliary) |
-| Popcount (2 sides) | 0 | ~512 (additions, free in R1CS — but bit-decomp for floor check ~50) |
-| Quorum (was #4, now witnessed) | ~10 | ~10 (same shape, different `m_old` source) |
-| Count-delta (was #6, now witnessed) | ~5 | ~5 |
-| Floor `m_new ≥ 2` (was contract-only) | 0 | ~12 (range check) |
-| Occupancy commitment Poseidon (2 sides) | 0 | ~600 (~2 hashes × ~300 R1CS each) |
+| Bitmap booleans (2 sides × 256 slots × 1 boolean each) | 0 | ~512 |
+| Bitmap-to-leaf binding (2 sides × 256 slots × 2 mults each per the §4.7.3-step-2 corrected gadget) | 0 | ~1024 |
+| Popcount (additions are free in R1CS — no constraint cost) | 0 | 0 |
+| Quorum `2·K ≥ popcount(bitmap_old)` (popcount-witnessed) | ~10 | ~10 |
+| Count-delta `\|popcount_new − popcount_old\| ≤ 1` (popcount-witnessed) | ~5 | ~5 |
+| Floor `popcount(bitmap_new) ≥ 2` (bit-decomp range check, was contract-only in v1) | 0 | ~25 |
+| Occupancy commitment Poseidon (2 sides, ~2 hashes per side × ~300 R1CS each) | 0 | ~1200 |
 | Existing constraints unchanged | ~3500 | ~3500 |
-| **Total** | **~3525** | **~6700** (≈1.9× larger) |
+| **Total** | **~3525** | **~6276** (≈1.8× larger) |
 
-Proving time scales roughly linearly with constraint count for Groth16, so v2 proves about 2× slower. On a modern device that's the difference between ~150ms and ~300ms — well within budget for an interactive epoch transition.
+A previous draft of this table double-counted popcount (charging 512 constraints as if additions cost something) while undercounting the occupancy-commitment hash. The numbers above are the corrected accounting. Proving time scales roughly linearly with constraint count for Groth16, so v2 proves about 1.8× slower. On a modern device that's the difference between ~150ms and ~270ms — well within budget for an interactive epoch transition.
+
+Phase A exit gate references this estimate ("constraint count within 10% of §4.7.3 estimate"). Updated baseline: **~6276** for tier 1 (depth 8). Tier 0 (depth 5, 32 slots) drops the bitmap-related rows roughly proportional to slot count: ~32 booleans + ~128 mults binding + same Poseidon cost + same fixed rows ≈ ~5060 constraints. Tier 2 (depth 11, 2048 slots) scales the bitmap-related rows by 8× over tier 1: ~4096 booleans + ~8192 mults binding + same Poseidon cost (Poseidon over 9 packed scalars at ~300 each ≈ ~2700) + same fixed rows ≈ ~19000 constraints. Phase A4 must measure and confirm.
 
 #### 4.7.4 Polymorphic `update_commitment` entrypoint (eliminates entrypoint-selector leak)
 
@@ -473,7 +489,7 @@ Within each phase, every numbered step is a discrete PR — small enough to revi
 | A5 | Cargo feature `democracy-v2-dev-vks` (off by default) | `Cargo.toml`, `src/lib.rs` | Feature gate per §4.3 Layer 1 |
 | A6 | Cross-platform test vectors | `docs/cross-platform-test-vectors.json` | New `democracy_v2` section: 1→2 and 2→3 reference proofs with expected `occupancy_commitment_old`/`occupancy_commitment_new` |
 
-**Phase A exit criteria**: `cargo test --features democracy-v2-dev-vks circuit::democracy_v2` and `cargo test prover::democracy_v2_round_trip` both green. R1CS constraint count for tier 1 is within 10% of the §4.7.3 estimate (~6700 constraints). Dev VKs check-in includes a fingerprint manifest (`keyset-democracy-dev/fingerprints-v2.json`).
+**Phase A exit criteria**: `cargo test --features democracy-v2-dev-vks circuit::democracy_v2` and `cargo test prover::democracy_v2_round_trip` both green. R1CS constraint count for tier 1 is within 10% of the §4.7.3 estimate (~6276 constraints, see the updated table). Dev VKs check-in includes a fingerprint manifest (`keyset-democracy-dev/fingerprints-v2.json`).
 
 **Phase A is the load-bearing crypto step** — it's where R1CS soundness is established. Subsequent phases depend on the circuit being correct.
 
@@ -581,7 +597,11 @@ The "no live users" position lets Phase D land while Phase E is in flight: the t
 - `prove_democracy_v2_errors_on_quorum_required` — single signer, 3 → 4 member insert, returns `QuorumRequired` without attempting proof generation.
 - `prove_democracy_v2_handles_replace` — single signer, key rotation at member's own slot.
 - `prove_democracy_v2_rejects_below_floor` — single signer, 1 → 0 transition. With v2's in-circuit `m_new ≥ 2` floor, the prover **rejects** at proof generation time, returning `BelowMinCount`. The contract-side check is now defense-in-depth, not the only enforcer. Asserts the v2 improvement: prover-side rejection matches `update_commitment` rejection — the circuit accepts only proofs the contract will also accept (§4.2.1 second consequence). (The previous draft of this test was named `..._handles_remove`, which was misleading — the test asserts rejection, not handling.)
-- `prove_democracy_v2_rejects_tombstone_collision` — manually constructs a member whose `Poseidon(sk)` collides with `Poseidon(0)` (forced via a chosen test scalar). With §4.1.1 domain tags applied, the collision lifts to disjoint Poseidon inputs and the test passes; without domain tags, the test would expose the soundness break. Regression test for the §4.1.1 normative rule.
+- `prove_democracy_v2_domain_tags_block_tombstone_collision` — paired test exercising the §4.1.1 normative rule. The "domain-tags-on" build (default) is the production path; the "domain-tags-off" build is a `#[cfg(test)]` toggle (`#[cfg(feature = "no-domain-tags-for-test")]` on the leaf-hash function) that strips the outer `Poseidon(DOMAIN_*, …)` wrapping. The test pair:
+  - **Domain-tags-off variant**: construct an attack scenario where a member's `Poseidon(sk)` happens to equal the all-zero leaf used as the tombstone constant in the unwrapped scheme (forced via a hand-picked test scalar). Drive a transition that relies on slot disambiguation between this member and a tombstone slot. Assert the prover **succeeds** in producing a malicious proof — i.e., without domain tags, the soundness break is real.
+  - **Domain-tags-on variant**: same scenario, default build. Assert the prover either rejects the input (the bitmap-to-leaf binding from §4.7.3 step 2 detects the inconsistency because `domain-tagged member leaf ≠ domain-tagged tombstone constant`) or produces a proof that fails the bitmap-binding constraint at proof-gen time.
+
+  Without the paired structure, a "domain-tags-on" test alone passes trivially regardless of whether domain tags are correctly applied — the threat doesn't materialize because the disjoint domain-tag prefixes already prevent the inner-Poseidon collision from lifting to the outer leaf-hash collision. The paired test is the only way to regress the normative rule. The `no-domain-tags-for-test` Cargo feature is gated to `#[cfg(test)]` so it cannot be enabled in any production build (Phase E mainnet CI assertion already enforces "production features set is fixed"; this feature joins that fixed-out list).
 - `prove_democracy_v2_slot_exhaustion` — at tier capacity (Small=32 for the test), drive cumulative joins past `2^depth - 1` (never-used slots run out due to tombstones). Asserts the prover returns `SlotExhausted`, not a malformed proof.
 - `prove_democracy_v2_bitmap_mismatch_rejected` — manually feed the prover a bitmap that disagrees with the actual leaf array (e.g., `bitmap[5] = 1` but `leaf[5] = tombstone`). Asserts proof generation fails at the bitmap-to-leaf binding constraint (§4.7.3 step 2). Soundness regression test.
 - `prove_democracy_v2_occupancy_commitment_round_trip` — for a known fixture roster, assert that `Poseidon(DOMAIN_OCCUPANCY, fold(bitmap))` matches a hardcoded expected value. Cross-platform vector (§7.2) reuses the same fixture.
@@ -604,6 +624,7 @@ The "no live users" position lets Phase D land while Phase E is in flight: the t
 - **Slot back-channel test.** iOS: `StellarChatTests/DemocracySlotDistributionTests.swift` — simulate §4.1.3: acceptor publishes a state update with `slotIndex` for the joiner; joiner stores and reuses it. Variants: (a) joiner offline during broadcast, recovers via `SEPSaltResponse` carrying the member list; (b) acceptor crashes after chain publish and before broadcast, restarts, re-broadcasts on next launch (asserts the `lastBroadcastEpoch` marker drives the recovery). Android parallel.
 - **Concurrent-acceptor rollback.** iOS: `StellarChatTests/DemocracyConcurrentAcceptorRollbackTests.swift` — two `OnChainService` mocks both processing the same `SEPMemberJoined`, only one chain publish allowed to win. Assert loser reverts to baseline, persists winner's slot assignment via the eventual `SEPGroupStateUpdate` broadcast, no double-counted member, no premature broadcast from loser before chain publish settled. Android parallel. Covers §4.1.4.
 - **Bitmap derivation determinism.** iOS: `StellarChatTests/DemocracyBitmapDerivationTests.swift` — given a fixed `[SEPGroupMemberLeaf]` (with mixed active/tombstone slots), assert `canonicalizeBitmap(members)` produces the byte-identical bitmap as the Rust prover and the Kotlin client (cross-checked via the §7.2 vector). Regression test for the bitmap-derivation desync risk in §9.
+- **`UpdateCommitmentPublicInputs` discriminator serialization.** iOS: `StellarChatTests/UpdateCommitmentDiscriminatorTests.swift` — for each governance type (Anarchy, Democracy, Oligarchy-when-it-lands), construct a `ChatGroup` instance and call the relayer-payload serializer. Assert: the discriminant in the encoded JSON matches `group.groupType.rawValue` byte-for-byte. Specifically, a Democracy group MUST NOT emit an `Anarchy` variant payload (which would surface as `chainRejected` from §4.7.4's contract-side type-confusion guard, costing a chain round-trip and bad UX). Android parallel test in `app/src/test/kotlin/.../UpdateCommitmentDiscriminatorTest.kt`. The §6 step C2 contract test covers contract-side rejection if a malformed discriminant slips through; this client-side test ensures the discriminant is well-formed at the source.
 
 ### 7.5 Manual testnet end-to-end
 
@@ -632,17 +653,19 @@ Failure-mode tests:
 - Quorum required: after the group reaches 3 members, attempt a 4th member add; expect `QuorumRequired` surface and a "multi-signer not yet supported" UX error (no silent failure). Phase F is the unblocker.
 - Old contract abandonment: an iOS build pointing at the old contract `CC6N…RWWKE` attempts to create a Democracy group; assert the client surfaces "this contract is no longer supported, please update" rather than attempting the call.
 
-### 7.6 Contract-side fail-closed (two scenarios)
+### 7.6 VK-mismatch handling, end-to-end (two scenarios)
 
-These exercise contract-side rejection paths, complementing §7.4's client-side `DemocracyVkFingerprintTests` (which covers refusal *before* the FFI is called).
+These exercise VK-mismatch rejection at two different fidelity levels. **7.6.1** is a true contract-side test: the client tries to publish, the contract refuses, the client surfaces the error. **7.6.2** is a client-side test (parallel to §7.4's `DemocracyVkFingerprintTests`) that uses a real Soroban testnet contract as the VK source — the client refuses to publish before the relayer is even called. They cover the same code path with different fidelities; the §7.4 stub-based test exercises the same client logic faster (no chain round-trip) and the §7.6.2 contract-anchored test verifies that the real on-chain `read_vk` plumbing works as the §7.4 stub claims it does.
 
-**7.6.1 No VK installed.** Pre-condition: a fresh testnet contract is set up *without* running the dev VK install. The democracy update entrypoint exists but no VK is registered for `(tier, group_type=2)`.
+The §7.4 / §7.6.2 fidelity overlap is intentional: both tests must pass, both must continue to test "the client's runtime fingerprint check refuses to publish on mismatch." If they drift (e.g., §7.4's stub returns a payload shape that the real contract doesn't), §7.6.2 catches the drift. CI runs §7.4 on every PR and §7.6.2 on a slower cadence (nightly or pre-release) since it requires a testnet contract.
+
+**7.6.1 No VK installed (true contract-side fail-closed).** Pre-condition: a fresh testnet contract is set up *without* running the dev VK install. The democracy update entrypoint exists but no VK is registered for `(tier, group_type=2)`.
 
 Run the same flow as 7.5. The contract should reject with `VkNotInitialized` (or analogous), the client should NOT silently fall back to non-chain-anchored chat, and the user should see a "this group requires updates that the network doesn't support yet" error.
 
-**7.6.2 Wrong VK installed (Layer 2 contract-side companion).** Pre-condition: a fresh testnet contract has a VK installed at `(tier, group_type=2)` that is **not** in the dev fingerprint allowlist — e.g., a one-off ceremony VK from a parallel chain, or a VK fingerprint deliberately rotated to simulate a future production deployment.
+**7.6.2 Wrong VK installed (client-side Layer 2, contract-anchored fidelity).** Pre-condition: a fresh testnet contract has a VK installed at `(tier, group_type=2)` that is **not** in the dev fingerprint allowlist — e.g., a one-off ceremony VK from a parallel chain, or a VK fingerprint deliberately rotated to simulate a future production deployment.
 
-Run the same flow as 7.5. Assert: the client's runtime fingerprint check (§4.3 Layer 2) catches the mismatch *before* attempting the publish, surfaces the "ceremony complete — release the production client" error, and never reaches the relayer. This is distinct from §7.4's `DemocracyVkFingerprintTests` because that test stubs the `OnChainService` (no real chain in the loop); §7.6.2 verifies the same safeguard against a real Soroban testnet contract carrying a real-but-unrecognized VK. Together, §7.4's stub-based and §7.6.2's contract-anchored tests cover the same code path with different fidelity.
+Run the same flow as 7.5. Assert: the client's runtime fingerprint check (§4.3 Layer 2) reads the on-chain VK, computes the fingerprint, finds no match in the allowlist, surfaces the "ceremony complete — release the production client" error, and never reaches the relayer. The relayer logs show no `update_commitment` call for this group during the test. (Note: this test verifies client refusal happens, but the *path* is client-side — not contract-side — so the §7.6 header now reads "VK-mismatch handling, end-to-end" rather than "contract-side fail-closed" to be accurate.)
 
 ---
 
@@ -714,11 +737,26 @@ Phase E ends with a mainnet release. The existing `breaking-changes-release-proc
 
 ## 10. Open Questions
 
-1. **Slot reuse policy after group reset.** If a group is deactivated and a new one created with the same `groupSecret`, do slot indices reset? (Probably yes — new group is a new contract entry.) Need to confirm with the deactivate-group flow before Phase D.
-2. **Backporting slot-index + occupancy commitment to Anarchy?** The v2 design could in principle replace Anarchy's public-key-sorted multi-leaf-delta `UpdateCircuit` too, unifying the codebase on a single update circuit shape. Trade-off: Anarchy doesn't currently leak count, but its circuit is simpler and ceremony has run for it. Open: revisit at the start of Phase E, since the ceremony plan there decides whether Anarchy and Democracy share a circuit family.
-3. **Domain tag values across circuits.** §4.1.1 proposes `DOMAIN_MEMBER = Fr::from(1)`, `DOMAIN_TOMBSTONE = Fr::from(2)`, `DOMAIN_OCCUPANCY = Fr::from(3)` (§4.7.2). Audit pass needed before Phase A merges to confirm no collision with values used by `MembershipCircuit` or `UpdateCircuit` (which currently don't use domain tags but may by the time Phase E lands). A single source of truth at `src/circuit/domain_tags.rs` with compile-time uniqueness assertions is the proposed mechanism.
-4. **`UpdateCommitmentPublicInputs` enum encoding on the wire.** The §4.4 Codable shape uses Swift's natural enum-with-associated-values encoding. The Soroban contract receives the *flat* fields (5 scalars for Democracy variant). The relayer's job is to translate. Open: should the relayer JSON shape be the discriminated union (richer, harder to forge accidentally) or the flat shape (matches contract)? Recommendation: discriminated union with the `group_type` discriminant explicit on the wire.
-5. **Tier-2 (Large) k_max value.** Phase A4 generates a Large dev VK; the choice of `k_max` (number of signer slots) matters for ceremony cost and proving time. The democracy circuit's `2K ≥ m_old` constraint at `m_old = 2048` requires `k_max ≥ 1024`, which makes proving expensive. Open: cap Large at a lower `k_max` (say 256) and reject large-group democracy proofs that would need more signers than the circuit can fit, with a clear UX error? Or commit to the full 1024-signer proof cost? Resolve in Phase A1.
+The questions below are split by their position in the dependency graph. **Phase-A blockers** must be ratified before Phase A1 (circuit) PR opens — the values they pin are inputs to the circuit shape itself and changing them after VK generation invalidates the dev VKs. **Other open questions** are tracked but don't block any specific phase entry.
+
+### 10.1 Phase-A blockers (must ratify before A1 opens)
+
+1. **Domain tag values across circuits (Phase A1 input).** §4.1.1 / §4.7.2 propose:
+   - `DOMAIN_MEMBER = Fr::from(1)`
+   - `DOMAIN_TOMBSTONE = Fr::from(2)`
+   - `DOMAIN_OCCUPANCY = Fr::from(3)`
+
+   These are the recommended values pending one-line confirmation in A1. The audit work for ratification: search `src/circuit/` for any other `Fr::from(N)` in a hash-input position (`MembershipCircuit`, `UpdateCircuit`, future `OligarchyCircuit`). At the time of writing, no other circuit uses domain tags, so values 1/2/3 are safe to claim. The ratification step (1 hour of work, mostly grep): confirm the claim against current `main`, codify the constants in a new `src/circuit/domain_tags.rs` with `const_assert!` style uniqueness checks, and reference that file from each circuit. **If a future circuit (e.g. Oligarchy) needs more domain tags, it picks values 4+, never reusing 1/2/3.** The §6 Phase A1 step opens with this domain-tags PR; the rest of Phase A depends on it.
+
+2. **Tier-2 (Large) `k_max` value (Phase A4 input).** Phase A4 generates the Large-tier dev VK. The democracy circuit's `2K ≥ m_old` constraint at `m_old = 2048` (Large tier capacity) requires `k_max ≥ 1024` for the maximum-size case to be provable. **Recommendation: cap `k_max` at 256 for the Large dev VK**, the same as Medium. The democracy single-signer subset (§4.2) only uses K=1 for groups of size ≤ 2; the Phase F multi-signer follow-up needs to scale K with `m_old` but is out of scope here. Capping `k_max = 256` means a Phase F effort that wants to support a 2048-member Large-tier group with full quorum will need to either redesign for partial-aggregation proofs (reasonable; the natural Phase F shape) or regenerate the Large VK with `k_max = 1024` (a separate ceremony, expensive). The cap is an explicit limitation and is documented in §4.6 alongside the "Large is testnet-only-with-cap" note. **Phase A4 ratifies `k_max = 256` for Large unless a different rationale surfaces during A1's circuit construction.**
+
+### 10.2 Other open questions (do not block phase entry)
+
+3. **Slot reuse policy after group reset.** If a group is deactivated and a new one created with the same `groupSecret`, do slot indices reset? (Probably yes — new group is a new contract entry.) Need to confirm with the deactivate-group flow before Phase D. §4.1.2 already foreshadows this as an exception to "monotonic, never forget" — the recommendation here is "yes, reset," confirmed during D5 client-state work.
+
+4. **Backporting slot-index + occupancy commitment to Anarchy?** The v2 design could in principle replace Anarchy's public-key-sorted multi-leaf-delta `UpdateCircuit` too, unifying the codebase on a single update circuit shape. Trade-off: Anarchy doesn't currently leak count, but its circuit is simpler and ceremony has run for it. Revisit at the start of Phase E, since the ceremony plan there decides whether Anarchy and Democracy share a circuit family.
+
+5. **`UpdateCommitmentPublicInputs` enum encoding on the wire.** The §4.4 Codable shape uses Swift's natural enum-with-associated-values encoding. The Soroban contract receives the *flat* fields (5 scalars for Democracy variant). The relayer's job is to translate. Recommendation: discriminated union with the `group_type` discriminant explicit on the wire (matches the §4.7.4 type-confusion guard). Resolved in D1 (relayer dispatch).
 
 (Items resolved in v0.4 vs prior versions: count-leak privacy regression (§3.4 → no longer accepted; circuit redesign now in §4.7); pre-design migration (no longer needed — contract redeploy in Phase C makes pre-design state moot); polymorphic dispatch (was §11 follow-up, now §4.7.4 in core design); tier-uniform salt-response padding (was acknowledged residual, now §4.7.5 in core design).)
 

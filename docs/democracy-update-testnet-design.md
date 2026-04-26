@@ -3,7 +3,7 @@
 **Date:** 2026-04-26
 **Status:** Draft (Proposal — pre-implementation)
 **Author:** Onym contributors
-**Version:** 0.4.4 — addresses @releaseng REQUEST_CHANGES on v0.4.2: load-bearing fix to §4.7.3 step 2 bitmap-to-leaf binding gadget (was a single broken constraint, now a correct two-constraint pair); §7.1 tombstone-collision test re-spec'd as paired domain-tags-disabled/enabled builds; §4.7.3 R1CS estimate corrected (~6276 for tier 1, popcount no longer double-counted); §7.6 renamed "VK-mismatch handling, end-to-end" with §7.4 fidelity overlap explicit; client-side discriminator-serializer test added; §10 split into Phase-A blockers (with recommendations to ratify) vs other open questions
+**Version:** 0.5 — bakes Path B (configurable Democracy quorum threshold) into the design. New §4.7.6 specifies `threshold_numerator ∈ [1, 100]` as a per-group public input set at `create_group_v3` time; the circuit's quorum constraint becomes `100·K ≥ threshold_numerator · m_old`. Wire format unchanged on the update path (contract reads threshold from storage); `BootstrapPayload` extended. Tier-1 R1CS estimate ~6298 (+22 from v0.4.4's ~6276). A–D total ~2710.
 **Supersedes:** (none — first iteration)
 **Related:**
 - [`group-governance-types-design.md`](group-governance-types-design.md) — the parent design that introduces `groupType ∈ {Anarchy, 1v1, Democracy, Oligarchy}`
@@ -112,6 +112,7 @@ Strict "no metadata" is impossible — Soroban itself carries some signals. The 
 | Group exists at all | Chain has a `CommitmentEntry` storage entry per group | None possible — protocol level |
 | Epoch counter advances | Chain stores `current.epoch`, observable | None — intrinsic to "newest state wins" |
 | Tier (chosen at create time, fixed) | `create_group_v3` argument | Choose tier conservatively at create; tier upgrades are a separate concern (next row) |
+| Democracy threshold (chosen at create time, fixed) per §4.7.6 | `create_group_v3` argument; stored in contract; readable via storage inspection | Same publicness class as `tier` and `group_type`. Not exposed in per-update call payload (the contract reads it from storage). Acknowledged residual: a chain observer who reads contract storage learns the threshold value of a group. No per-update leak. |
 | Tier upgrades visible | Different VK / different storage layout | **Partial**: tombstone permanence (§4.1.2) means tier capacity is the **lifetime** join cap, so operators size for the 95th-percentile join count and tier upgrades become rare. Eliminating entirely requires a universal-circuit redesign — out of scope. |
 | Group type from per-call entrypoint selector | `update_commitment_democracy` selector visible in tx | **Partially solved**: §4.7.4 polymorphic `update_commitment` dispatches all governance types through one entrypoint, eliminating the *selector* leak. **Residual**: the public-inputs payload size still differs by variant — Anarchy is 3 scalars, Democracy is 5 scalars (`c_old`, `epoch_old`, `c_new`, `occupancy_commitment_old`, `occupancy_commitment_new`), Oligarchy will add an `admin_root` scalar. A chain observer that doesn't witness `create_group_v3` can read `group_type` either from contract storage (one storage-load operation per group) OR derive it from the public-inputs scalar count on any update call. Same fundamental signal, two extraction paths. Eliminating both would require padding all variants to a uniform N-scalar shape with circuit-side dummy commitments — non-trivial circuit-side change, deferred. The `group_type` itself is already stored in the contract from `create_group_v3`, so a determined observer always has at least one extraction path; the polymorphic-dispatch fix narrows the convenience of extraction (no longer in the call selector indexed by block explorers by default), not the information itself. |
 | `slotIndex` reveals join order to current members | §4.4 wire-format addition | Lateral: current members already see each other. Acknowledged for future pseudonymous-author features. |
@@ -313,6 +314,8 @@ Compatibility rules:
 
 `SEPSaltResponse` gains an optional `members: [SEPGroupMemberLeaf]?` field carrying the latest slot map, plus an optional `padding: Data?` field set to bring total wire size to the tier-uniform maximum (§4.7.5). Same Codable wire-compat rules as `SEPGroupMemberLeaf.slotIndex` — old clients ignore both new fields. The slot-map is what supports the §4.1.3 offline-joiner recovery; the padding is what keeps the wire size from leaking member-list length to a relay observer.
 
+`BootstrapPayload` (`SEPBootstrapPayload`) gains a `thresholdNumerator: UInt8?` field per §4.7.6 — required (non-nil) for Democracy bootstrap payloads, MUST be `nil` for other governance types. A Democracy bootstrap payload with `thresholdNumerator == nil` is rejected on accept with a structured `MissingThreshold` error. Validated to `1..=100` on receive; a value outside that range is treated as a malformed payload. Joining members persist the value in their local group state; it's read by the prover whenever a democracy update proof is generated.
+
 **`SEPSaltResponse` is end-to-end opaque on relays.** The padding scheme requires that the encoded message size remain tier-uniform from sender to receiver. A relay (or any intermediary) that decodes, modifies, and re-encodes a `SEPSaltResponse` could shrink the encoded form (e.g., by stripping the `padding` field per the parser-tolerant Codable rule, or by re-serializing a `SEPGroupMemberLeaf` without optional fields) and break the size-uniform property. Onym's relay path (`relayer/src/handler.rs` and the Nostr relay layer) is normatively forbidden from re-encoding `SEPSaltResponse` payloads — they are forwarded as opaque bytes from the sender's encoding to the receiver. The §7.3 relayer integration test asserts the relayer forwards `SEPSaltResponse` byte-for-byte, never decoding-and-re-encoding. (Chat events are already handled this way today via `event.content` opacity; this is the same pattern extended to protocol messages.) For implementations that can't guarantee opacity, the §4.7.5 padding falls back to a "best-effort hint" rather than a hard size guarantee — but the testnet path requires opacity.
 
 ### 4.5 Relayer dispatch
@@ -381,11 +384,12 @@ The circuit no longer takes counts as public inputs. Instead it:
 
    This gadget is the load-bearing soundness link between the witnessed bitmap and the actual Merkle tree contents — if it's wrong, the entire occupancy-commitment privacy claim collapses (the prover could commit to a bitmap that disagrees with the tree, breaking the popcount-derived count constraints). Any future re-derivation (e.g., during ceremony review) MUST verify both constraints are present and the polarity is correct.
 3. **Computes popcount** as a private witness — sum of the bitmap booleans. Used internally for:
-   - Quorum: `2·K ≥ popcount(bitmap_old)` (replaces the old constraint #4 that referenced the public `member_count_old`).
+   - Quorum: `100·K ≥ threshold_numerator · popcount(bitmap_old)`, where `threshold_numerator ∈ [1, 100]` is a public input set per group at create time (see §4.7.6). Simple majority is `threshold_numerator = 50` (recovering the original `2·K ≥ m_old` constraint when `K, m_old` are scaled by 100/50). Two-thirds supermajority is `threshold_numerator = 67`; unanimous is `threshold_numerator = 100`. The denominator is implicit (always 100); thresholds are expressed as integer percentages.
    - Count-delta: `|popcount(bitmap_new) − popcount(bitmap_old)| ≤ 1` (replaces public-input constraint #6).
-   - Floor: `popcount(bitmap_new) ≥ 2` (the previously contract-only `m_new ≥ 2` rule from §4.2.1's table moves into the circuit).
+   - Floor: `popcount(bitmap_new) ≥ 2` (the previously contract-only `m_new ≥ 2` rule from §4.2.1's table moves into the circuit). Independent of the threshold value — the floor is a structural minimum group size, not a quorum ratio.
    - Ceiling: implicit in the bitmap's fixed length — at most `2^D` slots can be active because the bitmap *is* of length `2^D`. No explicit ceiling constraint needed.
 4. **Computes `occupancy_commitment_old`/`occupancy_commitment_new`** as defined in §4.7.2 and exposes them as public inputs (replacing the count fields).
+5. **Exposes `threshold_numerator` as a public input** so the verifier can plug in the chain-stored value. Bound to chain via §4.7.6's contract-side check (`claimed_threshold_numerator == current.threshold_numerator`). Range-checked in-circuit to `[1, 100]` via 7-bit decomposition + `numerator ≤ 100` constraint.
 
 R1CS-constraint impact estimate (for tier 1 / depth 8 / 256 slots, the testnet baseline):
 
@@ -394,16 +398,17 @@ R1CS-constraint impact estimate (for tier 1 / depth 8 / 256 slots, the testnet b
 | Bitmap booleans (2 sides × 256 slots × 1 boolean each) | 0 | ~512 |
 | Bitmap-to-leaf binding (2 sides × 256 slots × 2 mults each per the §4.7.3-step-2 corrected gadget) | 0 | ~1024 |
 | Popcount (additions are free in R1CS — no constraint cost) | 0 | 0 |
-| Quorum `2·K ≥ popcount(bitmap_old)` (popcount-witnessed) | ~10 | ~10 |
+| Quorum `100·K ≥ threshold_numerator · popcount(bitmap_old)` (one mult `numerator * popcount`, plus ~17-bit range check on the difference; `threshold_numerator * 2048` ≤ 204 800 ≈ 2^17.6) | ~10 | ~22 |
 | Count-delta `\|popcount_new − popcount_old\| ≤ 1` (popcount-witnessed) | ~5 | ~5 |
 | Floor `popcount(bitmap_new) ≥ 2` (bit-decomp range check, was contract-only in v1) | 0 | ~25 |
+| Threshold range check `1 ≤ threshold_numerator ≤ 100` (7-bit decomp + ≤100 check) | 0 | ~10 |
 | Occupancy commitment Poseidon (2 sides, ~2 hashes per side × ~300 R1CS each) | 0 | ~1200 |
 | Existing constraints unchanged | ~3500 | ~3500 |
-| **Total** | **~3525** | **~6276** (≈1.8× larger) |
+| **Total** | **~3525** | **~6298** (≈1.8× larger) |
 
-A previous draft of this table double-counted popcount (charging 512 constraints as if additions cost something) while undercounting the occupancy-commitment hash. The numbers above are the corrected accounting. Proving time scales roughly linearly with constraint count for Groth16, so v2 proves about 1.8× slower. On a modern device that's the difference between ~150ms and ~270ms — well within budget for an interactive epoch transition.
+A previous draft of this table double-counted popcount (charging 512 constraints as if additions cost something) while undercounting the occupancy-commitment hash. The numbers above are the corrected accounting. The quorum row gained ~12 constraints over the fixed-50% formulation because (a) the multiplication `threshold_numerator · popcount` is now witness-times-witness (one R1CS mult instead of constant scaling), and (b) the difference's range check widens from ~12 bits to ~18 bits. The threshold-range row is new (~10). Net additional cost vs. fixed-50%: ~22 constraints — trivial. Proving time scales roughly linearly with constraint count for Groth16, so v2 proves about 1.8× slower than v1. On a modern device that's the difference between ~150ms and ~270ms — well within budget for an interactive epoch transition.
 
-Phase A exit gate references this estimate ("constraint count within 10% of §4.7.3 estimate"). Updated baseline: **~6276** for tier 1 (depth 8). Tier 0 (depth 5, 32 slots) drops the bitmap-related rows roughly proportional to slot count: ~32 booleans + ~128 mults binding + same Poseidon cost + same fixed rows ≈ ~5060 constraints. Tier 2 (depth 11, 2048 slots) scales the bitmap-related rows by 8× over tier 1: ~4096 booleans + ~8192 mults binding + same Poseidon cost (Poseidon over 9 packed scalars at ~300 each ≈ ~2700) + same fixed rows ≈ ~19000 constraints. Phase A4 must measure and confirm.
+Phase A exit gate references this estimate ("constraint count within 10% of §4.7.3 estimate"). Updated baseline: **~6298** for tier 1 (depth 8). Tier 0 (depth 5, 32 slots) drops the bitmap-related rows roughly proportional to slot count: ~32 booleans + ~128 mults binding + same Poseidon cost + same fixed rows ≈ ~5082 constraints. Tier 2 (depth 11, 2048 slots) scales the bitmap-related rows by 8× over tier 1: ~4096 booleans + ~8192 mults binding + same Poseidon cost (Poseidon over 9 packed scalars at ~300 each ≈ ~2700) + same fixed rows ≈ ~19022 constraints. Phase A4 must measure and confirm.
 
 #### 4.7.4 Polymorphic `update_commitment` entrypoint (eliminates entrypoint-selector leak)
 
@@ -427,6 +432,32 @@ This is the §11-deferred polymorphic-dispatch fix from v0.3, pulled forward int
 #### 4.7.5 `SEPSaltResponse` size padding
 
 Per §3.4 residual #6, the protocol-level `SEPSaltResponse` size varies with member-list length, which is observable to any relay measuring kind-`44114` payload sizes. The fix: pad the encoded `members: [SEPGroupMemberLeaf]?` field to the tier-uniform maximum on send (so a Small-tier salt response is always sized for 32 members, regardless of how many are actually present). The padding is dropped on receive after CBOR/JSON parse — the wire shape is uniform but the decoded array carries only real members. Implementation: an explicit `padding: Data?` field in `SEPSaltResponse` set to a length that brings total payload to the tier ceiling. ~10 LOC on each platform.
+
+#### 4.7.6 Configurable quorum threshold (per group, fixed at create)
+
+The democracy circuit accepts a `threshold_numerator ∈ [1, 100]` public input. The quorum constraint becomes `100·K ≥ threshold_numerator · m_old` (§4.7.3 step 3, quorum row), where `m_old = popcount(bitmap_old)`. Examples:
+
+- `threshold_numerator = 50` — simple majority (`100·K ≥ 50·m_old` ⇔ `K ≥ m_old/2`). Default if the client doesn't specify.
+- `threshold_numerator = 67` — two-thirds supermajority.
+- `threshold_numerator = 75` — three-quarters supermajority.
+- `threshold_numerator = 100` — unanimous (`K = m_old`).
+
+The denominator is implicit (always 100); thresholds are integer percentages. This covers the common cases; thresholds requiring finer granularity (e.g., `60.5%`) are not supported (deliberately — fixing the denominator simplifies the circuit and the UX).
+
+**Per-group, fixed at create.** The threshold is set when the group is published via `create_group_v3` and stored in contract state alongside the other group metadata (`group_type`, `tier`, `commitment`, `epoch`, `occupancy_commitment`). It cannot change for the lifetime of the group — there is no `update_threshold` entrypoint and no path through `update_commitment` that mutates it. A group whose members later want a different threshold must recreate as a new group. (Threshold rotation is a §11 follow-up.)
+
+**Wire format unchanged on the update path.** The threshold isn't carried in `UpdateCommitmentPublicInputs::Democracy` — the contract reads it from storage (`current.threshold_numerator`) and supplies it to the Groth16 verifier as a public input alongside the wire-supplied `(c_old, epoch_old, c_new, occupancy_commitment_old, occupancy_commitment_new)`. The prover must construct the proof with the same threshold value (which it learns from the group's local state, populated at create or via the bootstrap payload). Any mismatch surfaces as proof-verification failure on chain.
+
+**Bootstrap payload extended.** `BootstrapPayload` (`SEPBootstrapPayload` Codable) gains a required `thresholdNumerator: UInt8` field for Democracy groups. Joining members read it on accept and persist it in their local group state. (Anarchy / 1v1 / Oligarchy bootstraps don't carry it — `nil` for those types per §4.4's optional-field rule, with the same Democracy-MUST-have-it / non-Democracy-MUST-be-nil semantics.)
+
+**Validation.**
+- Contract `create_group_v3`: rejects `threshold_numerator < 1 || threshold_numerator > 100` with `Error::InvalidThreshold` (new error code).
+- Circuit: range-checks `threshold_numerator ∈ [1, 100]` via 7-bit decomposition + an explicit `numerator ≤ 100` constraint (~10 R1CS).
+- Client UI: defaults to 50; common preset buttons for 50/67/75/100; "custom" entry accepts any 1–100 integer with a tooltip explaining the trade-offs (lower = easier to pass changes, higher = stronger consensus required).
+
+**Privacy class.** `threshold_numerator` is in the same publicness class as `group_type` and `tier` — set at create time, observable to a chain reader via storage inspection, but not exposed in the per-update call payload. A chain observer that reads contract state for a group sees its threshold; one that watches only `update_commitment` calls does not. This matches the v0.4 trust posture for `group_type` (per §3.4's residual table); no new leak is introduced.
+
+**Why per-group instead of per-update?** A per-update threshold would let a group raise the bar for a controversial vote and lower it for routine ones — flexible but trust-eroding (the threshold itself becomes a meta-vote). Per-group is the simpler trust model and matches how real-world bylaws work (the threshold is the governance constitution, fixed at founding, changed only by recreating the polity).
 
 ---
 
@@ -482,14 +513,14 @@ Within each phase, every numbered step is a discrete PR — small enough to revi
 
 | Step | Files | LOC | Output |
 |---|---|---|---|
-| A1 | `src/circuit/democracy_v2.rs` (new file). `src/circuit/democracy.rs` is **renamed** to `src/circuit/democracy_v1.rs` in the same commit. The renamed file is gated `#[cfg(test)]` so it stays available for v0.3-vs-v0.4 differential tests but is excluded from the production build and the FFI. Imports in non-test code are migrated to `democracy_v2`; `mod democracy_v1` is declared only inside `#[cfg(test)]` blocks. After the v2 ceremony lands and the differential tests are no longer useful, `democracy_v1.rs` is deleted in a follow-up cleanup. | ~400 | Empty + populated circuit; bitmap witness; popcount; bitmap-to-leaf binding (§4.7.3); occupancy-commitment Poseidon; all count-derived constraints internalized; domain tags from §4.1.1 + new `DOMAIN_OCCUPANCY` |
-| A2 | `src/circuit/democracy_v2.rs` tests | ~200 | Round-trip 1→2, 2→3, 2→4 (Insert), 3→2 (Remove via floor rejection), key rotation, **bitmap-mismatch attack rejection**, **tombstone-collision regression** (§4.1.1), slot-exhaustion at tier ceiling |
-| A3 | `src/prover/mod.rs` `prove_democracy_v2` + `verify_democracy_v2` | ~150 | Bitmap derivation from rosters, occupancy-commitment computation, single-leaf-delta inference, `QuorumRequired` error for `m_old ≥ 3` (single-signer subset per §4.2) |
+| A1 | `src/circuit/democracy_v2.rs` (new file). `src/circuit/democracy.rs` is **renamed** to `src/circuit/democracy_v1.rs` in the same commit. The renamed file is gated `#[cfg(test)]` so it stays available for v0.3-vs-v0.4 differential tests but is excluded from the production build and the FFI. Imports in non-test code are migrated to `democracy_v2`; `mod democracy_v1` is declared only inside `#[cfg(test)]` blocks. After the v2 ceremony lands and the differential tests are no longer useful, `democracy_v1.rs` is deleted in a follow-up cleanup. | ~425 | Empty + populated circuit; bitmap witness; popcount; bitmap-to-leaf binding (§4.7.3); occupancy-commitment Poseidon; all count-derived constraints internalized; domain tags from §4.1.1 + new `DOMAIN_OCCUPANCY`; **threshold_numerator public input + parameterized quorum constraint per §4.7.6** (~25 LOC over the fixed-50% formulation) |
+| A2 | `src/circuit/democracy_v2.rs` tests | ~225 | Round-trip 1→2, 2→3, 2→4 (Insert), 3→2 (Remove via floor rejection), key rotation, **bitmap-mismatch attack rejection**, **tombstone-collision regression** (§4.1.1), slot-exhaustion at tier ceiling, **threshold sweep** (50/67/75/100 each pass for K satisfying, fail for K below quorum) |
+| A3 | `src/prover/mod.rs` `prove_democracy_v2` + `verify_democracy_v2` | ~165 | Bitmap derivation from rosters, occupancy-commitment computation, single-leaf-delta inference, `QuorumRequired` error for `m_old ≥ 3` (single-signer subset per §4.2). Prover reads `threshold_numerator` from group state and supplies it as a public input. Verify-side helper inlines the chain-stored threshold for unit-test convenience. |
 | A4 | `scripts/generate-democracy-vk-dev.sh` extension; `keyset-democracy-dev/{tier0-k32,tier1-k256,tier2-k2048}/` | (script + bin output) | All three tier dev VKs regenerated against the v2 circuit; checked-in `verifying_key.bin` + fingerprint hashes |
 | A5 | Cargo feature `democracy-v2-dev-vks` (off by default) | `Cargo.toml`, `src/lib.rs` | Feature gate per §4.3 Layer 1 |
 | A6 | Cross-platform test vectors | `docs/cross-platform-test-vectors.json` | New `democracy_v2` section: 1→2 and 2→3 reference proofs with expected `occupancy_commitment_old`/`occupancy_commitment_new` |
 
-**Phase A exit criteria**: `cargo test --features democracy-v2-dev-vks circuit::democracy_v2` and `cargo test prover::democracy_v2_round_trip` both green. R1CS constraint count for tier 1 is within 10% of the §4.7.3 estimate (~6276 constraints, see the updated table). Dev VKs check-in includes a fingerprint manifest (`keyset-democracy-dev/fingerprints-v2.json`).
+**Phase A exit criteria**: `cargo test --features democracy-v2-dev-vks circuit::democracy_v2` and `cargo test prover::democracy_v2_round_trip` both green. R1CS constraint count for tier 1 is within 10% of the §4.7.3 estimate (~6298 constraints, see the updated table). Dev VKs check-in includes a fingerprint manifest (`keyset-democracy-dev/fingerprints-v2.json`).
 
 **Phase A is the load-bearing crypto step** — it's where R1CS soundness is established. Subsequent phases depend on the circuit being correct.
 
@@ -517,7 +548,7 @@ Phase B per-step LOC: `80 + 40 + 80 + 40 + 80 + 0 + 100 = 420`. The cumulative-s
 
 | Step | Files | LOC | Output |
 |---|---|---|---|
-| C1 | `contracts/sep-xxxx/src/lib.rs` v2 entrypoints | ~250 | Polymorphic `update_commitment(group_id, proof, public_inputs)`. Storage layout: `occupancy_commitment: BytesN<32>` per group instead of `member_count: u32`. New `create_group_v3` that emits initial occupancy commitment for the creator-only state |
+| C1 | `contracts/sep-xxxx/src/lib.rs` v2 entrypoints | ~270 | Polymorphic `update_commitment(group_id, proof, public_inputs)`. Storage layout: `occupancy_commitment: BytesN<32>` per group instead of `member_count: u32`; new `threshold_numerator: u8` per Democracy group. New `create_group_v3` that takes `threshold_numerator` as an argument (validated to `1..=100`, default 50 if not specified at the API level), emits initial occupancy commitment for the creator-only state, and stores the threshold. New `Error::InvalidThreshold` variant. Verifier-side: `update_commitment` reads `current.threshold_numerator` from storage and includes it in the Groth16 public-inputs vector for the Democracy variant (§4.7.6). |
 | C2 | Contract tests | ~250 | Mirror existing democracy tests against the v2 entrypoint; add tests for the polymorphic-dispatch type-confusion guard (`claimed_group_type == current.group_type`) and for the floor/ceiling moving in-circuit |
 | C3 | `Cargo.toml` (contract crate) — bump SemVer | ~5 | Marks the contract as a breaking change, abandoning the old testnet contract |
 | C4 | `scripts/deploy_sep_xxxx_testnet.sh` extension | ~30 | Runs the redeploy, captures the new contract address, writes `RelayerDefaults.contractID` (build-time-injected) |
@@ -576,11 +607,11 @@ Phase F is **explicitly out of scope** for this design doc. Without it, Democrac
 
 | Phase | Engineering LOC (approx) | Calendar (engineer-weeks) |
 |---|---|---|
-| A — circuit + prover | ~750 | 2–3 (R1CS review is the gate) |
+| A — circuit + prover | ~815 (A1 ~425 + A2 ~225 + A3 ~165) | 2–3 (R1CS review is the gate) |
 | B — FFI + bindings | ~420 (sums B1–B7; B6 is a CI rebuild, no LOC) | 1 |
-| C — contract redeploy | ~565 | 1 |
-| D — relayer + clients | ~880 | 2 |
-| **A–D total (testnet-functional)** | **~2615** | **6–7** |
+| C — contract redeploy | ~585 (C1 ~270 + others unchanged) | 1 |
+| D — relayer + clients | ~890 (D adds threshold-aware UX picker; ~10 extra) | 2 |
+| **A–D total (testnet-functional)** | **~2710** | **6–7** |
 | E — ceremony | (mostly process) | 4–8 (calendar; coordination + MPC sessions) |
 | F — multi-signer | (separate design) | not estimated; multi-month |
 
@@ -605,6 +636,11 @@ The "no live users" position lets Phase D land while Phase E is in flight: the t
 - `prove_democracy_v2_slot_exhaustion` — at tier capacity (Small=32 for the test), drive cumulative joins past `2^depth - 1` (never-used slots run out due to tombstones). Asserts the prover returns `SlotExhausted`, not a malformed proof.
 - `prove_democracy_v2_bitmap_mismatch_rejected` — manually feed the prover a bitmap that disagrees with the actual leaf array (e.g., `bitmap[5] = 1` but `leaf[5] = tombstone`). Asserts proof generation fails at the bitmap-to-leaf binding constraint (§4.7.3 step 2). Soundness regression test.
 - `prove_democracy_v2_occupancy_commitment_round_trip` — for a known fixture roster, assert that `Poseidon(DOMAIN_OCCUPANCY, fold(bitmap))` matches a hardcoded expected value. Cross-platform vector (§7.2) reuses the same fixture.
+- `prove_democracy_v2_threshold_simple_majority` — `threshold_numerator = 50`, group of size 3, K = 2 (50% of 3 rounded up = 2). Asserts the proof verifies. Equivalent to the original fixed-50% behavior; included to confirm the parameterized circuit recovers the v0.4-pre-threshold semantics when the default value is supplied.
+- `prove_democracy_v2_threshold_supermajority` — `threshold_numerator = 67`, group of size 3, K = 2 (need `100·2 ≥ 67·3 ⟺ 200 ≥ 201` → false; should fail). Then K = 3 (`300 ≥ 201` → true; should pass). Both asserted.
+- `prove_democracy_v2_threshold_unanimous` — `threshold_numerator = 100`, group of size 3, K = 2 (need `200 ≥ 300` → false; should fail). Then K = 3 (`300 ≥ 300` → true; should pass).
+- `prove_democracy_v2_threshold_out_of_range_rejected` — `threshold_numerator = 0` and `threshold_numerator = 101` both must be rejected at proof generation by the §4.7.6 range-check constraint. Asserts the in-circuit `1 ≤ numerator ≤ 100` enforcement is active.
+- `prove_democracy_v2_threshold_mismatch_with_chain_rejected` — prover constructs a proof with `threshold_numerator = 50` but the (mocked) on-chain group has `current.threshold_numerator = 67`. Asserts the proof verifies as a free-standing Groth16 proof (the circuit doesn't know what the chain stores) but **fails** when the verifier supplies the chain-stored value (67) instead of the prover's claimed value (50). This is the verifier-supplied public-input binding from §4.7.6 — exercised at the prover's `verify_democracy_v2` helper level since the contract integration test is C2.
 
 ### 7.2 Cross-platform vectors
 
@@ -756,7 +792,9 @@ The questions below are split by their position in the dependency graph. **Phase
 
 4. **Backporting slot-index + occupancy commitment to Anarchy?** The v2 design could in principle replace Anarchy's public-key-sorted multi-leaf-delta `UpdateCircuit` too, unifying the codebase on a single update circuit shape. Trade-off: Anarchy doesn't currently leak count, but its circuit is simpler and ceremony has run for it. Revisit at the start of Phase E, since the ceremony plan there decides whether Anarchy and Democracy share a circuit family.
 
-5. **`UpdateCommitmentPublicInputs` enum encoding on the wire.** The §4.4 Codable shape uses Swift's natural enum-with-associated-values encoding. The Soroban contract receives the *flat* fields (5 scalars for Democracy variant). The relayer's job is to translate. Recommendation: discriminated union with the `group_type` discriminant explicit on the wire (matches the §4.7.4 type-confusion guard). Resolved in D1 (relayer dispatch).
+5. **`UpdateCommitmentPublicInputs` enum encoding on the wire.** The §4.4 Codable shape uses Swift's natural enum-with-associated-values encoding. The Soroban contract receives the *flat* fields (5 scalars for Democracy variant — threshold is contract-supplied per §4.7.6, not on the wire). The relayer's job is to translate. Recommendation: discriminated union with the `group_type` discriminant explicit on the wire (matches the §4.7.4 type-confusion guard). Resolved in D1 (relayer dispatch).
+
+6. **Threshold UX picker — accept any integer 1–100, or whitelist common values?** Phase D's create-group UI surfaces the threshold control. Options: (a) free-form integer entry, validated `1..=100`; (b) preset buttons for common ratios (50, 67, 75, 100) plus a "custom" affordance; (c) presets-only, no custom path. Recommendation: (b) — friendlier UX, no functional restriction. Doesn't affect the protocol; cosmetic-tier decision but worth committing to a default. The contract / circuit accepts the full range regardless of which UX path is chosen.
 
 (Items resolved in v0.4 vs prior versions: count-leak privacy regression (§3.4 → no longer accepted; circuit redesign now in §4.7); pre-design migration (no longer needed — contract redeploy in Phase C makes pre-design state moot); polymorphic dispatch (was §11 follow-up, now §4.7.4 in core design); tier-uniform salt-response padding (was acknowledged residual, now §4.7.5 in core design).)
 
@@ -770,3 +808,4 @@ The questions below are split by their position in the dependency graph. **Phase
 - **iOS sync-lock UI integration with the v2 path.** The UI lock from [`fix/epoch-sync-and-ui-lock`](https://github.com/rinat-enikeev/stellar-mls/pull/145) generalizes to "any pending chain transition." Phase D5/D6 wires `awaitingChainConfirmation` into the new democracy publish path; the banner surface is unchanged.
 - **Backport unified update circuit to Anarchy.** Per §10 Q2, evaluate at the start of Phase E whether Anarchy should also adopt the slot-index + occupancy-commitment shape. If yes, would unify ceremony work but requires a coordinated migration of existing Anarchy groups (which DO have users in the broader Onym roadmap context). If no, keep Anarchy on its current `UpdateCircuit`. Decision deferred; not gating Phase A–D.
 - **Eliminating tier-upgrade visibility.** §3.4 acknowledges this as the only material residual leak after this design lands. Eliminating it requires either fixed-size groups (massive overhead) or a universal-circuit redesign (research project). Not on any near-term roadmap; tracked as a long-tail privacy-improvement item.
+- **Threshold rotation.** §4.7.6 fixes `threshold_numerator` at group creation; changing it requires recreating the group. A future feature would let an existing group vote to change its own threshold (a meta-governance operation). Design challenges: the meta-vote itself uses *some* threshold to pass — the existing one, the new one, or a higher fixed bar like unanimous? Each choice has a different trust story. Documented as a Phase G candidate; not on the immediate roadmap.

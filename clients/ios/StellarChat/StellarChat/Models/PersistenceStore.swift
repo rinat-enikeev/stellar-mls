@@ -1,6 +1,7 @@
 import Foundation
 import SwiftData
 import SwiftMLS
+import os.log
 
 /// SwiftData-backed persistence with field-level AES-256-GCM encryption
 /// and FileProtectionType.complete on the store directory.
@@ -9,6 +10,8 @@ final class PersistenceStore {
         label: "chat.onym.ios.persistence.write",
         qos: .utility
     )
+
+    private static let logger = Logger(subsystem: "chat.onym.ios", category: "PersistenceStore")
 
     let container: ModelContainer
     private let context: ModelContext
@@ -82,7 +85,11 @@ final class PersistenceStore {
             for item in existing { context.delete(item) }
         }
         context.insert(persisted)
-        try? context.save()
+        do {
+            try context.save()
+        } catch {
+            Self.logger.error("saveGroup failed for \(groupID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     func deleteGroup(id: String) {

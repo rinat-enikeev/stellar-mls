@@ -1,3 +1,5 @@
+import ImageIO
+import PhotosUI
 import SwiftUI
 import SwiftMLS
 
@@ -46,6 +48,9 @@ struct GroupInfoView: View {
 
     // Search
     @State private var showSearch = false
+
+    // Avatar
+    @State private var selectedAvatarItem: PhotosPickerItem?
 
     private var currentGroup: ChatGroup {
         appState.groups.first(where: { $0.id == group.id }) ?? group
@@ -539,6 +544,7 @@ struct GroupInfoView: View {
 
     private var hero: some View {
         let (c1, c2) = groupGradient(seed: currentGroup.id)
+        let avatarUIImage: UIImage? = currentGroup.avatarData.flatMap { UIImage(data: $0) }
         return VStack(spacing: 14) {
             ZStack {
                 // soft halo
@@ -547,25 +553,31 @@ struct GroupInfoView: View {
                     .frame(width: 240, height: 240)
                     .blur(radius: 40)
                     .offset(y: -30)
-                // avatar
-                Button {
-                    guard isMember else { return }
-                    newGroupName = currentGroup.name
-                    showRenameAlert = true
-                } label: {
+                // avatar — tap anywhere to pick a new photo
+                PhotosPicker(selection: $selectedAvatarItem, matching: .images) {
                     ZStack(alignment: .bottomTrailing) {
-                        Circle()
-                            .fill(
-                                LinearGradient(colors: [c1, c2], startPoint: .topLeading, endPoint: .bottomTrailing)
-                            )
-                            .frame(width: 96, height: 96)
-                            .shadow(color: c1.opacity(0.35), radius: 14, y: 8)
-                            .overlay(
-                                Text(initials(currentGroup.name))
-                                    .font(.system(size: 38, weight: .semibold))
-                                    .foregroundStyle(.white)
-                                    .minimumScaleFactor(0.6)
-                            )
+                        Group {
+                            if let avatarUIImage {
+                                Image(uiImage: avatarUIImage)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 96, height: 96)
+                                    .clipShape(Circle())
+                            } else {
+                                Circle()
+                                    .fill(
+                                        LinearGradient(colors: [c1, c2], startPoint: .topLeading, endPoint: .bottomTrailing)
+                                    )
+                                    .frame(width: 96, height: 96)
+                                    .overlay(
+                                        Text(initials(currentGroup.name))
+                                            .font(.system(size: 38, weight: .semibold))
+                                            .foregroundStyle(.white)
+                                            .minimumScaleFactor(0.6)
+                                    )
+                            }
+                        }
+                        .shadow(color: c1.opacity(0.35), radius: 14, y: 8)
                         if isMember {
                             ZStack {
                                 Circle()
@@ -583,6 +595,17 @@ struct GroupInfoView: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .disabled(!isMember)
+                .onChange(of: selectedAvatarItem) { _, newItem in
+                    guard let newItem else { return }
+                    Task {
+                        if let data = try? await newItem.loadTransferable(type: Data.self),
+                           let processed = Self.downscaleAvatar(data) {
+                            appState.setGroupAvatar(groupID: currentGroup.id, avatarData: processed)
+                        }
+                        selectedAvatarItem = nil
+                    }
+                }
             }
             .padding(.top, 20)
 
@@ -603,6 +626,22 @@ struct GroupInfoView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.bottom, 14)
+    }
+
+    /// ImageIO thumbnail path so a 50+ MP HEIC is never fully decoded; returns nil rather than 0-byte data.
+    private static func downscaleAvatar(_ data: Data) -> Data? {
+        let maxEdge = 256
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxEdge,
+        ]
+        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        guard let jpeg = UIImage(cgImage: thumbnail).jpegData(compressionQuality: 0.85),
+              !jpeg.isEmpty else { return nil }
+        return jpeg
     }
 
     private func chip(icon: String, text: String, tint: Color, bgAlpha: Double = 0.06) -> some View {

@@ -59,6 +59,8 @@ import com.stellarmls.mls.SEPSaltResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -180,6 +182,10 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     private var pushManager: PushNotificationManager? = null
     private val pushPrefs = application.getSharedPreferences("stellar_push_config", Context.MODE_PRIVATE)
     private val pushTokenProvider = PushTokenProviderFactory.create(application)
+    /** Serializes register/unregister toggles so rapid taps can't race the local sub store —
+     *  without this, an unregister can read the store before a prior register has saved, find
+     *  nothing, and skip the network request. */
+    private val pushToggleMutex = Mutex()
     /** Observable push-enabled state per group — separate from groups list for reliable Compose recomposition. */
     val pushEnabledStates = androidx.compose.runtime.mutableStateMapOf<String, Boolean>()
     /** Set by MainActivity.onNewIntent to navigate to a chat from a notification tap. */
@@ -2643,31 +2649,33 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         val group = groups[index]
         viewModelScope.launch {
             withContext(Dispatchers.IO) { store.saveGroup(group) }
-            if (enabled) {
-                val mgr = getOrCreatePushManager()
-                if (mgr == null) {
-                    Log.w("GroupListVM", "Cannot register push: no relay URL")
-                    return@launch
-                }
-                val token = getPushToken()
-                if (token == null) {
-                    Log.w("GroupListVM", "Cannot register push: no push token")
-                    return@launch
-                }
-                val registered = mgr.registerGroup(group, token, pushTokenProvider.getPlatformName())
-                if (registered) {
-                    if (BuildConfig.DEBUG) Log.d("GroupListVM", "Push registered for group ${groupID.take(8)}")
+            pushToggleMutex.withLock {
+                if (enabled) {
+                    val mgr = getOrCreatePushManager()
+                    if (mgr == null) {
+                        Log.w("GroupListVM", "Cannot register push: no relay URL")
+                        return@withLock
+                    }
+                    val token = getPushToken()
+                    if (token == null) {
+                        Log.w("GroupListVM", "Cannot register push: no push token")
+                        return@withLock
+                    }
+                    val registered = mgr.registerGroup(group, token, pushTokenProvider.getPlatformName())
+                    if (registered) {
+                        if (BuildConfig.DEBUG) Log.d("GroupListVM", "Push registered for group ${groupID.take(8)}")
+                    } else {
+                        Log.w("GroupListVM", "Push registration failed for group ${groupID.take(8)}")
+                    }
                 } else {
-                    Log.w("GroupListVM", "Push registration failed for group ${groupID.take(8)}")
+                    val mgr = getOrCreatePushManager()
+                    if (mgr == null) {
+                        Log.w("GroupListVM", "Cannot unregister push: no relay URL")
+                        return@withLock
+                    }
+                    mgr.unregisterGroup(groupID)
+                    if (BuildConfig.DEBUG) Log.d("GroupListVM", "Push unregistered for group ${groupID.take(8)}")
                 }
-            } else {
-                val mgr = getOrCreatePushManager()
-                if (mgr == null) {
-                    Log.w("GroupListVM", "Cannot unregister push: no relay URL")
-                    return@launch
-                }
-                mgr.unregisterGroup(groupID)
-                if (BuildConfig.DEBUG) Log.d("GroupListVM", "Push unregistered for group ${groupID.take(8)}")
             }
         }
     }

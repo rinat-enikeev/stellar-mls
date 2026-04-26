@@ -68,6 +68,29 @@ import kotlinx.coroutines.withContext
 class MainActivity : ComponentActivity() {
     private val groupListViewModel: GroupListViewModel by viewModels()
 
+    override fun onStart() {
+        super.onStart()
+        // On process-death restore, `ChatViewModel.init` re-arms `activeGroupID` when the
+        // NavHost re-composes the chat route from the saved back stack, so the VM-side
+        // saved value is only populated after a genuine background trip.
+        val saved = groupListViewModel.savedActiveGroupID ?: return
+        groupListViewModel.savedActiveGroupID = null
+        groupListViewModel.activeGroupID = saved
+        // Catch up on any messages that arrived while backgrounded so the sender sees ✓✓
+        // when we resume — same idea as ChatViewModel.init flushing on chat open.
+        groupListViewModel.sendBacklogAcks(saved)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // `isChangingConfigurations` fires on rotation/theme/locale: keep `activeGroupID`
+        // armed on the retained VM so the new Activity's `onStart` sees the chat still
+        // open and does not burn a ✓✓ gap. Real background trips fall through and clear.
+        if (isChangingConfigurations) return
+        groupListViewModel.savedActiveGroupID = groupListViewModel.activeGroupID
+        groupListViewModel.activeGroupID = null
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // Demo flag must be set BEFORE the lazy `viewModels()` delegate
         // resolves (which happens at first access in `setContent`).

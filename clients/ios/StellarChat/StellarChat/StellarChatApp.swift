@@ -98,6 +98,12 @@ struct StellarChatApp: App {
     @UIApplicationDelegateAdaptor(StellarChatAppDelegate.self) var appDelegate
     @State private var appState = AppState()
     @Environment(\.scenePhase) private var scenePhase
+    /// Active group ID stashed across background trips so the chat can be restored when
+    /// the user returns. Cleared on background so messages decoded by BGProcessingTask /
+    /// silent-push wake-ups do not auto-ACK and burn a ✓✓ that the recipient hasn't
+    /// actually seen — the PR description's "no check upgrade while the recipient is
+    /// backgrounded" only holds if `activeGroupID` follows scene phase, not just chat nav.
+    @State private var savedActiveGroupID: String?
 
     var body: some Scene {
         WindowGroup {
@@ -141,6 +147,29 @@ struct StellarChatApp: App {
                         // Clear badge when app comes to foreground
                         UNUserNotificationCenter.current().setBadgeCount(0)
                         UserDefaults(suiteName: "group.chat.onym.ios")?.set(0, forKey: "pn_badge_count")
+                        // Restore active chat tracking and flush any backlog ACKs that
+                        // accumulated while backgrounded. ChatView's onAppear/init don't
+                        // fire on scene resume, so the restore must happen here.
+                        if let groupID = savedActiveGroupID {
+                            appState.activeGroupID = groupID
+                            appState.sendBacklogAcks(groupID: groupID)
+                            savedActiveGroupID = nil
+                        }
+                    } else if newPhase == .background, let active = appState.activeGroupID {
+                        // True backgrounding only (home, app switcher commit, screen lock):
+                        // clear the active group so background-decoded messages don't auto-ACK.
+                        // Gated on `.background` rather than any non-`.active` transition so
+                        // transient interruptions (Control Center pull-down, incoming call
+                        // banner, notification center) — which fire `.inactive` then return
+                        // to `.active` without passing through `.background` — don't stomp
+                        // `activeGroupID` and silence in-window ACKs until the user returns.
+                        // Flush any queued messages first so in-flight arrivals from when
+                        // the chat was genuinely open still get ACKed against the
+                        // still-active groupID — preserves the "ACK iff chat was open
+                        // when message arrived" invariant across the 16ms flush debounce.
+                        appState.flushPendingMessages()
+                        savedActiveGroupID = active
+                        appState.activeGroupID = nil
                     }
                 }
         }
@@ -210,6 +239,11 @@ final class AppState {
     var chatMessages: [String: [ChatMessage]] = [:]
     /// Dedup set for chat message event IDs, keyed by group ID.
     private var seenMessageIDs: [String: Set<String>] = [:]
+    /// Event IDs already ACKed this session, per group. Dedupes the batched live handler
+    /// (`flushPendingMessages`) against `sendBacklogAcks` so an open-close-open cycle, a
+    /// stale `unreadCounts` after restart, or a multi-device echo cannot resend the same
+    /// ACK to the sender.
+    private var ackedEventIDs: [String: Set<String>] = [:]
     /// Message IDs currently being retried. Prevents two rapid taps on the same
     /// failed message from launching concurrent retries (mirrors Android's
     /// `retryingMessageIDs`). Access is serialised on the @MainActor class.
@@ -521,7 +555,14 @@ final class AppState {
         }
     }
 
-    private func flushPendingMessages() {
+    /// Drains `pendingIncomingMessages` into `chatMessages`, increments unread
+    /// counters, and emits ACKs for entries that arrived while the chat was open.
+    /// Normally fired by the 16ms debounce task; also called from
+    /// `StellarChatApp`'s scene-phase handler on `.background` to flush
+    /// in-flight arrivals before `activeGroupID` is nilled — without that,
+    /// messages queued in the final debounce window would lose their "chat was
+    /// open" ACK.
+    func flushPendingMessages() {
         let batch = pendingIncomingMessages
         pendingIncomingMessages.removeAll()
         messageFlushTask = nil
@@ -563,8 +604,10 @@ final class AppState {
                event.createdAt > group.lastEventTimestamp {
                 updateLastEventTimestamp(groupID: groupID, timestamp: event.createdAt)
             }
-            // Send delivery ACK for non-mine messages (fire-and-forget)
-            if !msg.isMine, let group = groups.first(where: { $0.id == groupID }) {
+            // ACK drives the ✓✓ "read" indicator — only send when recipient has the chat open.
+            if !msg.isMine, activeGroupID == groupID,
+               let group = groups.first(where: { $0.id == groupID }),
+               ackedEventIDs[groupID, default: []].insert(event.id).inserted {
                 let ack = SEPMessageAck(eventID: event.id)
                 Task {
                     try? await chatTransport.sendProtocolMessage(
@@ -573,6 +616,83 @@ final class AppState {
             }
         }
         unreadCounts = localUnread
+    }
+
+    /// ACK recent non-mine messages in a group so senders see ✓✓ for messages that
+    /// arrived while the recipient had the chat closed. Walks backwards from the tail,
+    /// stopping on the first `isMine` (we sent that, so prior messages were already ACKed
+    /// at that time) or the scan/ACK caps — independent of `unreadCounts`, which is
+    /// in-memory and resets on restart. Skips messages already in `ackedEventIDs`
+    /// (handler-acked head, repeat opens) but keeps walking past them so a handler-acked
+    /// newest message does not block the cold-start backfill.
+    func sendBacklogAcks(groupID: String) {
+        guard let msgs = chatMessages[groupID] else { return }
+        guard let group = groups.first(where: { $0.id == groupID }) else { return }
+        let toAck = AppState.computeBacklogAcks(
+            msgs: msgs, alreadyAcked: ackedEventIDs[groupID] ?? [])
+        for eventID in toAck {
+            ackedEventIDs[groupID, default: []].insert(eventID)
+            let ack = SEPMessageAck(eventID: eventID)
+            Task {
+                try? await chatTransport.sendProtocolMessage(
+                    ack, topic: group.topicTag, key: group.encryptionKey, keyManager: keyManager)
+            }
+        }
+    }
+
+    /// Cap on ACKs sent per backlog flush — bounds redundant ACK traffic when a
+    /// long history is walked at cold-start with no `isMine` to anchor against.
+    /// Enforced on the newest entries (we walk from the tail), so with >50 unread
+    /// and no `isMine` anchor the senders of the older messages do not get ✓✓.
+    /// Intentional: the recipient sees those messages as read locally, and a single
+    /// outbound reply ACKs the entire history via the `isMine` anchor on the next
+    /// open. Persisting `ackedEventIDs` across restarts to drain the rest is tracked
+    /// as followup (see review #4150750508).
+    nonisolated static let backlogAckMax = 50
+    /// Cap on messages scanned per backlog flush — bounds the cost of walking a long
+    /// history when nothing new needs ACKing (re-open with full `ackedEventIDs`).
+    nonisolated static let backlogAckScanCap = 200
+
+    /// Compute which event IDs to ACK from the tail of `msgs`, skipping isMine entries
+    /// (anchor: when we last sent, prior msgs were ACKed) and entries already in
+    /// `alreadyAcked` (handler beat us, or earlier call this session). Returns IDs in
+    /// reverse-chronological order. Pure for unit testing.
+    nonisolated static func computeBacklogAcks(
+        msgs: [ChatMessage],
+        alreadyAcked: Set<String>,
+        maxAcks: Int = backlogAckMax,
+        maxScan: Int = backlogAckScanCap
+    ) -> [String] {
+        var toAck: [String] = []
+        toAck.reserveCapacity(maxAcks)
+        var i = msgs.count - 1
+        var scanned = 0
+        while i >= 0 && scanned < maxScan && toAck.count < maxAcks {
+            let m = msgs[i]
+            if m.isMine { break }
+            if !alreadyAcked.contains(m.id) { toAck.append(m.id) }
+            i -= 1
+            scanned += 1
+        }
+        return toAck
+    }
+
+    /// Locate the oldest of the last `unreadCount` non-mine messages — used as the
+    /// anchor for the unread-separator. Walks backwards counting only non-mine entries
+    /// so interleaved isMine messages do not shift the window.
+    nonisolated static func firstUnreadMessageID(msgs: [ChatMessage], unreadCount: Int) -> String? {
+        guard unreadCount > 0 else { return nil }
+        var nonMine = 0
+        var firstUnread: String?
+        var i = msgs.count - 1
+        while i >= 0 && nonMine < unreadCount {
+            if !msgs[i].isMine {
+                nonMine += 1
+                firstUnread = msgs[i].id
+            }
+            i -= 1
+        }
+        return firstUnread
     }
 
     func togglePinGroup(id: String) {
@@ -593,6 +713,7 @@ final class AppState {
             invitation.payload.groupID.map { String(format: "%02x", $0) }.joined() == id
         }
         declinedGroupIDs.insert(id)
+        ackedEventIDs.removeValue(forKey: id)
     }
 
     func removePendingInvitation(id: String) {

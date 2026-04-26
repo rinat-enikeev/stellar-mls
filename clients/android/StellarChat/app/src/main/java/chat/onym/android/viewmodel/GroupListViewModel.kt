@@ -112,10 +112,26 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     // Uses SnapshotStateMap so Compose recomposes when messages change.
     val chatMessages = androidx.compose.runtime.mutableStateMapOf<String, List<ChatMessage>>()
     private val seenMessageIDs = java.util.concurrent.ConcurrentHashMap<String, MutableSet<String>>()
+    /** Event IDs already ACKed this session, per group. Dedupes the live handler against
+     *  `sendBacklogAcks` so the micro-race between setting `activeGroupID` and flushing
+     *  the backlog (handler may fire on a transport thread) cannot emit the same ACK twice. */
+    private val ackedEventIDs = java.util.concurrent.ConcurrentHashMap<String, MutableSet<String>>()
     /** Unread message count per group. Reset when the user opens the chat. */
     val unreadCounts = androidx.compose.runtime.mutableStateMapOf<String, Int>()
-    /** The group ID currently being viewed, used to suppress unread increments. */
+    /** The group ID currently being viewed, used to suppress unread increments.
+     *  `@Volatile` because the transport handler runs on a background thread and reads it
+     *  concurrently with the main-thread writes from `ChatViewModel.init` / `onCleared`
+     *  and `MainActivity.onStart` / `onStop`. */
+    @Volatile
     var activeGroupID: String? = null
+    /** Active group ID stashed across background trips so the chat can be restored when
+     *  the user returns. Lives on the ViewModel (retained across configuration changes)
+     *  so that rotation/theme/locale changes don't drop the saved value on the old Activity
+     *  instance — `MainActivity`'s `onStop` on the soon-to-be-destroyed Activity would
+     *  otherwise nil `activeGroupID` while the new Activity starts with a fresh null saved
+     *  value and never re-arms. Cleared on background so incoming messages decoded while
+     *  the app is not foreground (push wake, FCM, foreground service) do not auto-ACK. */
+    var savedActiveGroupID: String? = null
 
     val store = PersistenceStore(application)
     val contactAliasStore = ContactAliasStore()
@@ -457,6 +473,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         groups.removeAll { it.id == id }
         chatMessages.remove(id)
         seenMessageIDs.remove(id)
+        ackedEventIDs.remove(id)
         epochSnapshots.remove(id)
         pushEnabledStates.remove(id)
         viewModelScope.launch {
@@ -1063,6 +1080,60 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         private const val SALT_HISTORY_WINDOW = 64
         /** Maximum number of epoch snapshots retained per group. */
         private const val EPOCH_SNAPSHOT_WINDOW = 64
+
+        /** Cap on ACKs sent per backlog flush — bounds redundant ACK traffic when a
+         *  long history is walked at cold-start with no `isMine` to anchor against.
+         *  Enforced on the newest entries (we walk from the tail), so with >50 unread
+         *  and no `isMine` anchor the senders of the older messages do not get ✓✓.
+         *  Intentional: the recipient sees those messages as read locally, and a single
+         *  outbound reply ACKs the entire history via the `isMine` anchor on the next
+         *  open. Persisting `ackedEventIDs` across restarts to drain the rest is tracked
+         *  as followup (see review #4150750508). */
+        const val BACKLOG_ACK_MAX = 50
+        /** Cap on messages scanned per backlog flush — bounds the cost of walking a long
+         *  history when nothing new needs ACKing (re-open with full `ackedEventIDs`). */
+        const val BACKLOG_ACK_SCAN_CAP = 200
+
+        /** Compute which event IDs to ACK from the tail of [msgs], skipping isMine
+         *  entries (anchor: when we last sent, prior msgs were ACKed) and entries already
+         *  in [alreadyAcked] (handler beat us, or earlier call this session). Returns IDs
+         *  in reverse-chronological order. Pure for unit testing. */
+        fun computeBacklogAcks(
+            msgs: List<ChatMessage>,
+            alreadyAcked: Set<String>,
+            maxAcks: Int = BACKLOG_ACK_MAX,
+            maxScan: Int = BACKLOG_ACK_SCAN_CAP
+        ): List<String> {
+            val toAck = ArrayList<String>(maxAcks)
+            var i = msgs.size - 1
+            var scanned = 0
+            while (i >= 0 && scanned < maxScan && toAck.size < maxAcks) {
+                val m = msgs[i]
+                if (m.isMine) break
+                if (m.id !in alreadyAcked) toAck.add(m.id)
+                i--
+                scanned++
+            }
+            return toAck
+        }
+
+        /** Locate the oldest of the last [unreadCount] non-mine messages — used as the
+         *  anchor for the unread-separator. Walks backwards counting only non-mine entries
+         *  so interleaved isMine messages do not shift the window. */
+        fun firstUnreadMessageID(msgs: List<ChatMessage>, unreadCount: Int): String? {
+            if (unreadCount <= 0) return null
+            var nonMine = 0
+            var firstUnread: String? = null
+            var i = msgs.size - 1
+            while (i >= 0 && nonMine < unreadCount) {
+                if (!msgs[i].isMine) {
+                    nonMine++
+                    firstUnread = msgs[i].id
+                }
+                i--
+            }
+            return firstUnread
+        }
         /** N-8: Max entries for dedup sets to prevent unbounded memory growth. */
         private const val MAX_DEDUP_SET_SIZE = 10_000
 
@@ -2809,19 +2880,25 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 viewModelScope.launch {
                     try { store.saveMessage(msg) } catch (_: Exception) { }
                 }
+                // Single read of `activeGroupID` so the unread/ACK branches below see a
+                // consistent value even if the main thread writes between them.
+                val currentActive = activeGroupID
                 // Increment unread count if this group isn't currently active
-                if (!msg.isMine && activeGroupID != groupID) {
+                if (!msg.isMine && currentActive != groupID) {
                     unreadCounts[groupID] = (unreadCounts[groupID] ?: 0) + 1
                 }
-                // Send delivery ACK for non-mine messages (fire-and-forget)
-                if (!msg.isMine) {
-                    val group = groups.find { it.id == groupID }
-                    if (group != null) {
-                        val ackJson = JSONObject().apply {
-                            put("type", SEPMessageAck.MESSAGE_TYPE)
-                            put("eventID", eventID)
-                        }.toString()
-                        transport.sendProtocolMessage(group, ackJson)
+                // ACK drives the ✓✓ "read" indicator — only send when recipient has the chat open.
+                if (!msg.isMine && currentActive == groupID) {
+                    val acked = ackedEventIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }
+                    if (acked.add(eventID)) {
+                        val group = groups.find { it.id == groupID }
+                        if (group != null) {
+                            val ackJson = JSONObject().apply {
+                                put("type", SEPMessageAck.MESSAGE_TYPE)
+                                put("eventID", eventID)
+                            }.toString()
+                            transport.sendProtocolMessage(group, ackJson)
+                        }
                     }
                 }
                 // Update lastEventTimestamp (stored in seconds for relay catch-up filters)
@@ -2858,18 +2935,22 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                 viewModelScope.launch {
                     try { store.saveMessage(msg) } catch (_: Exception) { }
                 }
-                if (!msg.isMine && activeGroupID != groupID) {
+                val currentActive = activeGroupID
+                if (!msg.isMine && currentActive != groupID) {
                     unreadCounts[groupID] = (unreadCounts[groupID] ?: 0) + 1
                 }
-                // Send delivery ACK for non-mine image messages (fire-and-forget)
-                if (!msg.isMine) {
-                    val group = groups.find { it.id == groupID }
-                    if (group != null) {
-                        val ackJson = JSONObject().apply {
-                            put("type", SEPMessageAck.MESSAGE_TYPE)
-                            put("eventID", eventID)
-                        }.toString()
-                        transport.sendProtocolMessage(group, ackJson)
+                // ACK drives the ✓✓ "read" indicator — only send when recipient has the chat open.
+                if (!msg.isMine && currentActive == groupID) {
+                    val acked = ackedEventIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }
+                    if (acked.add(eventID)) {
+                        val group = groups.find { it.id == groupID }
+                        if (group != null) {
+                            val ackJson = JSONObject().apply {
+                                put("type", SEPMessageAck.MESSAGE_TYPE)
+                                put("eventID", eventID)
+                            }.toString()
+                            transport.sendProtocolMessage(group, ackJson)
+                        }
                     }
                 }
                 val group = groups.find { it.id == groupID }
@@ -2880,6 +2961,32 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                         try { store.saveGroup(group) } catch (_: Exception) { }
                     }
                 }
+            }
+        }
+    }
+
+    /** ACK recent non-mine messages in a group so senders see ✓✓ for messages that
+     *  arrived while the chat was closed. Walks backwards from the tail, stopping on the
+     *  first `isMine` (we sent that, so prior messages were already ACKed at that time)
+     *  or the scan/ACK caps — independent of `unreadCounts`, which is in-memory and resets
+     *  on restart. Skips messages already in [ackedEventIDs] (handler-acked head, repeat
+     *  opens) but keeps walking past them so a handler-acked newest message does not block
+     *  the cold-start backfill. */
+    fun sendBacklogAcks(groupID: String) {
+        val msgs = chatMessages[groupID] ?: return
+        val group = groups.find { it.id == groupID } ?: return
+        val acked = ackedEventIDs.computeIfAbsent(groupID) { java.util.Collections.synchronizedSet(mutableSetOf()) }
+        val toAck = computeBacklogAcks(msgs, acked, BACKLOG_ACK_MAX, BACKLOG_ACK_SCAN_CAP)
+        for (eventID in toAck) {
+            // `acked.add` claims the ID: dedupes this backlog flush against a second
+            // `sendBacklogAcks` (onStop→onStart re-arm) and against a concurrent
+            // text/image handler on the transport thread racing the same event.
+            if (acked.add(eventID)) {
+                val ackJson = JSONObject().apply {
+                    put("type", SEPMessageAck.MESSAGE_TYPE)
+                    put("eventID", eventID)
+                }.toString()
+                transport.sendProtocolMessage(group, ackJson)
             }
         }
     }

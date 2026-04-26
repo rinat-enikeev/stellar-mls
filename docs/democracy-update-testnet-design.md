@@ -3,7 +3,7 @@
 **Date:** 2026-04-26
 **Status:** Draft (Proposal — pre-implementation)
 **Author:** Onym contributors
-**Version:** 0.2 (revised against PR #146 review feedback)
+**Version:** 0.3 (folds in §12 second-pass review; member-count public input accepted as testnet trade-off)
 **Supersedes:** (none — first iteration)
 **Related:**
 - [`group-governance-types-design.md`](group-governance-types-design.md) — the parent design that introduces `groupType ∈ {Anarchy, 1v1, Democracy, Oligarchy}`
@@ -82,7 +82,24 @@ The Democracy circuit (constraint #7 in `src/circuit/democracy.rs`) accepts proo
 
 Without resolving this, the circuit only handles `Replace` operations where the public key is preserved (which is what the test fixture `build_replace_scenario` uses). Real `Insert`/`Remove` operations on real members do not satisfy the constraint.
 
-This is the gating design question. The next section proposes a resolution.
+This is the gating design question. §4.1 proposes a resolution.
+
+### 3.4 Privacy delta vs. Anarchy: member count is public on-chain (accepted)
+
+Anarchy's `update_commitment` exposes `(c_old, epoch_old, c_new)` as public inputs. Democracy's `update_commitment_democracy` exposes those plus `member_count_old` and `member_count_new`. Every Democracy epoch transition therefore publishes the exact group size, before and after, to any Soroban observer. Plotted over time, this gives a chain observer the complete membership trajectory of every Democracy group — joins, removals, replaces all distinguishable. Anarchy reveals epoch count and commitment trajectory but not size. This is a strict privacy regression for Democracy groups vs. Anarchy.
+
+The leak is intrinsic to the dev circuit's public-input shape: the contract's quorum and floor checks (`m_new ≥ 2`, `2K ≥ m_old`) require plaintext counts, and constraint #4 in the dev circuit uses `member_count_old` for the K-bound. Hiding the counts would require moving them to a private witness with a Merkle-occupancy commitment — a circuit-level change that doesn't fit in the testnet-gated scope.
+
+**Decision: accepted as a testnet-phase trade-off.** Onym contributors have accepted public on-chain member counts for Democracy groups during the testnet phase. The reasoning: (a) testnet is for protocol development, not value-bearing user data; (b) the Phase 2 ceremony review (gating mainnet) is the natural venue to revisit the public-input shape if a count-hiding circuit is desirable; (c) padding counts to a tier-uniform value would still leak tier (already public via `create_group_v2`'s `tier` argument) and would only hide intra-tier trajectory. The dev path therefore emits true counts; clients do not pad.
+
+Two corollaries follow from §4.1's tombstone-permanence design:
+
+- **Lifetime churn observable via tier upgrades.** Because tombstones are never reused, slot space is bounded by **cumulative** joins. Reaching the tier ceiling forces a tier upgrade (a chain-visible event), making two Democracy groups with identical peak membership but different churn rates distinguishable by upgrade cadence. This is a function of the slot convention, not a separable choice — accepted with the count leak above. Operators selecting a tier for a Democracy group must size for total expected churn (see §4.1).
+- **Entrypoint selector re-confirms `group_type=2` at every epoch.** A chain observer that did not witness `create_group_v2` re-derives the group type from the function selector on every subsequent epoch. The structural fix is a single polymorphic `update_commitment` entrypoint that internally dispatches by VK lookup; that's a contract-level change deferred to §11.
+
+The minor intra-protocol signals from the slot-index addition (§4.4) are listed in §9 risks but are mostly lateral — current members already see each other; size differences in `SEPSaltResponse` are already distinguishable from chat by payload size.
+
+This subsection is the *only* place this trade-off is decided; downstream sections inherit it. The Phase 2 ceremony scope question — does the production circuit hide counts? — is added to [`democracy-circuit-ceremony.md`](democracy-circuit-ceremony.md) as part of this design's land sequence.
 
 ---
 
@@ -94,9 +111,31 @@ Democracy groups switch from public-key-sorted Merkle ordering to **stable slot-
 
 - Each member is assigned a slot index `slot ∈ [0, 2^depth)` at the moment they join the group.
 - The first member is at slot 0. Subsequent joins take the **lowest never-used slot**. "Never-used" excludes both currently-active slots and tombstones — once a slot has been occupied by any member, it is permanently retired even if that member later leaves.
-- Removals leave a tombstone: the slot is set to a canonical empty leaf (`Poseidon(0)`), the slot index is **not** reassigned to a future joiner. (Reusing slots after removal would let a removed member's old proof masquerade as a new member's proof at the same epoch.)
-- The Merkle tree at any epoch is over the slot-indexed array `[leaf_0, leaf_1, ..., leaf_{2^depth - 1}]`, where each entry is either a member's leaf hash or a zero/tombstone.
+- Removals leave a tombstone (canonical empty leaf, defined in §4.1.1 below); the slot index is **not** reassigned to a future joiner.
+- The Merkle tree at any epoch is over the slot-indexed array `[leaf_0, leaf_1, ..., leaf_{2^depth - 1}]`, where each entry is either a member's domain-tagged leaf hash or the tombstone constant.
 - `member_count_old` / `member_count_new` (the new public inputs) are the count of non-tombstone slots, **not** the highest slot index.
+
+#### 4.1.1 Domain separation: members vs. tombstones (normative)
+
+Member leaves and tombstones MUST occupy disjoint subsets of the leaf-hash range. Without domain separation, a Poseidon collision between a real member's secret-derived leaf and the tombstone constant would let a removed member's old leaf masquerade as a tombstone (or a freshly removed slot masquerade as a future member). Either direction is a soundness break under §4.1's "single-leaf delta" property — the circuit cannot distinguish "this slot has been emptied" from "this slot still holds the same member" if the same hash can mean both.
+
+The single source of disjointness is a fixed domain tag prepended to every Poseidon input:
+
+```
+member_leaf(sk)  = Poseidon(DOMAIN_MEMBER, Poseidon(sk))
+tombstone        = Poseidon(DOMAIN_TOMBSTONE, 0)
+```
+
+With `DOMAIN_MEMBER ≠ DOMAIN_TOMBSTONE` (two distinct field elements pinned at the contract level — proposed values: `Fr::from(1)` and `Fr::from(2)`, decided alongside the Phase 2 ceremony spec). Disjointness then follows from Poseidon's collision resistance over the (domain, …) input shape — no probabilistic argument over secret-key range required.
+
+The dev circuit at `src/circuit/democracy.rs` does not currently apply this domain separation. The implementation work in §6 includes a circuit-level change (one extra Poseidon call per leaf, two new constants) before any client wiring is sound. **This is normative**: the spec does not ship without the domain tag, and the test in §7.1 includes a `prove_democracy_rejects_tombstone_collision` case to enforce it.
+
+#### 4.1.2 Why permanent tombstones (not just epoch-bound replay protection)
+
+Old proofs are bound to `(c_old, epoch_old)` and would already fail the contract's `epoch_old == current.epoch` check at any future epoch — cross-epoch replay alone doesn't motivate permanent tombstones. The tombstone-permanence rule has two non-replay justifications:
+
+1. **Same-epoch concurrent updates.** Two acceptors running in parallel against the same epoch can both produce valid proofs against the same `c_old`. Stellar serializes them — only one wins on chain. Without tombstones, the loser's local computation could have placed the new member at a slot that is now a removed-member tombstone in the winning state — slot collision, distinct from epoch collision. Tombstones prevent this by making "empty slot that was previously occupied" structurally distinct from "slot that has never been touched," so the loser's offline rollback (§4.1.3) lands on a deterministic re-assignment.
+2. **Stable slot ↔ identity invariant.** Clients persist `(memberPubkey, slotIndex)` pairs. If a removed member's slot were reassigned to a new member, every client's local mapping would have to be invalidated/migrated at exactly the right epoch, requiring synchronous purge-then-reassign coordination. Permanent tombstones let the slot map grow monotonically: clients only need to learn new mappings, never forget old ones.
 
 Trade-offs:
 
@@ -106,14 +145,36 @@ Trade-offs:
 
 Implementation note: slot indices are determined by the **acceptor** of a join (the proposer who lands the chain update). The bootstrap invitation does NOT carry the joining member's future slot index — that's assigned when their `SEPMemberJoined` is processed by an existing member who then runs the chain update.
 
-**Slot-index back-channel to the joiner.** The acceptor must communicate the assigned slot back to the joiner before the joiner constructs any subsequent `SEPMemberJoined`/state-update broadcast, otherwise the two sides will compute different `root_new` next epoch (the joiner places themselves in a different slot than the acceptor did). The mechanism reuses the existing `SEPGroupStateUpdate` broadcast that already follows the chain publish:
+#### 4.1.3 Slot-index back-channel to the joiner
+
+The acceptor must communicate the assigned slot back to the joiner before the joiner constructs any subsequent `SEPMemberJoined`/state-update broadcast, otherwise the two sides will compute different `root_new` next epoch (the joiner places themselves in a different slot than the acceptor did). The mechanism reuses the existing `SEPGroupStateUpdate` broadcast that already follows the chain publish:
 
 1. Acceptor processes `SEPMemberJoined`, assigns slot `s` to joiner, runs the democracy chain update, broadcasts `SEPGroupStateUpdate` over the group's hidden topic.
 2. The state update payload includes the full new member list as `[SEPGroupMemberLeaf]`, each carrying its `slotIndex` (acceptor's view of the canonical assignment).
 3. Joiner receives the broadcast, finds its own `publicKeyCompressed` in the member list, extracts and persists `slotIndex`. From this point the joiner uses that slot for any proof it generates.
 4. Until the joiner has received and persisted its slot, it MUST NOT initiate a chain update of its own (would race with the acceptor's). The client surfaces this as the existing "syncing with blockchain" UI lock from PR #145.
 
-If the state update broadcast is missed (e.g., joiner is offline when the acceptor publishes), the joiner's `SEPSaltRequest` flow on the next received chat event triggers the acceptor (or any other peer with the latest state) to reply with the salt. The salt-response carrier must also include the latest member list with slot indices — small extension to `SEPSaltResponse` covered in §4.4.
+If the state update broadcast is missed (e.g., joiner is offline when the acceptor publishes), the joiner's `SEPSaltRequest` flow on the next received chat event triggers the acceptor (or any other peer with the latest state) to reply. `SEPSaltResponse` therefore carries the latest member list with slot indices — small extension covered in §4.4.
+
+**Residual case: acceptor crashes after chain publish but before broadcast.** If the acceptor lands the chain update (chain `root_new` recorded) and then crashes before any peer receives the broadcast, AND the joiner is offline at the time, the chain has advanced but no in-network peer holds the slot map. The joiner's salt-request fallback queries peers who also missed the broadcast and cannot reconstruct the assignment from partial state. Recovery options that work in this case: (a) the acceptor restarts and re-broadcasts on next-launch (acceptor's local state is persisted before chain submit, so it can detect "I committed this epoch but did I broadcast?" via a small "last broadcast epoch" marker); (b) any peer with `verify_membership` access can re-derive the slot map by reading the chain's `member_count_new` and the member list from the latest persisted bootstrap, then assigning slots in canonical order — since at this point the chain is definitive and peers have to converge on it anyway. Acknowledged as a testnet-acceptable residual case; (a) is the implemented path, (b) is documented as a manual recovery procedure for support.
+
+#### 4.1.4 Concurrent-acceptor race (two existing members process the same `SEPMemberJoined`)
+
+§4.1.3 covers the joiner-vs-acceptor race. A separate race exists when two existing members both observe the same `SEPMemberJoined` simultaneously and both try to publish the chain update with their own slot assignment. Stellar serializes the publishes — only one transaction lands; the other returns `chainRejected` because `c_old` no longer matches the on-chain commitment.
+
+**The losing acceptor's local state is the issue.** By the time the chain publish fails, the loser has:
+
+- Computed and persisted a candidate `(members, epoch+1, salt+1)` locally.
+- Possibly broadcast its own `SEPGroupStateUpdate` (if the implementation broadcasts before chain confirmation, which the design above forbids — see below).
+- Signed a slot assignment that the network now disagrees with.
+
+Required client behavior to make this safe:
+
+1. **Broadcast strictly after chain confirmation.** Loser's `SEPGroupStateUpdate` MUST NOT be broadcast until the chain transaction has succeeded. The existing `awaitingChainConfirmation` state in `pendingTransitions` (PR #145) already holds the broadcast back; democracy keeps this contract. (Mirror of §4.1.3's "joiner must not initiate chain update until slot assigned" — same principle, different actor.)
+2. **Rollback on `chainRejected`.** Loser receives `chainRejected` from the relayer, restores its local state to the pre-candidate baseline (the existing `chainBaseline` map already tracks this for Anarchy; democracy reuses it), and waits for the winning acceptor's broadcast to learn the new slot map.
+3. **Re-converge on the winning slot assignment.** When the winning broadcast arrives, the loser updates its persisted member list to include the winning slot indices. The loser's own outbox of pending operations (none in this iteration; placeholder for future multi-signer flow) is reordered against the new state.
+
+The rollback path is a §7.4 integration test (`DemocracyConcurrentAcceptorRollbackTests` on iOS, parallel on Android): two `OnChainService` mocks driving the same `applyStateUpdate` for the same `SEPMemberJoined`, only one allowed to win. Assert: loser local epoch reverts to baseline, loser persists the winner's slot assignment, no double-counted member.
 
 ### 4.2 Single-signer subset (multi-signer quorum is future work)
 
@@ -131,6 +192,39 @@ This covers:
 - 2 → 3 (one peer adding a third)
 
 It does not cover `≥3` member transitions. Those require quorum collection, tracked as follow-up work in §11.
+
+#### 4.2.1 Circuit invariants vs. contract invariants (what the proof does and does NOT prove)
+
+The Democracy proof, taken in isolation against `update_commitment_democracy`'s VK, asserts a strict subset of the safety properties the system relies on. Several rules are enforced **only by the contract**, not by the circuit. Today this is sound because exactly one consumer (the contract entrypoint at `lib.rs:1440`) verifies these proofs. The moment a second consumer exists — a second contract revision sharing the VK, a different entrypoint that loads the same VK, a relayer-side optimistic check, an off-chain audit tool — those contract-only invariants disappear from the trust boundary.
+
+To make the boundary explicit, this table enumerates each safety-relevant invariant and which side enforces it. Future consumers of the same VK MUST re-enforce every contract-only row before trusting the proof.
+
+| Invariant | Circuit-enforced | Contract-enforced | Reference |
+|---|---|---|---|
+| `c_old = Poseidon(Poseidon(root_old, epoch_old), salt_old)` | ✓ (constraint #9) | (binding via public input) | `democracy.rs` constraint #9 |
+| `c_new = Poseidon(Poseidon(root_new, epoch_old + 1), salt_new)` | ✓ (constraint #10) | (binding via public input) | `democracy.rs` constraint #10 |
+| `epoch_new = epoch_old + 1` | ✓ (in-circuit, via `c_new` derivation) | also re-checked | `democracy.rs` #10; `lib.rs:1457` |
+| At least one signer's secret key opens to a leaf in `root_old` | ✓ (constraint #1) | — | `democracy.rs` #1 |
+| `K ≥ 1` (no zero-opening Commits) | ✓ (constraint #0, slot-0 active) | — | `democracy.rs` #0 |
+| `2·K ≥ member_count_old` (quorum threshold) | ✓ (constraint #4) | — | `democracy.rs` #4 |
+| Active signers strictly ascending leaf indices (no duplicates) | ✓ (constraints #2, #3) | — | `democracy.rs` #2, #3 |
+| `\|member_count_new − member_count_old\| ≤ 1` (single-leaf delta) | ✓ (constraints #6, #7, #8) | also re-checked | `democracy.rs` #6–#8; `lib.rs:1474-1481` |
+| `c_old == current.commitment` (replay against stale state) | — | ✓ (`lib.rs:1459-1463`) | contract |
+| `epoch_old == current.epoch` | — | ✓ (`lib.rs:1459-1463`) | contract |
+| `member_count_old == current.member_count` (binds count to chain) | — | ✓ (`lib.rs:1468-1470`) | contract |
+| `m_new ≥ 2` (Democracy floor — never empty, never 1-of-1) | — | ✓ (`lib.rs:1485-1487`) | contract |
+| `m_new ≤ tier_capacity(tier)` (tier ceiling) | — | ✓ (`lib.rs:1488-1490`) | contract |
+| `c_new` is canonical Fr encoding (no non-canonical aliases) | — | ✓ (`lib.rs:1492-1496`) | contract |
+| Proof is fresh (replay-window check) | — | ✓ (`check_proof_replay`) | contract |
+| `group_type == 2` (refuses to apply on non-Democracy groups) | — | ✓ (`lib.rs:1453-1455`) | contract |
+| Tombstone domain separation (§4.1.1) | ✓ (in domain-tagged Poseidon, once added) | — | this design |
+
+Two consequences worth surfacing in the prover documentation:
+
+1. **The `m_new ≥ 2` floor is contract-only.** A prover that constructs a 1 → 0 transition produces a proof the dev circuit accepts but the contract rejects. Section 7.1's `prove_democracy_handles_remove` test expects exactly this: the rejection is purely the contract floor, not a circuit failure. Future tooling that consumes proofs without going through the contract MUST re-impose this floor.
+2. **The current-state binding is contract-only.** The circuit verifies the *transition* `(c_old, m_old) → (c_new, m_new)` but not that `c_old` is the chain's current state. A relayer that pre-validates a proof against an in-memory cached `current` rather than a fresh chain read can be tricked into accepting a proof for a state that's already been advanced past. The contract's `lib.rs:1459-1470` checks are the only authoritative state-binding step.
+
+The §6 implementation includes a `// CIRCUIT-ONLY:` / `// CONTRACT-ONLY:` comment convention on each invariant assertion in the prover and contract dispatch code so this table stays grep-able as the implementation evolves.
 
 ### 4.3 Testnet-gating mechanism
 
@@ -174,7 +268,7 @@ Compatibility is tighter at the *semantic* level, and the rules are:
 - Anarchy / 1v1 / Oligarchy state updates: `slotIndex` is always `nil` on send. New clients that observe a non-nil `slotIndex` on a non-Democracy member ignore it.
 - Democracy state updates and bootstrap payloads: every member entry MUST carry a non-nil `slotIndex`. A Democracy state update with any member missing `slotIndex` is rejected on receive with a structured `MissingSlotIndex` error — there is no implicit "infer from public-key sort order" fallback because that would defeat the single-leaf-delta property.
 - Old client receiving a Democracy state update with `slotIndex` set: parses successfully, but the §4.3 Layer 1 build-flag gate prevents the old client from generating a *follow-on* democracy update (the FFI symbol isn't compiled in). The old client can read the chat (decryption keys are slot-index-agnostic) but cannot drive epoch transitions. This degrades safely.
-- Migration of pre-design Democracy groups (created on testnet before this change): no member entries have `slotIndex`. The first state update by a new client that sees such a group performs a one-time canonical assignment — sort current members by `compressed_public_key_bytes`, assign indices `0..n-1` in that order, broadcast the resulting `SEPGroupStateUpdate`. Once the broadcast lands, all members share the same slot map. Open Q §10.3 covers this.
+- Migration of pre-design Democracy groups (created on testnet before this change): by §2's premise, every such group is stuck at exactly **1 member** — the bug fires at the second-member join, so no testnet Democracy group has ever advanced past epoch 0. The migration rule is therefore trivial: a Democracy group with no `slotIndex` on its sole member is treated as having slot 0 implicitly. The formal `slotIndex` is materialized by the next real state-changing update (i.e., the first successful second-member add under this design), piggy-backed on the regular `SEPGroupStateUpdate` broadcast for that update. There is no migration broadcast pattern — no separate state update without a chain transition. (Earlier drafts proposed a canonical-public-key-sort assignment broadcast for size-N pre-design groups; that pattern is dropped because the population is empty.) If a future bug or branch produces a pre-design Democracy group of size ≥ 2, recreating the group is simpler than retrofitting a migration; documented in §10.
 
 `SEPSaltResponse` gains an optional `members: [SEPGroupMemberLeaf]?` field carrying the latest slot map. Same Codable wire-compat rules. Senders include this field for Democracy salt requests; for other types it stays `nil`. The §4.1 slot-back-channel relies on this for offline-joiner recovery.
 
@@ -184,9 +278,11 @@ Compatibility is tighter at the *semantic* level, and the rules are:
 
 ### 4.6 Contract VK installation
 
-`scripts/install-democracy-vks-testnet.sh` (already exists) is invoked by the testnet rotation step in [`breaking-changes-release-process.md`](breaking-changes-release-process.md). It installs `keyset-democracy-dev/tier0-k32/verifying_key.bin` and `keyset-democracy-dev/tier1-k256/verifying_key.bin` against the testnet contract via the `update_vk_v2(tier, group_type=2, vk)` admin entrypoint.
+`scripts/install-democracy-vks-testnet.sh` (already exists) is invoked by the testnet rotation step in [`breaking-changes-release-process.md`](breaking-changes-release-process.md). It installs `keyset-democracy-dev/tier0-k32/verifying_key.bin` (Small, capacity 32) and `keyset-democracy-dev/tier1-k256/verifying_key.bin` (Medium, capacity 256) against the testnet contract via the `update_vk_v2(tier, group_type=2, vk)` admin entrypoint.
 
-Pre-condition for this design: that script has been run against the current testnet contract (`CC6NUUKG25RSFI6D57HISDQ4HRBLXFAUC3GFVZIACHQX3NLRPYTRWWKE`). If it has not, this design fails closed — the prover will produce proofs but the contract will reject them with a different error (VK not found / wrong VK). That's still an improvement over the current `Error::UnknownGroupType` from calling the wrong entrypoint, but the operator must run the script for end-to-end success.
+**Tier scope.** Only Small and Medium are supported by the testnet dev path. The Large tier (capacity 2048, depth 11, k_max corresponding to a quorum scaling argument that hasn't been settled) has **no dev VK** in `keyset-democracy-dev/` and is **explicitly out of scope** for the testnet release. Clients gate on this: any attempt to create a Democracy group at Large tier surfaces "Democracy at this size is not yet supported on testnet" with a link to follow-up work in §11. Generating a Large-tier dev VK would require a third invocation of `generate-democracy-vk-dev.sh` and an extra `install-democracy-vks-testnet.sh` step. Tracked as separately schedulable work; not gating this design.
+
+Pre-condition for this design: the install script has been run against the current testnet contract (`CC6NUUKG25RSFI6D57HISDQ4HRBLXFAUC3GFVZIACHQX3NLRPYTRWWKE`). If it has not, this design fails closed — the prover will produce proofs but the contract will reject them with a different error (VK not found / wrong VK). That's still an improvement over the current `Error::UnknownGroupType` from calling the wrong entrypoint, but the operator must run the script for end-to-end success.
 
 ---
 
@@ -227,19 +323,20 @@ In dependency order. Each item is its own commit so the design's audit trail in 
 
 | # | Layer | Files | LOC est. | Notes |
 |---|---|---|---|---|
-| 1 | Rust prover | `src/prover/mod.rs` (+ helpers in `src/circuit/democracy.rs` if needed) | ~120 | `prove_democracy(pk, input, rng)`, signature mirrors `prove_update`; computes single-leaf delta from `members_old` / `members_new`; errors `QuorumRequired` if `member_count_old ≥ 3`. |
-| 2 | Rust FFI | `src/ffi.rs` | ~80 | `sep_generate_democracy_update_proof` export; opaque-bytes input/output buffers parallel to `sep_generate_update_proof`. |
+| 0 | Circuit domain tag | `src/circuit/democracy.rs`, `keyset-democracy-dev/` (regenerate via `scripts/generate-democracy-vk-dev.sh`) | ~30 | Add `DOMAIN_MEMBER`/`DOMAIN_TOMBSTONE` constants and apply to leaf hashing per §4.1.1. **Regenerates dev VKs**, so #10 (testnet install) must be re-run after this lands. Standalone PR — touches the circuit, must precede any prover work. |
+| 1 | Rust prover | `src/prover/mod.rs` (+ helpers in `src/circuit/democracy.rs` if needed) | ~120 | `prove_democracy(pk, input, rng)`, signature mirrors `prove_update`; computes single-leaf delta from `members_old` / `members_new`; uses §4.1.1 domain-tagged leaf hash; errors `QuorumRequired` if `member_count_old ≥ 3`. Annotates each invariant with `// CIRCUIT-ONLY:` per §4.2.1's grep convention. |
+| 2 | Rust FFI | `src/ffi.rs` | ~80 | `sep_generate_democracy_update_proof` export; opaque-bytes input/output buffers parallel to `sep_generate_update_proof`. Compiled out when `democracy-dev-vks` feature is off (separate test target — see §7.4). |
 | 3 | Cargo feature | `Cargo.toml`, `src/lib.rs`, `src/ffi.rs` | ~10 | `democracy-dev-vks` feature gate. CI matrix verifies on/off. |
 | 4 | Slot-index types | `swift-mls/Sources/SwiftMLS/Types.swift`, `kotlin-mls/.../Types.kt` | ~30 | `slotIndex` on `SEPGroupMemberLeaf`; `SEPDemocracyUpdatePublicInputs`. Codable on both sides. Cross-platform test vectors updated. |
 | 5 | Swift bridge | `swift-mls/Sources/SwiftMLS/RustBridge.swift`, `ProofGenerator.swift`, `ContractClient.swift` | ~80 | `generateDemocracyUpdateProof`, `updateCommitmentDemocracy`. Calls feature-gated FFI. |
 | 6 | Kotlin bridge | `kotlin-mls/.../RustBridge.kt`, `SEPProofGenerator.kt`, `ContractClient.kt` | ~80 | Same surface on the JNI side. Removes `DemocracyProofNotImplementedException`. |
 | 7 | Relayer | `relayer/src/handler.rs` | ~30 | Whitelist + dispatch. JSON shape mirrors `update_commitment` plus the two count fields. |
-| 8 | iOS client | `clients/ios/StellarChat/StellarChat/Models/OnChainService.swift`, `StellarChatApp.swift` | ~80 | Branch on `group.groupType == .democracy`; call new APIs; honor §4.3 Layer 2 fingerprint check. Slot-index assignment in `applyStateUpdate` for Democracy adds. |
-| 9 | Android client | `clients/android/.../OnChainService.kt`, `GroupListViewModel.kt` | ~80 | Same dispatch + slot-index logic. |
-| 10 | Testnet VK install | (existing `scripts/install-democracy-vks-testnet.sh` invocation in CI) | (script run, not code) | Run before merging; verify in deploy runbook. |
-| 11 | Tests | `src/prover/mod.rs` tests, `tests/democracy_e2e.rs`, `relayer/tests/*`, `StellarChatTests/*Democracy*Tests.swift`, `app/src/test/kotlin/.../*DemocracyTest.kt` | ~250 | See §7. |
+| 8 | iOS client | `clients/ios/StellarChat/StellarChat/Models/OnChainService.swift`, `StellarChatApp.swift` | ~120 | Branch on `group.groupType == .democracy`; call new APIs; honor §4.3 Layer 2 fingerprint check. Slot-index assignment in `applyStateUpdate` for Democracy adds. **Concurrent-acceptor rollback path per §4.1.4** — extends the existing `chainBaseline`/`pendingTransitions` baseline-revert flow to also revert candidate slot maps. **Acceptor restart re-broadcast** per §4.1.3 residual case (persist `lastBroadcastEpoch` marker). |
+| 9 | Android client | `clients/android/.../OnChainService.kt`, `GroupListViewModel.kt` | ~120 | Same dispatch, slot-index, rollback, restart-rebroadcast. |
+| 10 | Testnet VK install | (existing `scripts/install-democracy-vks-testnet.sh` invocation in CI) | (script run, not code) | Run before merging; verify in deploy runbook. Re-run required after #0 regenerates the dev VKs. |
+| 11 | Tests | `src/prover/mod.rs` tests, `tests/democracy_e2e.rs`, `relayer/tests/*`, `StellarChatTests/*Democracy*Tests.swift`, `app/src/test/kotlin/.../*DemocracyTest.kt` | ~320 | See §7. Adds slot-exhaustion, concurrent-acceptor rollback, fingerprint-mismatch (in dedicated test target), and migration-of-size-1 cases. |
 
-Total: ~840 LOC across ~14 files, plus VK install + test vectors.
+Total: ~990 LOC across ~15 files, plus VK install + test vectors. Item #0 is the new circuit dependency that wasn't visible in v0.2.
 
 ---
 
@@ -251,7 +348,10 @@ Total: ~840 LOC across ~14 files, plus VK install + test vectors.
 - `prove_democracy_round_trip_two_to_three` — single signer, 2 → 3 member insert, valid proof, verifier passes.
 - `prove_democracy_errors_on_quorum_required` — single signer, 3 → 4 member insert, returns `QuorumRequired` without attempting proof generation.
 - `prove_democracy_handles_replace` — single signer, key rotation at member's own slot.
-- `prove_democracy_handles_remove` — single signer, removal of self (the only member, edge case for 1 → 0; rejected by the contract's `m_new ≥ 2` min-count rule at `lib.rs:1485-1487`. Quorum is satisfied — `K=1` meets `2·K ≥ m_old=1` — so the rejection is purely the count-floor check, not a quorum failure).
+- `prove_democracy_handles_remove` — single signer, 1 → 0 transition. The proof itself succeeds (quorum satisfied: `K=1` meets `2·K ≥ m_old=1`); the contract rejects via the `m_new ≥ 2` floor at `lib.rs:1485-1487`. The test asserts both halves: prover returns a valid proof, contract entrypoint test (in `lib.rs`) returns `MemberCountOutOfRange`. This is the canonical example of the §4.2.1 "circuit-only vs. contract-only" boundary in §4.2.1's table.
+- `prove_democracy_rejects_tombstone_collision` — manually constructs a member whose `Poseidon(sk)` collides with `Poseidon(0)` (forced via a chosen test scalar that hits the same field element under the un-domain-tagged hash). With §4.1.1 domain tags applied, the collision lifts to disjoint Poseidon inputs and the test passes; without domain tags, the test would expose the soundness break. Acts as a regression test for the §4.1.1 normative rule.
+- `prove_democracy_slot_exhaustion` — at tier capacity (Small=32 for the test), drive cumulative joins past `2^depth - 1` (i.e., never-used slots run out due to tombstones). Asserts the prover returns `SlotExhausted`, not a malformed proof. Operator UX path is "tier upgrade required."
+- `prove_democracy_migration_size_one` — pre-design fixture: a Democracy group with 1 member and `slotIndex=nil`. The first prover invocation against this group materializes `slotIndex=0` and emits a normal 1 → 2 proof. Asserts §4.4's "size-1 implicit slot 0" migration is byte-deterministic across runs.
 
 ### 7.2 Cross-platform vectors
 
@@ -265,9 +365,10 @@ Total: ~840 LOC across ~14 files, plus VK install + test vectors.
 
 - iOS: `StellarChatTests/DemocracyMembershipTests.swift` — boots an in-memory `OnChainService` mock, drives a 1 → 2 member flow, asserts `updateCommitmentDemocracy` is called (not `updateCommitment`). Asserts slot indices are assigned and persisted.
 - Android: parallel test in `app/src/test/kotlin/.../DemocracyMembershipTest.kt`.
-- Both: feature-flag-off variants assert that `generateDemocracyUpdateProof` is not callable and the client falls back to the §5.1 strict-refusal behavior.
-- **§4.3 Layer 2 client-side fingerprint mismatch (no manual setup).** iOS: `StellarChatTests/DemocracyVkFingerprintTests.swift` — stub the `OnChainService` to return a known-bad VK fingerprint (one that is *not* in the hardcoded allowlist). Drive the 1 → 2 flow. Assert (a) `RustBridge.generateDemocracyUpdateProof` is **never** called (the FFI symbol must not be invoked), (b) `ContractClient.updateCommitmentDemocracy` is never called, (c) the client surfaces the structured "ceremony complete — release the production client" error to the user, (d) local state is not advanced. Android: parallel test `DemocracyVkFingerprintTest.kt`. This is the prover-layer companion to §7.6's contract-side fail-closed test — together they cover both ends of the safeguard.
-- **Slot back-channel test.** iOS: `StellarChatTests/DemocracySlotDistributionTests.swift` — simulate the §4.1 back-channel: acceptor publishes a state update with `slotIndex` for the joiner; joiner stores it and reuses it on the next proof. Variant: joiner is offline during the broadcast, recovers via `SEPSaltResponse` carrying the member list. Android parallel.
+- **Feature-flag-off behavior.** Because the FFI symbol (`sep_generate_democracy_update_proof`) and Swift/Kotlin bindings are conditionally compiled out per §4.3 Layer 1, a single test target *cannot* reference the symbol when the feature is off. The test source itself wouldn't compile. Solution: a dedicated test target/scheme `StellarChatTests-NoDemocracy` (iOS) and Gradle test variant `flagOffTest` (Android), both built with the feature flag off. These targets contain *only* the negative-path tests that verify (a) the symbol is unresolved at link time (link-error-as-expected via a tiny C shim that probes for the symbol via `dlsym` and asserts `nullptr`), and (b) `OnChainService.publishCommitmentUpdate` for a Democracy group surfaces the §5.1-style strict-refusal error instead of attempting to call the (absent) bridge. The main test target (`StellarChatTests` / default Gradle test) builds with the feature on and exercises the positive path. CI runs both. This is the only structurally-correct way to test compile-out behavior.
+- **§4.3 Layer 2 client-side fingerprint mismatch (no manual setup).** iOS: `StellarChatTests/DemocracyVkFingerprintTests.swift` — stub the `OnChainService` to return a known-bad VK fingerprint (one that is *not* in the hardcoded allowlist). Drive the 1 → 2 flow. Assert (a) `RustBridge.generateDemocracyUpdateProof` is **never** called (the FFI symbol must not be invoked), (b) `ContractClient.updateCommitmentDemocracy` is never called, (c) the client surfaces the structured "ceremony complete — release the production client" error to the user, (d) local state is not advanced. Android: parallel test `DemocracyVkFingerprintTest.kt`. Covers the "VK installed but fingerprint mismatched" leg of the safeguard. The "VK absent entirely" leg is §7.6.
+- **Slot back-channel test.** iOS: `StellarChatTests/DemocracySlotDistributionTests.swift` — simulate the §4.1.3 back-channel: acceptor publishes a state update with `slotIndex` for the joiner; joiner stores it and reuses it on the next proof. Variant: joiner is offline during the broadcast, recovers via `SEPSaltResponse` carrying the member list. Variant: §4.1.3 residual case — acceptor crashes after chain publish and before broadcast, restarts, re-broadcasts on next launch (asserts the `lastBroadcastEpoch` marker drives the recovery). Android parallel.
+- **Concurrent-acceptor rollback.** iOS: `StellarChatTests/DemocracyConcurrentAcceptorRollbackTests.swift` — two `OnChainService` mocks driving the same `applyStateUpdate` for the same `SEPMemberJoined`; only one's chain publish is allowed to win. Assert: loser's local epoch reverts to baseline, loser persists the winner's slot assignment via the eventual `SEPGroupStateUpdate` broadcast, no double-counted member, no premature broadcast from the loser before its chain publish settled. Android parallel. Covers §4.1.4.
 
 ### 7.5 Manual testnet end-to-end
 
@@ -288,11 +389,17 @@ Failure-mode tests:
 - §4.3 Layer 2: hand-edit the dev VK fingerprint list to NOT include the testnet's installed VK; observe that the client refuses to perform the chain update and surfaces the expected error.
 - Quorum required: after the group reaches 3 members, attempt a 4th member add; expect `QuorumRequired` surface and a "multi-signer not yet supported" UX error (no silent failure).
 
-### 7.6 Mainnet fail-closed
+### 7.6 Contract-side fail-closed (two scenarios)
 
-Pre-condition: a fresh testnet contract is set up *without* running the dev VK install. The democracy update entrypoint exists but no VK is registered for `(tier, group_type=2)`.
+These exercise contract-side rejection paths, complementing §7.4's client-side `DemocracyVkFingerprintTests` (which covers refusal *before* the FFI is called).
+
+**7.6.1 No VK installed.** Pre-condition: a fresh testnet contract is set up *without* running the dev VK install. The democracy update entrypoint exists but no VK is registered for `(tier, group_type=2)`.
 
 Run the same flow as 7.5. The contract should reject with `VkNotInitialized` (or analogous), the client should NOT silently fall back to non-chain-anchored chat, and the user should see a "this group requires updates that the network doesn't support yet" error.
+
+**7.6.2 Wrong VK installed (Layer 2 contract-side companion).** Pre-condition: a fresh testnet contract has a VK installed at `(tier, group_type=2)` that is **not** in the dev fingerprint allowlist — e.g., a one-off ceremony VK from a parallel chain, or a VK fingerprint deliberately rotated to simulate a future production deployment.
+
+Run the same flow as 7.5. Assert: the client's runtime fingerprint check (§4.3 Layer 2) catches the mismatch *before* attempting the publish, surfaces the "ceremony complete — release the production client" error, and never reaches the relayer. This is distinct from §7.4's `DemocracyVkFingerprintTests` because that test stubs the `OnChainService` (no real chain in the loop); §7.6.2 verifies the same safeguard against a real Soroban testnet contract carrying a real-but-unrecognized VK. Together, §7.4's stub-based and §7.6.2's contract-anchored tests cover the same code path with different fidelity.
 
 ---
 
@@ -317,19 +424,27 @@ The mainnet release process gains a new pre-flight check: confirm `democracy-dev
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | Dev client run against mainnet contract | Low | High (user actions performed against unverified circuit) | §4.3 Layer 2 fingerprint check at runtime; clients refuse to act on fingerprint mismatch. |
-| Slot-index convention conflicts with Phase 2 circuit | Medium | High (rework after ceremony) | This document is reviewed alongside the circuit-soundness review; slot-index convention is an explicit input to the Phase 2 ceremony spec. |
+| Slot-index convention conflicts with Phase 2 circuit | Medium | High (rework after ceremony) | This document is reviewed alongside the circuit-soundness review; slot-index convention is an explicit input to the Phase 2 ceremony spec. The domain-tagged leaf hash from §4.1.1 is similarly carried forward. |
 | Quorum-required cases hit production usage | Medium | Medium (groups of ≥3 members can't grow) | UX surfaces a clear "this needs a vote, not yet implemented" message. Multi-signer follow-up doc filed before any group of 3 ships in product. |
-| Testnet contract loses VK across redeploys | High (per existing memory of testnet rotations) | Medium (feature breaks until script re-run) | Document the install script as a step in the deploy runbook. |
+| Testnet contract loses VK across redeploys | High (per existing memory of testnet rotations) | Medium (feature breaks until script re-run + client release) | §8 step 3 spells out the coordinated triplet (install → regenerate fingerprints → release client). Acceptor restart re-broadcast (§4.1.3) covers the in-flight case. |
 | Old clients in the field can't drive Democracy state transitions | Medium | Medium (Democracy-only; groups stay readable on old clients but stop advancing epoch when no new client is online) | The `slotIndex` Codable addition is parser-compatible — old clients decode messages without error and ignore the unknown field. The §4.3 Layer 1 build flag prevents old clients from generating democracy updates at all. Anarchy/1v1/Oligarchy groups are entirely unaffected. Cross-platform test vectors include both old (slot-less) and new (slot-bearing) shapes for parser regression coverage. |
+| Public on-chain member counts profile groups for chain observers | High (intrinsic to public inputs) | Medium (membership trajectory + size visible per group; no plaintext content leak) | **Accepted as a testnet-phase trade-off, see §3.4.** Carried forward to Phase 2 ceremony scope as an open question (does the production circuit hide counts via Merkle-occupancy commitment?). Operators of testnet Democracy groups understand counts are public. |
+| Lifetime churn observable via tier upgrade cadence | Medium | Low (chain-visible, but only meaningful when combined with the count leak above) | Same accept-and-defer-to-ceremony posture as the count leak. Operators size tiers for total expected churn (§4.1, §4.6). |
+| Entrypoint selector re-confirms `group_type=2` at every epoch | High (intrinsic to current contract dispatch shape) | Low (group_type is already public via `create_group_v2`; this is re-confirmation, not new leak) | Acknowledged. Structural fix (polymorphic `update_commitment` dispatching by VK) is a contract-level change tracked in §11. |
+| `slotIndex` reveals join order to current members | High (intrinsic to design) | Low (current members already see each other; no new identity exposure) | Acknowledged. Breaks future features that treat joiners as pseudonymous-within-the-group (e.g., anonymous proposal authorship under Democracy governance). Filed as an input to the future quorum-collection design. |
+| `SEPSaltResponse` size varies with Democracy member count, distinguishable from Anarchy on the wire | Medium | Low (lateral signal — already distinguishable from chat by payload size; observer is the relay, not a chain spectator) | Acknowledged; no design change. Padding to tier-uniform would help but adds bandwidth across every salt response and isn't load-bearing for testnet. |
+| Acceptor crashes after chain publish but before broadcast | Low | Medium (recoverable via §4.1.3 acceptor restart re-broadcast; manual peer recovery if state is permanently lost) | Acceptor persists `lastBroadcastEpoch` marker before chain submit; on next launch detects "I committed but didn't broadcast" and re-publishes. Manual support recovery procedure documented for the unrecoverable case. |
+| Two acceptors race the same `SEPMemberJoined` and both prepare slot assignments | Medium | Low (rollback path in §4.1.4 handles this; loser reverts local state to baseline before broadcast) | §4.1.4 rollback path; tested in §7.4 `DemocracyConcurrentAcceptorRollbackTests`. Loser MUST hold its broadcast until chain confirms. |
 
 ---
 
 ## 10. Open Questions
 
-1. **Tombstone leaf value.** Is `Poseidon(0)` distinguishable from any legitimate member leaf? Need confirmation that 0 is not a valid `secret_key` that would hash to the same value. (Almost certainly true since `secret_key ∈ [1, r-1]` for BLS12-381 scalars, but explicit assertion required in `prove_democracy`.)
-2. **Slot reuse policy after group reset.** If a group is deactivated and a new one created with the same `groupSecret`, do slot indices reset? (Probably yes — new group is a new contract entry.) Need to confirm with the deactivate-group flow.
-3. **Migration of existing testnet Democracy groups.** Groups created before this change have no slot-index field on their members. Migration: assign slot indices in canonical public-key order at first state update, persist forever after. Alternatively, force users to recreate. Recommendation: migration, since user data exists.
-4. **Backporting to Anarchy?** The slot-index convention could in principle replace public-key sorting for all governance types, simplifying the code. Out of scope for this design, but worth filing as a follow-up.
+1. **Slot reuse policy after group reset.** If a group is deactivated and a new one created with the same `groupSecret`, do slot indices reset? (Probably yes — new group is a new contract entry.) Need to confirm with the deactivate-group flow.
+2. **Backporting slot-index to Anarchy?** The slot-index convention could in principle replace public-key sorting for all governance types, simplifying the code. Out of scope for this design, but worth filing as a follow-up. (Open: would Anarchy's existing `UpdateCircuit` benefit from single-leaf delta, or is multi-position re-rooting actually simpler there?)
+3. **Domain tag values.** §4.1.1 proposes `Fr::from(1)` for `DOMAIN_MEMBER` and `Fr::from(2)` for `DOMAIN_TOMBSTONE`. The Phase 2 ceremony spec may want to coordinate these with other domain tags across the protocol — needs an audit pass for collisions across `MembershipCircuit`, `UpdateCircuit`, `DemocracyUpdateCircuit`, and any future Oligarchy circuit. Resolve before circuit-level lock-in.
+
+(Items resolved into the body in v0.3: tombstone leaf value → §4.1.1 normative; pre-design migration → §4.4 simplified to size-1 implicit slot.)
 
 ---
 
@@ -339,31 +454,6 @@ The mainnet release process gains a new pre-flight check: confirm `democracy-dev
 - **Phase 2 trusted-setup ceremony.** Tracked in [`democracy-circuit-ceremony.md`](democracy-circuit-ceremony.md). Mainnet blocker.
 - **Oligarchy update path.** Same shape (per-type entrypoint and VK), separate circuit, separate quorum (admin-only). Out of scope here; documented in [`group-governance-types-design.md`](group-governance-types-design.md).
 - **iOS sync-lock UI integration.** The UI lock from [`fix/epoch-sync-and-ui-lock`](https://github.com/rinat-enikeev/stellar-mls/pull/145) (PR open at the time of this writing) generalizes to "any pending chain transition," including the new democracy update path. After this design lands, the sync banner should pick up `awaitingChainConfirmation` for democracy updates without code changes.
-
----
-
-## 12. Second-pass review notes (soundness + metadata leakage)
-
-*Reviewer: @gramyzer, against v0.2. Items below need to be addressed (or explicitly accepted with rationale) before this design exits Draft. They are not yet folded into the body of the doc — they are a punch list for v0.3.*
-
-### 12.1 Soundness
-
-1. **The `m_new ≥ 2` floor is contract-side only; the circuit accepts proofs that the contract will reject.** §7.1's `prove_democracy_handles_remove` confirms this — the rejection comes from `contracts/sep-xxxx/src/lib.rs:1485-1487`, not from the circuit. As long as exactly one contract version uses this circuit, the safety property holds. The moment a second consumer of the same VK exists (a different contract, a future entrypoint, a relayer-side optimistic check), the floor evaporates. Action: add an explicit "circuit invariants vs. contract invariants" subsection that lists every safety property the circuit does **not** enforce on its own, so a future caller cannot accidentally trust the proof beyond what the circuit actually guarantees.
-
-2. **Tombstone domain separation must be a §4 design point, not an Open Question.** §10.1 currently flags this as "almost certainly true since `secret_key ∈ [1, r-1]`". That is a probabilistic argument, not a constraint. The single-leaf-delta property turns into "any hash collision between a real leaf and `Poseidon(0)` lets a removed member's old leaf masquerade as a tombstone (or vice versa)" — a soundness break, not a usability quibble. Action: require every member leaf to be `Poseidon(domain_member, …)` with a fixed domain tag distinct from the tombstone's domain, and assert the disjointness as a circuit-level invariant. Move this from §10 into §4.1 as a non-optional rule.
-
-3. **Concurrent-acceptor race in slot assignment is unresolved.** §4.1 step 4 covers the joiner-vs-acceptor race ("joiner MUST NOT initiate a chain update of its own until it has received and persisted its slot"). It does **not** cover *two existing members* both processing the same `SEPMemberJoined` and both publishing a chain update with potentially different slot assignments. Stellar serializes the chain publishes — only one wins — but the loser has already advanced local state, broadcast `SEPGroupStateUpdate`, and signed for a slot that the network now disagrees with. Action: specify the rollback path (loser detects `chainRejected` due to stale `c_old`, reverts local state, re-applies against the winning epoch's slot map) and a test in §7.4 that exercises it.
-
-4. **Pre-design migration (§4.4) needs a byte-stable assignment function, not just a "canonical" one.** The migration broadcast is fine if two new clients independently produce identical slot maps and only race on the chain publish. That requires the canonical sort to be byte-identical across Swift, Kotlin, and Rust implementations. "Sort by `compressed_public_key_bytes`" is underspecified — endianness, equal-key tiebreak (impossible in practice but worth a `debug_assert`), and serialization of the resulting `SEPGroupStateUpdate` must all be cross-platform-deterministic. Action: cite the existing `canonicalize_members` helper as the single source of truth and add a cross-platform vector for the migration case to `docs/cross-platform-test-vectors.json` (currently §7.2 only covers steady-state 1→2 / 2→3).
-
-### 12.2 Metadata leakage
-
-1. **Public member counts on-chain are a privacy regression vs. Anarchy — and the doc does not acknowledge it.** Anarchy's `update_commitment` exposes `(c_old, epoch_old, c_new)` as public inputs. Democracy's `update_commitment_democracy` exposes those plus `member_count_old` and `member_count_new`. Every Democracy epoch transition therefore publishes the exact group size, before and after, to any Soroban observer. Plotted over time, this gives a chain observer the complete membership trajectory of every Democracy group — joins, removals, replaces all distinguishable. Anarchy reveals epoch count and commitment trajectory but not size. This is the headline metadata delta and it is currently unstated.
-
-   The leak is intrinsic to the dev circuit's public-input shape — the contract's quorum / floor checks need plaintext counts, and constraint #4 in the dev circuit uses `member_count_old` for the K-bound. Removing the leak requires moving the counts to a private witness with a Merkle-occupancy commitment, which is a circuit-level change. Action: (a) add an explicit "Privacy delta vs. Anarchy" subsection under §3 or §9 stating this regression, (b) add it to the Phase 2 ceremony scope question — does the production circuit hide counts? — in [`democracy-circuit-ceremony.md`](democracy-circuit-ceremony.md), and (c) decide whether testnet-stage public counts are an acceptable cost while the ceremony is pending or whether the dev path should pad counts to a tier-uniform value to mask the trajectory.
-
-2. **Tombstone permanence makes lifetime churn observable via forced tier upgrades.** Because tombstones are never reused (§4.1, correctly), a Democracy group's slot space is bounded by **cumulative** joins, not peak membership. Reaching the tier ceiling forces a tier upgrade, and tier upgrades are visible on chain. Two Democracy groups with identical peak membership but different churn rates are distinguishable by upgrade cadence; the same comparison for Anarchy groups (which use peak-membership-bounded tiers) is not. Combined with finding 12.2.1, a chain observer can profile groups along (current size, lifetime size, churn velocity). Action: add to §9 risks; consider as input to the ceremony's tier-sizing decision.
-
-3. **`update_commitment_democracy` entrypoint name re-confirms `group_type=2` at every epoch.** `group_type` is already public from `create_group_v2`, so this isn't a strictly new leak — but a relay or chain observer that did not witness the create event re-derives the group type from the entrypoint selector on every subsequent epoch. Combined with 12.2.1, the per-group on-chain footprint becomes "Democracy group, currently N members, was M members last epoch, ever had K cumulative joins." Action: acknowledge in §9; the structural fix would be a single polymorphic `update_commitment` entrypoint that internally dispatches by VK lookup, which is a contract-level change out of scope here but worth filing.
-
-4. **Minor in-protocol signals worth a sentence each.** (a) `SEPGroupStateUpdate` now carries explicit `slotIndex` per member, exposing **join order** to all current members. Prior public-key sort hid this. Not a problem under today's threat model (current members already see each other) but breaks any future feature that treats joiners as pseudonymous-within-the-group (e.g., anonymous proposal authorship). (b) `SEPSaltResponse` for Democracy now varies in size with member count, distinguishing Democracy salt responses from Anarchy ones to a relay measuring kind-`44114` payload sizes on the hidden topic — already distinguishable from chat by size, so this is a lateral signal, not a new exposure axis. Action: one bullet each in §9 risks; no design change requested.
+- **Polymorphic `update_commitment` contract dispatch.** Replace per-type entrypoints (`update_commitment`, `update_commitment_democracy`, future `update_commitment_oligarchy`) with a single `update_commitment_v3` that dispatches internally by VK lookup. Reduces the entrypoint-selector leak (§3.4 corollary) and simplifies relayer/client dispatch. Contract-level change; needs its own design doc.
+- **Hide member counts in production circuit.** Move `member_count_old`/`member_count_new` to private witnesses with a Merkle-occupancy commitment as the public input. Closes the §3.4 privacy gap for the production rollout. Coordinated with the Phase 2 ceremony spec.
+- **Large tier dev VK.** Generate and install a third-tier (Large, capacity 2048) dev VK if testnet usage demands it. Out of scope per §4.6.

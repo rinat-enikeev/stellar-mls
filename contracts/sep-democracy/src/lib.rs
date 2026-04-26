@@ -70,7 +70,7 @@ const UPDATE_IC_POINTS: u32 = 7;
 /// commitment internalizes the bound. This function is preserved as
 /// the canonical source of truth for the `tier_capacity` test-vector
 /// pin (`test_vectors_consistency`).
-#[allow(dead_code)]
+#[cfg(test)]
 fn tier_capacity(tier: u32) -> u32 {
     match tier {
         0 => 32,

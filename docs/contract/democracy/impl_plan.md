@@ -68,7 +68,7 @@ Modules (all inline in one file, matching the existing convention):
    - `pub struct CommitmentEntry { commitment, epoch, timestamp, tier, active, occupancy_commitment, threshold_numerator }`
    - `pub struct UpdateCommitmentPublicInputs { c_old: BytesN<32>, epoch_old: u64, c_new: BytesN<32>, occupancy_commitment_old: BytesN<32>, occupancy_commitment_new: BytesN<32> }` — the wire payload (5 fields).
    - `pub struct VerifyMembershipPublicInputs { commitment: BytesN<32>, epoch: u64 }`
-   - `pub struct Groth16Proof { a: BytesN<96>, b: BytesN<192>, c: BytesN<96> }` (compressed)
+   - `pub struct Groth16Proof { a: BytesN<96>, b: BytesN<192>, c: BytesN<96> }` (uncompressed BLS12-381 — G1=96, G2=192)
    - `pub struct VerifyingKey { vk_alpha_g1, vk_beta_g2, vk_gamma_g2, vk_delta_g2, ic: Vec<BytesN<96>> }`
 4. **`DataKey` enum** — `Admin`, `VK(u32)`, `UpdateVK(u32)`, `Group(BytesN<32>)`, `History(BytesN<32>)`, `UsedProof(BytesN<32>)`, `TierCount(u32)`. **No `UpdateVK(tier, group_type)` — the `group_type` second key is dropped since contract is Democracy-only.**
 5. **`SepDemocracyContract` impl** — entrypoints:

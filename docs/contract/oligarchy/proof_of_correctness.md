@@ -147,8 +147,9 @@ For each public entrypoint, the spec's input class → output behavior mapping i
 
 | Input class | Spec-required behavior | Verified by |
 |---|---|---|
-| Existing group | `Group(group_id)` and `History(group_id)` TTLs extended; `Ok(())` | `test_bump_group_ttl_extends_used_proof_lifetime` |
-| Unknown `group_id` | `Err(GroupNotFound)` | (gated at `lib.rs:439`) |
+| Existing group | `Group(group_id)` and `History(group_id)` TTLs extended; `Ok(())` | `test_bump_group_ttl_extends_group_storage` |
+| Unknown `group_id` | `Err(GroupNotFound)` | `test_bump_group_ttl_rejects_unknown_group` |
+| Pre-init | `Err(NotInitialized)` | (gated by `require_initialized` — added in PR #149 review chunk 2 #5) |
 
 ### 3.5 `create_oligarchy_group(env, caller, group_id, commitment, member_tier, admin_threshold_numerator, occupancy_commitment_initial, member_root, admin_root, salt_initial, proof, public_inputs)`
 
@@ -187,8 +188,8 @@ For each public entrypoint, the spec's input class → output behavior mapping i
 | Non-canonical `c_new` / `occupancy_commitment_new` | `Err(InvalidCommitmentEncoding)` | `test_update_commitment_rejects_non_canonical_c_new`, `test_update_commitment_rejects_non_canonical_occupancy_commitment_new` |
 | Replayed proof | `Err(ProofReplay)` | `test_update_commitment_rejects_replayed_proof` |
 | Bad proof bytes | `Err(InvalidProof)` | (mock-blocked at verifier in happy-path test) |
-| `admin_threshold_numerator` supplied from storage | proof verified against `current.admin_threshold_numerator`, not wire | `test_update_commitment_admin_threshold_supplied_from_storage`, `test_update_commitment_admin_threshold_mismatch_rejected_v2` |
-| Tie semantics | accepted | `test_update_commitment_admin_threshold_tie_passes_v2` |
+| `admin_threshold_numerator` pinned to storage (IC[6] absorption) | proof verifier's vk_x receives `current.admin_threshold_numerator` as IC[6] scalar, NOT a wire field | `test_update_commitment_admin_threshold_pinned_to_storage` (code-level inspection: builds IC[6]·50 vs IC[6]·67 and asserts the G1 shifts differ — proves the threshold is load-bearing in the MSM. Replaces the earlier `_supplied_from_storage` / `_mismatch_rejected_v2` / `_tie_passes_v2` tests, which all asserted `Err(InvalidProof)` from a mock-pairing failure and would have passed even if the threshold was dropped from the MSM.) |
+| Tie semantics | (circuit-side property; the contract is value-agnostic to the popcount comparison — that's enforced by the v0.1.4 oligarchy update circuit, not by the contract) | (Phase A integration test, when real proofs land) |
 
 ### 3.7 `verify_membership(env, group_id, proof, public_inputs: PublicInputs) -> bool`
 
@@ -279,7 +280,7 @@ Soroban guarantees that any failed entrypoint (returning `Err(...)` or panicking
 
 ## 6. Test coverage matrix
 
-The 48 inline tests cover every entry in `test-vectors.json#tests_to_implement` 1:1, plus `test_vectors_consistency` and `test_archive_entry_appends_and_prunes`. Mapping:
+The 51 inline tests cover every entry in `test-vectors.json#tests_to_implement` 1:1, plus `test_vectors_consistency` and `test_archive_entry_appends_and_prunes`. Mapping:
 
 | Test | Covers |
 |---|---|
@@ -293,7 +294,12 @@ The 48 inline tests cover every entry in `test-vectors.json#tests_to_implement` 
 | `test_get_commitment_returns_current_state` | live state read |
 | `test_get_history_returns_chronological_entries` | history read in chronological order |
 | `test_archive_entry_appends_and_prunes` | History write + FIFO prune at HISTORY_WINDOW |
-| `test_bump_group_ttl_extends_used_proof_lifetime` | TTL bump on existing group |
+| `test_bump_group_ttl_extends_group_storage` | TTL bump on existing group (renamed from `_extends_used_proof_lifetime` per PR #149 review chunk 2 #2 — bump_group_ttl does NOT touch UsedProof) |
+| `test_bump_group_ttl_rejects_unknown_group` | GroupNotFound on missing group_id |
+| `test_get_commitment_rejects_unknown_group` | GroupNotFound on missing group_id |
+| `test_get_history_rejects_unknown_group` | GroupNotFound on missing group_id |
+| `test_update_vk_rejects_invalid_tier` | InvalidTier on tier > 2 |
+| `test_update_vk_rejects_create_vk_arity_mismatch` | InvalidVkLength on cross-family arity mismatch (3-IC VK as Create) |
 | `test_vectors_consistency` | ABI pin (errors, tier capacities, IC counts, MAX_GROUPS_PER_TIER) |
 
 **Coverage gap (acknowledged):** mock proofs cannot pass `pairing_check`. Therefore the success branches of `create_oligarchy_group`, `update_commitment`, `verify_membership`, and `deactivate_group` reach the verifier and surface `InvalidProof` / `Ok(false)`. Gates above the verifier are fully covered; post-verifier state writes are exercised by `test_archive_entry_appends_and_prunes` (for history) and by Phase A integration tests (for the full round-trip with real Groth16 proofs).

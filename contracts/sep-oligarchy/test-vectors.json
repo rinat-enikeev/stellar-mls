@@ -381,7 +381,7 @@
     "description": "Global nullifier scope. The nullifier is sha256(proof.a || proof.b || proof.c) over the 384-byte uncompressed proof bytes. Scope is global per contract: the same 384 bytes used at any state-changing entrypoint on any group consume the nullifier.",
     "rules": [
       "Once a proof's bytes have been recorded by record_proof, any subsequent entrypoint call with byte-identical proof.a||proof.b||proof.c is rejected with ProofReplay.",
-      "TTL of UsedProof entries is LEDGER_BUMP (~30 days). After expiry the same proof bytes can be re-used; long-lived groups require periodic state advancement to keep nullifiers alive (mitigated in part by bump_group_ttl).",
+      "TTL of UsedProof entries is LEDGER_BUMP (~30 days). After expiry the same proof bytes can be re-used; long-lived groups require periodic state advancement to keep nullifiers alive (mitigated by recording fresh proofs at successful state-changing entrypoints — record_proof bumps UsedProof TTL, but bump_group_ttl does NOT touch UsedProof entries since they are keyed by proof_hash with contract-global scope, not per-group).",
       "Pre-inclusion mempool replay is NOT closed by the contract-level nullifier — see existing notes in `contracts/sep-xxxx/src/lib.rs` for the circuit-level v0.1.4 (operation tag binding) that would close that."
     ]
   },
@@ -418,9 +418,7 @@
       "test_update_commitment_rejects_replayed_proof",
       "test_update_commitment_rejects_inactive_group",
       "test_update_commitment_rejects_unknown_group",
-      "test_update_commitment_admin_threshold_supplied_from_storage",
-      "test_update_commitment_admin_threshold_mismatch_rejected_v2",
-      "test_update_commitment_admin_threshold_tie_passes_v2",
+      "test_update_commitment_admin_threshold_pinned_to_storage",
       "test_verify_membership_happy_path",
       "test_verify_membership_rejects_wrong_commitment",
       "test_verify_membership_rejects_wrong_epoch",
@@ -432,10 +430,15 @@
       "test_update_vk_rotates_membership_vk",
       "test_update_vk_rotates_create_vk",
       "test_update_vk_rotates_update_vk",
+      "test_update_vk_rejects_invalid_tier",
+      "test_update_vk_rejects_create_vk_arity_mismatch",
       "test_get_commitment_returns_current_state",
+      "test_get_commitment_rejects_unknown_group",
       "test_get_history_returns_chronological_entries",
+      "test_get_history_rejects_unknown_group",
       "test_archive_entry_appends_and_prunes",
-      "test_bump_group_ttl_extends_used_proof_lifetime",
+      "test_bump_group_ttl_extends_group_storage",
+      "test_bump_group_ttl_rejects_unknown_group",
       "test_vectors_consistency"
     ]
   }

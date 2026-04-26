@@ -514,7 +514,14 @@ impl SepOligarchyContract {
     }
 
     /// Permissionless TTL bump for a group's persistent storage.
+    ///
+    /// Bumps `Group(group_id)` and `History(group_id)` only — does NOT
+    /// touch `UsedProof(...)` entries. The global-nullifier set is
+    /// keyed by proof-bytes hash with contract-global scope; bumping
+    /// it requires recording a fresh proof via a state-changing
+    /// entrypoint.
     pub fn bump_group_ttl(env: Env, group_id: BytesN<32>) -> Result<(), Error> {
+        Self::require_initialized(&env)?;
         if !Self::group_exists(&env, &group_id) {
             return Err(Error::GroupNotFound);
         }
@@ -762,6 +769,14 @@ impl SepOligarchyContract {
     /// parallel to sep-democracy). Admin status not verified by this
     /// call — admin authorization for state changes is exclusively via
     /// `update_commitment`'s K-signer subset.
+    ///
+    /// No `check_proof_replay` — verify is read-only and does not
+    /// consume the global nullifier; the same proof bytes can be
+    /// re-submitted to this entrypoint indefinitely without burning
+    /// `UsedProof` storage. Same convention as sep-democracy. Note
+    /// that high-frequency repeat verifies on the same proof are
+    /// observable to a chain observer (the call is not free); that's
+    /// a metering concern, not a soundness one.
     pub fn verify_membership(
         env: Env,
         group_id: BytesN<32>,
@@ -912,6 +927,9 @@ impl SepOligarchyContract {
     }
 
     fn load_vk(env: &Env, tier: u32) -> Result<VerificationKeyData, Error> {
+        if tier > 2 {
+            return Err(Error::InvalidTier);
+        }
         env.storage()
             .persistent()
             .get(&DataKey::VK(tier))
@@ -919,6 +937,9 @@ impl SepOligarchyContract {
     }
 
     fn load_create_vk(env: &Env, tier: u32) -> Result<VerificationKeyData, Error> {
+        if tier > 2 {
+            return Err(Error::InvalidTier);
+        }
         env.storage()
             .persistent()
             .get(&DataKey::CreateVK(tier))
@@ -926,6 +947,9 @@ impl SepOligarchyContract {
     }
 
     fn load_update_vk(env: &Env, tier: u32) -> Result<VerificationKeyData, Error> {
+        if tier > 2 {
+            return Err(Error::InvalidTier);
+        }
         env.storage()
             .persistent()
             .get(&DataKey::UpdateVK(tier))

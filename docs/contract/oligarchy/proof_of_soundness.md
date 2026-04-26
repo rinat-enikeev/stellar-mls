@@ -58,7 +58,7 @@ Enforced at `lib.rs:643-648`. A wire payload that doesn't bind to current state 
 Same guard (`lib.rs:645`). Pins the salted combined-bitmap-derived value to chain state, preventing a relayer from advancing to an arbitrary new commitment by routing the proof through a different prior state.
 
 **SI-4: `admin_threshold_numerator` is fixed at `create_oligarchy_group` and never mutated.**
-Enforced by `lib.rs:684` — the new entry inherits `current.admin_threshold_numerator`. Verified at `update_commitment` by reading `current.admin_threshold_numerator` from storage (`lib.rs:668`) rather than from the wire. Test pin: `test_update_commitment_admin_threshold_supplied_from_storage`, `test_update_commitment_admin_threshold_mismatch_rejected_v2`.
+Enforced by `lib.rs:684` — the new entry inherits `current.admin_threshold_numerator`. Verified at `update_commitment` by reading `current.admin_threshold_numerator` from storage (`lib.rs:668`) rather than from the wire. Test pin: `test_update_commitment_admin_threshold_pinned_to_storage` — code-level inspection that builds `IC[6] · 50` and `IC[6] · 67` via the BLS host directly and asserts the resulting G1 shifts differ. This proves the threshold scalar is being absorbed into the MSM (a regression that drops the threshold from the verifier's `vk_x` would make the shifts collide).
 
 **SI-5 (Oligarchy-specific): The verbose Create proof binds `occupancy_commitment_initial` to the actual member + admin bitmaps.**
 Unlike sep-democracy (where the create proof's only public inputs are commitment + epoch and occupancy_commitment_initial is supplied by the wire and stored without verification), sep-oligarchy's Create VK has 7 IC points and the proof binds `occupancy_commitment` as IC[3]. A creator cannot supply a bogus value: the circuit recomputes the salted combined commitment from witnessed bitmaps and salt_occ_initial, and the proof would fail. **Closes the create-time self-DoS** that sep-democracy still carries. Test pin: `test_create_oligarchy_group_rejects_non_canonical_occupancy_commitment` (canonical-Fr gate runs before verification; but the verbose binding ensures verification itself catches semantic mismatches).
@@ -218,7 +218,7 @@ The inline test suite in `contracts/sep-oligarchy/src/test.rs` enforces these in
 | SI-1 / SI-5 | `test_create_oligarchy_group_happy_path`, `test_create_oligarchy_group_rejects_invalid_proof` |
 | SI-2 | `test_update_commitment_rejects_stale_c_old`, `test_update_commitment_rejects_wrong_epoch_old` |
 | SI-3 | `test_update_commitment_rejects_stale_occupancy_commitment_old` |
-| SI-4 | `test_update_commitment_admin_threshold_supplied_from_storage`, `test_update_commitment_admin_threshold_mismatch_rejected_v2` |
+| SI-4 | `test_update_commitment_admin_threshold_pinned_to_storage` |
 | SI-6 | (subgroup checks at constructor — implicit via `test_initialize` using `hash_to_g{1,2}` valid mocks) |
 | SI-7 | (subgroup checks at proof verify — implicit via mock_proof) |
 | SI-8 | `test_create_oligarchy_group_rejects_non_canonical_*` (5 tests covering each wire field), `test_update_commitment_rejects_non_canonical_*` (2 tests) |

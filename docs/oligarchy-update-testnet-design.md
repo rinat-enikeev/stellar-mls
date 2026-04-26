@@ -3,14 +3,15 @@
 **Date:** 2026-04-26
 **Status:** Draft (Proposal — pre-implementation)
 **Author:** Onym contributors
-**Version:** 0.1.2 — addresses @gramyzer REQUEST_CHANGES on v0.1.1 plus self-review: stale "7-scalar" references in §6 D1, §7.3, §7.5 steps 4 and 8 corrected to 9-scalar (the v0.1.1 wire-payload bump was missed in those four spots — and §7.5 step 9's "identical scalar count" privacy assertion depends on the count being right); §7.1 gains two tests for the new `admin_root_old/new` wire fields (`prove_oligarchy_v2_admin_root_old_mismatch_rejected`, `prove_oligarchy_v2_admin_root_bundling_rejected`); §7.3 additionally asserts `admin_root_old/new` are forwarded to stellar CLI without re-shaping; §4.6 D1 storage list clarifies `admin_root` is preserved in schema shape (carried over from abandoned contract design), not state; §4.4 deduplicated — the redundant "Updated:" repeat of the same `case oligarchy(…)` definition is removed; §4.7.7 clarifies "192-byte proof" refers to Groth16 proof bytes, not public-input wire scalars
-**v0.1.1 — addresses @gramyzer REQUEST_CHANGES on v0.1:** §4.4 admin_root claim corrected (Poseidon is one-way; admin_root is stored separately, not derived from c_old; wire payload extended to 9 scalars to carry admin_root_old/new explicitly); §4.2 single-signer cutoff generalized for non-default thresholds (parallel to Democracy v0.5.1 fix); §7.1 constraint reference renumbered to #12; §6 Phase A LOC arithmetic corrected to ~1190; §4.8 zero-member create disallowed (would brick on first update); §10.2 Q6 self-removal workaround corrected to four steps (was three, but skipped a step that violated the member floor); §4.7.7 "Defeats:" renamed to "Threat-model limitation"
+**Version:** 0.1.3 — addresses @gramyzer REQUEST_CHANGES on v0.1.2: the §3.5 "which tree changed" privacy claim was defeated by the v0.1.2 wire layout (per-tree occupancy commitments + separate `admin_root_old/new` exposed every update — a chain observer trivially distinguished member updates from admin updates by comparing `admin_root_old == admin_root_new` or `member_occupancy_old == member_occupancy_new`). Closed by combining reviewer's options 2 and 3: (a) drop the separate `admin_root_old/new` wire fields and verify the lockstep update entirely in-circuit (admin_root is bound into `c_old`/`c_new` via the §4.7.2 Poseidon bundling, never re-exposed); (b) fold the two per-tree occupancy commitments into a single combined commitment via new `DOMAIN_COMBINED_OCCUPANCY=6` domain tag (§4.7.2). Net effect: Oligarchy wire payload shrinks from 9 scalars to 5, byte-identical to Democracy's wire shape. This simultaneously closes the §3.4 residual ("Oligarchy is the most-distinguishable variant on payload size") for Democracy-vs-Oligarchy comparison. Side effects: §4.6 drops the separate `admin_root` storage field and the `get_admin_root` getter (the leak-on-read path); group members reconstruct `admin_root` off-chain from `BootstrapPayload.admins` / `SEPSaltResponse.admins` / `SEPGroupStateUpdate`, same shape Democracy uses for `member_root` reconstruction. §7.1 drops the now-vacuous `prove_oligarchy_v2_admin_root_old_mismatch_rejected` / `prove_oligarchy_v2_admin_root_bundling_rejected` tests and adds `prove_oligarchy_v2_member_admin_indistinguishable_on_wire` (the privacy regression the reviewer requested in §7.5-style). §4.1.1 "Three additional domain tags" wording is now correct (`DOMAIN_ADMIN=4`, `DOMAIN_ADMIN_OCCUPANCY=5`, `DOMAIN_COMBINED_OCCUPANCY=6` are the three new tags). §4.7.3 R1CS estimate bumps by ~600 (one extra Poseidon per side for the combine) less the ~30 dropped admin_root range checks → tier-1 ~9630. §6 D LOC unchanged (~3265, same as v0.1.2) — the wire-payload simplification touches handler/relayer code in roughly equal measure to what the dropped admin_root pass-through removed
+**v0.1.2 — self-review on v0.1.1:** stale "7-scalar" references in §6 D1, §7.3, §7.5 steps 4 and 8 corrected to 9-scalar (the v0.1.1 wire-payload bump was missed in those four spots — and §7.5 step 9's "identical scalar count" privacy assertion depends on the count being right); §7.1 gains two tests for the v0.1.1 `admin_root_old/new` wire fields (later removed in v0.1.3 per the privacy regression above); §7.3 additionally asserts `admin_root_old/new` are forwarded to stellar CLI without re-shaping (later removed in v0.1.3); §4.6 D1 storage list clarifies `admin_root` is preserved in schema shape (carried over from abandoned contract design), not state (later dropped entirely in v0.1.3); §4.4 deduplicated — the redundant "Updated:" repeat of the same `case oligarchy(…)` definition is removed; §4.7.7 clarifies "192-byte proof" refers to Groth16 proof bytes, not public-input wire scalars
+**v0.1.1 — addresses @gramyzer REQUEST_CHANGES on v0.1:** §4.4 admin_root claim corrected (Poseidon is one-way; admin_root is stored separately, not derived from c_old; wire payload extended to 9 scalars to carry admin_root_old/new explicitly — later collapsed back to 5 in v0.1.3 per the privacy regression); §4.2 single-signer cutoff generalized for non-default thresholds (parallel to Democracy v0.5.1 fix); §7.1 constraint reference renumbered to #12; §6 Phase A LOC arithmetic corrected to ~1190; §4.8 zero-member create disallowed (would brick on first update); §10.2 Q6 self-removal workaround corrected to four steps (was three, but skipped a step that violated the member floor); §4.7.7 "Defeats:" renamed to "Threat-model limitation"
 **Supersedes:** (none — first iteration)
 **Related:**
 - [`democracy-update-testnet-design.md`](democracy-update-testnet-design.md) — sibling design; many mechanisms (slot-index convention, occupancy commitment, polymorphic dispatch, testnet gating, ceremony) are inherited verbatim and cross-referenced rather than duplicated below.
 - [`group-governance-types-design.md`](group-governance-types-design.md) — parent design that introduces `groupType ∈ {Anarchy=0, OneOnOne=1, Democracy=2, Oligarchy=3}`.
 - [`democracy-circuit-ceremony.md`](democracy-circuit-ceremony.md) — extends to cover Oligarchy circuits as part of the same Phase 2 ceremony.
-- `contracts/sep-xxxx/src/lib.rs:197-200` (`MissingAdminRoot=19`, `AdminRootMismatch=20`), `:1154-1248` (`create_oligarchy_group`), `:1293-1300` (`get_admin_root`). Updates against Oligarchy groups currently have no contract entrypoint at all — the missing piece this design specifies.
+- `contracts/sep-xxxx/src/lib.rs:197-200` (`MissingAdminRoot=19`, `AdminRootMismatch=20`), `:1154-1248` (`create_oligarchy_group`), `:1293-1300` (`get_admin_root`). Updates against Oligarchy groups currently have no contract entrypoint at all — the missing piece this design specifies. Per §4.4 / §4.6, the v2 redeploy abandons the existing `admin_root` storage field and `get_admin_root` getter (the chain-observer leak path closed in v0.1.3); errors `MissingAdminRoot` / `AdminRootMismatch` go away with them.
 
 ---
 
@@ -26,7 +27,7 @@ This design fills the gap. It commits to the same direct-to-v2 trajectory as Dem
 
 ## 2. Problem
 
-Oligarchy groups can be created on chain but never modified. There's no `update_commitment` arm that accepts `group_type == 3`, no proving function, no FFI export, no client dispatch. The contract knows about `admin_root` storage but has no read path that consumes it (apart from `get_admin_root`, which is a passive getter).
+Oligarchy groups can be created on chain but never modified. There's no `update_commitment` arm that accepts `group_type == 3`, no proving function, no FFI export, no client dispatch. The contract knows about `admin_root` storage but has no read path that consumes it (apart from `get_admin_root`, which is a passive getter that v0.1.3 drops as a privacy-leak path).
 
 Functionally, a 1-admin / 1-member Oligarchy group works as a static "single-person room" since no updates ever happen. As soon as you want to add a member, promote/demote an admin, or remove anyone, the group bricks the same way Democracy does pre-v0.5. The only difference: Oligarchy groups are deliberately small (admin sets are typically 1-3 people), so the "permanently stuck at creation" failure mode is more visible per-call than in Democracy.
 
@@ -75,7 +76,7 @@ In addition to all of [Democracy §3.4's residuals](democracy-update-testnet-des
 
 | Residual | Why it leaks | Mitigation in this design |
 |---|---|---|
-| The group is Oligarchy-typed | `group_type=3` from `create_oligarchy_group_v2` argument and contract storage | Same publicness class as Democracy's `group_type=2`. Polymorphic dispatch (§4.7.4) keeps it out of the per-call selector. **Residual**: the Oligarchy public-inputs payload size differs from Democracy and Anarchy (9 scalars vs 5 vs 3) — observable from call-payload analysis. Oligarchy is the most-distinguishable variant on payload size. Same partial-solution as Democracy: structural fix is uniform-shape padding via dummy circuit-side commitments, deferred. |
+| The group is Oligarchy-typed | `group_type=3` from `create_oligarchy_group_v2` argument and contract storage | Same publicness class as Democracy's `group_type=2`. Polymorphic dispatch (§4.7.4) keeps it out of the per-call selector. **Residual (reduced in v0.1.3)**: the Oligarchy public-inputs payload size now matches Democracy's (5 scalars vs Anarchy's 3) — Democracy and Oligarchy are byte-indistinguishable on the wire, only Anarchy remains distinguishable on payload size. Closing Anarchy's residual would still need uniform-shape padding via dummy circuit-side commitments (deferred). |
 | Admin tree depth (capped at Small=32 in v0.1) | Tier choice fixed at create time | Documented; see §4.6. Operators select the member tier (Small/Medium/Large) but admin tree is always Small. |
 | Existence of an admin set | Implicit from `group_type=3` | Inherent to the type. No mitigation possible without restructuring at the type level. |
 
@@ -104,9 +105,10 @@ Three additional domain tags on top of the Democracy set:
 | `DOMAIN_TOMBSTONE` | `Fr::from(2)` | Inherited. Shared between both trees — the tombstone constant is structurally the same in member and admin trees. The disjoint *non-tombstone* domain tags below ensure no cross-tree leaf collision is possible. |
 | `DOMAIN_OCCUPANCY` | `Fr::from(3)` | Inherited. Member-tree occupancy commitment: `Poseidon(DOMAIN_OCCUPANCY, fold(member_bitmap))`. |
 | `DOMAIN_ADMIN` | `Fr::from(4)` | **New.** Admin-tree leaf prefix: `Poseidon(DOMAIN_ADMIN, Poseidon(sk))`. Disjoint from `DOMAIN_MEMBER` so the same secret key produces structurally distinct leaves in the two trees. |
-| `DOMAIN_ADMIN_OCCUPANCY` | `Fr::from(5)` | **New.** Admin-tree occupancy commitment: `Poseidon(DOMAIN_ADMIN_OCCUPANCY, fold(admin_bitmap))`. |
+| `DOMAIN_ADMIN_OCCUPANCY` | `Fr::from(5)` | **New.** Admin-tree occupancy commitment intermediate: `Poseidon(DOMAIN_ADMIN_OCCUPANCY, fold(admin_bitmap))`. **Circuit-internal — not exposed on wire or in storage** (per the v0.1.3 §3.5 fix; only the §4.7.2 combined commitment is observable). |
+| `DOMAIN_COMBINED_OCCUPANCY` | `Fr::from(6)` | **New (v0.1.3).** Combined occupancy commitment over both trees: `Poseidon(DOMAIN_COMBINED_OCCUPANCY, member_occ_intermediate, admin_occ_intermediate)`. This is the public-input value carried on the wire and stored on chain. Combining the two per-tree intermediates under a fresh domain tag prevents a chain observer from distinguishing "member tree changed" from "admin tree changed" — both produce a fresh combined-commitment value with no per-tree decomposition leaked. |
 
-§10 Q1 (the cross-circuit domain-tag audit) extends to cover values 4 and 5. All five values must be unique not just across this circuit but across `MembershipCircuit`, `UpdateCircuit`, `DemocracyUpdateCircuit`, and any future circuit family.
+§10 Q1 (the cross-circuit domain-tag audit) extends to cover values 4, 5, and 6. All six values must be unique not just across this circuit but across `MembershipCircuit`, `UpdateCircuit`, `DemocracyUpdateCircuit`, and any future circuit family.
 
 #### 4.1.2–4.1.4 (inherited)
 
@@ -171,7 +173,7 @@ Same two-layer scheme:
 
 ### 4.4 Wire / data-model additions
 
-A new variant on the polymorphic `UpdateCommitmentPublicInputs` enum:
+A new variant on the polymorphic `UpdateCommitmentPublicInputs` enum, byte-identical in shape to the Democracy variant:
 
 ```swift
 public enum UpdateCommitmentPublicInputs: Codable, Equatable, Sendable {
@@ -180,20 +182,20 @@ public enum UpdateCommitmentPublicInputs: Codable, Equatable, Sendable {
         cOld: Data, epochOld: UInt64, cNew: Data,
         occupancyCommitmentOld: Data, occupancyCommitmentNew: Data
     )
-    case oligarchy(                                                          // 9 scalars
+    case oligarchy(                                                          // 5 scalars (v0.1.3)
         cOld: Data, epochOld: UInt64, cNew: Data,
-        memberOccupancyCommitmentOld: Data, memberOccupancyCommitmentNew: Data,
-        adminOccupancyCommitmentOld: Data, adminOccupancyCommitmentNew: Data,
-        adminRootOld: Data, adminRootNew: Data    // see Note below: `admin_root` stored separately, updated in lockstep with `commitment`
+        occupancyCommitmentOld: Data, occupancyCommitmentNew: Data
     )
 }
 ```
 
-Note on `admin_root` storage: the contract stores `admin_root` as a separate field on the redeployed contract (the schema shape is carried over from the abandoned-contract design so the existing `get_admin_root` getter keeps working as a read-only query path on the new address). **`admin_root` is NOT a derivative of `c_old`** — Poseidon is one-way, so the bundled commitment doesn't recover the unbundled root. Instead, `admin_root` is stored redundantly alongside `commitment` (= `c_old`); both must be updated in lockstep on every successful `update_commitment`.
+The Democracy and Oligarchy variants carry the same scalar count and the same field shape; only the verifying-key family (and the in-circuit semantics behind `occupancyCommitment`) differs. For Oligarchy, `occupancyCommitment` is the *combined* commitment over both trees defined in §4.7.2 — its per-tree decomposition is a circuit-internal intermediate that never reaches the wire or contract storage.
 
-To make the in-lockstep update verifiable, the wire payload carries `admin_root_old` and `admin_root_new` as **separate fields** (not bundled into `c_old`/`c_new`) — the two trailing scalars in the 9-scalar enum case shown above. The contract on receive: (1) checks `admin_root_old == current.admin_root` (same kind of state-binding as `c_old == current.commitment`), (2) supplies both `admin_root_old` and `admin_root_new` as Groth16 public inputs to the verifier — the circuit binds them into `c_old`/`c_new` via Poseidon and verifies the bundling matches the wire's `c_old`/`c_new` claims, (3) on success writes both `admin_root = admin_root_new` and `commitment = c_new` to storage atomically.
+Note on `admin_root` (v0.1.3 simplification): `admin_root` is bundled into `c_old`/`c_new` via the §4.7.2 Poseidon nesting and supplied to the circuit as a private witness. It is NOT exposed on the wire and NOT stored as a separate contract field. The contract's only state-binding check is `c_old == current.commitment` (same as Democracy). Group members reconstruct `admin_root` off-chain from `BootstrapPayload.admins` (initial), `SEPSaltResponse.admins` (offline-recovery), and `SEPGroupStateUpdate.admins` (per-update broadcast) — exactly the way Democracy reconstructs `member_root` from `BootstrapPayload.members`. A chain observer with no out-of-band access cannot recover `admin_root` from `c_old` (Poseidon is one-way) and cannot read it from contract storage (it isn't there).
 
-§3.4 entrypoint-selector residual: Oligarchy is now 9 scalars on the wire (vs. Anarchy's 3 and Democracy's 5). The same "uniform-shape padding" structural fix that's deferred for Democracy/Anarchy applies; Oligarchy is the most-distinguishable variant on payload size. §9 risks track this. §4.7.3 R1CS estimate gets a small bump for the additional public-input range checks (~30 constraints; absorbed into the existing ~9060 estimate without changing the order-of-magnitude).
+(Earlier drafts v0.1.1–v0.1.2 carried `admin_root_old/new` as two extra wire scalars and stored `admin_root` separately, on the rationale that Poseidon is one-way and the contract needs a way to verify the lockstep update. That worked for soundness but defeated §3.5: a chain observer trivially distinguished member updates from admin updates by comparing `admin_root_old == admin_root_new`, and likewise via `member_occupancy_old == member_occupancy_new` against the salt-less per-tree commitments. v0.1.3 closes both leaks: the wire and the storage carry only the bundled `commitment` and the combined occupancy commitment, with admin_root and per-tree occupancies confined to circuit-internal witnesses.)
+
+§3.4 entrypoint-selector residual: Oligarchy is now 5 scalars on the wire (vs. Anarchy's 3 and Democracy's 5). Democracy and Oligarchy are byte-indistinguishable on the wire; only Anarchy still differs on payload size, and the same "uniform-shape padding" structural fix to close Anarchy's residual remains deferred.
 
 `SEPGroupMemberLeaf.slotIndex: UInt32?` carries forward unchanged (per [Democracy §4.4](democracy-update-testnet-design.md#44-wire--data-model-additions)). Same Codable wire-compat rules; same normative-leaf-hash rule (slotIndex NOT part of the leaf hash).
 
@@ -216,12 +218,13 @@ The polymorphic `update_commitment` entrypoint already covers Anarchy + Democrac
 
 This design inherits [Democracy §4.6](democracy-update-testnet-design.md#46-contract-redeploy--vk-installation)'s contract redeploy. The Oligarchy entrypoints land in the same redeployed contract as Democracy's — one fresh address covers all three governance types' v2 paths.
 
-`create_oligarchy_group_v2(group_id, member_root, member_occupancy_commitment, admin_root, admin_occupancy_commitment, member_tier, admin_threshold_numerator, …)`. Storage gains, per Oligarchy group:
+`create_oligarchy_group_v2(group_id, member_root, admin_root, occupancy_commitment, commitment_initial, member_tier, admin_threshold_numerator, initial_proof, …)`. The creator passes both `member_root` and `admin_root` as create-time inputs (so the contract can verify `initial_proof` and bind `commitment_initial` correctly), but neither root is persisted to storage — only `commitment_initial` and `occupancy_commitment` are. Storage gains, per Oligarchy group:
 
-- `admin_root: BytesN<32>` — Poseidon root of the admin tree. **Preserved in schema shape** (carried over from the abandoned-contract design — the redeploy is a fresh address with no migrated state, so there's nothing to "preserve" in the storage-state sense). Computation now bundles into `commitment` per §4.7.2; on every `update_commitment`, `admin_root` is updated in lockstep with `commitment` from the wire's `admin_root_new` field (§4.4).
-- `admin_occupancy_commitment: BytesN<32>` — new field, parallel to `member_occupancy_commitment`.
+- `occupancy_commitment: BytesN<32>` — the **combined** occupancy commitment from §4.7.2 (`Poseidon(DOMAIN_COMBINED_OCCUPANCY, member_occ_intermediate, admin_occ_intermediate)`). Same field name and storage shape as Democracy's `occupancy_commitment` — Democracy and Oligarchy share storage layout; the in-circuit semantics behind the value is what differs. Per-tree intermediates (`member_occupancy_intermediate`, `admin_occupancy_intermediate`) are circuit-internal witnesses, never stored.
 - `admin_threshold_numerator: u8` — new field, range `1..=100`. Validated at `create_oligarchy_group_v2`.
-- `admin_count: u8` — implicit from `popcount(admin_bitmap)` but cached for getter convenience. **Caveat**: caching `admin_count` on chain *as a separate readable field* would partially defeat the §3.5 hiding property — a chain observer reading the cached count gets exact admin-set size. So `admin_count` is NOT stored as a separate field; it's only computable in-circuit. Public getters for "is this group still alive" use `admin_occupancy_commitment ≠ commitment_to_empty_bitmap` instead.
+- `admin_count: u8` — implicit from `popcount(admin_bitmap)` but cached for getter convenience. **Caveat**: caching `admin_count` on chain *as a separate readable field* would partially defeat the §3.5 hiding property — a chain observer reading the cached count gets exact admin-set size. So `admin_count` is NOT stored as a separate field; it's only computable in-circuit. There is no public getter for admin-set "alive" — the same `commitment` value is the canonical liveness signal for any governance type.
+
+**Removed in v0.1.3 (was in v0.1.1–v0.1.2):** the separate `admin_root: BytesN<32>` storage field and the `get_admin_root` public getter. Both were leak paths under the §3.5 threat model — a chain observer reading `admin_root` directly defeated the "which tree changed" hiding regardless of the wire-layout fix. The `admin_occupancy_commitment` and `member_occupancy_commitment` separate-storage fields are likewise removed; the combined `occupancy_commitment` replaces both. Errors `MissingAdminRoot=19` / `AdminRootMismatch=20` are removed from the v2 contract. Group members reconstruct `admin_root` and the per-tree occupancies off-chain from `BootstrapPayload` / `SEPSaltResponse` / `SEPGroupStateUpdate` (same shape Democracy uses for `member_root`).
 
 **Admin tier cap**: depth = 5 (32 slots) for the admin tree, hard-coded across all member tiers. Rationale: real-world admin sets are small (typically ≤10), 32 lifetime slots covers the expected churn comfortably for testnet, and capping the admin tier reduces ceremony scope (one admin VK shape across all member tiers) and circuit constraint count. Phase A4's three Oligarchy circuits differ only in the *member* tier; admin tier is fixed.
 
@@ -251,14 +254,17 @@ c_new = Poseidon(Poseidon(Poseidon(root_member_new, root_admin_new), epoch_old +
 
 Three Poseidon calls instead of Democracy's two. The inner `Poseidon(root_member, root_admin)` packs both roots into a single field element before the existing `Poseidon(combined, epoch)` step. Adds ~300 R1CS constraints over Democracy's `c_old`/`c_new` derivation (one extra Poseidon per side).
 
-Occupancy commitments are exposed as separate public inputs (per the §4.4 enum), one per tree:
+Occupancy commitments (v0.1.3): a single **combined** commitment is exposed on the wire and in storage; per-tree intermediates are circuit-internal:
 
 ```
-member_occupancy_commitment = Poseidon(DOMAIN_OCCUPANCY, fold(member_bitmap))
-admin_occupancy_commitment  = Poseidon(DOMAIN_ADMIN_OCCUPANCY, fold(admin_bitmap))
+member_occupancy_intermediate = Poseidon(DOMAIN_OCCUPANCY, fold(member_bitmap))
+admin_occupancy_intermediate  = Poseidon(DOMAIN_ADMIN_OCCUPANCY, fold(admin_bitmap))
+occupancy_commitment          = Poseidon(DOMAIN_COMBINED_OCCUPANCY, member_occupancy_intermediate, admin_occupancy_intermediate)
 ```
 
-The admin bitmap (32 bits) packs into a single `Fr` scalar (252-bit capacity), so admin's `fold` is trivial — one scalar in, one Poseidon call out. Member side scales with tier as in Democracy (1 / 2 / 9 scalars).
+The admin bitmap (32 bits) packs into a single `Fr` scalar (252-bit capacity), so admin's `fold` is trivial — one scalar in, one Poseidon call out. Member side scales with tier as in Democracy (1 / 2 / 9 scalars). The combine adds one extra Poseidon per side (old / new) — ~600 R1CS in total.
+
+Why combine: per-tree intermediates are deterministic functions of the bitmap, with no salt. Exposing them as separate public inputs let a chain observer compare `member_occ_old == member_occ_new` (or the admin counterpart) and trivially infer which tree changed in any update — defeating §3.5. Bundling under `DOMAIN_COMBINED_OCCUPANCY` produces a single externally-visible value per epoch that depends on both bitmaps; without out-of-band knowledge of one tree's content, a chain observer cannot decompose the combined value or determine which tree's intermediate moved. This trades the cost of one extra Poseidon hash for the §3.5 indistinguishability claim. (See §4.7.7 for the full mechanism and threat-model limitations.)
 
 #### 4.7.3 Circuit constraints
 
@@ -278,9 +284,9 @@ Reads as Democracy's §4.7.3 with parallel admin-tree work added. Numbered by th
 7. **Single-leaf delta on the target tree** (§4.7.7's `target_tree` witness picks which tree). When `target_tree = 0` (member): member-tree delta witness active, admin-tree must be unchanged (`admin_bitmap_old == admin_bitmap_new`, structurally enforced via constraint #8). When `target_tree = 1` (admin): admin-tree delta witness active, member-tree must be unchanged.
 8. **Non-target-tree no-change**: the non-target tree's bitmap and root MUST be byte-identical between old and new — enforced as `bitmap_old[i] == bitmap_new[i]` for all `i` in the non-target tree, plus root equality.
 9. **Threshold range**: `1 ≤ admin_threshold_numerator ≤ 100`.
-10. **Occupancy commitments** (member + admin, both sides). Two Poseidon calls per side per tree → ~1500 R1CS for tier-1 (member) + ~600 (admin).
+10. **Occupancy commitments** (member intermediate + admin intermediate + combined; both sides). ~1200 R1CS for member intermediate (tier-1) + ~600 for admin intermediate + ~600 for the combine. The combine binds the two intermediates under `DOMAIN_COMBINED_OCCUPANCY`; only the combined output reaches the public-input boundary.
 11. **`c_old`, `c_new` derivations** (with the bundled-roots formula). ~700 R1CS for two sides × three Poseidon calls each.
-12. **Existing constraints** unchanged: signer Merkle openings against `root_admin_old`, ascending leaf-index ordering, etc. ~3500.
+12. **Existing constraints** unchanged: signer Merkle openings against `root_admin_old` (private witness, bound to `c_old` via §4.7.2), ascending leaf-index ordering, etc. ~3500.
 
 R1CS-constraint impact estimate (tier-1 member tier / depth 8 / 256 slots; admin tier depth 5 / 32 slots):
 
@@ -295,17 +301,18 @@ R1CS-constraint impact estimate (tier-1 member tier / depth 8 / 256 slots; admin
 | Member floor + admin floor (range checks) | ~50 |
 | Single-leaf-delta dispatcher (`target_tree` witness + non-target-no-change constraints) | ~150 |
 | Threshold range check | ~10 |
-| Member occupancy commitment Poseidon (2 hashes × 2 sides) | ~1200 |
-| Admin occupancy commitment Poseidon (1 hash × 2 sides) | ~600 |
+| Member occupancy intermediate Poseidon (2 hashes × 2 sides) | ~1200 |
+| Admin occupancy intermediate Poseidon (1 hash × 2 sides) | ~600 |
+| Combined occupancy commitment Poseidon (1 hash × 2 sides) | ~600 |
 | `c_old`/`c_new` bundled-roots (3 hashes × 2 sides × ~300 each) | ~1800 |
 | Existing constraints unchanged | ~3500 |
-| **Total tier-1** | **~9060** |
+| **Total tier-1** | **~9630** |
 
-Larger than Democracy's ~6298 — the second tree adds about 50% to the constraint count. Proving time for Oligarchy at tier-1 is roughly 2.5× v1-Anarchy's ~150ms → ~400ms. Still well within budget for an interactive epoch transition.
+Larger than Democracy's ~6298 — the second tree plus the occupancy combine adds about 53% to the constraint count. Proving time for Oligarchy at tier-1 is roughly 2.7× v1-Anarchy's ~150ms → ~410ms. Still well within budget for an interactive epoch transition.
 
 Tier scaling:
-- Tier-0 (member depth 5 / 32 slots): admin overhead unchanged; member overhead drops proportional to slot count. ~7800 constraints.
-- Tier-2 (member depth 11 / 2048 slots): member overhead scales 8×. ~21000 constraints.
+- Tier-0 (member depth 5 / 32 slots): admin overhead unchanged; member overhead drops proportional to slot count. ~8400 constraints.
+- Tier-2 (member depth 11 / 2048 slots): member overhead scales 8×. ~21600 constraints.
 
 #### 4.7.4 Polymorphic dispatch (extends [Democracy §4.7.4](democracy-update-testnet-design.md#474-polymorphic-update_commitment-entrypoint-eliminates-entrypoint-selector-leak))
 
@@ -333,32 +340,37 @@ There is **no separate** `member_threshold_numerator` for Oligarchy. Member chan
 
 Constraint #7 above lets `target_tree ∈ {0, 1}` be a private witness. Every Oligarchy update produces:
 
-- The same wire-format public-inputs payload (9 scalars: c_old, epoch_old, c_new, member_occ_old, member_occ_new, admin_occ_old, admin_occ_new, admin_root_old, admin_root_new).
-- The same proof byte length (192 bytes canonical Groth16). **Note**: this 192-byte figure refers to the Groth16 proof object itself (three group elements: `A` ∈ G1, `B` ∈ G2, `C` ∈ G1, totaling 48+96+48 bytes). It does *not* include the 9 public-input scalars carried alongside on the wire — those are separate ~32-byte fields per scalar. The §3.4 residual ("Oligarchy is the most-distinguishable variant on payload size — 9 vs 5 vs 3") is about the public-input wire scalar count, not the proof byte length; both are simultaneously true for distinct reasons.
+- The same wire-format public-inputs payload — 5 scalars: `c_old`, `epoch_old`, `c_new`, `occupancy_commitment_old`, `occupancy_commitment_new`. Byte-identical in shape to Democracy's payload. The combined `occupancy_commitment` (§4.7.2) bundles `member_occupancy_intermediate` and `admin_occupancy_intermediate` under `DOMAIN_COMBINED_OCCUPANCY`; the per-tree intermediates are circuit-internal and never reach the wire.
+- The same proof byte length (192 bytes canonical Groth16). **Note**: this 192-byte figure refers to the Groth16 proof object itself (three group elements: `A` ∈ G1, `B` ∈ G2, `C` ∈ G1, totaling 48+96+48 bytes). It does *not* include the 5 public-input scalars carried alongside on the wire — those are separate ~32-byte fields per scalar. With v0.1.3, Democracy and Oligarchy share both proof byte length AND public-input scalar count — they are byte-indistinguishable on the wire end-to-end. Only Anarchy still differs (3 scalars vs 5).
 - The same on-chain operation (`update_commitment` polymorphic entrypoint, same selector).
 
-The only observable signals are the occupancy-commitment values themselves (which change per update) and the bundled `c_new` (which advances per epoch). A chain observer sees occupancy commitments updating but cannot distinguish:
+The only observable signals are the occupancy-commitment values themselves (which change per update) and the bundled `c_new` (which advances per epoch). A chain observer sees a single combined occupancy commitment updating but cannot distinguish:
 
 - A member-add update from an admin-promotion update.
 - An admin-demotion from a member-remove.
 - Any of the above from a "key rotation" (member or admin replacing their own key in place — both bitmaps unchanged but `c_new` shifts due to different leaf hashes after rotation; this is still a single-leaf delta).
 
-**Threat-model limitation (out-of-band caveat).** A chain observer who *also* has out-of-band access to one of the trees' state — e.g., compromised one client's local storage and read its persisted member list — can infer which tree changed by comparing the new commitments against their offline computation of "what the new tree should be if my offline state is correct." This is the same threat profile as Democracy — out-of-band access to a peer's state defeats the on-chain hiding regardless of governance type. The on-chain privacy floor is what this design protects; out-of-band defenses (forward secrecy of local state, tamper-resistant storage, etc.) are layered separately and out of scope here.
+**Threat-model limitation (out-of-band caveat).** A chain observer who *also* has out-of-band access to one of the trees' state — e.g., compromised one client's local storage and read its persisted member list — can recompute that tree's `*_occupancy_intermediate` themselves, then attempt to brute-force or guess the other tree's intermediate to verify the combined commitment. Combined with knowing one tree's content, they can also recompute that tree's root and check whether the next combined commitment is consistent with "their tree unchanged" or "their tree changed." This is the same threat profile as Democracy — out-of-band access to a peer's state defeats the on-chain hiding regardless of governance type. The on-chain privacy floor is what this design protects; out-of-band defenses (forward secrecy of local state, tamper-resistant storage, etc.) are layered separately and out of scope here.
+
+**What v0.1.3 changed and why.** Earlier drafts (v0.1.1 / v0.1.2) exposed nine public-input scalars that included the per-tree occupancy commitments and `admin_root_old/new` directly. Even with the §4.7.7 "uniform proof byte length" mechanism, a chain observer could trivially compare `admin_root_old == admin_root_new` (or `member_occ_old == member_occ_new`) on each `update_commitment` call to learn which tree changed — defeating the §3.5 row "Which tree changed in any given update". v0.1.3 closes the leak by (a) bundling the two per-tree occupancy intermediates into a single combined commitment under `DOMAIN_COMBINED_OCCUPANCY`, and (b) dropping `admin_root_old/new` from the wire entirely, with `admin_root` confined to a circuit-internal private witness that's bound into `c_old`/`c_new` via Poseidon. The combination produces a 5-scalar wire payload byte-identical to Democracy's. §7.1 carries `prove_oligarchy_v2_member_admin_indistinguishable_on_wire` as the privacy regression test for this property.
 
 ### 4.8 Initial admin set, `create_oligarchy_group_v2`
 
 ```
 create_oligarchy_group_v2(
     group_id,
-    member_root, member_occupancy_commitment,
-    admin_root, admin_occupancy_commitment,
+    member_root,                   // create-time input only; not persisted to storage
+    admin_root,                    // create-time input only; not persisted to storage
+    occupancy_commitment,          // combined per §4.7.2 — persisted
+    commitment_initial,            // = Poseidon(Poseidon(Poseidon(member_root, admin_root), 0), salt_initial) — persisted
+    salt_initial,                  // create-time input; circuit-bound via initial_proof; not persisted
     member_tier,
-    admin_threshold_numerator,  // 1..=100
-    initial_proof,              // membership proof from creator against member_root
+    admin_threshold_numerator,     // 1..=100
+    initial_proof,                 // membership proof from creator binding member_root, admin_root, occupancy_commitment, commitment_initial
 )
 ```
 
-The creator constructs `member_root` with themselves at member-slot 0 (tombstone elsewhere) and `admin_root` with themselves at admin-slot 0 (tombstone elsewhere). The `initial_proof` proves the creator knows the secret key behind both leaves (one secret key, used in two trees with different domain tags — see §4.1.1).
+The creator constructs `member_root` with themselves at member-slot 0 (tombstone elsewhere) and `admin_root` with themselves at admin-slot 0 (tombstone elsewhere). The `initial_proof` proves the creator knows the secret key behind both leaves (one secret key, used in two trees with different domain tags — see §4.1.1) AND that `commitment_initial` correctly bundles the supplied roots, salt, and `epoch=0`. After successful create, only `commitment_initial` and `occupancy_commitment` (plus `admin_threshold_numerator`, `member_tier`, `group_type`) are persisted; `member_root`, `admin_root`, and `salt_initial` are consumed in verification and discarded. The same shape Democracy uses for `member_root` after create.
 
 **Creator MUST appear in both trees at create time.** `create_oligarchy_group_v2` rejects `member_count_initial == 0` (and analogously `admin_count_initial == 0`) — both with `Error::InvalidInitialMembership` (new error). The reason: the in-circuit floor `popcount(member_bitmap_new) ≥ 1` (§4.7.3 #5) would otherwise brick the group on first update — every update would fail the floor because `m_new` would have to grow from 0, and the single-leaf-delta witness can't insert into a "below the floor" starting state without a special-case relaxation that the v2 circuit doesn't carry. (An earlier draft of this section allowed admin-only zero-member groups; that's incompatible with §4.7.3 #5 and removed in v0.1.1.) Operators who want a "single-admin static observer" group instead use Anarchy with one member and never publish updates; Oligarchy is for groups that intend to grow.
 
@@ -429,9 +441,9 @@ Same phase shape as [Democracy §6](democracy-update-testnet-design.md#6-impleme
 
 | Step | Files | LOC | Output |
 |---|---|---|---|
-| A1 | `src/circuit/oligarchy_v2.rs` (new) | ~600 | Two-tree bitmap binding (member + admin); bundled-roots `c_old`/`c_new`; admin-quorum threshold; target-tree dispatcher witness + non-target-no-change constraints; member + admin floors; new domain tags `DOMAIN_ADMIN`, `DOMAIN_ADMIN_OCCUPANCY` declared in `src/circuit/domain_tags.rs` (extends Democracy's). |
-| A2 | Tests for A1 | ~300 | Round-trip member-add, admin-promotion, admin-demotion, member-replace; tombstone-collision regression for both trees; bitmap-mismatch attack rejection per tree; threshold sweep on admin-quorum; target-tree-flip attack (witness `target_tree = 1` while presenting member-delta data — must fail); floor-violation rejection (member→0 or admin→0). |
-| A3 | `src/prover/mod.rs` `prove_oligarchy_v2` + `verify_oligarchy_v2` | ~200 | Bitmap derivation for both trees, bundled-roots commitment computation, target-tree inference from rosters, admin-signer Merkle path against `admin_root_old`, `QuorumRequired` for `admin_count_old ≥ 3`. |
+| A1 | `src/circuit/oligarchy_v2.rs` (new) | ~600 | Two-tree bitmap binding (member + admin); bundled-roots `c_old`/`c_new`; combined occupancy commitment under `DOMAIN_COMBINED_OCCUPANCY` (§4.7.2); admin-quorum threshold; target-tree dispatcher witness + non-target-no-change constraints; member + admin floors; new domain tags `DOMAIN_ADMIN=4`, `DOMAIN_ADMIN_OCCUPANCY=5`, `DOMAIN_COMBINED_OCCUPANCY=6` declared in `src/circuit/domain_tags.rs` (extends Democracy's). |
+| A2 | Tests for A1 | ~300 | Round-trip member-add, admin-promotion, admin-demotion, member-replace; tombstone-collision regression for both trees; bitmap-mismatch attack rejection per tree; threshold sweep on admin-quorum; target-tree-flip attack (witness `target_tree = 1` while presenting member-delta data — must fail); floor-violation rejection (member→0 or admin→0); §3.5 privacy regression `prove_oligarchy_v2_member_admin_indistinguishable_on_wire` (per §7.1). |
+| A3 | `src/prover/mod.rs` `prove_oligarchy_v2` + `verify_oligarchy_v2` | ~200 | Bitmap derivation for both trees, bundled-roots commitment computation, combined occupancy commitment computation (§4.7.2), target-tree inference from rosters, admin-signer Merkle path against `admin_root_old` (private witness, bound to `c_old` via Poseidon — never on the wire), `QuorumRequired` for `admin_count_old ≥ 3`. |
 | A4 | `keyset-oligarchy-dev/{tier0-k1,tier1-k1,tier2-k1}/` (admin tier fixed at Small=32 across all member tiers; `_k1` reflects single-admin-signer single-K). Generated via extended `scripts/generate-democracy-vk-dev.sh` (renamed `scripts/generate-governance-vks-dev.sh`). | (binary VK files) | Three dev VKs (one per member tier; admin tree fixed at depth 5). Fingerprints checked into `keyset-oligarchy-dev/fingerprints-v2.json`. |
 | A5 | `Cargo.toml` feature `oligarchy-v2-dev-vks` | ~10 | Off by default. Independent of `democracy-v2-dev-vks` (mainnet build verifies BOTH features are off). |
 | A6 | Cross-platform test vectors `docs/cross-platform-test-vectors.json` | ~80 | New `oligarchy_v2` section; reference proofs for member-add, admin-promotion, admin-demotion, member-replace flows. |
@@ -458,7 +470,7 @@ Total: ~460 LOC. Same parallelism with Phase C as Democracy's §6.
 
 | Step | Files | LOC | Output |
 |---|---|---|---|
-| C1 | `contracts/sep-xxxx/src/lib.rs` Oligarchy v2 entrypoints | ~280 | Polymorphic `update_commitment` Oligarchy variant. New storage fields per Oligarchy group: `admin_occupancy_commitment`, `admin_threshold_numerator`. (Existing `admin_root` repurposed; `admin_count` deliberately NOT stored as a separate field.) New `create_oligarchy_group_v2` taking the tuple from §4.8. New `Error::InvalidAdminThreshold` variant. Verifier reads `current.admin_threshold_numerator` from storage. |
+| C1 | `contracts/sep-xxxx/src/lib.rs` Oligarchy v2 entrypoints | ~280 | Polymorphic `update_commitment` Oligarchy variant. Storage shape per Oligarchy group: shared `commitment` and `occupancy_commitment` (combined per §4.7.2) with Democracy, plus per-Oligarchy `admin_threshold_numerator`. Existing `admin_root` storage field, `get_admin_root` getter, and `MissingAdminRoot=19` / `AdminRootMismatch=20` errors are removed (v0.1.3 §3.5 fix); `admin_count` deliberately NOT stored as a separate field. New `create_oligarchy_group_v2` taking the tuple from §4.8. New `Error::InvalidAdminThreshold` variant. Verifier reads `current.admin_threshold_numerator` from storage. |
 | C2 | Contract tests | ~280 | Mirror existing Oligarchy tests against v2. New tests: target-tree dispatcher (member-update + admin-update both succeed against the same VK); type-confusion guard rejects an Oligarchy proof submitted to a Democracy group; `m_member_new == 0 || m_admin_new == 0` rejected per the new floors; threshold-mismatch rejected; admin-tier-cap enforcement (33rd lifetime admin add rejected). |
 | C3 | Cargo crate version bump | ~5 | |
 | C4 | `scripts/deploy_sep_xxxx_testnet.sh` (extends Democracy's) | (script) | Same fresh contract address as Democracy redeploy (one address covers all governance types). |
@@ -471,7 +483,7 @@ Total: ~595 LOC.
 
 | Step | Files | LOC | Output |
 |---|---|---|---|
-| D1 | `relayer/src/handler.rs` Oligarchy variant in the public-inputs translation | ~30 | Polymorphic dispatch already handles the new variant — minor extension to recognize the 9-scalar payload (includes `admin_root_old`/`admin_root_new` per §4.4 lockstep-update). |
+| D1 | `relayer/src/handler.rs` Oligarchy variant in the public-inputs translation | ~30 | Polymorphic dispatch already handles the new variant — Oligarchy's 5-scalar payload is byte-identical to Democracy's, so the relayer-side translation is the same shape; the only practical difference is the verifying-key family the contract picks at receive time based on `current.group_type`. |
 | D2 | `swift-mls/.../ContractClient.swift` `updateCommitment` overload accepting Oligarchy variant | ~30 | |
 | D3 | `kotlin-mls/.../ContractClient.kt` parallel | ~30 | |
 | D4 | iOS `OnChainService.publishCommitmentUpdate` Oligarchy dispatch | ~180 | Branches on `group.groupType == .oligarchy`; assembles both bitmaps; chooses `target_tree` based on which roster changed; calls `generateOligarchyUpdateProofV2`; honors §4.3 Layer 2 fingerprint check. Slot-index assignment for both trees in `applyStateUpdate`. Rollback path extension for both bitmaps per §4.1.4. |
@@ -526,9 +538,9 @@ Inherits all of [Democracy §7](democracy-update-testnet-design.md#7-test-plan)'
 - `prove_oligarchy_v2_admin_signer_not_in_admin_tree_rejected` — signer's secret key opens against member tree but not admin tree. The admin-tree Merkle-opening constraint (§4.7.3 #12 "Existing constraints unchanged: signer Merkle openings against `root_admin_old`") detects the missing path. (Earlier draft cited "Constraint #1" — that's the bitmap-allocation step, not the signer opening; renumbered.)
 - `prove_oligarchy_v2_admin_tier_cap_exhaustion` — 33rd lifetime admin promotion attempt. Prover rejects (admin slot space exhausted; no never-used slot available).
 - `prove_oligarchy_v2_member_tombstone_collision` and `prove_oligarchy_v2_admin_tombstone_collision` — paired domain-tag-disabled / enabled regression tests for both trees independently. Same shape as Democracy's `prove_democracy_v2_domain_tags_block_tombstone_collision`.
-- `prove_oligarchy_v2_bundled_roots_consistency` — verifier recomputes `c_old` from `(root_member, root_admin, epoch_old, salt_old)` and confirms it matches the public-input value.
-- `prove_oligarchy_v2_admin_root_old_mismatch_rejected` — wire `admin_root_old` is set to a value other than `current.admin_root` (with `c_old` and other fields still bundling against the *real* `current.admin_root`). Contract-side check rejects with `Error::AdminRootMismatch` before reaching the verifier. Regression for the §4.4 lockstep-update state-binding.
-- `prove_oligarchy_v2_admin_root_bundling_rejected` — wire `admin_root_old`/`admin_root_new` claim values that don't match the `c_old`/`c_new` they're supposed to bundle into. The circuit's in-Poseidon binding (§4.7.2) detects the inconsistency and Groth16 verification fails. Soundness regression for "wire admin_root must equal the admin_root that was hashed into the commitment."
+- `prove_oligarchy_v2_bundled_roots_consistency` — verifier recomputes `c_old` from `(root_member, root_admin, epoch_old, salt_old)` and confirms it matches the public-input value. Since `admin_root` is a private witness (not on the wire), this test exercises the in-circuit binding — flipping any bit of the witnessed `admin_root` while keeping `c_old` constant must fail Groth16 verification (replaces v0.1.2's wire-side `admin_root_bundling_rejected` test).
+- `prove_oligarchy_v2_combined_occupancy_consistency` — verifier recomputes `occupancy_commitment` from `(member_bitmap, admin_bitmap)` via the §4.7.2 nesting and confirms it matches the public-input value. Per-tree intermediates derived as private witnesses; their values cannot be guessed from the combined commitment alone.
+- `prove_oligarchy_v2_member_admin_indistinguishable_on_wire` — **the §3.5 privacy regression.** Constructs two updates from the same prior state: (a) member-add (member-tree single-leaf delta; admin tree unchanged); (b) admin-promotion (admin-tree single-leaf delta; member tree unchanged). Generates valid proofs for both. Asserts: (i) both public-input vectors have exactly 5 scalars; (ii) both proofs are 192 bytes; (iii) all five fields (`c_old`, `epoch_old`, `c_new`, `occupancy_commitment_old`, `occupancy_commitment_new`) take values that depend on *both* tree states in (a) and in (b) — no field is byte-identical between (a) and (b) for a reason that would let a chosen distinguisher decide "this was a member update vs. an admin update"; specifically, `c_old` is identical in (a) and (b) (same prior state) but `c_new`, `occupancy_commitment_new`, and (trivially) `epoch_old` advance the same way in both, so a chain observer who sees only the wire payload cannot decide which tree changed. The dual to v0.1.2's now-removed `admin_root_*_rejected` tests — those targeted soundness of the (since-removed) wire fields; this targets privacy of the new wire shape. **Test fails the build** if a future change re-introduces a per-tree distinguisher on the wire.
 
 ### 7.2 Cross-platform vectors
 
@@ -536,7 +548,7 @@ Inherits all of [Democracy §7](democracy-update-testnet-design.md#7-test-plan)'
 
 ### 7.3 Relayer integration
 
-Polymorphic `update_commitment` already accepts arbitrary `UpdateCommitmentPublicInputs` variants — Oligarchy adds one test asserting the relayer forwards a 9-scalar Oligarchy payload to stellar CLI without re-shaping it. The test additionally asserts `admin_root_old` and `admin_root_new` are passed through verbatim (these are the new fields the §4.4 lockstep-update guarantee depends on; truncation or reordering by the relayer would silently break the contract-side `admin_root_old == current.admin_root` check).
+Polymorphic `update_commitment` already accepts arbitrary `UpdateCommitmentPublicInputs` variants — Oligarchy adds one test asserting the relayer forwards a 5-scalar Oligarchy payload to stellar CLI without re-shaping it (byte-identical in shape to the Democracy variant; only the contract-side VK family selection differs). The test additionally asserts the relayer does NOT inject any per-tree decomposition of `occupancy_commitment` into the call — preserving the §3.5 indistinguishability claim end-to-end through the relayer.
 
 ### 7.4 iOS / Android integration
 
@@ -553,15 +565,15 @@ Pre-condition: Phase C complete (fresh testnet contract; `scripts/install-govern
 
 Steps (member-add + admin-promote sequenced):
 
-1. iOS creates an Oligarchy group at medium tier with `admin_threshold_numerator = 50`. Verify on Soroban testnet that `current.group_type == 3`, `current.admin_threshold_numerator == 50`, `admin_root` is set, both occupancy commitments are set.
+1. iOS creates an Oligarchy group at medium tier with `admin_threshold_numerator = 50`. Verify on Soroban testnet that `current.group_type == 3`, `current.admin_threshold_numerator == 50`, `current.commitment` is set, `current.occupancy_commitment` (combined per §4.7.2) is set. Verify NO `admin_root` field exists in the contract storage entry (per the v0.1.3 §3.5 fix) and NO `get_admin_root` getter is callable.
 2. iOS sends an invitation to Android.
 3. Android accepts. Android sends `SEPMemberJoined`.
-4. iOS as the only admin processes the SMJ, runs Oligarchy v2 path, polymorphic `update_commitment` with `target_tree=member` private witness. Verify relayer log shows `function=update_commitment` with 9-scalar Oligarchy variant payload, status 200.
+4. iOS as the only admin processes the SMJ, runs Oligarchy v2 path, polymorphic `update_commitment` with `target_tree=member` private witness. Verify relayer log shows `function=update_commitment` with 5-scalar Oligarchy variant payload (byte-identical in shape to a Democracy payload), status 200.
 5. iOS local state advances: epoch 1, 2 members (slots 0, 1), 1 admin (slot 0).
 6. Android receives broadcast; persists its member-slot index = 1; sees admin set unchanged.
 7. iOS chat to Android works; Android chat to iOS works (both members, BLS auth passes).
-8. iOS as admin promotes Android: sends `SEPAdminPromoted`. iOS runs Oligarchy v2 path with `target_tree=admin`. Member tree unchanged; admin tree gains Android at admin-slot 1. Verify relayer log: same 9-scalar payload shape, no observable difference from step 4 except the occupancy-commitment values and `admin_root_old`/`admin_root_new`.
-9. **Privacy verification**: read the contract storage entry for this group via Soroban testnet RPC. Assert no `admin_count` or `member_count` field is present. Compare the on-chain trace of the two `update_commitment` calls (steps 4 and 8); assert the call payloads have **identical scalar count and byte length**. A chain observer cannot distinguish "added a member" from "promoted an admin" from these calls alone.
+8. iOS as admin promotes Android: sends `SEPAdminPromoted`. iOS runs Oligarchy v2 path with `target_tree=admin`. Member tree unchanged; admin tree gains Android at admin-slot 1. Verify relayer log: same 5-scalar payload shape as step 4, no observable difference except the values of `c_old`/`c_new` and the combined `occupancy_commitment_old`/`occupancy_commitment_new` (which advance every update regardless of which tree changed).
+9. **Privacy verification**: read the contract storage entry for this group via Soroban testnet RPC. Assert no `admin_count` or `member_count` field is present, AND no `admin_root` field is present (the v0.1.3 §3.5 fix removed it). Compare the on-chain trace of the two `update_commitment` calls (steps 4 and 8); assert the call payloads have **identical scalar count, identical byte length, AND no value-level distinguisher**: in particular, no public-input field at index 0..4 takes a "moved vs. unchanged" pattern that lets a chosen distinguisher decide which tree was the target. (In v0.1.2 the `admin_root_old==admin_root_new` test trivially decided this; in v0.1.3 there is no such field.) A chain observer cannot distinguish "added a member" from "promoted an admin" from these calls alone, modulo the §4.7.7 out-of-band threat-model limitation.
 
 Failure-mode tests:
 
@@ -604,7 +616,7 @@ Inherits all of [Democracy §9](democracy-update-testnet-design.md#9-risks)'s ri
 | Admin tier cap (32 admins) inadequate for some use case | Medium | Low–Medium (operators warned in UX; recreate group as workaround) | Documented in §4.6 and §11. Operators choose admin-heavy use cases at their own risk. Phase F or §11 follow-up could lift the cap with additional ceremony work. |
 | Self-bricking via last-admin demotion | Low | High (group permanently unmodifiable) | Admin floor `admin_count_new ≥ 1` is in-circuit (constraint #6). Tested. UX warning before the demotion confirms. |
 | Self-bricking via last-member removal | Low | Medium (group has no chat capacity but can still be modified by admins) | Member floor `member_count_new ≥ 1` enforced. UX warning. (An admin-only zero-member group is technically valid but useless; if it happens, recreate.) |
-| Domain-tag collision (now five values: 1–5) | Low | High | §10 Q3 cross-circuit audit covers values 4 and 5 in addition to 1/2/3. |
+| Domain-tag collision (now six values: 1–6) | Low | High | §10 Q1 cross-circuit audit covers values 4, 5, and 6 in addition to 1/2/3. |
 | Admin set leaks via timing of admin-only operations (an admin promotion is observable as "an update happened" — chain timestamps reveal cadence) | High (intrinsic to public ledger) | Low (cadence is the same residual as Democracy; Oligarchy doesn't add new cadence-class signals) | Acknowledged. Same as Democracy's epoch-counter residual. |
 | Cross-tree-update demand (operators want to combine member + admin changes atomically) | Medium | Medium (UX cost — two updates instead of one, one extra epoch) | §4.10 / §11. Documented limitation; not blocking. |
 
@@ -614,7 +626,7 @@ Inherits all of [Democracy §9](democracy-update-testnet-design.md#9-risks)'s ri
 
 ### 10.1 Phase-A blockers (must ratify before A1 opens)
 
-1. **Domain tag values (extends [Democracy §10.1 Q1](democracy-update-testnet-design.md#101-phase-a-blockers-must-ratify-before-a1-opens)).** Recommended values: `DOMAIN_MEMBER=1`, `DOMAIN_TOMBSTONE=2`, `DOMAIN_OCCUPANCY=3`, `DOMAIN_ADMIN=4`, `DOMAIN_ADMIN_OCCUPANCY=5`. Audit pass: same 1-hour grep against current `main` to confirm no collision; codified in `src/circuit/domain_tags.rs`.
+1. **Domain tag values (extends [Democracy §10.1 Q1](democracy-update-testnet-design.md#101-phase-a-blockers-must-ratify-before-a1-opens)).** Recommended values: `DOMAIN_MEMBER=1`, `DOMAIN_TOMBSTONE=2`, `DOMAIN_OCCUPANCY=3`, `DOMAIN_ADMIN=4`, `DOMAIN_ADMIN_OCCUPANCY=5`, `DOMAIN_COMBINED_OCCUPANCY=6` (last one added in v0.1.3 per the §3.5 privacy fix). Audit pass: same 1-hour grep against current `main` to confirm no collision; codified in `src/circuit/domain_tags.rs`.
 
 2. **Admin tier cap value.** Recommended: 32 (Small tier, depth=5). Lifetime admin appointments capped at 32 per group. Operators warned. Larger admin trees are §11 follow-up if a real use case demands.
 

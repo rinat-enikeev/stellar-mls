@@ -24,7 +24,7 @@ open StellarChat.xcodeproj
 # Select an iPhone 17.0+ simulator → Cmd+R
 ```
 
-If XcodeGen is not available, you can open the checked-in `.xcodeproj` directly, but regenerating is recommended after any `project.yml` change.
+The `.xcodeproj` is generated from `project.yml` and is not checked in — run `xcodegen generate` before opening Xcode (and again after any `project.yml` change).
 
 ## Usage
 

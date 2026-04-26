@@ -3,13 +3,13 @@
 **Date:** 2026-04-26
 **Status:** Draft (Proposal — pre-implementation)
 **Author:** Onym contributors
-**Version:** 0.1
+**Version:** 0.2 (revised against PR #146 review feedback)
 **Supersedes:** (none — first iteration)
 **Related:**
 - [`group-governance-types-design.md`](group-governance-types-design.md) — the parent design that introduces `groupType ∈ {Anarchy, 1v1, Democracy, Oligarchy}`
 - [`democracy-circuit-ceremony.md`](democracy-circuit-ceremony.md) — Phase 2 trusted-setup plan (gates mainnet)
 - [`update-circuit-binding-design.md`](update-circuit-binding-design.md) — analogous binding work for the Anarchy `update_commitment` flow
-- `contracts/sep-xxxx/src/lib.rs:1318-1338` (`update_commitment`, Anarchy-only) and `:1440-1545` (`update_commitment_democracy`, the target entrypoint)
+- `contracts/sep-xxxx/src/lib.rs:1318-1338` (`update_commitment`, Anarchy-only) and `:1440-1545` (`update_commitment_democracy`, the target entrypoint). `sep-xxxx` is the actual current package name in the repo, pending SEP number assignment — not a placeholder.
 - `src/circuit/democracy.rs` — the dev-only `DemocracyUpdateCircuit`
 - `keyset-democracy-dev/` — placeholder dev VKs (tier0-k32, tier1-k256)
 
@@ -93,18 +93,27 @@ This is the gating design question. The next section proposes a resolution.
 Democracy groups switch from public-key-sorted Merkle ordering to **stable slot-index Merkle ordering**:
 
 - Each member is assigned a slot index `slot ∈ [0, 2^depth)` at the moment they join the group.
-- The first member is at slot 0. Subsequent joins take the lowest unused slot.
+- The first member is at slot 0. Subsequent joins take the **lowest never-used slot**. "Never-used" excludes both currently-active slots and tombstones — once a slot has been occupied by any member, it is permanently retired even if that member later leaves.
 - Removals leave a tombstone: the slot is set to a canonical empty leaf (`Poseidon(0)`), the slot index is **not** reassigned to a future joiner. (Reusing slots after removal would let a removed member's old proof masquerade as a new member's proof at the same epoch.)
 - The Merkle tree at any epoch is over the slot-indexed array `[leaf_0, leaf_1, ..., leaf_{2^depth - 1}]`, where each entry is either a member's leaf hash or a zero/tombstone.
 - `member_count_old` / `member_count_new` (the new public inputs) are the count of non-tombstone slots, **not** the highest slot index.
 
 Trade-offs:
 
-- **Slot exhaustion**: a Democracy group running for many epochs with frequent membership churn could exhaust its `2^depth` slots without exhausting its actual member count. Mitigation: tier ceiling already caps active members at `2^depth`; documentation must call out that this ceiling now refers to *cumulative joins minus removals* rather than peak membership. For the planned tiers (Small=32, Medium=256, Large=2048), this is a soft limit acceptable for the planned use cases.
-- **Wire format change**: `SEPGroupMemberLeaf` gains a `slot_index: u32` field. `BootstrapPayload` must carry per-member slot indices. State updates (`SEPGroupStateUpdate`) likewise. Cross-platform test vectors (`docs/cross-platform-test-vectors.json`) need a new section for Democracy member ordering.
+- **Slot exhaustion**: because tombstones are permanent, the `2^depth` ceiling is reached at **cumulative joins** (every member who has ever joined the group, regardless of whether they're still active). For the planned tiers (Small=32, Medium=256, Large=2048), a Democracy group with high churn could exhaust its slot space well before the apparent active-member cap. Mitigation: documentation must explicitly call out that the tier ceiling for Democracy refers to lifetime joins, not peak membership. Operators selecting a tier for a Democracy group must size for total expected churn, not steady-state size. (For Anarchy this stays a peak-membership cap, since Anarchy doesn't use slot indices.)
+- **Wire format change**: `SEPGroupMemberLeaf` gains an optional `slot_index: u32?` field. `BootstrapPayload` must carry per-member slot indices for Democracy groups. State updates (`SEPGroupStateUpdate`) likewise. Cross-platform test vectors (`docs/cross-platform-test-vectors.json`) need a new section for Democracy member ordering. Codable parsers tolerate the missing field (so Anarchy/1v1/Oligarchy messages remain unchanged), but a Democracy state update with any member missing `slotIndex` is rejected on receive — there is no implicit "infer from sort order" fallback because that would defeat the single-leaf-delta property. See §4.4 for the exact compatibility rules.
 - **Compatibility with Anarchy**: Anarchy keeps public-key-sorted ordering (the existing `UpdateCircuit` doesn't have the single-leaf constraint and is fine with multi-position deltas). The slot convention is Democracy-only, gated on `group.groupType == .democracy`.
 
 Implementation note: slot indices are determined by the **acceptor** of a join (the proposer who lands the chain update). The bootstrap invitation does NOT carry the joining member's future slot index — that's assigned when their `SEPMemberJoined` is processed by an existing member who then runs the chain update.
+
+**Slot-index back-channel to the joiner.** The acceptor must communicate the assigned slot back to the joiner before the joiner constructs any subsequent `SEPMemberJoined`/state-update broadcast, otherwise the two sides will compute different `root_new` next epoch (the joiner places themselves in a different slot than the acceptor did). The mechanism reuses the existing `SEPGroupStateUpdate` broadcast that already follows the chain publish:
+
+1. Acceptor processes `SEPMemberJoined`, assigns slot `s` to joiner, runs the democracy chain update, broadcasts `SEPGroupStateUpdate` over the group's hidden topic.
+2. The state update payload includes the full new member list as `[SEPGroupMemberLeaf]`, each carrying its `slotIndex` (acceptor's view of the canonical assignment).
+3. Joiner receives the broadcast, finds its own `publicKeyCompressed` in the member list, extracts and persists `slotIndex`. From this point the joiner uses that slot for any proof it generates.
+4. Until the joiner has received and persisted its slot, it MUST NOT initiate a chain update of its own (would race with the acceptor's). The client surfaces this as the existing "syncing with blockchain" UI lock from PR #145.
+
+If the state update broadcast is missed (e.g., joiner is offline when the acceptor publishes), the joiner's `SEPSaltRequest` flow on the next received chat event triggers the acceptor (or any other peer with the latest state) to reply with the salt. The salt-response carrier must also include the latest member list with slot indices — small extension to `SEPSaltResponse` covered in §4.4.
 
 ### 4.2 Single-signer subset (multi-signer quorum is future work)
 
@@ -131,6 +140,10 @@ Two layers of defense in depth, so Democracy chain updates cannot accidentally s
 
 **Layer 2 — VK fingerprint check at runtime.** When a client makes a `update_commitment_democracy` call, it first reads the on-chain VK at `(tier, group_type=2)` and compares its hash to a hardcoded list of known dev VK fingerprints. If the on-chain VK does not match any fingerprint in the list (i.e., a real ceremony VK is now installed), the dev path refuses to run and surfaces a "ceremony complete — release the production client" error. This prevents the (theoretically possible) future scenario where a dev build is run against a mainnet-equivalent contract — the dev client refuses to act because its fingerprints don't match.
 
+**Caching policy.** The fingerprint comparison fetches the on-chain VK at `(tier, group_type=2)` on **every** democracy update publish — no cache. Testnet VK rotations during dev iteration are flagged as `High` likelihood in the §9 risk table, and a stale cached fingerprint would silently bypass the safeguard (a client built against an older fingerprint list would happily publish against a newly-rotated dev VK because its cache says "matches"). The on-chain read adds one Soroban RPC round-trip per democracy update; given the new path is already a chain-publishing operation costing seconds, the additional latency is negligible. If we later add a session-scoped cache for performance, it must be invalidated on any publish failure that returns an error code consistent with VK mismatch.
+
+**Fingerprint list lives in code, with a release coupling.** The hardcoded fingerprint allowlist sits in the client (Swift constants, Kotlin constants — same content, generated from a single source file in `keyset-democracy-dev/`). Each testnet VK rotation therefore requires a client release that ships the new fingerprint. This is intentional friction: it prevents an operator from rotating the VK silently and having every existing field client suddenly trust the new key. A signed remote config could in principle relax this coupling, but adds infrastructure (signing key management, fetch path, fail-closed semantics on fetch failure) that costs more than the rotation cadence justifies for testnet-only use. The release-process doc must list "regenerate `democracy-vk-fingerprints.{swift,kt}` and bump the patch version" as a step on every dev VK rotation. See §8 for the exact ordering.
+
 Layer 2 is the load-bearing one. Layer 1 is an ergonomic bound on which builds even compile the path.
 
 ### 4.4 Wire / data-model additions
@@ -154,7 +167,16 @@ public struct SEPUpdateCommitmentDemocracyRequest: Codable, Sendable {
 }
 ```
 
-`SEPGroupMemberLeaf` gains an optional `slotIndex: UInt32?` (nil for Anarchy/1v1/Oligarchy, required for Democracy). Wire format: append after the existing fields, version byte bumped where applicable.
+`SEPGroupMemberLeaf` gains an optional `slotIndex: UInt32?`. Codable shape adds the field with `nil` allowed; old clients that have never seen this field decode messages without error and treat the field as absent. **No version byte is bumped** at the `SEPGroupMemberLeaf` level — the addition is wire-compatible at the parser level.
+
+Compatibility is tighter at the *semantic* level, and the rules are:
+
+- Anarchy / 1v1 / Oligarchy state updates: `slotIndex` is always `nil` on send. New clients that observe a non-nil `slotIndex` on a non-Democracy member ignore it.
+- Democracy state updates and bootstrap payloads: every member entry MUST carry a non-nil `slotIndex`. A Democracy state update with any member missing `slotIndex` is rejected on receive with a structured `MissingSlotIndex` error — there is no implicit "infer from public-key sort order" fallback because that would defeat the single-leaf-delta property.
+- Old client receiving a Democracy state update with `slotIndex` set: parses successfully, but the §4.3 Layer 1 build-flag gate prevents the old client from generating a *follow-on* democracy update (the FFI symbol isn't compiled in). The old client can read the chat (decryption keys are slot-index-agnostic) but cannot drive epoch transitions. This degrades safely.
+- Migration of pre-design Democracy groups (created on testnet before this change): no member entries have `slotIndex`. The first state update by a new client that sees such a group performs a one-time canonical assignment — sort current members by `compressed_public_key_bytes`, assign indices `0..n-1` in that order, broadcast the resulting `SEPGroupStateUpdate`. Once the broadcast lands, all members share the same slot map. Open Q §10.3 covers this.
+
+`SEPSaltResponse` gains an optional `members: [SEPGroupMemberLeaf]?` field carrying the latest slot map. Same Codable wire-compat rules. Senders include this field for Democracy salt requests; for other types it stays `nil`. The §4.1 slot-back-channel relies on this for offline-joiner recovery.
 
 ### 4.5 Relayer dispatch
 
@@ -229,7 +251,7 @@ Total: ~840 LOC across ~14 files, plus VK install + test vectors.
 - `prove_democracy_round_trip_two_to_three` — single signer, 2 → 3 member insert, valid proof, verifier passes.
 - `prove_democracy_errors_on_quorum_required` — single signer, 3 → 4 member insert, returns `QuorumRequired` without attempting proof generation.
 - `prove_democracy_handles_replace` — single signer, key rotation at member's own slot.
-- `prove_democracy_handles_remove` — single signer, removal of self (the only member, edge case for 1 → 0; rejected by quorum/min-count constraints).
+- `prove_democracy_handles_remove` — single signer, removal of self (the only member, edge case for 1 → 0; rejected by the contract's `m_new ≥ 2` min-count rule at `lib.rs:1485-1487`. Quorum is satisfied — `K=1` meets `2·K ≥ m_old=1` — so the rejection is purely the count-floor check, not a quorum failure).
 
 ### 7.2 Cross-platform vectors
 
@@ -244,6 +266,8 @@ Total: ~840 LOC across ~14 files, plus VK install + test vectors.
 - iOS: `StellarChatTests/DemocracyMembershipTests.swift` — boots an in-memory `OnChainService` mock, drives a 1 → 2 member flow, asserts `updateCommitmentDemocracy` is called (not `updateCommitment`). Asserts slot indices are assigned and persisted.
 - Android: parallel test in `app/src/test/kotlin/.../DemocracyMembershipTest.kt`.
 - Both: feature-flag-off variants assert that `generateDemocracyUpdateProof` is not callable and the client falls back to the §5.1 strict-refusal behavior.
+- **§4.3 Layer 2 client-side fingerprint mismatch (no manual setup).** iOS: `StellarChatTests/DemocracyVkFingerprintTests.swift` — stub the `OnChainService` to return a known-bad VK fingerprint (one that is *not* in the hardcoded allowlist). Drive the 1 → 2 flow. Assert (a) `RustBridge.generateDemocracyUpdateProof` is **never** called (the FFI symbol must not be invoked), (b) `ContractClient.updateCommitmentDemocracy` is never called, (c) the client surfaces the structured "ceremony complete — release the production client" error to the user, (d) local state is not advanced. Android: parallel test `DemocracyVkFingerprintTest.kt`. This is the prover-layer companion to §7.6's contract-side fail-closed test — together they cover both ends of the safeguard.
+- **Slot back-channel test.** iOS: `StellarChatTests/DemocracySlotDistributionTests.swift` — simulate the §4.1 back-channel: acceptor publishes a state update with `slotIndex` for the joiner; joiner stores it and reuses it on the next proof. Variant: joiner is offline during the broadcast, recovers via `SEPSaltResponse` carrying the member list. Android parallel.
 
 ### 7.5 Manual testnet end-to-end
 
@@ -276,7 +300,11 @@ Run the same flow as 7.5. The contract should reject with `VkNotInitialized` (or
 
 1. **Land the design doc.** This document. PR with reviewers from cryptography (@cryptoreviewer-tbd) and protocol (@protocolreviewer-tbd).
 2. **Implementation PR per layer.** Items 1–6 from the table can land in a single PR if reviewable; items 7–9 in separate PRs (relayer and clients respectively, since they're independently deployable).
-3. **Testnet VK install.** Run `scripts/install-democracy-vks-testnet.sh`. Operator records the resulting VK fingerprint and updates the §4.3 Layer 2 hardcoded list.
+3. **Testnet VK install + fingerprint update + client release.** A single coordinated step:
+   1. Run `scripts/install-democracy-vks-testnet.sh` against the active testnet contract.
+   2. Compute the SHA-256 fingerprints of `keyset-democracy-dev/tier{0,1}/verifying_key.bin` and update the hardcoded allowlist in `swift-mls/Sources/SwiftMLS/DemocracyVkFingerprints.swift` and `kotlin-mls/.../DemocracyVkFingerprints.kt`. Both files are generated from the single source of truth at `keyset-democracy-dev/fingerprints.json`.
+   3. Bump the patch version of both clients and cut a release. Older clients (with the previous fingerprints baked in) will refuse to drive democracy updates against the new VK and surface the "ceremony complete — release the production client" error — this is the safeguard working as designed, not a bug. Operators must communicate the rotation to all dev/beta testers so they update their clients before continuing testnet usage.
+   4. The `breaking-changes-release-process.md` runbook gains a "Democracy VK rotation" section spelling out this triplet so future operators don't perform step 1 without steps 2–3.
 4. **Testnet end-to-end smoke.** Section 7.5 manual run. Pass before merging client changes.
 5. **Release.** Standard non-breaking release flow per [`breaking-changes-release-process.md`](breaking-changes-release-process.md) §10. Release notes call out: "Democracy groups now functional on testnet; mainnet support pending Phase 2 ceremony review (#TBD-issue)."
 
@@ -292,7 +320,7 @@ The mainnet release process gains a new pre-flight check: confirm `democracy-dev
 | Slot-index convention conflicts with Phase 2 circuit | Medium | High (rework after ceremony) | This document is reviewed alongside the circuit-soundness review; slot-index convention is an explicit input to the Phase 2 ceremony spec. |
 | Quorum-required cases hit production usage | Medium | Medium (groups of ≥3 members can't grow) | UX surfaces a clear "this needs a vote, not yet implemented" message. Multi-signer follow-up doc filed before any group of 3 ships in product. |
 | Testnet contract loses VK across redeploys | High (per existing memory of testnet rotations) | Medium (feature breaks until script re-run) | Document the install script as a step in the deploy runbook. |
-| Wire-format change to `SEPGroupMemberLeaf` breaks old clients in the field | Medium | High (groups become un-decodable) | `slotIndex` is appended optionally; old clients ignore it. Cross-platform test vectors include both old and new shapes. Versioned in `BootstrapPayload`. |
+| Old clients in the field can't drive Democracy state transitions | Medium | Medium (Democracy-only; groups stay readable on old clients but stop advancing epoch when no new client is online) | The `slotIndex` Codable addition is parser-compatible — old clients decode messages without error and ignore the unknown field. The §4.3 Layer 1 build flag prevents old clients from generating democracy updates at all. Anarchy/1v1/Oligarchy groups are entirely unaffected. Cross-platform test vectors include both old (slot-less) and new (slot-bearing) shapes for parser regression coverage. |
 
 ---
 

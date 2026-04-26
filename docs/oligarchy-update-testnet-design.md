@@ -3,7 +3,7 @@
 **Date:** 2026-04-26
 **Status:** Draft (Proposal — pre-implementation)
 **Author:** Onym contributors
-**Version:** 0.1 — initial; mirrors v0.5 of [`democracy-update-testnet-design.md`](democracy-update-testnet-design.md) where mechanisms are shared, calls out divergence where Oligarchy adds a second tree (the admin set)
+**Version:** 0.1.1 — addresses @gramyzer REQUEST_CHANGES on v0.1: §4.4 admin_root claim corrected (Poseidon is one-way; admin_root is stored separately, not derived from c_old; wire payload extended to 9 scalars to carry admin_root_old/new explicitly); §4.2 single-signer cutoff generalized for non-default thresholds (parallel to Democracy v0.5.1 fix); §7.1 constraint reference renumbered to #12; §6 Phase A LOC arithmetic corrected to ~1190; §4.8 zero-member create disallowed (would brick on first update); §10.2 Q6 self-removal workaround corrected to four steps (was three, but skipped a step that violated the member floor); §4.7.7 "Defeats:" renamed to "Threat-model limitation"
 **Supersedes:** (none — first iteration)
 **Related:**
 - [`democracy-update-testnet-design.md`](democracy-update-testnet-design.md) — sibling design; many mechanisms (slot-index convention, occupancy commitment, polymorphic dispatch, testnet gating, ceremony) are inherited verbatim and cross-referenced rather than duplicated below.
@@ -74,7 +74,7 @@ In addition to all of [Democracy §3.4's residuals](democracy-update-testnet-des
 
 | Residual | Why it leaks | Mitigation in this design |
 |---|---|---|
-| The group is Oligarchy-typed | `group_type=3` from `create_oligarchy_group_v2` argument and contract storage | Same publicness class as Democracy's `group_type=2`. Polymorphic dispatch (§4.7.4) keeps it out of the per-call selector. **Residual**: the Oligarchy public-inputs payload size differs from Democracy and Anarchy (7 scalars vs 5 vs 3) — observable from call-payload analysis. Same partial-solution as Democracy: structural fix is uniform-shape padding, deferred. |
+| The group is Oligarchy-typed | `group_type=3` from `create_oligarchy_group_v2` argument and contract storage | Same publicness class as Democracy's `group_type=2`. Polymorphic dispatch (§4.7.4) keeps it out of the per-call selector. **Residual**: the Oligarchy public-inputs payload size differs from Democracy and Anarchy (9 scalars vs 5 vs 3) — observable from call-payload analysis. Oligarchy is the most-distinguishable variant on payload size. Same partial-solution as Democracy: structural fix is uniform-shape padding via dummy circuit-side commitments, deferred. |
 | Admin tree depth (capped at Small=32 in v0.1) | Tier choice fixed at create time | Documented; see §4.6. Operators select the member tier (Small/Medium/Large) but admin tree is always Small. |
 | Existence of an admin set | Implicit from `group_type=3` | Inherent to the type. No mitigation possible without restructuring at the type level. |
 
@@ -117,13 +117,25 @@ Three additional domain tags on top of the Democracy set:
 
 Parallel to [Democracy §4.2](democracy-update-testnet-design.md#42-single-signer-subset-multi-signer-quorum-is-future-work), with admin set in place of full member set as the source of authorizing signers.
 
-Constraint #4 in the Oligarchy circuit will be `100·K ≥ admin_threshold_numerator · admin_count_old`, where `K` is the number of *admin* signers contributing their secret keys to the proof. For `admin_count_old ∈ {1, 2}` a single signer suffices (with any threshold ≤100); for `admin_count_old ≥ 3` at least two admin signers are required at the 50%+ default. This iteration ships only the single-admin-signer subset. Multi-admin-quorum is Phase F (shared with Democracy's same-named phase — the K-of-N collection mechanism is the same shape regardless of which set the K signers are drawn from).
+Constraint #4 in the Oligarchy circuit will be `100·K ≥ admin_threshold_numerator · admin_count_old`, where `K` is the number of *admin* signers contributing their secret keys to the proof. For a single signer (`K = 1`), this collapses to `admin_count_old ≤ 100 / admin_threshold_numerator` — same parameterized formulation as the [Democracy §4.2](democracy-update-testnet-design.md#42-single-signer-subset-multi-signer-quorum-is-future-work) cutoff but applied to the admin set. The single-signer-supported size depends on the group's chosen `admin_threshold_numerator`:
 
-Coverage:
+| `admin_threshold_numerator` | Max `admin_count_old` for K=1 | Covers transitions |
+|---|---|---|
+| 50 (default — simple admin majority) | 2 | 1→2, 2→3 admin |
+| 51 (strict admin majority) | 1 | 1→2 admin only |
+| 67 (admin supermajority) | 1 | 1→2 admin only |
+| 75 | 1 | 1→2 admin only |
+| 100 (unanimous admin consent) | 1 | 1→2 admin only |
+
+The bootstrap case (1→2 admin) works for any `admin_threshold_numerator ≤ 100`. The 2→3 admin case (and analogously, member updates whose proof depends on `admin_count_old = 2` for the quorum check) work only at default 50%. Groups created with stricter admin thresholds therefore hit `QuorumRequired` at the second-admin-add boundary, with a UX message routing the user to the (not-yet-built) multi-admin flow.
+
+The prover errors with `Error::QuorumRequired` when `⌈admin_threshold_numerator · admin_count_old / 100⌉ > 1`. This computation is included in the prover's preflight; no malformed proof is ever generated. Multi-admin-quorum is Phase F (shared with Democracy's same-named phase — the K-of-N collection mechanism is the same shape regardless of which set the K signers are drawn from).
+
+Coverage at default `admin_threshold_numerator = 50`:
 - 1 → 2 admin transition: K=1, single signer (the original admin) authorizes the promotion.
-- 2 → 3 admin transition: K=1 still satisfies `100·1 ≥ 50·2` for the default threshold.
+- 2 → 3 admin transition: K=1 satisfies `100·1 ≥ 50·2` (tie-passes per [Democracy §4.7.6](democracy-update-testnet-design.md#476-configurable-quorum-threshold-per-group-fixed-at-create) tie semantics, inherited).
 - Member updates with admin_count_old ∈ {1, 2}: K=1.
-- Admin / member updates with admin_count_old ≥ 3: blocked, returns `QuorumRequired`.
+- Admin or member updates with admin_count_old ≥ 3 OR with admin_count_old = 2 and admin_threshold_numerator > 50: blocked, returns `QuorumRequired`.
 
 #### 4.2.1 Circuit invariants vs. contract invariants (parallel to Democracy §4.2.1)
 
@@ -167,15 +179,29 @@ public enum UpdateCommitmentPublicInputs: Codable, Equatable, Sendable {
         cOld: Data, epochOld: UInt64, cNew: Data,
         occupancyCommitmentOld: Data, occupancyCommitmentNew: Data
     )
-    case oligarchy(                                                          // 7 scalars
+    case oligarchy(                                                          // 9 scalars
         cOld: Data, epochOld: UInt64, cNew: Data,
         memberOccupancyCommitmentOld: Data, memberOccupancyCommitmentNew: Data,
-        adminOccupancyCommitmentOld: Data, adminOccupancyCommitmentNew: Data
+        adminOccupancyCommitmentOld: Data, adminOccupancyCommitmentNew: Data,
+        adminRootOld: Data, adminRootNew: Data    // see Note below: `admin_root` stored separately, updated in lockstep with `commitment`
     )
 }
 ```
 
-Note: `admin_root_old`/`admin_root_new` are NOT separate public inputs — they're bundled into `c_old`/`c_new` per §4.7.2's nested commitment formula. The contract's existing `admin_root` storage field becomes a derivative (computed from the bundle on read for backward compatibility with `get_admin_root`); the canonical authority is `c_old`.
+Note on `admin_root` storage: the contract continues to store `admin_root` as a separate field (preserved across the v2 redeploy so the existing `get_admin_root` getter keeps working as a read-only query path). **`admin_root` is NOT a derivative of `c_old`** — Poseidon is one-way, so the bundled commitment doesn't recover the unbundled root. Instead, `admin_root` is stored redundantly alongside `commitment` (= `c_old`); both must be updated in lockstep on every successful `update_commitment`.
+
+To make the in-lockstep update verifiable, the wire payload carries `admin_root_old` and `admin_root_new` as **separate fields** (not bundled into `c_old`/`c_new`). The contract on receive: (1) checks `admin_root_old == current.admin_root` (same kind of state-binding as `c_old == current.commitment`), (2) supplies both `admin_root_old` and `admin_root_new` as Groth16 public inputs to the verifier — the circuit binds them into `c_old`/`c_new` via Poseidon and verifies the bundling matches the wire's `c_old`/`c_new` claims, (3) on success writes both `admin_root = admin_root_new` and `commitment = c_new` to storage atomically. The wire-format `oligarchy` variant therefore carries 9 scalars (the 7 from earlier in this section plus `admin_root_old`, `admin_root_new`), not 7. Updated:
+
+```swift
+case oligarchy(
+    cOld: Data, epochOld: UInt64, cNew: Data,
+    memberOccupancyCommitmentOld: Data, memberOccupancyCommitmentNew: Data,
+    adminOccupancyCommitmentOld: Data, adminOccupancyCommitmentNew: Data,
+    adminRootOld: Data, adminRootNew: Data
+)
+```
+
+§3.4 entrypoint-selector residual: Oligarchy is now 9 scalars on the wire (vs. Anarchy's 3 and Democracy's 5). The same "uniform-shape padding" structural fix that's deferred for Democracy/Anarchy applies; Oligarchy is the most-distinguishable variant on payload size. §9 risks track this. §4.7.3 R1CS estimate gets a small bump for the additional public-input range checks (~30 constraints; absorbed into the existing ~9060 estimate without changing the order-of-magnitude).
 
 `SEPGroupMemberLeaf.slotIndex: UInt32?` carries forward unchanged (per [Democracy §4.4](democracy-update-testnet-design.md#44-wire--data-model-additions)). Same Codable wire-compat rules; same normative-leaf-hash rule (slotIndex NOT part of the leaf hash).
 
@@ -315,7 +341,7 @@ There is **no separate** `member_threshold_numerator` for Oligarchy. Member chan
 
 Constraint #7 above lets `target_tree ∈ {0, 1}` be a private witness. Every Oligarchy update produces:
 
-- The same wire-format public-inputs payload (7 scalars: c_old, epoch_old, c_new, member_occ_old, member_occ_new, admin_occ_old, admin_occ_new).
+- The same wire-format public-inputs payload (9 scalars: c_old, epoch_old, c_new, member_occ_old, member_occ_new, admin_occ_old, admin_occ_new, admin_root_old, admin_root_new).
 - The same proof byte length (192 bytes canonical Groth16).
 - The same on-chain operation (`update_commitment` polymorphic entrypoint, same selector).
 
@@ -325,7 +351,7 @@ The only observable signals are the occupancy-commitment values themselves (whic
 - An admin-demotion from a member-remove.
 - Any of the above from a "key rotation" (member or admin replacing their own key in place — both bitmaps unchanged but `c_new` shifts due to different leaf hashes after rotation; this is still a single-leaf delta).
 
-Defeats: a chain observer who *also* has out-of-band access to one of the trees' state (e.g., compromised one client and read its persisted member list) can infer which tree changed by comparing the new commitments against their offline computation. This is the same threat profile as Democracy — out-of-band access to a peer's state defeats the on-chain hiding regardless. The on-chain privacy floor is what this design protects.
+**Threat-model limitation (out-of-band caveat).** A chain observer who *also* has out-of-band access to one of the trees' state — e.g., compromised one client's local storage and read its persisted member list — can infer which tree changed by comparing the new commitments against their offline computation of "what the new tree should be if my offline state is correct." This is the same threat profile as Democracy — out-of-band access to a peer's state defeats the on-chain hiding regardless of governance type. The on-chain privacy floor is what this design protects; out-of-band defenses (forward secrecy of local state, tamper-resistant storage, etc.) are layered separately and out of scope here.
 
 ### 4.8 Initial admin set, `create_oligarchy_group_v2`
 
@@ -342,7 +368,7 @@ create_oligarchy_group_v2(
 
 The creator constructs `member_root` with themselves at member-slot 0 (tombstone elsewhere) and `admin_root` with themselves at admin-slot 0 (tombstone elsewhere). The `initial_proof` proves the creator knows the secret key behind both leaves (one secret key, used in two trees with different domain tags — see §4.1.1).
 
-Creator can opt to omit themselves from the member tree (admin-only single-person group), but admin tree must always have at least one entry (initial admin is the creator).
+**Creator MUST appear in both trees at create time.** `create_oligarchy_group_v2` rejects `member_count_initial == 0` (and analogously `admin_count_initial == 0`) — both with `Error::InvalidInitialMembership` (new error). The reason: the in-circuit floor `popcount(member_bitmap_new) ≥ 1` (§4.7.3 #5) would otherwise brick the group on first update — every update would fail the floor because `m_new` would have to grow from 0, and the single-leaf-delta witness can't insert into a "below the floor" starting state without a special-case relaxation that the v2 circuit doesn't carry. (An earlier draft of this section allowed admin-only zero-member groups; that's incompatible with §4.7.3 #5 and removed in v0.1.1.) Operators who want a "single-admin static observer" group instead use Anarchy with one member and never publish updates; Oligarchy is for groups that intend to grow.
 
 ### 4.9 Ceremony scope
 
@@ -480,11 +506,11 @@ Quorum-collection design doc (proposal lifecycle, vote tally, K-of-N partial-pro
 
 | Phase | Engineering LOC (approx) | Calendar (engineer-weeks) |
 |---|---|---|
-| A — circuit + prover | ~1110 (A1 ~600 + A2 ~300 + A3 ~200 + A6 ~80 — A4 binary VK output, A5 ~10) | 3–4 (R1CS review of two-tree dispatcher is the gate) |
+| A — circuit + prover | ~1190 (A1 ~600 + A2 ~300 + A3 ~200 + A5 ~10 + A6 ~80; A4 produces binary VK files, no source LOC) | 3–4 (R1CS review of two-tree dispatcher is the gate) |
 | B — FFI + bindings | ~460 | 1 |
 | C — contract redeploy | ~595 | 1 |
 | D — relayer + clients | ~1020 | 2–3 |
-| **A–D total (testnet-functional Oligarchy)** | **~3185** | **7–9** |
+| **A–D total (testnet-functional Oligarchy)** | **~3265** (1190 + 460 + 595 + 1020) | **7–9** |
 | E — ceremony (incremental over Democracy) | (mostly process) | 1–2 (calendar; coordination only — three more circuits in the same MPC session) |
 | F — multi-admin quorum | (shared with Democracy F) | not estimated |
 
@@ -505,7 +531,7 @@ Inherits all of [Democracy §7](democracy-update-testnet-design.md#7-test-plan)'
 - `prove_oligarchy_v2_member_floor_rejected` — last-member-removal attempt; `member_count_new = 0`. Prover rejects via in-circuit floor.
 - `prove_oligarchy_v2_admin_floor_rejected` — last-admin-removal attempt; `admin_count_new = 0`. Prover rejects.
 - `prove_oligarchy_v2_admin_threshold_sweep` — same shape as Democracy's threshold-sweep test, applied to admin set: 50 / 67 / 75 / 100 each pass for K satisfying, fail for K below quorum.
-- `prove_oligarchy_v2_admin_signer_not_in_admin_tree_rejected` — signer's secret key opens against member tree but not admin tree. Constraint #1 (admin-tree opening) detects.
+- `prove_oligarchy_v2_admin_signer_not_in_admin_tree_rejected` — signer's secret key opens against member tree but not admin tree. The admin-tree Merkle-opening constraint (§4.7.3 #12 "Existing constraints unchanged: signer Merkle openings against `root_admin_old`") detects the missing path. (Earlier draft cited "Constraint #1" — that's the bitmap-allocation step, not the signer opening; renumbered.)
 - `prove_oligarchy_v2_admin_tier_cap_exhaustion` — 33rd lifetime admin promotion attempt. Prover rejects (admin slot space exhausted; no never-used slot available).
 - `prove_oligarchy_v2_member_tombstone_collision` and `prove_oligarchy_v2_admin_tombstone_collision` — paired domain-tag-disabled / enabled regression tests for both trees independently. Same shape as Democracy's `prove_democracy_v2_domain_tags_block_tombstone_collision`.
 - `prove_oligarchy_v2_bundled_roots_consistency` — verifier recomputes `c_old` from `(root_member, root_admin, epoch_old, salt_old)` and confirms it matches the public-input value.
@@ -604,11 +630,15 @@ Inherits all of [Democracy §9](democracy-update-testnet-design.md#9-risks)'s ri
 
 4. **Should member tree and admin tree share a `target_tree`-typed dispatcher, or always emit a uniform-shape proof regardless of which tree changed?** Current design (uniform-shape via `target_tree` private witness) is the correct call for §3.5. Open: when Phase F's multi-admin-quorum redesign lands, does the dispatcher still hold? Needs a re-check at the start of Phase F.
 
-5. **Allow zero-member, admin-only Oligarchy groups?** A group with `member_count = 0, admin_count ≥ 1` is technically valid (admins can still update each other) but has no chat capacity. Recommendation: enforce `member_count_new ≥ 1` (the admin can be a member at slot 0 trivially). Documented in §4.7.3 floor row.
+5. **What happens when the only admin is also the only member, and they try to remove themselves?** Either floor (member or admin = 0) trips at the first removal step. The admin can't remove themselves and promote a new admin in one update (cross-tree changes are out of scope per §4.10). Workaround requires growing both trees first; the minimal sequence:
+   1. Add a second member (1 → 2 members). Single-signer K=1 from the original admin authorizes (per §4.2 default-50 threshold table).
+   2. Promote that member to admin (1 → 2 admins). Single-signer K=1 from the original admin again.
+   3. Original creator removes self from member tree (2 → 1 members). Member floor `≥1` satisfied. Admin signer is now either the original creator OR the new admin — either suffices for K=1 since admin_count_old=2 at this step.
+   4. Original creator demotes self from admin tree (2 → 1 admins). Authorized by the new (remaining) admin. K=1 from `admin_count_old=2`.
 
-6. **What happens when the only admin is also the only member, and they try to remove themselves?** Either floor (member or admin = 0) trips. The admin can't remove themselves and self-promote a new admin in one update because that'd be cross-tree. Workaround: promote a second admin first (1 → 2 admin), then leave the group (which removes them from member tree but not admin tree, then admin demotion from a different admin). Three updates, three epochs. UX cost; documented.
+   **Four updates, four epochs.** (An earlier draft cited a three-update workaround; that version skipped step 1 and immediately tried "remove self from member tree" from a 1-member starting state — which would violate the member floor since `m_new` drops to 0. Corrected here.) UX cost is high; clients SHOULD warn when the user is about to commit to becoming a member-and-admin singleton group, since exit cost is steep.
 
-7. **Can a non-member be promoted to admin?** Technically yes — admin tree and member tree are independent. A "non-member admin" is someone who can authorize updates but doesn't appear in the member list (no chat capacity). Probably not useful but not blocked. Recommendation: allow it; clients surface a warning "this admin is not a member of the group; promote them as a member first?" — operator can override.
+6. **Can a non-member be promoted to admin?** Technically yes — admin tree and member tree are independent. A "non-member admin" is someone who can authorize updates but doesn't appear in the member list (no chat capacity). Probably not useful but not blocked. Recommendation: allow it; clients surface a warning "this admin is not a member of the group; promote them as a member first?" — operator can override.
 
 ### 10.3 Resolved (folded into core design)
 
@@ -616,6 +646,7 @@ Inherits all of [Democracy §9](democracy-update-testnet-design.md#9-risks)'s ri
 - Admin status per-leaf flag vs separate tree: separate tree (§5.2 rejected).
 - Per-tier admin depth: fixed at Small (§5.4 rejected).
 - Cross-tree atomic updates: out of scope (§4.10).
+- **Zero-member admin-only groups: disallowed.** Earlier-draft Q5 asked whether admin-only zero-member groups should be allowed. Resolved as no — `create_oligarchy_group_v2` rejects `member_count_initial == 0` per §4.8 amendment. The in-circuit floor `popcount(member_bitmap_new) ≥ 1` (§4.7.3 #5) makes any post-create update from a zero-member state impossible; allowing the create state would brick the group on its first attempted update.
 
 ---
 

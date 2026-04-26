@@ -3,7 +3,7 @@
 **Date:** 2026-04-26
 **Status:** Draft (Proposal — pre-implementation)
 **Author:** Onym contributors
-**Version:** 0.4 — pivot to direct-to-v2: occupancy-commitment circuit, contract redeploy, no count-public intermediate stage
+**Version:** 0.4.1 — addresses PR #146 review feedback on v0.4 (table/duplicate fixes; LOC reconciled to ~2555; `_v2` test naming made consistent; old-contract abandonment claim tightened; Phase A1 rename spelled out)
 **Supersedes:** (none — first iteration)
 **Related:**
 - [`group-governance-types-design.md`](group-governance-types-design.md) — the parent design that introduces `groupType ∈ {Anarchy, 1v1, Democracy, Oligarchy}`
@@ -217,8 +217,6 @@ The Democracy proof, taken in isolation against `update_commitment_democracy`'s 
 
 To make the boundary explicit, this table enumerates each safety-relevant invariant and which side enforces it. Future consumers of the same VK MUST re-enforce every contract-only row before trusting the proof.
 
-| Invariant | Circuit-enforced | Contract-enforced | Reference |
-|---|---|---|---|
 **Note on revisions for v2.** This table reflects the v2 circuit (`democracy_v2.rs`, §4.7). Two changes vs. the v1 (count-public) circuit's invariants:
 
 - `m_new ≥ 2` (Democracy floor) and `m_new ≤ tier_capacity` (tier ceiling) move **into** the circuit (count is a popcount of the bitmap private witness), eliminating the v1 case where the circuit accepted proofs the contract rejected.
@@ -258,9 +256,9 @@ The §6 implementation includes a `// CIRCUIT-ONLY:` / `// CONTRACT-ONLY:` comme
 
 Two layers of defense in depth, so Democracy chain updates cannot accidentally ship to mainnet:
 
-**Layer 1 — Build flag.** `Cargo.toml` adds a feature `democracy-dev-vks` (off by default). The democracy proof FFI export, the Swift `RustBridge.generateDemocracyUpdateProof`, the Kotlin `RustBridge.generateDemocracyUpdateProof`, the `ContractClient.updateCommitmentDemocracy` Swift method, and its Kotlin counterpart are all gated on this feature. Mainnet release builds (`make release`, `gh workflow run Release`) explicitly do NOT enable the feature; CI assertion test verifies the feature is off in release configs. Testnet/dev builds enable it.
+**Layer 1 — Build flag.** `Cargo.toml` adds a feature `democracy-v2-dev-vks` (off by default). The democracy proof FFI export `sep_generate_democracy_update_proof_v2`, the Swift `RustBridge.generateDemocracyUpdateProofV2`, the Kotlin equivalent, and the Democracy variant handling in the polymorphic `ContractClient.updateCommitment` are all gated on this feature. Mainnet release builds (`make release`, `gh workflow run Release`) explicitly do NOT enable the feature; CI assertion test verifies the feature is off in release configs. Testnet/dev builds enable it.
 
-**Layer 2 — VK fingerprint check at runtime.** When a client makes a `update_commitment_democracy` call, it first reads the on-chain VK at `(tier, group_type=2)` and compares its hash to a hardcoded list of known dev VK fingerprints. If the on-chain VK does not match any fingerprint in the list (i.e., a real ceremony VK is now installed), the dev path refuses to run and surfaces a "ceremony complete — release the production client" error. This prevents the (theoretically possible) future scenario where a dev build is run against a mainnet-equivalent contract — the dev client refuses to act because its fingerprints don't match.
+**Layer 2 — VK fingerprint check at runtime.** When a client is about to publish a Democracy update via the polymorphic `ContractClient.updateCommitment`, it first reads the on-chain VK at `(tier, group_type=2)` from the redeployed contract and compares its hash to a hardcoded list of known dev VK fingerprints (§8.3). If the on-chain VK does not match any fingerprint in the list (i.e., a real ceremony VK is now installed), the dev path refuses to run and surfaces a "ceremony complete — release the production client" error. This prevents the (theoretically possible) future scenario where a dev build is run against a mainnet-equivalent contract — the dev client refuses to act because its fingerprints don't match.
 
 **Caching policy.** The fingerprint comparison fetches the on-chain VK at `(tier, group_type=2)` on **every** democracy update publish — no cache. Testnet VK rotations during dev iteration are flagged as `High` likelihood in the §9 risk table, and a stale cached fingerprint would silently bypass the safeguard (a client built against an older fingerprint list would happily publish against a newly-rotated dev VK because its cache says "matches"). The on-chain read adds one Soroban RPC round-trip per democracy update; given the new path is already a chain-publishing operation costing seconds, the additional latency is negligible. If we later add a session-scoped cache for performance, it must be invalidated on any publish failure that returns an error code consistent with VK mismatch.
 
@@ -322,7 +320,9 @@ This design ships against a **fresh contract address**. The existing testnet con
 
 These VKs are regenerated from the v2 circuit (§4.7), not the v1 dev circuit currently in `src/circuit/democracy.rs`. The §6 phasing ensures the circuit lands before the VK install.
 
-The new contract address is recorded in `RelayerDefaults.contractID` and shipped with the client release that turns on the v2 path. Old clients pointing at the orphaned contract continue to fail (gracefully — the existing `chainRejected` UX surfaces "this group's contract was abandoned, please update").
+The new contract address is recorded in `RelayerDefaults.contractID` and shipped with the client release that turns on the v2 path. **Updated** clients (post Phase D release) pointing at the new contract get the working v2 flow; if such a client is asked to operate on a group bound to the old contract, the existing `chainRejected` UX surfaces "this group's contract was abandoned, please update."
+
+Important nuance: the *old contract itself* doesn't change behavior — it still has the broken `Error::UnknownGroupType` rejection on Democracy `update_commitment` calls. Pre-Phase-D clients pointing at the old address therefore continue to see the same broken behavior they see today, **not** an "abandoned" message. The "abandoned" UX is purely a client-side check: a Phase-D-or-later client detects "my baked-in `RelayerDefaults.contractID` doesn't match the contract this group was created on" and surfaces the redeploy notice. Old clients have no such check; they just keep failing the way they currently fail. There is no live-user impact (no live users), so this asymmetry is acceptable.
 
 ### 4.7 Occupancy-commitment public input (the heart of v2)
 
@@ -436,7 +436,7 @@ Deferred. §4.2 ships the single-signer subset; multi-signer is a follow-up docu
 
 An earlier draft (v0.2 / v0.3 of this doc) proposed shipping `update_commitment_democracy` with `member_count_old` / `member_count_new` as public inputs on testnet first, accepting the privacy regression as a temporary trade-off, and rebuilding the circuit with hidden counts as a separate Phase 3 effort.
 
-- **Pros:** Smaller initial implementation (~840 LOC vs ~1770), no contract redeploy, dev-key ceremony skipped for tier 2 (Large) initially.
+- **Pros:** Smaller initial implementation (~990 LOC vs the ~2555 in §6 for the v2 path A–D), no contract redeploy, dev-key ceremony scoped to tiers 0/1 only initially.
 - **Cons:** Locks in a wire format that has to be migrated later (separate ceremony, separate VK rotation, separate client release). Two Phase 2 ceremonies instead of one. Two reviewer cycles for cryptography. Degrades Democracy's privacy below Anarchy's even temporarily — which is unacceptable to the project's "no metadata leakage" commitment.
 
 Rejected by project direction (see §3.4). With no live users and ceremony status at Phase 1 dev-key for all three tiers, the cost of redeploy + single ceremony on the v2 shape is lower than the cost of shipping v1, then revisiting. This document is the v2 path; v1 is not implemented.
@@ -455,7 +455,7 @@ Within each phase, every numbered step is a discrete PR — small enough to revi
 
 | Step | Files | LOC | Output |
 |---|---|---|---|
-| A1 | `src/circuit/democracy_v2.rs` (new file; `democracy.rs` left in tree as `democracy_v1.rs` for reference, NOT compiled into the FFI) | ~400 | Empty + populated circuit; bitmap witness; popcount; bitmap-to-leaf binding (§4.7.3); occupancy-commitment Poseidon; all count-derived constraints internalized; domain tags from §4.1.1 + new `DOMAIN_OCCUPANCY` |
+| A1 | `src/circuit/democracy_v2.rs` (new file). `src/circuit/democracy.rs` is **renamed** to `src/circuit/democracy_v1.rs` in the same commit. The renamed file is gated `#[cfg(test)]` so it stays available for v0.3-vs-v0.4 differential tests but is excluded from the production build and the FFI. Imports in non-test code are migrated to `democracy_v2`; `mod democracy_v1` is declared only inside `#[cfg(test)]` blocks. After the v2 ceremony lands and the differential tests are no longer useful, `democracy_v1.rs` is deleted in a follow-up cleanup. | ~400 | Empty + populated circuit; bitmap witness; popcount; bitmap-to-leaf binding (§4.7.3); occupancy-commitment Poseidon; all count-derived constraints internalized; domain tags from §4.1.1 + new `DOMAIN_OCCUPANCY` |
 | A2 | `src/circuit/democracy_v2.rs` tests | ~200 | Round-trip 1→2, 2→3, 2→4 (Insert), 3→2 (Remove via floor rejection), key rotation, **bitmap-mismatch attack rejection**, **tombstone-collision regression** (§4.1.1), slot-exhaustion at tier ceiling |
 | A3 | `src/prover/mod.rs` `prove_democracy_v2` + `verify_democracy_v2` | ~150 | Bitmap derivation from rosters, occupancy-commitment computation, single-leaf-delta inference, `QuorumRequired` error for `m_old ≥ 3` (single-signer subset per §4.2) |
 | A4 | `scripts/generate-democracy-vk-dev.sh` extension; `keyset-democracy-dev/{tier0-k32,tier1-k256,tier2-k2048}/` | (script + bin output) | All three tier dev VKs regenerated against the v2 circuit; checked-in `verifying_key.bin` + fingerprint hashes |
@@ -563,10 +563,10 @@ The "no live users" position lets Phase D land while Phase E is in flight: the t
 
 ### 7.1 Rust unit tests
 
-- `prove_democracy_round_trip_one_to_two` — single signer, 1 → 2 member insert, valid proof, verifier passes.
-- `prove_democracy_round_trip_two_to_three` — single signer, 2 → 3 member insert, valid proof, verifier passes.
-- `prove_democracy_errors_on_quorum_required` — single signer, 3 → 4 member insert, returns `QuorumRequired` without attempting proof generation.
-- `prove_democracy_handles_replace` — single signer, key rotation at member's own slot.
+- `prove_democracy_v2_round_trip_one_to_two` — single signer, 1 → 2 member insert, valid proof, verifier passes.
+- `prove_democracy_v2_round_trip_two_to_three` — single signer, 2 → 3 member insert, valid proof, verifier passes.
+- `prove_democracy_v2_errors_on_quorum_required` — single signer, 3 → 4 member insert, returns `QuorumRequired` without attempting proof generation.
+- `prove_democracy_v2_handles_replace` — single signer, key rotation at member's own slot.
 - `prove_democracy_v2_handles_remove` — single signer, 1 → 0 transition. With v2's in-circuit `m_new ≥ 2` floor, the prover **rejects** at proof generation time, returning `BelowMinCount`. The contract-side check is now defense-in-depth, not the only enforcer. Asserts the v2 improvement: `prove_democracy_v2_handles_remove` matches `update_commitment` rejection — the circuit accepts only proofs the contract will also accept (§4.2.1 second consequence).
 - `prove_democracy_v2_rejects_tombstone_collision` — manually constructs a member whose `Poseidon(sk)` collides with `Poseidon(0)` (forced via a chosen test scalar). With §4.1.1 domain tags applied, the collision lifts to disjoint Poseidon inputs and the test passes; without domain tags, the test would expose the soundness break. Regression test for the §4.1.1 normative rule.
 - `prove_democracy_v2_slot_exhaustion` — at tier capacity (Small=32 for the test), drive cumulative joins past `2^depth - 1` (never-used slots run out due to tombstones). Asserts the prover returns `SlotExhausted`, not a malformed proof.
@@ -711,8 +711,7 @@ Phase E ends with a mainnet release. The existing `breaking-changes-release-proc
 
 ## 11. Follow-Up Work
 
-- **Multi-signer democracy proofs.** Quorum-collection design doc; implements the K ≥ ⌈member_count_old / 2⌉ general case. Required before Democracy groups can grow beyond 3 members.
-- **Phase F — Multi-signer democracy proofs.** Quorum-collection design doc (proposal lifecycle, vote tally, K-of-N partial-proof aggregation). Required before Democracy groups can grow past 3 members. Multi-month effort with its own design doc; out of scope for v0.4. Phase F design must arrive **before** the second mainnet Democracy release.
+- **Phase F — Multi-signer democracy proofs.** Quorum-collection design doc (proposal lifecycle, vote tally, K-of-N partial-proof aggregation). Implements the `K ≥ ⌈m_old / 2⌉` general case. Required before Democracy groups can grow past 3 members. Multi-month effort with its own design doc; out of scope for v0.4. Phase F design must arrive **before** the second mainnet Democracy release.
 - **Phase E — Phase 2 trusted-setup ceremony for v2 circuit.** Tracked in [`democracy-circuit-ceremony.md`](democracy-circuit-ceremony.md), updated to v2-only scope. Three-tier ceremony, MPC, attestations. Mainnet blocker. ~4–8 weeks calendar.
 - **Oligarchy update path.** Per-type circuit + VK; admin-only quorum. Slots into the polymorphic `update_commitment` (§4.7.4) once its circuit and ceremony land. Documented in [`group-governance-types-design.md`](group-governance-types-design.md). Independently schedulable; not blocked by anything in this design after Phase D.
 - **iOS sync-lock UI integration with the v2 path.** The UI lock from [`fix/epoch-sync-and-ui-lock`](https://github.com/rinat-enikeev/stellar-mls/pull/145) generalizes to "any pending chain transition." Phase D5/D6 wires `awaitingChainConfirmation` into the new democracy publish path; the banner surface is unchanged.

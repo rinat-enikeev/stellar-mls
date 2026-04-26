@@ -440,8 +440,9 @@ struct ChatView: View {
                         }
                     }
 
-                    TextField("Message", text: $viewModel.inputText)
+                    TextField("Message", text: $viewModel.inputText, axis: .vertical)
                         .textFieldStyle(.plain)
+                        .lineLimit(1...5)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                         .background(.quaternary, in: RoundedRectangle(cornerRadius: 20))
@@ -878,6 +879,37 @@ struct MessageBubble: View {
         return formatter
     }()
 
+    private static let linkDetector: NSDataDetector? = {
+        let types: NSTextCheckingResult.CheckingType = [.link, .phoneNumber]
+        return try? NSDataDetector(types: types.rawValue)
+    }()
+
+    static func linkified(_ text: String, isMine: Bool) -> AttributedString {
+        var attributed = AttributedString(text)
+        guard let detector = linkDetector, !text.isEmpty else { return attributed }
+        let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        detector.enumerateMatches(in: text, options: [], range: nsRange) { match, _, _ in
+            guard let match,
+                  let swiftRange = Range(match.range, in: text),
+                  let attrRange = Range(swiftRange, in: attributed) else { return }
+            let url: URL?
+            switch match.resultType {
+            case .link:
+                url = match.url
+            case .phoneNumber:
+                url = match.phoneNumber
+                    .map { $0.filter { !$0.isWhitespace } }
+                    .flatMap { URL(string: "tel:\($0)") }
+            default:
+                url = nil
+            }
+            guard let url else { return }
+            attributed[attrRange].link = url
+            attributed[attrRange].underlineStyle = .single
+        }
+        return attributed
+    }
+
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
             if message.isMine { Spacer(minLength: 60) }
@@ -923,7 +955,9 @@ struct MessageBubble: View {
                             } else if message.replyToID != nil {
                                 MissingReplyView(isMine: message.isMine)
                             }
-                            Text(message.text)
+                            Text(MessageBubble.linkified(message.text, isMine: message.isMine))
+                                .tint(message.isMine ? .white : .blue)
+                                .fixedSize(horizontal: false, vertical: true)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 8)
                         }
@@ -1532,7 +1566,7 @@ struct ReplyPreviewBar: View {
                     Text(message.text)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(3)
                 }
             }
 
@@ -1544,6 +1578,7 @@ struct ReplyPreviewBar: View {
             }
             .buttonStyle(.plain)
         }
+        .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal)
         .padding(.vertical, 6)
         .background(Color(.systemGray6))
@@ -1590,6 +1625,7 @@ struct QuotedReplyView: View {
                 }
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
         .opacity(0.8)
@@ -1614,6 +1650,7 @@ struct MissingReplyView: View {
                 .font(.caption2)
                 .foregroundStyle(isMine ? .white.opacity(0.6) : .secondary)
         }
+        .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
     }

@@ -1,0 +1,503 @@
+{
+  "description": "Canonical test vectors for the SEP-XXXX Soroban contract (`contracts/sep-xxxx`). Pinned by the design spec — every value here is derivable from `contracts/sep-xxxx/src/lib.rs` (current testnet contract) or `docs/democracy-update-testnet-design.md` (v2 redeploy planned in Phase C). Vectors that depend on Poseidon / Groth16 outputs are deliberately omitted: those are produced by Phase A's `prove_democracy_v2` reference implementation and added to `docs/cross-platform-test-vectors.json` per §6 step A6. The vectors below cover the contract surface only — error codes, enum values, validation boundaries, wire shapes, dispatch routing, and bitmap-to-field-element packing rules — i.e., the parts that any conforming contract reimplementation MUST match byte-for-byte without running cryptography.",
+  "version": 1,
+  "design_doc": "docs/democracy-update-testnet-design.md",
+  "contract_source": "contracts/sep-xxxx/src/lib.rs",
+
+  "error_codes": {
+    "description": "Numeric values of `Error` variants (`#[contracterror] #[repr(u32)]`). The contract's ABI and every client-side error mapping MUST agree on these. New entries introduced by the v2 design are flagged `since=\"v2\"`.",
+    "vectors": [
+      { "name": "NotInitialized", "code": 1 },
+      { "name": "AlreadyInitialized", "code": 2 },
+      { "name": "Reserved3", "code": 3, "note": "previously Unauthorized; admin checks now use require_auth() which panics" },
+      { "name": "GroupAlreadyExists", "code": 4 },
+      { "name": "GroupNotFound", "code": 5 },
+      { "name": "GroupInactive", "code": 6 },
+      { "name": "InvalidProof", "code": 7 },
+      { "name": "InvalidTier", "code": 8 },
+      { "name": "InvalidVkLength", "code": 9 },
+      { "name": "PublicInputsMismatch", "code": 10 },
+      { "name": "InvalidEpoch", "code": 11 },
+      { "name": "ProofReplay", "code": 12 },
+      { "name": "TierGroupLimitReached", "code": 13 },
+      { "name": "AdminOnly", "code": 14 },
+      { "name": "InvalidCommitmentEncoding", "code": 15 },
+      { "name": "UnknownVkKind", "code": 16 },
+      { "name": "OneOnOneImmutable", "code": 17 },
+      { "name": "UnknownGroupType", "code": 18 },
+      { "name": "MissingAdminRoot", "code": 19 },
+      { "name": "AdminRootMismatch", "code": 20 },
+      { "name": "DemocracyInputMissing", "code": 21 },
+      { "name": "Reserved22", "code": 22, "note": "reserved for NotAdmin (Oligarchy update dispatch)" },
+      { "name": "Invalid1v1Tier", "code": 23 },
+      { "name": "MemberCountMismatch", "code": 24, "note": "v1-only — removed in v2 (no member_count in storage)" },
+      { "name": "MemberCountOutOfRange", "code": 25, "note": "v1-only — removed in v2 (count constraints internalised in circuit)" },
+      { "name": "InvalidPoint", "code": 26 },
+      { "name": "GroupStillActive", "code": 27 },
+      { "name": "InvalidThreshold", "code": 28, "since": "v2", "note": "create_group_v3 rejects threshold_numerator < 1 || > 100 (§4.7.6)" },
+      { "name": "GroupTypeMismatch", "code": 29, "since": "v2", "note": "polymorphic update_commitment rejects when claimed_group_type in UpdateCommitmentPublicInputs ≠ stored.group_type (§4.7.4 type-confusion guard)" }
+    ]
+  },
+
+  "group_type_enum": {
+    "description": "`group_type` u32 values stored in `CommitmentEntryV2.group_type`. Same numeric ABI in v1 and v2.",
+    "vectors": [
+      { "name": "Anarchy", "value": 0 },
+      { "name": "OneOnOne", "value": 1 },
+      { "name": "Democracy", "value": 2 },
+      { "name": "Oligarchy", "value": 3 }
+    ],
+    "rejected_values": [
+      { "value": 4, "expected_error": "UnknownGroupType" },
+      { "value": 255, "expected_error": "UnknownGroupType" },
+      { "value": 4294967295, "expected_error": "UnknownGroupType" }
+    ]
+  },
+
+  "tier": {
+    "description": "Tier index → tree depth → leaf capacity. `tier_capacity()` returns 0 for any out-of-range tier; the contract MUST reject `tier > 2` with `InvalidTier` before reaching `tier_capacity`. v2 keeps this mapping unchanged.",
+    "vectors": [
+      { "tier": 0, "name": "Small", "depth": 5, "capacity": 32 },
+      { "tier": 1, "name": "Medium", "depth": 8, "capacity": 256 },
+      { "tier": 2, "name": "Large", "depth": 11, "capacity": 2048 }
+    ],
+    "rejected_tiers": [
+      { "tier": 3, "expected_error": "InvalidTier" },
+      { "tier": 100, "expected_error": "InvalidTier" },
+      { "tier": 4294967295, "expected_error": "InvalidTier" }
+    ]
+  },
+
+  "vk_kind_enum": {
+    "description": "Discriminator values for the `VkKind` enum (passed to `update_vk`). The numeric ordering matches the variant declaration order in `lib.rs`. `UpdateByType(u32)` carries the group_type as an associated u32; only group_type=2 (Democracy) is an installable VK family in v2 testnet (Oligarchy=3 lands later per §11).",
+    "vectors": [
+      { "name": "Membership", "ic_count": 3, "ic_layout": ["base", "commitment", "epoch"] },
+      { "name": "Update", "ic_count": 4, "ic_layout": ["base", "c_old", "epoch_old", "c_new"] },
+      {
+        "name": "UpdateByType(2)",
+        "since": "v1",
+        "ic_count_v1": 6,
+        "ic_layout_v1": ["base", "c_old", "epoch_old", "c_new", "member_count_old", "member_count_new"],
+        "ic_count_v2": 7,
+        "ic_layout_v2": ["base", "c_old", "epoch_old", "c_new", "occupancy_commitment_old", "occupancy_commitment_new", "threshold_numerator"],
+        "note": "v2 swaps the two count IC points for two occupancy_commitment IC points and adds threshold_numerator (§4.7.3 step 5, §4.7.6). Wire-supplied inputs in v2 are 5 scalars; threshold_numerator is supplied by the contract from storage at verify time, not by the caller."
+      },
+      { "name": "AdminUpdate", "ic_count": 4, "ic_layout": ["base", "admin_c_old", "admin_epoch_old", "admin_c_new"] }
+    ]
+  },
+
+  "create_group_v2_validation": {
+    "description": "Per-group_type validation in `create_group_v2` (v1 contract — the entrypoint kept for Anarchy/1v1 on the testnet contract). v2 supersedes this with `create_group_v3` for Democracy + Oligarchy; Anarchy continues to use `create_group_v2`.",
+    "vectors": [
+      {
+        "group_type": 0,
+        "name": "Anarchy",
+        "rules": [
+          "tier ∈ {0,1,2}",
+          "member_count is informational; any value ≤ tier_capacity(tier) accepted (the contract does not bound it for Anarchy in current source — note: the source reads `if member_count > tier_capacity(tier) { Err(MemberCountOutOfRange) }` only inside the Democracy arm; Anarchy accepts any u32. Reimplementations MUST match.)"
+        ]
+      },
+      {
+        "group_type": 1,
+        "name": "OneOnOne",
+        "rules": [
+          "tier MUST equal 0 (else Invalid1v1Tier)",
+          "member_count MUST equal 2 (else PublicInputsMismatch)"
+        ]
+      },
+      {
+        "group_type": 2,
+        "name": "Democracy (v1 contract)",
+        "rules": [
+          "tier ∈ {0,1,2}",
+          "member_count ∈ [0, tier_capacity(tier)]; any out-of-range value yields MemberCountOutOfRange",
+          "member_count == 0 and == 1 are accepted at create time (group grows via off-chain MLS); democracy-of-≥2 invariant is enforced at first update_commitment_democracy call"
+        ]
+      },
+      {
+        "group_type": 3,
+        "name": "Oligarchy",
+        "rules": [
+          "create_group_v2 rejects with UnknownGroupType — Oligarchy uses the separate create_oligarchy_group entrypoint that takes admin_root"
+        ]
+      }
+    ]
+  },
+
+  "create_group_v3_validation": {
+    "since": "v2",
+    "description": "New entrypoint introduced in §6 step C1 for the v2 contract redeploy. Replaces both create_group_v2 (for Democracy) and create_oligarchy_group (when Oligarchy lands per §11). Carries threshold_numerator for Democracy (§4.7.6) and the initial occupancy_commitment for the creator-only state.",
+    "argument_order": [
+      "env",
+      "caller",
+      "group_id",
+      "commitment",
+      "tier",
+      "group_type",
+      "threshold_numerator",
+      "occupancy_commitment_initial",
+      "proof",
+      "public_inputs"
+    ],
+    "threshold_numerator_validation": {
+      "rule": "threshold_numerator MUST be in [1, 100] for Democracy groups; MUST be ignored (or set to 0 sentinel — implementer's choice, but consistent across the codebase) for non-Democracy groups",
+      "valid_vectors": [
+        { "threshold_numerator": 1, "semantics": "single-vote-passes (degenerate; allowed by spec)" },
+        { "threshold_numerator": 50, "semantics": "simple majority (default)" },
+        { "threshold_numerator": 51, "semantics": "strict majority" },
+        { "threshold_numerator": 67, "semantics": "two-thirds supermajority" },
+        { "threshold_numerator": 75, "semantics": "three-quarters supermajority" },
+        { "threshold_numerator": 100, "semantics": "unanimous" }
+      ],
+      "invalid_vectors": [
+        { "threshold_numerator": 0, "expected_error": "InvalidThreshold" },
+        { "threshold_numerator": 101, "expected_error": "InvalidThreshold" },
+        { "threshold_numerator": 200, "expected_error": "InvalidThreshold" },
+        { "threshold_numerator": 255, "expected_error": "InvalidThreshold" }
+      ]
+    }
+  },
+
+  "update_commitment_polymorphic_dispatch": {
+    "since": "v2",
+    "description": "v2's polymorphic `update_commitment` entrypoint dispatches on `current.group_type` (read from storage) to the matching update VK family. The discriminator on `UpdateCommitmentPublicInputs` MUST equal `current.group_type`; mismatch is rejected with `GroupTypeMismatch` BEFORE proof verification (no chain-pairing wasted on a type-confusion attempt). See §4.7.4.",
+    "vectors": [
+      {
+        "stored_group_type": 0,
+        "name": "Anarchy",
+        "expected_vk_kind": "Update (tier-indexed; 4 IC points)",
+        "expected_public_input_variant": "UpdateCommitmentPublicInputs::Anarchy",
+        "wire_input_field_count": 3,
+        "wire_input_fields": ["c_old", "epoch_old", "c_new"]
+      },
+      {
+        "stored_group_type": 1,
+        "name": "OneOnOne",
+        "expected_error": "OneOnOneImmutable",
+        "note": "1v1 groups are immutable; update_commitment rejects regardless of public-inputs variant"
+      },
+      {
+        "stored_group_type": 2,
+        "name": "Democracy",
+        "expected_vk_kind": "UpdateByType(2) (tier-indexed; 7 IC points in v2)",
+        "expected_public_input_variant": "UpdateCommitmentPublicInputs::Democracy",
+        "wire_input_field_count": 5,
+        "wire_input_fields": ["c_old", "epoch_old", "c_new", "occupancy_commitment_old", "occupancy_commitment_new"],
+        "contract_supplied_at_verify": ["threshold_numerator (read from current.threshold_numerator)"]
+      },
+      {
+        "stored_group_type": 3,
+        "name": "Oligarchy",
+        "expected_vk_kind": "UpdateByType(3) (tier-indexed; IC count TBD by Oligarchy circuit design)",
+        "expected_public_input_variant": "UpdateCommitmentPublicInputs::Oligarchy",
+        "note": "Oligarchy update_commitment dispatch lands per §11 follow-up; the dispatch arm is the placeholder that reserves the slot."
+      }
+    ],
+    "type_confusion_guard": {
+      "description": "The discriminator inside the wire-supplied UpdateCommitmentPublicInputs MUST match the stored group_type. Mismatch is rejected BEFORE any cryptographic check.",
+      "test_pairs": [
+        {
+          "stored_group_type": 0,
+          "wire_variant": "Democracy",
+          "expected_error": "GroupTypeMismatch"
+        },
+        {
+          "stored_group_type": 2,
+          "wire_variant": "Anarchy",
+          "expected_error": "GroupTypeMismatch"
+        },
+        {
+          "stored_group_type": 2,
+          "wire_variant": "Democracy",
+          "expected_outcome": "proceeds to proof verification"
+        },
+        {
+          "stored_group_type": 0,
+          "wire_variant": "Anarchy",
+          "expected_outcome": "proceeds to proof verification"
+        }
+      ]
+    }
+  },
+
+  "domain_tags": {
+    "since": "v2",
+    "description": "Field-element domain tags used inside Poseidon hash inputs. Pinned per §10.1 (Phase-A blocker). Codified in the planned `src/circuit/domain_tags.rs`. Future circuits MUST NOT reuse these values.",
+    "vectors": [
+      { "name": "DOMAIN_MEMBER", "value_decimal": 1, "value_hex": "0000000000000000000000000000000000000000000000000000000000000001", "used_for": "Poseidon(DOMAIN_MEMBER, Poseidon(sk)) — member leaf" },
+      { "name": "DOMAIN_TOMBSTONE", "value_decimal": 2, "value_hex": "0000000000000000000000000000000000000000000000000000000000000002", "used_for": "Poseidon(DOMAIN_TOMBSTONE, 0) — tombstone leaf constant" },
+      { "name": "DOMAIN_OCCUPANCY", "value_decimal": 3, "value_hex": "0000000000000000000000000000000000000000000000000000000000000003", "used_for": "Poseidon(DOMAIN_OCCUPANCY, fold(bitmap)) — occupancy commitment" }
+    ]
+  },
+
+  "occupancy_bitmap_fold": {
+    "since": "v2",
+    "description": "Per §4.7.2, the occupancy bitmap is folded into Fr scalar field elements at BITS_PER_FELT = 252 bits per scalar. Each scalar packs 252 bitmap bits in little-endian order: bit i of the bitmap is bit (i mod 252) of scalar (i div 252). The high (255-th, 254-th, 253-rd, 252-th) bits of every scalar MUST be zero — this keeps the encoding canonical (Fr modulus is ~2^254.86, so the high 3 bits cannot all be 1). Vectors below specify the bit→(scalar_index, bit_offset) mapping rule and the per-tier scalar count; concrete Poseidon hash outputs are deferred to the cross-platform vectors file populated by Phase A6.",
+    "bits_per_felt": 252,
+    "scalar_count_by_tier": [
+      { "tier": 0, "depth": 5, "bitmap_bits": 32, "scalar_count": 1 },
+      { "tier": 1, "depth": 8, "bitmap_bits": 256, "scalar_count": 2, "note": "256 bits = ceil(256/252) = 2 scalars; 4 high bits of scalar 1 are zero-padded" },
+      { "tier": 2, "depth": 11, "bitmap_bits": 2048, "scalar_count": 9, "note": "2048 bits = ceil(2048/252) = 9 scalars; 220 high bits of scalar 8 are zero-padded" }
+    ],
+    "bit_packing_rule": "bitmap[i] occupies bit position (i mod 252) of scalar (i div 252), little-endian within the scalar. Bits 252–255 of every produced scalar MUST be 0.",
+    "tier_0_examples": [
+      {
+        "description": "All slots empty (creator-only state has not yet been initialised; pre-creation reference)",
+        "bitmap_bits": "0000000000000000000000000000000000000000000000000000000000000000",
+        "bitmap_decimal": 0,
+        "expected_scalars_be_hex": [
+          "0000000000000000000000000000000000000000000000000000000000000000"
+        ]
+      },
+      {
+        "description": "Slot 0 active (creator-only state at create_group_v3 time)",
+        "bitmap_bits": "0000000000000000000000000000000000000000000000000000000000000001",
+        "bitmap_decimal": 1,
+        "expected_scalars_be_hex": [
+          "0000000000000000000000000000000000000000000000000000000000000001"
+        ]
+      },
+      {
+        "description": "Slots 0 and 1 active (after first member join, no tombstones)",
+        "bitmap_bits": "0000000000000000000000000000000000000000000000000000000000000011",
+        "bitmap_decimal": 3,
+        "expected_scalars_be_hex": [
+          "0000000000000000000000000000000000000000000000000000000000000003"
+        ]
+      },
+      {
+        "description": "Slots 0, 1, 3 active; slot 2 tombstoned (slot 2 was once a member, then removed)",
+        "bitmap_bits": "0000000000000000000000000000000000000000000000000000000000001011",
+        "bitmap_decimal": 11,
+        "expected_scalars_be_hex": [
+          "000000000000000000000000000000000000000000000000000000000000000b"
+        ]
+      },
+      {
+        "description": "All 32 slots active (Small tier maximum)",
+        "bitmap_bits": "0000000000000000000000000000000011111111111111111111111111111111",
+        "bitmap_decimal": 4294967295,
+        "expected_scalars_be_hex": [
+          "00000000000000000000000000000000000000000000000000000000ffffffff"
+        ]
+      }
+    ],
+    "tier_1_examples": [
+      {
+        "description": "Slot 0 active (creator-only state, Medium tier)",
+        "bitmap_bit_indices_set": [0],
+        "expected_scalars_be_hex": [
+          "0000000000000000000000000000000000000000000000000000000000000001",
+          "0000000000000000000000000000000000000000000000000000000000000000"
+        ]
+      },
+      {
+        "description": "Slot 251 active (last bit of scalar 0)",
+        "bitmap_bit_indices_set": [251],
+        "expected_scalars_be_hex": [
+          "0800000000000000000000000000000000000000000000000000000000000000",
+          "0000000000000000000000000000000000000000000000000000000000000000"
+        ]
+      },
+      {
+        "description": "Slot 252 active (first bit of scalar 1; the boundary case that wedges if BITS_PER_FELT is misimplemented as 256)",
+        "bitmap_bit_indices_set": [252],
+        "expected_scalars_be_hex": [
+          "0000000000000000000000000000000000000000000000000000000000000000",
+          "0000000000000000000000000000000000000000000000000000000000000001"
+        ]
+      },
+      {
+        "description": "Slots 0 and 252 active (one bit per scalar; tests the cross-scalar boundary)",
+        "bitmap_bit_indices_set": [0, 252],
+        "expected_scalars_be_hex": [
+          "0000000000000000000000000000000000000000000000000000000000000001",
+          "0000000000000000000000000000000000000000000000000000000000000001"
+        ]
+      },
+      {
+        "description": "Slot 255 active (last bit of bitmap; bit position 3 of scalar 1)",
+        "bitmap_bit_indices_set": [255],
+        "expected_scalars_be_hex": [
+          "0000000000000000000000000000000000000000000000000000000000000000",
+          "0000000000000000000000000000000000000000000000000000000000000008"
+        ]
+      }
+    ],
+    "tier_2_examples": [
+      {
+        "description": "Slot 2047 active (last bit of bitmap; bit position (2047 mod 252) = 31 of scalar 8)",
+        "bitmap_bit_indices_set": [2047],
+        "scalar_index_for_bit_2047": 8,
+        "bit_offset_within_scalar_for_bit_2047": 31,
+        "expected_scalar_8_be_hex": "0000000000000000000000000000000000000000000000000000000080000000",
+        "note": "Scalars 0..7 are all-zero in this single-bit example."
+      }
+    ],
+    "high_bits_zero_assertion": {
+      "description": "Every produced scalar MUST have bits 252–255 equal to 0 (canonical-Fr requirement). Implementations MUST reject (or refuse to produce) any scalar where the top byte (BE) has any of the high 4 bits set.",
+      "rejection_examples_be_hex": [
+        "f000000000000000000000000000000000000000000000000000000000000000",
+        "1000000000000000000000000000000000000000000000000000000000000000",
+        "8000000000000000000000000000000000000000000000000000000000000000"
+      ]
+    }
+  },
+
+  "membership_count_validation_v2": {
+    "since": "v2",
+    "description": "v2 internalises the count-derived rules into the circuit (§4.7.3 step 3). The contract no longer reads `member_count` from storage on the update path. The values below describe what the circuit is required to enforce, expressed as bitmap popcount conditions; they are reproduced as test vectors so the C2 contract integration tests (§7.1's `prove_democracy_v2_*` cases) and the Phase A R1CS soundness review have a single source of truth.",
+    "popcount_constraints": [
+      {
+        "rule": "popcount(bitmap_new) ≥ 2 (floor)",
+        "rationale": "preserves democracy-of-≥2 invariant; was contract-only in v1, now in-circuit",
+        "valid_examples": [
+          { "popcount_old": 2, "popcount_new": 2, "valid": true, "context": "no-op epoch advance" },
+          { "popcount_old": 2, "popcount_new": 3, "valid": true, "context": "single member added" },
+          { "popcount_old": 3, "popcount_new": 2, "valid": true, "context": "single member removed; floor preserved" }
+        ],
+        "invalid_examples": [
+          { "popcount_old": 2, "popcount_new": 1, "valid": false, "expected_error": "BelowMinCount (prover-side); InvalidProof (contract-side)" },
+          { "popcount_old": 2, "popcount_new": 0, "valid": false, "expected_error": "BelowMinCount (prover-side); InvalidProof (contract-side)" }
+        ]
+      },
+      {
+        "rule": "|popcount(bitmap_new) − popcount(bitmap_old)| ≤ 1 (single-leaf delta)",
+        "rationale": "matches the single-signer-subset proof shape from §4.2; multi-signer transitions are deferred to Phase F",
+        "valid_examples": [
+          { "popcount_old": 5, "popcount_new": 5, "valid": true, "context": "key rotation, no membership change" },
+          { "popcount_old": 5, "popcount_new": 6, "valid": true, "context": "single insert" },
+          { "popcount_old": 5, "popcount_new": 4, "valid": true, "context": "single remove" }
+        ],
+        "invalid_examples": [
+          { "popcount_old": 5, "popcount_new": 7, "valid": false, "expected_error": "InvalidProof (delta > 1)" },
+          { "popcount_old": 5, "popcount_new": 3, "valid": false, "expected_error": "InvalidProof (delta > 1)" },
+          { "popcount_old": 10, "popcount_new": 0, "valid": false, "expected_error": "InvalidProof (delta > 1)" }
+        ]
+      },
+      {
+        "rule": "popcount(bitmap) ≤ 2^depth (ceiling)",
+        "rationale": "implicit in the bitmap's fixed length; no explicit constraint required",
+        "tier_0_max_popcount": 32,
+        "tier_1_max_popcount": 256,
+        "tier_2_max_popcount": 2048
+      },
+      {
+        "rule": "100·K ≥ threshold_numerator · popcount(bitmap_old) (quorum)",
+        "rationale": "configurable per group (§4.7.6); K is the number of signers in the proof. K=1 is the single-signer subset baseline (§4.2)",
+        "single_signer_examples": [
+          { "threshold_numerator": 50, "popcount_old": 1, "K": 1, "valid": true, "calc": "100·1 ≥ 50·1 ⟺ 100 ≥ 50" },
+          { "threshold_numerator": 50, "popcount_old": 2, "K": 1, "valid": true, "calc": "100·1 ≥ 50·2 ⟺ 100 ≥ 100" },
+          { "threshold_numerator": 50, "popcount_old": 3, "K": 1, "valid": false, "calc": "100·1 ≥ 50·3 ⟺ 100 ≥ 150 false", "note": "single-signer subset hits the limit at popcount_old ≥ 3; Phase F covers larger groups" },
+          { "threshold_numerator": 67, "popcount_old": 2, "K": 1, "valid": false, "calc": "100·1 ≥ 67·2 ⟺ 100 ≥ 134 false" },
+          { "threshold_numerator": 67, "popcount_old": 3, "K": 2, "valid": false, "calc": "100·2 ≥ 67·3 ⟺ 200 ≥ 201 false" },
+          { "threshold_numerator": 67, "popcount_old": 3, "K": 3, "valid": true, "calc": "100·3 ≥ 67·3 ⟺ 300 ≥ 201" },
+          { "threshold_numerator": 100, "popcount_old": 3, "K": 2, "valid": false, "calc": "100·2 ≥ 100·3 ⟺ 200 ≥ 300 false" },
+          { "threshold_numerator": 100, "popcount_old": 3, "K": 3, "valid": true, "calc": "100·3 ≥ 100·3 ⟺ 300 ≥ 300" }
+        ]
+      }
+    ]
+  },
+
+  "update_commitment_public_inputs_wire_format_v2": {
+    "since": "v2",
+    "description": "Discriminated-union encoding of `UpdateCommitmentPublicInputs` for the polymorphic v2 entrypoint. Encoded as a Soroban contract enum (`#[contracttype]`) with one variant per governance type. The discriminator is a single u32 tag matching the group_type values from `group_type_enum`. Fields below give the per-variant scalar layout that feeds the Groth16 verifier (after the contract reads its own additions like threshold_numerator from storage).",
+    "variants": [
+      {
+        "discriminator_tag": 0,
+        "name": "Anarchy",
+        "wire_fields": [
+          { "name": "c_old", "type": "BytesN<32>", "fr_canonical": true },
+          { "name": "epoch_old", "type": "u64" },
+          { "name": "c_new", "type": "BytesN<32>", "fr_canonical": true }
+        ],
+        "groth16_public_inputs": ["c_old", "epoch_old", "c_new"],
+        "vk_kind": "Update (4 IC points)"
+      },
+      {
+        "discriminator_tag": 2,
+        "name": "Democracy",
+        "wire_fields": [
+          { "name": "c_old", "type": "BytesN<32>", "fr_canonical": true },
+          { "name": "epoch_old", "type": "u64" },
+          { "name": "c_new", "type": "BytesN<32>", "fr_canonical": true },
+          { "name": "occupancy_commitment_old", "type": "BytesN<32>", "fr_canonical": true },
+          { "name": "occupancy_commitment_new", "type": "BytesN<32>", "fr_canonical": true }
+        ],
+        "groth16_public_inputs": [
+          "c_old",
+          "epoch_old",
+          "c_new",
+          "occupancy_commitment_old",
+          "occupancy_commitment_new",
+          "threshold_numerator (supplied by contract from current.threshold_numerator; NOT on the wire)"
+        ],
+        "vk_kind": "UpdateByType(2) (7 IC points in v2)"
+      },
+      {
+        "discriminator_tag": 3,
+        "name": "Oligarchy",
+        "status": "reserved (lands per §11 follow-up); shape determined by the Oligarchy circuit design"
+      }
+    ],
+    "canonical_encoding_rules": [
+      "Every BytesN<32> commitment field MUST round-trip through Fr::from_bytes ∘ Fr::to_bytes; non-canonical encodings are rejected with InvalidCommitmentEncoding (matches v1 update_commitment).",
+      "u64 epoch_old uses Soroban's native big-endian XDR encoding; it is bound to the proof via the IC[2] = epoch_old layout.",
+      "The discriminator tag is part of the wire (Soroban enum encoding); a wire that decodes to a different variant than the stored group_type is rejected with GroupTypeMismatch BEFORE proof verification."
+    ]
+  },
+
+  "storage_layout_v2": {
+    "since": "v2",
+    "description": "Storage entries written by the v2 contract. Replaces `CommitmentEntryV2.member_count: u32` with `occupancy_commitment: BytesN<32>` and adds `threshold_numerator: u8`. Existing v1 keys (`Group`, `History`, `GroupV2`, `HistoryV2`) are unused by v2 — the v2 contract is a fresh deployment per §4.6, so there are no live v1 records to migrate.",
+    "commitment_entry_v3": {
+      "fields": [
+        { "name": "commitment", "type": "BytesN<32>" },
+        { "name": "epoch", "type": "u64" },
+        { "name": "timestamp", "type": "u64" },
+        { "name": "tier", "type": "u32" },
+        { "name": "active", "type": "bool" },
+        { "name": "group_type", "type": "u32" },
+        { "name": "occupancy_commitment", "type": "BytesN<32>", "since": "v2", "note": "Poseidon hash of the slot bitmap; replaces v1's member_count" },
+        { "name": "threshold_numerator", "type": "u8", "since": "v2", "constraints": "0 for non-Democracy groups; 1..=100 for Democracy groups", "note": "fixed at create_group_v3, never mutated thereafter (§4.7.6)" }
+      ]
+    },
+    "removed_in_v2": [
+      { "field": "member_count", "rationale": "exposed via contract storage was the §3.4 leak; v2 commits to bitmap via occupancy_commitment instead" }
+    ],
+    "data_keys_v2_additions": [
+      {
+        "name": "GroupV3(BytesN<32>)",
+        "since": "v2",
+        "value_type": "CommitmentEntryV3",
+        "note": "v2-specific persistent storage key; analogous to v1's GroupV2"
+      },
+      {
+        "name": "HistoryV3(BytesN<32>)",
+        "since": "v2",
+        "value_type": "Vec<CommitmentEntry-history>",
+        "note": "see §4.7's note that history records intentionally drop fields not needed for historical queries; the exact V3-history shape is decided in C1"
+      }
+    ]
+  },
+
+  "epoch_invariant": {
+    "description": "v2 keeps v1's monotonic-by-1 epoch rule. update_commitment increments stored.epoch by exactly 1 on success.",
+    "vectors": [
+      { "stored_epoch": 0, "wire_epoch_old": 0, "valid": true, "post_epoch": 1 },
+      { "stored_epoch": 5, "wire_epoch_old": 5, "valid": true, "post_epoch": 6 },
+      { "stored_epoch": 5, "wire_epoch_old": 4, "valid": false, "expected_error": "PublicInputsMismatch" },
+      { "stored_epoch": 5, "wire_epoch_old": 6, "valid": false, "expected_error": "PublicInputsMismatch" },
+      { "stored_epoch": 18446744073709551615, "wire_epoch_old": 18446744073709551615, "valid": false, "expected_error": "InvalidEpoch", "note": "u64 overflow on checked_add" }
+    ]
+  },
+
+  "proof_replay_protection": {
+    "description": "Global nullifier scope — same in v1 and v2. The nullifier is sha256(proof.a || proof.b || proof.c) over the 384-byte uncompressed proof bytes. Scope is global: the same 384 bytes used at any state-changing entrypoint on any group consume the nullifier. See `lib.rs` `proof_hash`.",
+    "rules": [
+      "Once a proof's bytes have been recorded by record_proof, any subsequent entrypoint call with byte-identical proof.a||proof.b||proof.c is rejected with ProofReplay.",
+      "TTL of UsedProof entries is LEDGER_BUMP (~30 days). After expiry the same proof bytes can be re-used; long-lived groups require periodic state advancement to keep nullifiers alive (mitigated in part by bump_group_ttl).",
+      "Pre-inclusion mempool replay is NOT closed by the contract-level nullifier — see the long comment in `lib.rs` for what circuit-level v2 (different v2 — operation tag binding) would close that this `lib.rs`-level v2 redeploy does not."
+    ]
+  }
+}

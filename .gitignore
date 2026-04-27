@@ -25,7 +25,14 @@ scripts/.env
 #.idea/
 
 .DS_Store
-.claude
+# Ignore everything under .claude/ EXCEPT skills/ — project-level
+# skills are committed alongside the code so reviewers see them in
+# PR diffs. User-level state (settings.local.json, memory/, plans/,
+# projects/, agents/, hooks, statsig/, todos/, …) stays ignored via
+# the .claude/* glob below.
+.claude/*
+!.claude/skills/
+!.claude/skills/**
 
 # XCFramework build output (binary artifacts). build/* rather than
 # build/ so individual subtrees can be re-included below.

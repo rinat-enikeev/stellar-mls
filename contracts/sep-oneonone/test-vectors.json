@@ -1,0 +1,200 @@
+{
+  "description": "Canonical test vectors for the SEP 1v1 Soroban contract (`contracts/sep-oneonone`). Single source of truth for the contract's ABI: every error code, IC count, validation rule, wire field is documented and CI-asserted by the inline `test_vectors_consistency` test. 1v1 is the smallest of the per-type contracts: immutable two-party group, no update path, no deactivation, no quorum, no admin tree, tier hardcoded to 0, single Membership VK + single Create VK (no per-tier arrays).",
+  "version": 1,
+  "design_doc": "docs/oneonone-update-testnet-design.md",
+  "design_doc_version": "0.1",
+  "contract_source": "contracts/sep-oneonone/src/lib.rs",
+  "architecture_note": "This contract is the per-type 1v1 contract — fourth in the per-type family (Anarchy, OneOnOne, Democracy, Oligarchy). The `group_type` discriminator is implicit in the contract address; no `group_type` field in storage. The 1v1 contract is the only one without an `update_commitment` entrypoint by design — once a 1v1 group is created its commitment is sealed forever (the on-chain entry only ages out via TTL). It is also the only one without a `tier` parameter on `create_group` (tier=0 hardcoded for 1v1 per design §6.4.1) and without a `tier` field on `CommitmentEntry` (the contract address fixes the tier; storing a constant is noise).",
+
+  "error_codes": {
+    "description": "Numeric values of `Error` variants (`#[contracterror] #[repr(u32)]`). Number alignment with sibling per-type contracts is intentional: `7 = InvalidProof` everywhere, `26 = InvalidPoint` everywhere, etc. Gaps in the numbering (3, 6, 8, 11, 16-25, 27-30) are reserved by sibling contracts for variants 1v1 doesn't need (`InvalidTier`, `GroupInactive`, `InvalidEpoch`, `InvalidThreshold`, etc.); holding the alignment makes cross-contract error-code lookups consistent.",
+    "vectors": [
+      { "name": "NotInitialized", "code": 1 },
+      { "name": "AlreadyInitialized", "code": 2 },
+      { "name": "GroupAlreadyExists", "code": 4 },
+      { "name": "GroupNotFound", "code": 5 },
+      { "name": "InvalidProof", "code": 7 },
+      { "name": "InvalidVkLength", "code": 9 },
+      { "name": "PublicInputsMismatch", "code": 10 },
+      { "name": "ProofReplay", "code": 12 },
+      { "name": "GroupCountLimitReached", "code": 13, "note": "1v1's analogue of TierGroupLimitReached; renamed because there's a single counter, not per-tier" },
+      { "name": "AdminOnly", "code": 14, "note": "create_group in restricted mode rejects non-admin callers" },
+      { "name": "InvalidCommitmentEncoding", "code": 15 },
+      { "name": "InvalidPoint", "code": 26 }
+    ],
+    "not_declared_aligned_with_siblings": [
+      { "name": "Reserved3", "code": 3, "reason": "sibling contracts reserve this for the legacy Unauthorized variant; 1v1 doesn't need it" },
+      { "name": "GroupInactive", "code": 6, "reason": "no `active` field, no deactivate path" },
+      { "name": "InvalidTier", "code": 8, "reason": "no tier parameter; tier hardcoded to 0" },
+      { "name": "InvalidEpoch", "code": 11, "reason": "no update path, no checked_add overflow to surface" },
+      { "name": "OneOnOneImmutable", "code": 17, "reason": "1v1's update path doesn't exist; the rejection happens by absence of the entrypoint, not by error" },
+      { "name": "Invalid1v1Tier", "code": 23, "reason": "no tier parameter to reject" },
+      { "name": "InvalidThreshold", "code": 28, "reason": "no quorum" },
+      { "name": "GroupTypeMismatch", "code": 29, "reason": "no polymorphic dispatch" }
+    ]
+  },
+
+  "tier": {
+    "description": "1v1 hardcodes tier=0 (Small, depth 5, capacity 32). The contract has no `tier` parameter on any entrypoint and no `tier` field on stored entries. Listed for reference and parallel with sibling contracts.",
+    "fixed_value": { "tier": 0, "name": "Small", "depth": 5, "capacity": 32 },
+    "rationale": "1v1 holds exactly 2 members at creation. Allowing tier 1/2 would let the group support up to 256 / 2048 members at the contract level — but the OneOnOneCreateCircuit enforces 'exactly 2 non-zero leaves' in-circuit, so any tier larger than Small would just waste tree depth. Hardcoding tier=0 at the contract level is honest about the constraint."
+  },
+
+  "max_groups": {
+    "description": "Cross-group cap enforced by create_group: GroupCount must be < MAX_GROUPS, else GroupCountLimitReached. Single counter (no per-tier array) because tier is fixed at 0.",
+    "value": 10000,
+    "rule": "GroupCount MUST be < 10000 at create_group; exceeded → GroupCountLimitReached",
+    "operational_note": "GroupCount is monotonic increment-only (no decrement path since no `deactivate_group`). At testnet scale, fine. At production scale, 10k 1v1 groups per contract instance is restrictive — two parties holding multiple short conversations would burn through the budget. The right answer is probably 'deploy a fresh contract instance and route by deployment address' rather than re-introduce decrementing. Out of scope for v0; documented for visibility."
+  },
+
+  "vk_kind_enum": {
+    "description": "Two VK kinds — Membership + Create. Both are stored as single VKs (not per-tier arrays) because tier is hardcoded to 0. Membership is the standard 3-IC `(commitment, epoch)` shape used at `verify_membership`. Create is the OneOnOneCreateCircuit VK that binds the 'exactly 2 non-zero leaves' invariant in-circuit at create time. This parallels sep-oligarchy's distinct Create VK (which binds the verbose §4.8 tuple); the pattern is: when a contract needs to enforce a creation-time invariant beyond 'you know a leaf,' that invariant gets its own circuit and VK.",
+    "vectors": [
+      {
+        "name": "Membership",
+        "ic_count": 3,
+        "ic_layout": ["base", "commitment", "epoch"],
+        "used_by": ["verify_membership"]
+      },
+      {
+        "name": "Create",
+        "ic_count": 3,
+        "ic_layout": ["base", "commitment", "epoch"],
+        "used_by": ["create_group"],
+        "note": "OneOnOneCreateCircuit. Same public-input shape as the Membership circuit — the 2-leaf invariant is enforced inside the circuit's witness, not in the public-input layout. Future ceremony work may add additional public inputs (e.g., a domain-tag scalar to disambiguate the two circuits and prevent VK confusion). v0 keeps the 3-IC shape to minimize Phase A blockers."
+      }
+    ],
+    "ic_ordering_canonical": "MUST match the OneOnOneCreateCircuit and standard MembershipCircuit allocation orders. Pinned for cross-implementation reference."
+  },
+
+  "create_group_validation": {
+    "description": "Per-call validation in `create_group`. Single-type contract — no per-type dispatch. No tier parameter, no member_count parameter (always 2 by definition). The Create-circuit verifier opens (commitment, epoch=0) — 1v1 groups always start at epoch 0 and never advance.",
+    "rules": [
+      "group_id MUST NOT already be assigned; collision → GroupAlreadyExists",
+      "commitment MUST be a canonical Fr encoding; non-canonical → InvalidCommitmentEncoding",
+      "GroupCount MUST be < MAX_GROUPS (10000); exceeded → GroupCountLimitReached",
+      "if RestrictedMode is true: caller MUST equal Admin, else AdminOnly (caller.require_auth() runs first)",
+      "public_inputs.commitment MUST equal `commitment` parameter; mismatch → PublicInputsMismatch",
+      "public_inputs.epoch MUST be 0; non-zero → PublicInputsMismatch",
+      "proof MUST verify under the Create VK against (commitment, 0); failure → InvalidProof",
+      "proof_hash(proof) MUST NOT be in UsedProof storage; collision → ProofReplay"
+    ]
+  },
+
+  "front_running_surface": {
+    "description": "create_group is replayable by an observer of a prover's transaction (caller is NOT bound into the Create proof; only the auth-gate runs against caller). This is benign griefing — the attacker can only create the group with the prover's same commitment under their own caller; the legitimate creator's subsequent submission fails with GroupAlreadyExists or ProofReplay; there is no per-creator on-chain privilege to be stolen. Mitigation: the legitimate creator picks a different group_id and resubmits. Same shape as create_group on the other three per-type contracts — distinct from the post-#153 deactivate_group pattern (which was uniquely dangerous because the state delta was irreversible).",
+    "post_postmortem_153_note": "1v1 ships without `deactivate_group` from the start (see docs/postmortem-deactivate-group-frontrun.md). 1v1 groups age out via storage TTL; there is no on-chain 'leave' event."
+  },
+
+  "storage_layout": {
+    "description": "Storage entries written by the contract. Per-type 1v1 means `group_type` is implicit in the contract address (not a stored field). `tier` and `member_count` are not stored either: both are constants for 1v1 (0 and 2 respectively).",
+    "commitment_entry": {
+      "fields": [
+        { "name": "commitment", "type": "BytesN<32>", "rule": "Poseidon commitment; canonical Fr encoding" },
+        { "name": "epoch", "type": "u64", "rule": "always 0 for 1v1; the contract has no `update_commitment` entrypoint to advance it" },
+        { "name": "timestamp", "type": "u64", "rule": "ledger timestamp at create" }
+      ]
+    },
+    "removed_vs_per_type_template": [
+      { "field": "group_type", "rationale": "single-type contract; the contract address IS the discriminator" },
+      { "field": "active", "rationale": "no deactivate path, no code can set it false" },
+      { "field": "tier", "rationale": "always 0 by definition; clients reading get_commitment know the tier from the contract address" },
+      { "field": "member_count", "rationale": "always 2 by definition; storing a constant is noise" }
+    ],
+    "data_keys": [
+      { "name": "Admin", "value_type": "Address", "storage": "instance", "note": "contract admin; required for update_vk and set_restricted_mode" },
+      { "name": "RestrictedMode", "value_type": "bool", "storage": "instance", "note": "when true, only the admin may call create_group; toggled by set_restricted_mode (admin-only). Default false." },
+      { "name": "MembershipVK", "value_type": "VerificationKeyData", "storage": "persistent", "note": "Membership-circuit VK (single, not per-tier); 3 IC points; used at verify_membership" },
+      { "name": "CreateVK", "value_type": "VerificationKeyData", "storage": "persistent", "note": "OneOnOneCreate-circuit VK (single, not per-tier); 3 IC points; used at create_group" },
+      { "name": "Group(group_id)", "value_type": "CommitmentEntry", "storage": "persistent", "note": "current group state; immutable after create" },
+      { "name": "UsedProof(proof_hash)", "value_type": "()", "storage": "persistent (TTL ~30 days via LEDGER_BUMP)", "note": "global-nullifier scope; only create_group writes here" },
+      { "name": "GroupCount", "value_type": "u32", "storage": "instance", "note": "active group count; checked against MAX_GROUPS (10000) in create_group. Monotonic increment-only since 1v1 has no deactivate path; the cap is a one-way ratchet. Operationally fine at testnet scale." }
+    ]
+  },
+
+  "admin_entrypoints": {
+    "description": "Admin-gated entrypoints. All require admin.require_auth(); panic on unauth. There is no separate `set_admin` entrypoint — admin is fixed at __constructor.",
+    "vectors": [
+      {
+        "name": "update_vk",
+        "args": [
+          { "name": "kind", "type": "VkKind", "values": ["Membership", "Create"] },
+          { "name": "new_vk", "type": "VerificationKeyData", "rule": "IC length == 3 (both kinds); subgroup-valid; else InvalidVkLength / InvalidPoint" }
+        ],
+        "purpose": "rotate Membership or Create VK — used for ceremony-rotation. NO `tier` parameter (tier hardcoded to 0)."
+      },
+      {
+        "name": "set_restricted_mode",
+        "args": [
+          { "name": "restricted", "type": "bool" }
+        ],
+        "purpose": "when restricted=true, create_group rejects non-admin callers with AdminOnly. Storage: DataKey::RestrictedMode (instance). Default value (key absent) is treated as false. Emits RestrictedModeChanged event for audit transparency."
+      }
+    ]
+  },
+
+  "queries": {
+    "description": "Read-only entrypoints. None require auth. All return Result<_, Error>.",
+    "vectors": [
+      { "name": "get_commitment", "args": [{"name": "group_id", "type": "BytesN<32>"}], "returns": "CommitmentEntry", "errors": ["GroupNotFound"] },
+      { "name": "verify_membership", "args": [{"name": "group_id", "type": "BytesN<32>"}, {"name": "proof", "type": "Groth16Proof"}, {"name": "public_inputs", "type": "PublicInputs"}], "returns": "bool", "errors": ["GroupNotFound", "PublicInputsMismatch"], "note": "returns Ok(false) on bad proof rather than InvalidProof — read-only verifier semantics. Verifies under the Membership VK (NOT the Create VK)." },
+      { "name": "bump_group_ttl", "args": [{"name": "group_id", "type": "BytesN<32>"}], "returns": "()", "errors": ["GroupNotFound", "NotInitialized"], "note": "permissionless TTL bump — the only ongoing lifecycle event for a 1v1 group" }
+    ]
+  },
+
+  "epoch_invariant": {
+    "description": "1v1 epoch is always 0. The contract has no entrypoint that advances epoch. PublicInputs.epoch MUST be 0 at create_group and verify_membership; non-zero → PublicInputsMismatch.",
+    "fixed_value": 0,
+    "rule": "create_group rejects public_inputs.epoch != 0 with PublicInputsMismatch; verify_membership rejects the same with PublicInputsMismatch. There is no checked_add path that could overflow."
+  },
+
+  "proof_replay_protection": {
+    "description": "Global nullifier scope. The nullifier is sha256(proof.a || proof.b || proof.c) over the 384-byte uncompressed proof bytes. Scope is global per contract: the same 384 bytes used at create_group on any group consume the nullifier.",
+    "rules": [
+      "Once a proof's bytes have been recorded by record_proof at create_group, any subsequent create_group call with byte-identical proof bytes is rejected with ProofReplay.",
+      "TTL of UsedProof entries is LEDGER_BUMP (~30 days). After expiry the same proof bytes can be re-used; this is not a concern in practice because each create_group call requires a fresh 2-leaf tree (different group_id implies different commitment).",
+      "verify_membership does NOT consume nullifiers (read-only verifier semantics). 1v1 has no membership-VK-keyed state-changing entrypoint to replay the leaked proof against, which closes the post-#153 attack pattern by construction."
+    ]
+  },
+
+  "tests_to_implement": {
+    "description": "Inline test names that the `#[cfg(test)] mod test` block in `contracts/sep-oneonone/src/test.rs` MUST cover. The `test_vectors_consistency` test loads this very file and asserts the contract's `Error` enum / IC-point constants / MAX_GROUPS match the values pinned above. Every other entry in this list maps 1:1 to a `#[test] fn` in the inline module.",
+    "tests": [
+      "test_initialize",
+      "test_invalid_membership_vk_length_rejected",
+      "test_invalid_create_vk_length_rejected",
+      "test_create_group_happy_path",
+      "test_create_group_rejects_duplicate_group_id",
+      "test_create_group_rejects_non_canonical_commitment",
+      "test_create_group_rejects_invalid_proof",
+      "test_create_group_restricted_mode_rejects_non_admin",
+      "test_create_group_enforces_group_count_limit",
+      "test_create_group_rejects_replayed_proof",
+      "test_create_group_rejects_public_inputs_commitment_mismatch",
+      "test_create_group_rejects_non_zero_epoch",
+      "test_create_group_rejects_non_canonical_public_inputs_commitment",
+      "test_verify_membership_happy_path",
+      "test_verify_membership_rejects_wrong_commitment",
+      "test_verify_membership_rejects_wrong_epoch",
+      "test_verify_membership_rejects_unknown_group",
+      "test_verify_membership_returns_false_on_invalid_proof",
+      "test_update_vk_requires_auth",
+      "test_update_vk_rotates_membership_vk",
+      "test_update_vk_rotates_create_vk",
+      "test_update_vk_rejects_invalid_vk_length",
+      "test_get_commitment_returns_current_state",
+      "test_get_commitment_rejects_unknown_group",
+      "test_bump_group_ttl_extends_group_storage",
+      "test_vectors_consistency"
+    ],
+    "categories": {
+      "initialization": 3,
+      "create_group": 10,
+      "verify_membership": 5,
+      "update_vk": 4,
+      "queries": 3,
+      "abi_pin": 1,
+      "total": 26
+    }
+  }
+}

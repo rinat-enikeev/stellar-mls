@@ -36,14 +36,14 @@ To save a reader from looking for things that don't exist:
 
 ## 5. Entrypoints
 
-Seven user-callable entrypoints + the constructor.
+Six user-callable entrypoints + the constructor.
 
 | Entrypoint | Auth | Purpose |
 |---|---|---|
 | `__constructor(env, admin, vk_membership, vk_create)` | `admin.require_auth()` | One-time init. Pins admin + the two VKs (Membership + Create). |
 | `update_vk(env, kind: VkKind, new_vk)` | `admin.require_auth()` | VK rotation (`Membership` or `Create`). No `tier` parameter — tier is fixed at 0. |
 | `set_restricted_mode(env, restricted)` | `admin.require_auth()` | Toggles whether non-admin addresses may call `create_group`. Default `false`. |
-| `create_group(env, caller, group_id, commitment, proof, public_inputs)` | `caller.require_auth()` + restricted-mode gate | Verifies a Create-circuit proof (which binds the 2-leaf invariant in-circuit) against `(commitment, epoch=0)`. Stores the entry, increments `GroupCount`. |
+| `create_group(env, caller, group_id, commitment, proof, public_inputs)` | `caller.require_auth()` + restricted-mode gate | Verifies a Create-circuit proof (which binds the 2-leaf invariant in-circuit) against `(commitment, epoch=0)`. Stores the entry, increments `GroupCount`. **`caller` is NOT bound into the proof**: it is a pure auth gate (must sign the transaction) plus the address-of-record for the optional restricted-mode admin check. The proof binds only `(commitment, epoch=0)`; see §5.2 for what this means for front-running. |
 | `verify_membership(env, group_id, proof, public_inputs) → bool` | none | Read-only. Verifies a Membership-circuit proof against the stored commitment. Returns `Ok(false)` on invalid proof, not an error. |
 | `bump_group_ttl(env, group_id)` | none | Permissionless TTL bump. The only ongoing lifecycle event for a 1v1 group. |
 | `get_commitment(env, group_id) → CommitmentEntry` | none | Read-only state lookup. |
@@ -56,6 +56,12 @@ The Create proof must bind an extra invariant the Membership proof doesn't: **th
 
 This parallels `sep-oligarchy`, which also has a Create VK distinct from its Membership VK (Oligarchy's Create binds the verbose §4.8 tuple). The pattern is: when a contract needs to enforce a creation-time invariant beyond "you know a leaf," that invariant gets its own circuit and its own VK.
 
+### 5.2 Front-running surface
+
+A leaked or observed Create-circuit proof can be replayed by an attacker submitting `create_group` under their own address — `caller` is not bound into the proof, only `(commitment, epoch=0)` is. This is **benign griefing**: the attacker can only create the group with the *same* commitment the prover authored, the legitimate creator's subsequent submission fails with `GroupAlreadyExists` or `ProofReplay`, and there is no on-chain privilege to be stolen (no admin role per group, the `caller` is not stored). The legitimate creator picks a different `group_id` and resubmits.
+
+This is the same shape as `create_group` front-running on the other three per-type contracts. The post-#153 reasoning (deactivate_group was uniquely dangerous because the state delta was *irreversible* and triggerable by anyone observing a read-only `verify_membership` call) does not apply to creates: the state delta is fully fixed by the proof's public inputs, and the worst case is "attacker forces the prover to re-pick a group_id." Documented for completeness; no contract-level mitigation needed beyond what's already there (replay protection via `UsedProof`).
+
 ## 6. Storage layout
 
 ```rust
@@ -63,7 +69,6 @@ pub struct CommitmentEntry {
     pub commitment: BytesN<32>,   // Poseidon commitment, canonical Fr
     pub epoch: u64,               // always 0 for 1v1 (immutable; no updates ever)
     pub timestamp: u64,           // ledger timestamp at create
-    pub tier: u32,                // always 0 (Small) — kept for parallelism with other contracts
 }
 
 pub enum VkKind {
@@ -88,6 +93,7 @@ Differences from the per-type-template (Anarchy/Democracy/Oligarchy):
 |---|---|---|
 | `active: bool` on entry | yes | No `deactivate_group`; no code path can set it false. Removing the field is honest about the immutable-by-design property. |
 | `member_count` on entry | yes | Always 2 by definition. Storing a constant is noise. |
+| `tier: u32` on entry | yes | Always 0 by definition. Same rationale as `member_count` — storing a constant on every group is noise. Clients reading `get_commitment` from a `sep-oneonone` contract know the tier from the contract address. |
 | `History(group_id)` | yes | Empty by definition (no updates). |
 | `GroupDeactivated` event | yes | Postmortem #153. |
 | `CommitmentUpdated` event | yes | No updates. |
@@ -116,7 +122,7 @@ A focused set; no inherited dead variants.
 | 15 | InvalidCommitmentEncoding | Commitment is not canonical Fr |
 | 26 | InvalidPoint | VK or proof point fails BLS12-381 small-subgroup check |
 
-Numbers are aligned with the existing per-type contracts where the trigger overlaps (e.g., `7 = InvalidProof` everywhere). Variants without a 1v1 use case (`InvalidTier`, `InvalidEpoch`, `InvalidThreshold`, `GroupInactive`) are not declared.
+Numbers are aligned with the existing per-type contracts where the trigger overlaps (`7 = InvalidProof` everywhere, `26 = InvalidPoint` everywhere, etc.). **Gaps in the numbering (3, 6, 8, 11, 16-25) are intentional**: those codes are reserved by sibling contracts for variants that don't apply to 1v1 (`InvalidTier`, `GroupInactive`, `InvalidEpoch`, `InvalidThreshold`, `OneOnOneImmutable`, `Invalid1v1Tier`, etc.). Holding the alignment makes cross-contract error-code lookups consistent and avoids future renumbering churn if 1v1 ever needs to add an overlap-shaped variant.
 
 ## 8. Capacity ceiling
 
@@ -158,13 +164,12 @@ Mirroring the established pattern from `docs/contract/{democracy,oligarchy,anarc
 
 ## 11. Test plan
 
-Inline contract tests parallel to the other per-type contracts. Approximate count: **~25 tests** (smaller than Anarchy's 36 because no `update_commitment` paths and no `deactivate_group` paths to cover).
+Inline contract tests parallel to the other per-type contracts. **26 tests** total (smaller than Anarchy's 36 because no `update_commitment` paths and no `deactivate_group` paths to cover):
 
-Categories:
 - **Initialization (3)**: happy path + 2 IC-arity rejections (membership=3, create=≥3 — exact count pinned in PR-Y).
-- **`create_group` (~10)**: happy path, duplicate group_id, non-canonical commitment, invalid proof (mock), restricted-mode admin-only, restricted-mode non-admin-rejected, group-count cap, replay protection, public-input mismatch on commitment, public-input mismatch on epoch (must be 0).
-- **`verify_membership` (~5)**: happy path, wrong commitment, wrong epoch, GroupNotFound, mock-proof returns Ok(false).
-- **`update_vk` (~4)**: requires_auth, rotates membership, rotates create, invalid VK length.
+- **`create_group` (10)**: happy path, duplicate group_id, non-canonical commitment, invalid proof (mock), restricted-mode admin-only, restricted-mode non-admin-rejected, group-count cap, replay protection, public-input mismatch on commitment, public-input mismatch on epoch (must be 0).
+- **`verify_membership` (5)**: happy path, wrong commitment, wrong epoch, GroupNotFound, mock-proof returns Ok(false).
+- **`update_vk` (4)**: requires_auth, rotates membership, rotates create, invalid VK length.
 - **Queries (3)**: get_commitment {happy, GroupNotFound}, bump_group_ttl.
 - **ABI pin (1)**: `test_vectors_consistency`.
 

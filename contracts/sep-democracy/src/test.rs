@@ -158,7 +158,7 @@ fn setup_with_bad_update_vk(
 
 /// Inject a `CommitmentEntry` directly into storage — bypasses the
 /// proof-verification path so tests can drive `update_commitment` /
-/// `verify_membership` / `deactivate_group` from a known-good state.
+/// `verify_membership` from a known-good state.
 fn inject_group(
     env: &Env,
     contract_id: &Address,
@@ -198,7 +198,10 @@ fn inject_group(
 }
 
 /// Inject a deactivated group (active = false) — for testing the
-/// `GroupInactive` path on `update_commitment` / `deactivate_group`.
+/// dead-but-defended `GroupInactive` path on `update_commitment` /
+/// `verify_membership`. No production code path sets active=false
+/// since `deactivate_group` was dropped (postmortem #153); the check
+/// remains as defense-in-depth against any future re-introduction.
 fn inject_deactivated_group(
     env: &Env,
     contract_id: &Address,
@@ -911,8 +914,9 @@ fn test_verify_membership_rejects_wrong_epoch() {
 #[test]
 fn test_verify_membership_rejects_inactive_group() {
     // verify_membership is read-only and intentionally works on
-    // deactivated groups (so off-chain attestations against the
-    // final pre-deactivation state remain verifiable). The deactivated
+    // groups whose `active` flag is false (defense-in-depth path —
+    // no production flow currently produces such a group since
+    // deactivate_group was removed in postmortem #153). The deactivated
     // case still returns Ok(false) for our mock proof, not an error.
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
@@ -927,64 +931,7 @@ fn test_verify_membership_rejects_inactive_group() {
 }
 
 // ================================================================
-// 5. deactivate_group
-// ================================================================
-
-#[test]
-fn test_deactivate_group_happy_path() {
-    let (env, client, _admin) = setup_env();
-    let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[40u8; 32]);
-    let stored = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &stored, &stored, 0, 50, 0);
-    let pi = PublicInputs {
-        commitment: stored.clone(),
-        epoch: 0,
-    };
-    let r = client.try_deactivate_group(&group_id, &mock_proof(&env), &pi);
-    match r {
-        Err(Err(_)) | Err(Ok(Error::InvalidProof)) => {}
-        other => panic!("expected InvalidProof, got {:?}", other),
-    }
-}
-
-#[test]
-fn test_deactivate_group_rejects_non_member_proof() {
-    // Non-member proof = mock_proof under valid PublicInputs. Our
-    // mock fails pairing — surfaces InvalidProof, same path a real
-    // non-member proof would take.
-    let (env, client, _admin) = setup_env();
-    let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[41u8; 32]);
-    let stored = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &stored, &stored, 0, 50, 0);
-    let pi = PublicInputs {
-        commitment: stored.clone(),
-        epoch: 0,
-    };
-    let r = client.try_deactivate_group(&group_id, &mock_proof(&env), &pi);
-    match r {
-        Err(Err(_)) | Err(Ok(Error::InvalidProof)) => {}
-        other => panic!("expected InvalidProof, got {:?}", other),
-    }
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #6)")]
-fn test_deactivate_already_inactive_group() {
-    let (env, client, _admin) = setup_env();
-    let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[42u8; 32]);
-    inject_deactivated_group(&env, &contract_id, &group_id, 0);
-    let pi = PublicInputs {
-        commitment: canonical_zero(&env),
-        epoch: 0,
-    };
-    client.deactivate_group(&group_id, &mock_proof(&env), &pi);
-}
-
-// ================================================================
-// 6. update_vk admin rotation
+// 5. update_vk admin rotation
 // ================================================================
 
 #[test]
@@ -1094,11 +1041,11 @@ fn test_get_history_returns_chronological_entries() {
 #[test]
 fn test_archive_entry_appends_and_prunes() {
     // Drive archive_entry through env.as_contract() — the same code
-    // path update_commitment and deactivate_group use to append. Mock
-    // proofs can't pass pairing_check, so the integration paths
-    // through update/deactivate never reach archive_entry; this test
-    // covers the helper directly so the rolling-window prune logic is
-    // CI-asserted independent of Phase A's real proofs.
+    // path update_commitment uses to append. Mock proofs can't pass
+    // pairing_check, so the integration path through update never
+    // reaches archive_entry; this test covers the helper directly so
+    // the rolling-window prune logic is CI-asserted independent of
+    // Phase A's real proofs.
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
     let group_id = BytesN::from_array(&env, &[60u8; 32]);

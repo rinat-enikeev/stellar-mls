@@ -20,7 +20,7 @@ Anarchy groups (`groupType = 0`) are the simplest governance type in the SEP fam
 `contracts/sep-xxxx/src/lib.rs` already implements the full Anarchy lifecycle:
 - `create_group` / `create_group_v2` accept `(commitment, tier, member_count, group_type=0, …)` and verify a 3-IC membership proof.
 - `update_commitment` accepts `(c_old, epoch_old, c_new)` and verifies a 4-IC update proof against `current.commitment` / `current.epoch`.
-- `deactivate_group` accepts a membership proof against the current state and flips `active = false`.
+- ~~`deactivate_group` accepts a membership proof against the current state and flips `active = false`.~~ **Removed in postmortem #153** — the entrypoint had a front-running vulnerability that could not be closed at the contract level (any observer of an honest `verify_membership` call could replay the leaked proof to permanently freeze the group). See `docs/postmortem-deactivate-group-frontrun.md`.
 - `verify_membership` is read-only.
 
 This works correctly. There is no Anarchy "missing entrypoint" problem analogous to what Democracy and Oligarchy faced before their respective design docs.
@@ -348,7 +348,6 @@ Inline tests in `contracts/sep-anarchy/src/test.rs` parallel to Democracy's `~43
 - `test_update_commitment_rejects_inactive_group` — `GroupInactive`.
 - `test_update_commitment_rejects_unknown_group` — `GroupNotFound`.
 - `test_verify_membership_*` (4 tests) — read-only verifier branches.
-- `test_deactivate_group_*` (3 tests) — happy path + rejects-non-member + already-inactive.
 - `test_update_vk_requires_auth` — admin-only.
 - `test_update_vk_rotates_membership_vk`, `test_update_vk_rotates_update_vk` — Membership / Update rotation paths.
 - `test_update_vk_rejects_invalid_tier` — tier > 2 → `InvalidTier`.

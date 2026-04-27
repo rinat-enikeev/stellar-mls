@@ -134,15 +134,6 @@ pub struct CommitmentUpdated {
     pub timestamp: u64,
 }
 
-#[contractevent]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct GroupDeactivated {
-    #[topic]
-    pub group_id: BytesN<32>,
-    pub final_epoch: u64,
-    pub timestamp: u64,
-}
-
 /// Emitted when admin toggles restricted mode. Lets chain observers
 /// detect mode flips without inspecting instance storage. Same shape
 /// as sep-oligarchy's `RestrictedModeChanged`.
@@ -188,9 +179,8 @@ pub struct CommitmentEntry {
     pub member_count: u32,
 }
 
-/// Public inputs supplied to `create_group`, `verify_membership`, and
-/// `deactivate_group`. Two scalars wired to `Membership` IC points 1
-/// and 2.
+/// Public inputs supplied to `create_group` and `verify_membership`.
+/// Two scalars wired to `Membership` IC points 1 and 2.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PublicInputs {
@@ -665,68 +655,6 @@ impl SepAnarchyContract {
             &state.commitment,
             state.epoch,
         ))
-    }
-
-    /// Permanently freeze the group. Any current member may deactivate
-    /// (V-C1 safety valve from sep-xxxx). Irreversible.
-    pub fn deactivate_group(
-        env: Env,
-        group_id: BytesN<32>,
-        proof: Groth16Proof,
-        public_inputs: PublicInputs,
-    ) -> Result<(), Error> {
-        Self::require_initialized(&env)?;
-        let current = Self::load_group(&env, &group_id)?;
-        if !current.active {
-            return Err(Error::GroupInactive);
-        }
-        if public_inputs.commitment != current.commitment
-            || public_inputs.epoch != current.epoch
-        {
-            return Err(Error::PublicInputsMismatch);
-        }
-        Self::check_proof_replay(&env, &proof)?;
-
-        let vk = Self::load_vk(&env, current.tier)?;
-        if !verify_membership_proof(&env, &vk, &proof, &current.commitment, current.epoch) {
-            return Err(Error::InvalidProof);
-        }
-        Self::record_proof(&env, &proof);
-
-        let timestamp = env.ledger().timestamp();
-        // Archive the final active state to history before flipping
-        // the live entry inactive — mirrors the update_commitment
-        // pattern (history holds prior states; current state is in
-        // Group). Without this the freeze snapshot is lost.
-        Self::archive_entry(&env, &group_id, &current);
-        let deactivated = CommitmentEntry {
-            active: false,
-            timestamp,
-            ..current.clone()
-        };
-        env.storage()
-            .persistent()
-            .set(&DataKey::Group(group_id.clone()), &deactivated);
-        Self::bump_group(&env, &group_id);
-
-        let count: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::GroupCount(current.tier))
-            .unwrap_or(0);
-        if count > 0 {
-            env.storage()
-                .instance()
-                .set(&DataKey::GroupCount(current.tier), &(count - 1));
-        }
-
-        GroupDeactivated {
-            group_id,
-            final_epoch: current.epoch,
-            timestamp,
-        }
-        .publish(&env);
-        Ok(())
     }
 
     // ---- Queries ----

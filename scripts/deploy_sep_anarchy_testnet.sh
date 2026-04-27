@@ -20,8 +20,8 @@ set -euo pipefail
 # Scope:
 #   * Build sep_anarchy_contract.wasm
 #   * Deploy with admin + per-tier membership VKs + per-tier
-#     Anarchy update VKs (6 VKs total — smaller than sep-democracy's 6
-#     same shape, sep-oligarchy's 9)
+#     Anarchy update VKs (6 VKs total — same as sep-democracy,
+#     smaller than sep-oligarchy's 9)
 #   * Surface the deployed contract address
 #
 # Anarchy reuses the existing keyset-v2 VKs that the monolithic

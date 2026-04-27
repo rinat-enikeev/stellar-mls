@@ -128,6 +128,8 @@ Numbers are aligned with the existing per-type contracts where the trigger overl
 
 `MAX_GROUPS = 10_000`. `GroupCount` is a one-way ratchet (no decrement path since no `deactivate_group`). At testnet scale, 10k is non-issue. **At production scale, 10k 1v1 groups per contract is restrictive** — two users having multiple short conversations would burn through the budget. This is a known follow-up; the right answer is probably "deploy a fresh contract instance and route by deployment address" rather than re-introduce decrementing. Out of scope for this design. Documented in `test-vectors.json` `GroupCount` note for visibility.
 
+A capacity-cap warning event (emitting a Soroban event from `create_group` when `GroupCount` approaches `MAX_GROUPS`) was considered and rejected: it adds contract surface for what is fundamentally an off-chain monitoring concern. Operator-side capacity monitoring — watching `GroupCount` via `get_*` reads or indexer state and provisioning a fresh contract instance before saturation — is a **Phase D operator concern**, not a contract-level event.
+
 ## 9. Wire format
 
 ### `create_group`

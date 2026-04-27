@@ -29,7 +29,7 @@
 ## 2. Trust assumptions
 
 1. **Soroban BLS host functions** — `g1_add`, `g1_msm`, `pairing_check`, `is_in_subgroup`, `Fr::from_bytes`, `Fr::to_bytes`, `Fr::from_u256`, `U256::from_be_bytes` — implement BLS12-381 group operations correctly (Stellar SEP-0046 / soroban-sdk 25.3.0).
-2. **Groth16 verifier formula** as implemented in `verify_membership_proof` (`lib.rs:617-662`) and `verify_update_proof` (`lib.rs:670-722`) — `e(-π_A, π_B) · e(α, β) · e(vk_x, γ) · e(π_C, δ) = 1_GT` is sound under the q-PKE / generic-group assumption used by Groth16, given a trusted setup.
+2. **Groth16 verifier formula** as implemented in `verify_membership_proof` and `verify_update_proof` — `e(-π_A, π_B) · e(α, β) · e(vk_x, γ) · e(π_C, δ) = 1_GT` is sound under the q-PKE / generic-group assumption used by Groth16, given a trusted setup.
 3. **Poseidon collision-resistance / preimage-resistance** is used by the *prover* (off-chain). The contract is value-agnostic to Poseidon — it sees only 32-byte field elements.
 4. **`env.crypto().sha256`** is collision-resistant (used for the proof-replay nullifier).
 5. **The admin's installed VKs correspond to a real ceremony / dev-keyset** that fixes the circuit constraint system. A malicious admin who installs a VK with known toxic-waste secrets can forge proofs.
@@ -42,72 +42,72 @@
 ### 3.1 State-binding invariants
 
 **SI-1: `current.commitment` is bound by a Groth16 proof against the membership VK at `current.tier` (at create) and against the update VK at every subsequent epoch.**
-Established at `create_group` (`lib.rs:399`). Re-established at every `update_commitment` (`lib.rs:464`).
+Established by the verifier call inside `create_group`. Re-established by the verifier call inside `update_commitment`.
 
 **SI-2: `c_old` and `epoch_old` on the wire equal `current.commitment` and `current.epoch` at the moment of `update_commitment`.**
-Enforced at `lib.rs:451-455`. A wire payload that doesn't bind to current state is rejected with `PublicInputsMismatch` before the proof is loaded.
+Enforced by the chaining gate inside `update_commitment`. A wire payload that doesn't bind to current state is rejected with `PublicInputsMismatch` before the proof is loaded.
 
 **SI-3: `member_count` is informational and never mutated by the contract.**
-Set at `create_group` from the wire (`lib.rs:406`). Preserved verbatim at `update_commitment` via `member_count: current.member_count` (`lib.rs:475`). Preserved verbatim at `deactivate_group` via `..current.clone()` (`lib.rs:548`). The contract is value-agnostic to this field; clients track the actual count off-chain. **NOT a soundness invariant per se** (the contract makes no claim about the field's accuracy); SI-3 documents the field's contract-side immutability post-create.
+Set at `create_group` from the wire. Preserved verbatim at `update_commitment` via `member_count: current.member_count` in the new entry's struct literal. Preserved verbatim at `deactivate_group` via `..current.clone()`. The contract is value-agnostic to this field; clients track the actual count off-chain. **NOT a soundness invariant per se** (the contract makes no claim about the field's accuracy); SI-3 documents the field's contract-side immutability post-create.
 
 ### 3.2 Cryptographic invariants
 
 **SI-4: All curve points stored in any of the 6 VKs are subgroup-valid.**
-`validate_vk_points` (`lib.rs:570-590`) runs `is_in_subgroup` on `α_g1`, `β_g2`, `γ_g2`, `δ_g2`, and every `IC[i]`. Called at `__constructor` for all 6 VKs (`lib.rs:295-300`) and at `update_vk` (`lib.rs:333`). A small-subgroup VK is rejected with `Error::InvalidPoint`.
+`validate_vk_points` runs `is_in_subgroup` on `α_g1`, `β_g2`, `γ_g2`, `δ_g2`, and every `IC[i]`. Called at `__constructor` for all 6 VKs and at `update_vk`. A small-subgroup VK is rejected with `Error::InvalidPoint`.
 
 **SI-5: All proof points are subgroup-valid.**
-`validate_proof_points` (`lib.rs:592-596`) runs `is_in_subgroup` on `proof.a`, `proof.b`, `proof.c`. Called at the start of each verifier helper (`lib.rs:625-627`, `:678-680`). A small-subgroup proof returns `false` (→ `Error::InvalidProof` upstream).
+`validate_proof_points` runs `is_in_subgroup` on `proof.a`, `proof.b`, `proof.c`. Called at the start of `verify_membership_proof` and `verify_update_proof`. A small-subgroup proof returns `false` (→ `Error::InvalidProof` upstream).
 
 **SI-6: All field-element commitments use canonical Fr encoding.**
-`is_canonical_fr` (`lib.rs:598-602`) round-trips `Fr::from_bytes ∘ Fr::to_bytes` and rejects any 32-byte value whose `Fr::from_bytes` reduces. Called at every entrypoint for every wire scalar AND defensively inside each verifier helper. Non-canonical inputs → `InvalidCommitmentEncoding`. Closes the malleability hole where `Fr` reduction can produce two distinct 32-byte preimages of the same field element.
+`is_canonical_fr` round-trips `Fr::from_bytes ∘ Fr::to_bytes` and rejects any 32-byte value whose `Fr::from_bytes` reduces. Called at every entrypoint for every wire scalar AND defensively inside each verifier helper. Non-canonical inputs → `InvalidCommitmentEncoding`. Closes the malleability hole where `Fr` reduction can produce two distinct 32-byte preimages of the same field element.
 
 **SI-7: VK IC-vector length matches each circuit's public-input arity.**
-`MEMBERSHIP_IC_POINTS = 3`, `UPDATE_IC_POINTS = 4`. Enforced at `__constructor` (`lib.rs:281-292`) and `update_vk` (`lib.rs:325-330`) and re-asserted inside the verifiers (`lib.rs:622`, `:675`). A wrong-arity VK can never be installed.
+`MEMBERSHIP_IC_POINTS = 3`, `UPDATE_IC_POINTS = 4`. Enforced at `__constructor` and `update_vk` and re-asserted inside `verify_membership_proof` and `verify_update_proof`. A wrong-arity VK can never be installed.
 
 ### 3.3 Replay protection
 
 **SI-8: A proof's bytes (`a || b || c`) cannot be reused at any state-changing entrypoint within `LEDGER_BUMP` (~30 days).**
-`proof_hash` (`lib.rs:521-527`) = `sha256(a.to_array() || b.to_array() || c.to_array())`. `check_proof_replay` (`lib.rs:529-539`) is called BEFORE proof verification at `create_group` (`lib.rs:396`), `update_commitment` (`lib.rs:461`), and `deactivate_group` (`lib.rs:543`). `record_proof` (`lib.rs:541-549`) is called only after the proof verifies, so a failed entrypoint does not consume the nullifier (transactional revert).
+`proof_hash` = `sha256(a.to_array() || b.to_array() || c.to_array())`. `check_proof_replay` is called BEFORE proof verification at `create_group`, `update_commitment`, and `deactivate_group`. `record_proof` is called only after the proof verifies, so a failed entrypoint does not consume the nullifier (transactional revert).
 
 The scope is **contract-global** — not per-group. Two distinct groups cannot accept byte-identical proofs.
 
-`verify_membership` does NOT call `check_proof_replay` — read-only, no nullifier consumption. The same proof bytes can be re-submitted to that entrypoint indefinitely. Documented at `lib.rs:497-506` (rationale: read-only verifier semantics; high-frequency repeats are a metering concern, not a soundness one).
+`verify_membership` does NOT call `check_proof_replay` — read-only, no nullifier consumption. The same proof bytes can be re-submitted to that entrypoint indefinitely. Documented in `verify_membership`'s doc-comment (rationale: read-only verifier semantics; high-frequency repeats are a metering concern, not a soundness one).
 
 ### 3.4 Authorization
 
 **SI-9: Admin-gated entrypoints require Soroban auth from the stored admin address.**
-`update_vk` (`lib.rs:309-340`) and `set_restricted_mode` (`lib.rs:344-362`) both load `Admin` from instance storage and call `admin.require_auth()`. Without a matching auth, Soroban panics with "Unauthorized" before any state mutation.
+`update_vk` and `set_restricted_mode` both load `Admin` from instance storage and call `admin.require_auth()`. Without a matching auth, Soroban panics with "Unauthorized" before any state mutation.
 
 **SI-10: `create_group` requires `caller.require_auth()` and, in restricted mode, `caller == admin`.**
-The `caller.require_auth()` call (`lib.rs:380`) prevents one address from creating a group on behalf of another. In restricted mode, `caller != admin` returns `AdminOnly` (`lib.rs:391-393`).
+The `caller.require_auth()` call inside `create_group` prevents one address from creating a group on behalf of another. In restricted mode, `caller != admin` returns `AdminOnly` (restricted-mode gate in `create_group`).
 
 **SI-11: `update_commitment`, `verify_membership`, `deactivate_group` do NOT require Soroban-level auth.**
-The proof IS the authorization. Documented at `lib.rs:441-444`. An attacker without a valid proof cannot construct a passing `verify_*_proof` call. The only attack surface is a valid proof that's been replayed, which SI-8 closes.
+The proof IS the authorization. Documented in `update_commitment`'s doc-comment. An attacker without a valid proof cannot construct a passing `verify_*_proof` call. The only attack surface is a valid proof that's been replayed, which SI-8 closes.
 
 ### 3.5 State-machine invariants
 
 **SI-12: Epoch is monotonic and increments by exactly 1 per successful `update_commitment`.**
-Enforced at `lib.rs:449` (`current.epoch.checked_add(1)`) and `lib.rs:472` (`new_epoch` written to storage). The `checked_add` returns `InvalidEpoch` if `current.epoch == u64::MAX`.
+Enforced inside `update_commitment` via `current.epoch.checked_add(1)`, with the resulting `new_epoch` written to storage. The `checked_add` returns `InvalidEpoch` if `current.epoch == u64::MAX`.
 
 **SI-13: A group transitions `active=true → false` exactly once and irreversibly.**
-`create_group` writes `active: true` (`lib.rs:411`). `update_commitment` preserves `active: true` on the new entry (`lib.rs:474`). `deactivate_group` rejects if `current.active == false` (`lib.rs:534-536`) and sets `active: false` (`lib.rs:550`).
+`create_group` writes `active: true`. `update_commitment` preserves `active: true` on the new entry. `deactivate_group` rejects if `current.active == false` and sets `active: false`.
 
 **SI-14: `tier` is fixed at create and never mutated.**
-`update_commitment`'s new entry inherits `tier: current.tier` (`lib.rs:473`); `deactivate_group`'s deactivated entry uses `..current.clone()`. No entrypoint takes `tier` as a wire input post-create.
+`update_commitment`'s new entry inherits `tier: current.tier`; `deactivate_group`'s deactivated entry uses `..current.clone()`. No entrypoint takes `tier` as a wire input post-create.
 
 **SI-15: `GroupCount(tier)` is bounded by `MAX_GROUPS_PER_TIER = 10000`.**
-`create_group` (`lib.rs:387-392`) reads the count and rejects with `TierGroupLimitReached` if `count >= MAX_GROUPS_PER_TIER`. `deactivate_group` (`lib.rs:557-566`) decrements with an underflow guard.
+`create_group` reads the count and rejects with `TierGroupLimitReached` if `count >= MAX_GROUPS_PER_TIER`. `deactivate_group` decrements with an underflow guard.
 
 **SI-16: `__constructor` is callable exactly once.**
-`do_initialize` (`lib.rs:271-273`) returns `AlreadyInitialized` if `DataKey::Admin` is already set. Called at deploy time by Soroban.
+`do_initialize` returns `AlreadyInitialized` if `DataKey::Admin` is already set. Called at deploy time by Soroban.
 
 ### 3.6 History invariants
 
 **SI-17: History is a rolling FIFO window of at most `HISTORY_WINDOW = 64` entries.**
-`archive_entry` (`lib.rs:551-572`) appends and prunes from the front. Test pin: `test_archive_entry_appends_and_prunes`.
+`archive_entry` appends and prunes from the front. Test pin: `test_archive_entry_appends_and_prunes`.
 
 **SI-18: History captures the prior active state, not the post-update state.**
-`update_commitment` calls `archive_entry(env, &group_id, &current)` BEFORE writing the new entry (`lib.rs:471-486`). `deactivate_group` likewise archives `&current` before flipping inactive (`lib.rs:546-554`).
+`update_commitment` calls `archive_entry(env, &group_id, &current)` BEFORE writing the new entry. `deactivate_group` likewise archives `&current` before flipping inactive.
 
 ---
 
@@ -131,7 +131,7 @@ A successful return requires: initialized; `Group(group_id)` exists and `active 
 
 Read-only. Returns `Ok(true)` iff `(public_inputs.commitment == current.commitment) ∧ (public_inputs.epoch == current.epoch) ∧ (proof verifies under VK(current.tier))`. Returns `Ok(false)` on bad proof, `Err(...)` on storage / chain mismatch.
 
-**Note**: Does NOT check `state.active`. Post-deactivation attestations against the frozen final state remain verifiable forever. Documented at `lib.rs:497-506`.
+**Note**: Does NOT check `state.active`. Post-deactivation attestations against the frozen final state remain verifiable forever. Documented in `verify_membership`'s doc-comment.
 
 ### 4.4 `deactivate_group`
 

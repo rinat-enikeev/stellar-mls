@@ -41,8 +41,8 @@ Anarchy is the protocol's "null case" — pure membership proof, governance enfo
 | `contracts/sep-anarchy/Cargo.toml` | Created | `crate-type = ["cdylib"]`, `soroban-sdk = "=25.3.0"`. Mirror sep-democracy's Cargo.toml verbatim. |
 | `contracts/sep-anarchy/Cargo.lock` | Copied from sep-democracy | Pins transitive deps; avoids 25.3.1 / rustc-1.91 trap. |
 | `contracts/sep-anarchy/test-vectors.json` | Created FIRST | Canonical contract-ABI pin. CI-asserted by `test_vectors_consistency`. |
-| `contracts/sep-anarchy/src/lib.rs` | Created | The contract (~870 LOC). |
-| `contracts/sep-anarchy/src/test.rs` | Created | Inline tests (~620 LOC, 39 tests). |
+| `contracts/sep-anarchy/src/lib.rs` | Created | The contract (~1050 LOC including doc-comments / blank lines). |
+| `contracts/sep-anarchy/src/test.rs` | Created | Inline tests (~990 LOC, 39 tests). |
 | `contracts/sep-anarchy/test_snapshots/test/` | Auto-generated | `#[contracttest]` snapshots; checked in. |
 | `docs/contract/anarchy/impl_plan.md` | Created | This plan. |
 | `docs/contract/anarchy/proof_of_soundness.md` | Created | SI-N invariants. |
@@ -56,7 +56,7 @@ Anarchy is the protocol's "null case" — pure membership proof, governance enfo
 Canonical contract-ABI pin. CI-asserted by `test_vectors_consistency`. Mirrors sep-democracy + sep-oligarchy structure with Anarchy-specific values.
 
 Sections:
-1. **`error_codes`** — 17 reachable variants (smaller than sep-democracy's 19, sep-oligarchy's 19). `dropped_from_sep_xxxx` lists 13 dropped (multi-type + Democracy + Oligarchy + 1v1 artifacts).
+1. **`error_codes`** — 17 active enum slots (15 reachable + 2 reserved: Reserved3, GroupStillActive); smaller than sep-democracy's 19 and sep-oligarchy's 19. `dropped_from_sep_xxxx` lists 13 dropped (multi-type + Democracy + Oligarchy + 1v1 artifacts).
 2. **`tier`** — member tier 0/1/2 (32/256/2048).
 3. **`max_groups_per_tier`** — 10000.
 4. **`vk_kind_enum`** — 2 kinds: Membership (3 IC, used at create + verify_membership + deactivate_group) + Update (4 IC, used at update_commitment).

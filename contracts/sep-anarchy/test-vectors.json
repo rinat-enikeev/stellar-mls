@@ -7,7 +7,7 @@
   "architecture_note": "This contract is the per-type Anarchy contract — one of the eventual four (Anarchy, OneOnOne, Democracy, Oligarchy). The `group_type` discriminator is implicit in the contract address; there is no polymorphic `update_commitment` dispatch, no `group_type` field in storage, no type-confusion guard. Anarchy is the protocol's null case: no quorum threshold, no admin set, no occupancy commitment for member-count hiding. The 3-scalar wire payload is byte-distinguishable from Democracy/Oligarchy's 5-scalar shape, but per-type address discrimination renders this moot — chain observers see the contract address first.",
 
   "error_codes": {
-    "description": "Numeric values of `Error` variants (`#[contracterror] #[repr(u32)]`). Per-type Anarchy contract drops everything tied to multi-type dispatch (UnknownGroupType, GroupTypeMismatch), 1v1 (OneOnOneImmutable, Invalid1v1Tier), Oligarchy (MissingAdminRoot, AdminRootMismatch, Reserved22, InvalidInitialMembership), Democracy v1 artifacts (MemberCountMismatch, MemberCountOutOfRange, DemocracyInputMissing), Democracy v2 (InvalidThreshold — no quorum), and the unreachable UnknownVkKind=16. The active set is 17 reachable variants.",
+    "description": "Numeric values of `Error` variants (`#[contracterror] #[repr(u32)]`). Per-type Anarchy contract drops everything tied to multi-type dispatch (UnknownGroupType, GroupTypeMismatch), 1v1 (OneOnOneImmutable, Invalid1v1Tier), Oligarchy (MissingAdminRoot, AdminRootMismatch, Reserved22, InvalidInitialMembership), Democracy v1 artifacts (MemberCountMismatch, MemberCountOutOfRange, DemocracyInputMissing), Democracy v2 (InvalidThreshold — no quorum), and the unreachable UnknownVkKind=16. 17 active enum slots; 15 reachable + 2 reserved (Reserved3 placeholder; GroupStillActive reserved for a possible future delete-inactive-group entrypoint).",
     "vectors": [
       { "name": "NotInitialized", "code": 1 },
       { "name": "AlreadyInitialized", "code": 2 },
@@ -45,7 +45,7 @@
   },
 
   "tier": {
-    "description": "Member tier index → tree depth → leaf capacity. The contract MUST reject `tier > 2` with `InvalidTier`. Tier capacity is the total slot space (cumulative-joins ceiling per Democracy §4.1's tombstone-permanence rule, inherited).",
+    "description": "Member tier index → tree depth → leaf capacity. The contract MUST reject `tier > 2` with `InvalidTier`. Tier capacity is the total leaf slot space (2^depth); tombstone-permanence is a circuit-side concern — this contract is value-agnostic to occupancy and tracks no on-chain floor.",
     "vectors": [
       { "tier": 0, "name": "Small", "depth": 5, "capacity": 32 },
       { "tier": 1, "name": "Medium", "depth": 8, "capacity": 256 },
@@ -65,7 +65,7 @@
   },
 
   "vk_kind_enum": {
-    "description": "Two VK kinds for this contract — smaller than sep-democracy's 2 (same shape) and sep-oligarchy's 3. Anarchy reuses the standard 3-IC membership VK at `create_group`, `verify_membership`, AND `deactivate_group` — no separate Create VK family because Anarchy doesn't need verbose binding (no occupancy_commitment to validate against the proof). Update VK is 4-IC, smaller than Democracy/Oligarchy's 7-IC.",
+    "description": "Two VK kinds — same count as sep-democracy, one fewer than sep-oligarchy's 3. Anarchy reuses the standard 3-IC membership VK at `create_group`, `verify_membership`, AND `deactivate_group` — no separate Create VK family because Anarchy doesn't need verbose binding (no occupancy_commitment to validate against the proof). Update VK is 4-IC, smaller than Democracy/Oligarchy's 7-IC.",
     "vectors": [
       {
         "name": "Membership",

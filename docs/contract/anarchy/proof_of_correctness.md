@@ -17,7 +17,7 @@
 
 ### 1.1 Storage layout
 
-The on-chain `CommitmentEntry` (`lib.rs:172-191`) carries exactly the fields the design's §4.6 storage-layout pin requires:
+The on-chain `CommitmentEntry` struct in `lib.rs` carries exactly the fields the design's §4.6 storage-layout pin requires:
 
 | Field | Type | Source-of-truth | Mutation surface |
 |---|---|---|---|
@@ -31,7 +31,7 @@ The on-chain `CommitmentEntry` (`lib.rs:172-191`) carries exactly the fields the
 **Removed fields vs sep-xxxx v1**:
 - `group_type` — implicit in contract address (per-type architecture).
 
-The `DataKey` enum (`lib.rs:226-244`) covers the design's required keys: `Admin`, `RestrictedMode`, `VK(tier)`, `UpdateVK(tier)`, `Group(group_id)`, `History(group_id)`, `UsedProof(proof_hash)`, `GroupCount(tier)`. CI-asserted by `test_vectors_consistency`.
+The `DataKey` enum covers the design's required keys: `Admin`, `RestrictedMode`, `VK(tier)`, `UpdateVK(tier)`, `Group(group_id)`, `History(group_id)`, `UsedProof(proof_hash)`, `GroupCount(tier)`. CI-asserted by `test_vectors_consistency`.
 
 ### 1.2 Constants
 
@@ -47,7 +47,7 @@ The `DataKey` enum (`lib.rs:226-244`) covers the design's required keys: `Admin`
 
 ### 1.3 Errors
 
-The `Error` enum (`lib.rs:74-99`) pins 17 reachable variants plus `Reserved3` and `GroupStillActive` (slot reservations). `UnknownVkKind=16` removed (parallel to sep-democracy / sep-oligarchy). No `InvalidThreshold=28` (Anarchy has no quorum) and no `InvalidInitialMembership=30` (no in-circuit floor). CI-asserted by `test_vectors_consistency`'s error-code loop.
+The `Error` enum pins 17 active enum slots: 15 reachable variants plus `Reserved3` and `GroupStillActive` (slot reservations). `UnknownVkKind=16` removed (parallel to sep-democracy / sep-oligarchy). No `InvalidThreshold=28` (Anarchy has no quorum) and no `InvalidInitialMembership=30` (no in-circuit floor). CI-asserted by `test_vectors_consistency`'s error-code loop.
 
 ### 1.4 Events
 
@@ -95,9 +95,9 @@ The soundness document's SI-1 through SI-18 are also correctness invariants. Cro
 | Admin auth + valid `(kind, tier ≤ 2, IC arity)` + subgroup-valid points | `VK(tier)` or `UpdateVK(tier)` overwritten; `Ok(())` | `test_update_vk_rotates_membership_vk`, `test_update_vk_rotates_update_vk` |
 | No auth granted | "Unauthorized" panic | `test_update_vk_requires_auth` |
 | `tier > 2` | `Err(InvalidTier)` | `test_update_vk_rejects_invalid_tier` |
-| IC arity mismatch | `Err(InvalidVkLength)` | (gated at `lib.rs:328`) |
+| IC arity mismatch | `Err(InvalidVkLength)` | (gated inside `update_vk`) |
 | Non-subgroup VK point | `Err(InvalidPoint)` | (gated at `validate_vk_points`) |
-| Pre-init | `Err(NotInitialized)` | (gated at `lib.rs:317`) |
+| Pre-init | `Err(NotInitialized)` | (gated by `require_initialized` in `update_vk`) |
 
 ### 3.3 `set_restricted_mode(env, restricted: bool)`
 
@@ -123,7 +123,7 @@ The soundness document's SI-1 through SI-18 are also correctness invariants. Cro
 |---|---|---|
 | All checks pass + valid Groth16 proof | `CommitmentEntry` written at epoch 0; empty `History`; `GroupCount(tier) += 1`; `UsedProof(proof_hash) := true`; `GroupCreated` event; `Ok(())` | `test_create_group_happy_path` |
 | `tier > 2` | `Err(InvalidTier)` | `test_create_group_rejects_invalid_tier` |
-| `public_inputs.commitment != commitment OR epoch != 0` | `Err(PublicInputsMismatch)` | (gated at `lib.rs:382-384`) |
+| `public_inputs.commitment != commitment OR epoch != 0` | `Err(PublicInputsMismatch)` | (gated inside `create_group`) |
 | Group already exists | `Err(GroupAlreadyExists)` | `test_create_group_rejects_duplicate_group_id` |
 | Non-canonical `commitment` | `Err(InvalidCommitmentEncoding)` | `test_create_group_rejects_non_canonical_commitment` |
 | `GroupCount(tier) >= MAX_GROUPS_PER_TIER` | `Err(TierGroupLimitReached)` | `test_create_group_enforces_tier_group_limit` |
@@ -156,7 +156,7 @@ The soundness document's SI-1 through SI-18 are also correctness invariants. Cro
 | Wire matches `current`, bad proof | `Ok(false)` | `test_verify_membership_happy_path` |
 | `public_inputs.commitment != current.commitment` | `Err(PublicInputsMismatch)` | `test_verify_membership_rejects_wrong_commitment` |
 | `public_inputs.epoch != current.epoch` | `Err(PublicInputsMismatch)` | `test_verify_membership_rejects_wrong_epoch` |
-| Group inactive (`current.active == false`) | `Ok(true)` for valid pre-deactivation proof; `Ok(false)` for invalid. The verifier intentionally does NOT check `state.active` — post-deactivation attestations against the frozen final state remain verifiable forever. | `test_verify_membership_rejects_inactive_group` (mock proof returns `Ok(false)`; the test name is historical — what it actually pins is "verifier reaches `Ok(false)` on inactive group", confirming absence of `if !state.active` short-circuit) |
+| Group inactive (`current.active == false`) | `Ok(true)` for valid pre-deactivation proof; `Ok(false)` for invalid. The verifier intentionally does NOT check `state.active` — post-deactivation attestations against the frozen final state remain verifiable forever. | `test_verify_membership_rejects_inactive_group` (mock proof returns `Ok(false)`; the test name is historical — what it actually pins is "verifier reaches `Ok(false)` on inactive group", confirming absence of an `if !state.active` short-circuit in `verify_membership`) |
 | Group missing | `Err(GroupNotFound)` | (gated at `load_group`) |
 
 ### 3.8 `deactivate_group(env, group_id, proof, public_inputs)`
@@ -166,7 +166,7 @@ The soundness document's SI-1 through SI-18 are also correctness invariants. Cro
 | All checks pass + valid membership proof | `Group(group_id).active = false`; prior `current` archived to history; `GroupCount(current.tier) -= 1`; `UsedProof(proof_hash) := true`; `GroupDeactivated` event | `test_deactivate_group_happy_path` |
 | Group missing | `Err(GroupNotFound)` | (gated at `load_group`) |
 | `current.active == false` | `Err(GroupInactive)` | `test_deactivate_already_inactive_group` |
-| `public_inputs.commitment != current.commitment OR epoch != current.epoch` | `Err(PublicInputsMismatch)` | (gated at `lib.rs:537-540`) |
+| `public_inputs.commitment != current.commitment OR epoch != current.epoch` | `Err(PublicInputsMismatch)` | (gated inside `deactivate_group`) |
 | Replayed proof | `Err(ProofReplay)` | (gated at `check_proof_replay`) |
 | Bad proof | `Err(InvalidProof)` | `test_deactivate_group_rejects_non_member_proof` |
 
@@ -223,7 +223,7 @@ Soroban guarantees that any failed entrypoint reverts ALL storage writes. The co
 
 ## 6. Test coverage matrix
 
-The 39 inline tests cover every entry in `test-vectors.json#tests_to_implement` 1:1, plus `test_vectors_consistency`. Mapping:
+The 39 inline tests (38 behavioral tests + 1 ABI-pin test = 39 total) cover every entry in `test-vectors.json#tests_to_implement` 1:1. Mapping:
 
 | Test | Covers |
 |---|---|

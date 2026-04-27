@@ -59,7 +59,7 @@ The skill block carries `cache_control: ephemeral`, so subsequent fixtures hit t
 
 **Without-skill mode**: no system prompt, just the fixture's `PROMPT` as the user message.
 
-Both modes use `temperature=0` for repeatability (not strict determinism — the API can still vary slightly).
+Both modes use the model's default sampling — opus-4-7 deprecated `temperature` in its API, so we don't pin it. Eval signal is the **score gap**, which is robust to small per-call variation; run the suite a few times if a single fixture looks borderline.
 
 ## Cost estimate (default haiku-4-5)
 

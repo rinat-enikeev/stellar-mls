@@ -110,7 +110,8 @@ def load_skill_content(skill_name: str, include_references: bool = True) -> str:
 
 
 def run_fixture(
-    client, prompt: str, skill_content: str | None, model: str
+    client, prompt: str, skill_content: str | None, model: str,
+    max_tokens: int = 2048,
 ) -> str:
     """Send `prompt` through the API; return the assistant's text reply.
 
@@ -120,8 +121,7 @@ def run_fixture(
     """
     kwargs = {
         "model": model,
-        "max_tokens": 2048,
-        "temperature": 0,
+        "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": prompt}],
     }
     if skill_content:
@@ -207,10 +207,13 @@ def main() -> int:
         print(f"--- {name}")
         print(f"    prompt: {prompt_preview}{'…' if len(fixture.PROMPT) > 120 else ''}")
 
+        max_tokens = getattr(fixture, "MAX_TOKENS", 2048)
         for mode in modes:
             content = skill_content if mode == "with-skill" else None
             try:
-                response = run_fixture(client, fixture.PROMPT, content, args.model)
+                response = run_fixture(
+                    client, fixture.PROMPT, content, args.model, max_tokens
+                )
             except Exception as e:
                 print(f"    [{mode:>14s}] ERROR: {e}", file=sys.stderr)
                 continue

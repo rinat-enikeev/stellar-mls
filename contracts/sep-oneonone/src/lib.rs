@@ -367,7 +367,7 @@ impl SepOneOnOneContract {
             .persistent()
             .get(&DataKey::CreateVK)
             .ok_or(Error::NotInitialized)?;
-        if !verify_proof(&env, &vk, &proof, &commitment, 0) {
+        if !verify_proof(&env, &vk, CREATE_IC_POINTS, &proof, &commitment, 0) {
             return Err(Error::InvalidProof);
         }
 
@@ -426,6 +426,7 @@ impl SepOneOnOneContract {
         Ok(verify_proof(
             &env,
             &vk,
+            MEMBERSHIP_IC_POINTS,
             &proof,
             &state.commitment,
             state.epoch,
@@ -437,6 +438,7 @@ impl SepOneOnOneContract {
         env: Env,
         group_id: BytesN<32>,
     ) -> Result<CommitmentEntry, Error> {
+        Self::require_initialized(&env)?;
         Self::load_group(&env, &group_id)
     }
 
@@ -535,17 +537,21 @@ fn u64_to_u256_be(val: u64) -> [u8; 32] {
 /// Verify a 3-IC-point proof against `(commitment, epoch)` public
 /// inputs. Used for both Membership (at `verify_membership`) and
 /// Create (at `create_group`) — the public-input shape is identical;
-/// the caller passes the appropriate VK.
+/// the caller passes the appropriate VK and asserts its expected IC
+/// count via `expected_ic_count` so a future divergence between the
+/// two VK families surfaces here as a verification failure rather
+/// than a silent mismatch.
 ///
 /// Pairing check: `e(-π_A, π_B) · e(α, β) · e(vk_x, γ) · e(π_C, δ) = 1_GT`.
 fn verify_proof(
     env: &Env,
     vk: &VerificationKeyData,
+    expected_ic_count: u32,
     proof: &Groth16Proof,
     commitment: &BytesN<32>,
     epoch: u64,
 ) -> bool {
-    if vk.ic.len() != MEMBERSHIP_IC_POINTS {
+    if vk.ic.len() != expected_ic_count {
         return false;
     }
     if !validate_proof_points(proof) {

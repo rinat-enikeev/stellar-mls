@@ -73,6 +73,32 @@ fn mock_proof(env: &Env, tag: &[u8]) -> Groth16Proof {
     }
 }
 
+/// Tag-keyed mock VK — distinct from the constructor-time VKs so
+/// rotation tests can verify post-state by reading back the stored
+/// VK and comparing a deterministic field. The IC layout is the
+/// 3-IC standard for both Membership and Create.
+fn mock_vk_with_tag(env: &Env, tag: &[u8]) -> VerificationKeyData {
+    let alpha_tag = ["alpha-".as_bytes(), tag].concat();
+    let beta_tag = ["beta-".as_bytes(), tag].concat();
+    let gamma_tag = ["gamma-".as_bytes(), tag].concat();
+    let delta_tag = ["delta-".as_bytes(), tag].concat();
+    let ic0_tag = ["ic0-".as_bytes(), tag].concat();
+    let ic1_tag = ["ic1-".as_bytes(), tag].concat();
+    let ic2_tag = ["ic2-".as_bytes(), tag].concat();
+    VerificationKeyData {
+        alpha_g1: valid_g1(env, &alpha_tag),
+        beta_g2: valid_g2(env, &beta_tag),
+        gamma_g2: valid_g2(env, &gamma_tag),
+        delta_g2: valid_g2(env, &delta_tag),
+        ic: vec![
+            env,
+            valid_g1(env, &ic0_tag),
+            valid_g1(env, &ic1_tag),
+            valid_g1(env, &ic2_tag),
+        ],
+    }
+}
+
 fn canonical_zero(env: &Env) -> BytesN<32> {
     BytesN::from_array(env, &[0u8; 32])
 }
@@ -337,7 +363,7 @@ fn test_create_group_rejects_replayed_proof() {
         epoch: 0,
     };
     let proof = mock_proof(&env, b"replay");
-    let h = env.as_contract(&contract_id, || {
+    env.as_contract(&contract_id, || {
         let mut preimage = Bytes::new(&env);
         preimage.append(&Bytes::from_slice(&env, proof.a.to_array().as_slice()));
         preimage.append(&Bytes::from_slice(&env, proof.b.to_array().as_slice()));
@@ -345,10 +371,8 @@ fn test_create_group_rejects_replayed_proof() {
         let h: BytesN<32> = env.crypto().sha256(&preimage).into();
         env.storage()
             .persistent()
-            .set(&DataKey::UsedProof(h.clone()), &true);
-        h
+            .set(&DataKey::UsedProof(h), &true);
     });
-    let _ = h; // silence unused
     client.create_group(
         &caller(&env),
         &BytesN::from_array(&env, &[7u8; 32]),
@@ -523,15 +547,31 @@ fn test_update_vk_requires_auth() {
 #[test]
 fn test_update_vk_rotates_membership_vk() {
     let (env, client, _admin) = setup_env();
-    let new_vk = mock_membership_vk(&env);
+    let new_vk = mock_vk_with_tag(&env, b"rotated-membership");
+    let new_alpha = new_vk.alpha_g1.clone();
     client.update_vk(&VkKind::Membership, &new_vk);
+    // Read back the persisted VK and confirm the rotation actually
+    // wrote the new bytes — guards against silent wrong-key-written
+    // regressions.
+    let stored: VerificationKeyData = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MembershipVK)
+            .unwrap()
+    });
+    assert_eq!(stored.alpha_g1, new_alpha);
 }
 
 #[test]
 fn test_update_vk_rotates_create_vk() {
     let (env, client, _admin) = setup_env();
-    let new_vk = mock_create_vk(&env);
+    let new_vk = mock_vk_with_tag(&env, b"rotated-create");
+    let new_alpha = new_vk.alpha_g1.clone();
     client.update_vk(&VkKind::Create, &new_vk);
+    let stored: VerificationKeyData = env.as_contract(&client.address, || {
+        env.storage().persistent().get(&DataKey::CreateVK).unwrap()
+    });
+    assert_eq!(stored.alpha_g1, new_alpha);
 }
 
 #[test]
@@ -550,8 +590,50 @@ fn test_update_vk_rejects_invalid_vk_length() {
     client.update_vk(&VkKind::Membership, &bad);
 }
 
+#[test]
+#[should_panic(expected = "Unauthorized")]
+fn test_set_restricted_mode_requires_auth() {
+    // Parallel to test_update_vk_requires_auth: no mock_all_auths,
+    // so admin.require_auth() inside set_restricted_mode panics.
+    let env = Env::default();
+    env.cost_estimate().budget().reset_unlimited();
+    let admin = Address::generate(&env);
+    let mvk = mock_membership_vk(&env);
+    let cvk = mock_create_vk(&env);
+    let contract_id = env.register(SepOneOnOneContract, (admin, mvk, cvk));
+    let client = SepOneOnOneContractClient::new(&env, &contract_id);
+    client.set_restricted_mode(&true);
+}
+
+#[test]
+fn test_create_group_restricted_mode_admin_can_create() {
+    // Positive complement to test_create_group_restricted_mode_rejects_non_admin:
+    // when restricted=true, admin can still call create_group. The
+    // call reaches the verifier (mock proof can't pass pairing →
+    // InvalidProof), proving the AdminOnly gate did NOT trigger
+    // for the admin caller.
+    let (env, client, admin) = setup_env();
+    client.set_restricted_mode(&true);
+    let z = canonical_zero(&env);
+    let pi = PublicInputs {
+        commitment: z.clone(),
+        epoch: 0,
+    };
+    let r = client.try_create_group(
+        &admin,
+        &BytesN::from_array(&env, &[12u8; 32]),
+        &z,
+        &mock_proof(&env, b"restricted-admin"),
+        &pi,
+    );
+    match r {
+        Err(Err(_)) | Err(Ok(Error::InvalidProof)) => {}
+        other => panic!("expected InvalidProof at verifier, got {:?}", other),
+    }
+}
+
 // ================================================================
-// 5. Queries (3 tests)
+// 5. Queries (4 tests)
 // ================================================================
 
 #[test]
@@ -590,9 +672,27 @@ fn test_bump_group_ttl_extends_group_storage() {
     assert_eq!(post.commitment, z);
 }
 
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn test_bump_group_ttl_rejects_unknown_group() {
+    let (env, client, _admin) = setup_env();
+    client.bump_group_ttl(&BytesN::from_array(&env, &[98u8; 32]));
+}
+
 // ================================================================
 // 6. test-vectors.json consistency (1 test)
 // ================================================================
+//
+// Note: event-emission assertions for `GroupCreated` /
+// `RestrictedModeChanged` were considered but deferred — soroban-sdk
+// 25.3.0's `env.events()` returns a `ContractEvents` handle that
+// isn't directly iterable / lengthable in stable test-utils, and no
+// sibling per-type contract pins event emission either. The events
+// themselves are CI-protected by `cargo build` (the structs derive
+// `#[contractevent]`) and by the `.publish(&env)` callsites; a
+// future regression dropping a callsite is detectable in code
+// review. Left as a follow-up if event auditing becomes a
+// recurring concern.
 
 #[test]
 fn test_vectors_consistency() {
@@ -657,5 +757,5 @@ fn test_vectors_consistency() {
     let test_count = v["tests_to_implement"]["categories"]["total"]
         .as_u64()
         .unwrap();
-    assert_eq!(test_count, 26, "test count pin drift");
+    assert_eq!(test_count, 29, "test count pin drift");
 }

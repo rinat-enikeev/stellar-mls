@@ -3477,50 +3477,6 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    // -- Group Deactivation --
-
-    /**
-     * Deactivate a group on-chain. Any member with a valid proof can deactivate.
-     * M-18: [confirmed] must be true — callers should show a confirmation dialog first,
-     * since deactivation is irreversible on-chain.
-     */
-    fun deactivateGroupOnChain(group: ChatGroup, confirmed: Boolean = false, onResult: (Result<Unit>) -> Unit) {
-        if (!confirmed) {
-            onResult(Result.failure(IllegalStateException("Deactivation requires explicit confirmation")))
-            return
-        }
-        val service = onChainService
-        if (service == null) {
-            onResult(Result.failure(ChatError.ContractNotConfigured))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                val response = withContext(Dispatchers.IO) {
-                    service.deactivateGroup(
-                        groupIDData = group.groupIDData,
-                        members = group.members,
-                        blsSecretKey = keyManager.blsSecretKey,
-                        epoch = group.epoch,
-                        salt = group.salt,
-                        tier = group.tier
-                    )
-                }
-                if (response.accepted) {
-                    onResult(Result.success(Unit))
-                } else {
-                    onResult(Result.failure(
-                        ChatError.OnChainPublishFailed(response.message ?: "Deactivation rejected")
-                    ))
-                }
-            } catch (e: Exception) {
-                onResult(Result.failure(
-                    ChatError.OnChainPublishFailed(e.message ?: "Unknown error")
-                ))
-            }
-        }
-    }
-
     // -- JSON Helpers --
 
     private fun stateUpdateToJson(update: SEPGroupStateUpdate): String {

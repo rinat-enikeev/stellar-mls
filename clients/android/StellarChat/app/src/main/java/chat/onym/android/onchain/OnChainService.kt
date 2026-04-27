@@ -425,29 +425,6 @@ class OnChainService(private val context: Context, contractID: String, transport
     }
 
     /**
-     * Deactivate a group on-chain. Requires a valid ZK proof of membership.
-     * Any authorized member can deactivate. The contract sets active = false.
-     */
-    fun deactivateGroup(
-        groupIDData: ByteArray,
-        members: List<SEPGroupMemberLeaf>,
-        blsSecretKey: ByteArray,
-        epoch: Long,
-        salt: ByteArray,
-        tier: SEPTier
-    ): SEPSubmissionResponse {
-        val proofBundle = generateProof(members, blsSecretKey, epoch, salt, tier)
-        val uncompressedProof = proofForContract(proofBundle.proof)
-
-        return contractClient.deactivateGroup(
-            groupID = groupIDData,
-            proof = uncompressedProof,
-            commitment = proofBundle.publicInputs.commitment,
-            epoch = epoch
-        )
-    }
-
-    /**
      * Verify membership via the on-chain contract (read-only).
      *
      * Generates a proof, decompresses to 384-byte contract format,

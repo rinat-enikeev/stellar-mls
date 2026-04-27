@@ -533,36 +533,6 @@ actor OnChainService {
         }
     }
 
-    /// Deactivate a group on-chain. Requires a valid ZK proof of membership.
-    ///
-    /// Any authorized member can deactivate. The contract sets `active = false`,
-    /// preventing further commitment updates.
-    func deactivateGroup(
-        groupIDData: Data,
-        members: [SEPGroupMemberLeaf],
-        blsSecretKey: Data,
-        epoch: UInt64,
-        salt: Data,
-        tier: SEPTier
-    ) async throws -> SEPSubmissionResponse {
-        let proofBundle = try generateProof(
-            members: members,
-            blsSecretKey: blsSecretKey,
-            epoch: epoch,
-            salt: salt,
-            tier: tier
-        )
-
-        let uncompressedProof = try proofForContract(proofBundle.proof)
-
-        let request = SEPDeactivateGroupRequest(
-            groupID: groupIDData,
-            proof: uncompressedProof,
-            publicInputs: proofBundle.publicInputs
-        )
-        return try await withRetry { try await self.contractClient.deactivateGroup(request) }
-    }
-
     /// Verify membership via the on-chain contract.
     ///
     /// Generates a fresh proof, decompresses to 384-byte contract format,

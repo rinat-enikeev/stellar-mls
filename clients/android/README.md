@@ -114,7 +114,6 @@ Groups, messages, and keys persist across app restarts:
 - **ZK proof generation**: Groth16 proofs via Rust FFI with testing proving keys
 - **Commitment publishing**: On group creation and membership changes
 - **Commitment verification**: Poseidon commitment comparison against on-chain state
-- **Group deactivation**: Any member with a valid proof can permanently freeze a group
 - **Relayer support**: `OkHttpRelayerTransport` with bearer token auth and certificate pinning
 
 ## Interoperability

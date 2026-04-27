@@ -1,5 +1,7 @@
 # Proof of Soundness — `contracts/sep-anarchy`
 
+> **Amendment (postmortem #153 phase 1):** Soundness invariants tied to `deactivate_group` describe a removed entrypoint. The mempool-front-run residual that this document originally acknowledged for `deactivate_group` is no longer reachable: there is no entrypoint that consumes a membership-VK-keyed proof to mutate live state. See `docs/postmortem-deactivate-group-frontrun.md` for rationale.
+
 **Scope:** the per-type Anarchy Soroban contract at `contracts/sep-anarchy/src/lib.rs` (revision: branch `feat/contract-sep-anarchy`).
 
 **Status:** informal soundness argument. Not a machine-checked proof. Cryptographic core (Groth16, Poseidon, BLS12-381) relied upon as a black box; trust assumptions explicit below.

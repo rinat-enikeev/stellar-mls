@@ -70,13 +70,13 @@
   },
 
   "vk_kind_enum": {
-    "description": "Three VK kinds for this contract. No `UpdateByType(u32)` because group_type is constant (Oligarchy). Membership VK is reused across verify_membership + deactivate_group (opens against the member tree only, parallel to sep-democracy's membership VK). Create VK is used only by create_oligarchy_group and binds the verbose §4.8 tuple as public inputs (rather than trusting wire-supplied occupancy_commitment as sep-democracy does — the verbose binding closes the create-time self-DoS sep-democracy still carries). Update VK is used only by update_commitment.",
+    "description": "Three VK kinds for this contract. No `UpdateByType(u32)` because group_type is constant (Oligarchy). Membership VK is used by verify_membership (opens against the member tree only, parallel to sep-democracy's membership VK). Create VK is used only by create_oligarchy_group and binds the verbose §4.8 tuple as public inputs (rather than trusting wire-supplied occupancy_commitment as sep-democracy does — the verbose binding closes the create-time self-DoS sep-democracy still carries). Update VK is used only by update_commitment. (`deactivate_group` was removed in postmortem #153 — see docs/postmortem-deactivate-group-frontrun.md.)",
     "vectors": [
       {
         "name": "Membership",
         "ic_count": 3,
         "ic_layout": ["base", "commitment", "epoch"],
-        "used_by": ["verify_membership", "deactivate_group"],
+        "used_by": ["verify_membership"],
         "note": "opens against the member tree only — chat-capacity proof, not admin-tree proof. Admin authorization for state changes is done via the Update VK's K-signer subset, NOT via this VK."
       },
       {
@@ -309,7 +309,7 @@
         { "name": "epoch", "type": "u64", "rule": "starts at 0, increments by 1 per successful update_commitment" },
         { "name": "timestamp", "type": "u64", "rule": "ledger timestamp when this state was recorded" },
         { "name": "tier", "type": "u32", "rule": "member tier: 0=Small, 1=Medium, 2=Large; fixed at create_oligarchy_group, never mutated. Admin tier is fixed at Small (depth=5, 32 slots) and NOT stored — implicit per design §4.6." },
-        { "name": "active", "type": "bool", "rule": "false after deactivate_group; rejects update_commitment with GroupInactive" },
+        { "name": "active", "type": "bool", "rule": "always true in current contract — `deactivate_group` was removed in postmortem #153, so no production code path sets this to false. Field + GroupInactive guard retained as defense-in-depth for any future re-introduction of deactivation." },
         { "name": "occupancy_commitment", "type": "BytesN<32>", "rule": "salted combined Poseidon commitment per §4.7.2 v0.1.4; canonical Fr encoding; replaces v1's member_count + admin_count" },
         { "name": "admin_threshold_numerator", "type": "u32", "rule": "1..=100; fixed at create_oligarchy_group, never mutated by update_commitment per design §4.7.6. Stored as u32 (matches contract); the value range fits in u8 but the storage type matches the wire-supplied tier type for consistency." }
       ]
@@ -330,7 +330,7 @@
       { "name": "Group(group_id)", "value_type": "CommitmentEntry", "storage": "persistent", "note": "current group state" },
       { "name": "History(group_id)", "value_type": "Vec<CommitmentEntry>", "storage": "persistent", "note": "rolling-window history of past entries; capped at HISTORY_WINDOW=64; pruned FIFO" },
       { "name": "UsedProof(proof_hash)", "value_type": "()", "storage": "persistent (TTL ~30 days via LEDGER_BUMP)", "note": "global-nullifier scope per design §11" },
-      { "name": "GroupCount(tier)", "value_type": "u32", "storage": "instance", "note": "active group count per member tier; checked against MAX_GROUPS_PER_TIER (10000) in create_oligarchy_group; decremented on deactivate_group" }
+      { "name": "GroupCount(tier)", "value_type": "u32", "storage": "instance", "note": "active group count per member tier; checked against MAX_GROUPS_PER_TIER (10000) in create_oligarchy_group. Monotonic increment-only since `deactivate_group` was removed (postmortem #153) — no decrement path exists; the cap is now a one-way ratchet. Operationally fine at testnet scale; if mainnet ever approaches 10k groups/tier, the architecture itself needs revisiting." }
     ]
   },
 
@@ -423,9 +423,6 @@
       "test_verify_membership_rejects_wrong_commitment",
       "test_verify_membership_rejects_wrong_epoch",
       "test_verify_membership_rejects_inactive_group",
-      "test_deactivate_group_happy_path",
-      "test_deactivate_group_rejects_non_member_proof",
-      "test_deactivate_already_inactive_group",
       "test_update_vk_requires_auth",
       "test_update_vk_rotates_membership_vk",
       "test_update_vk_rotates_create_vk",

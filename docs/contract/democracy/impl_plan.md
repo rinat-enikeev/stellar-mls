@@ -1,5 +1,7 @@
 # Plan: implement `contracts/sep-democracy` from scratch
 
+> **Amendment (postmortem #153 phase 1):** The `deactivate_group` entrypoint described below was removed after a front-running vulnerability surfaced — see `docs/postmortem-deactivate-group-frontrun.md`. References below are retained for historical accuracy of the implementation plan; the live contract has 8 user-callable entrypoints (not 9) and 40 inline tests (not 43). The Membership VK is used at `create_group` + `verify_membership` only. The `active` field on `CommitmentEntry` and the `GroupInactive` error variant remain as defense-in-depth for any future re-introduction of deactivation but are unreachable in current production code paths.
+
 ## Context
 
 The user is moving from one monolithic `contracts/sep-xxxx` (Anarchy + 1v1 + Democracy + Oligarchy multiplexed via a `group_type` discriminator) to **per-type contracts** — eventually four independent Soroban crates, one per governance type. This task creates the Democracy one.

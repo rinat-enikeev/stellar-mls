@@ -1,5 +1,7 @@
 # Plan: implement `contracts/sep-oligarchy` from scratch (per-type Soroban contract)
 
+> **Amendment (postmortem #153 phase 1):** The `deactivate_group` entrypoint described below was removed after a front-running vulnerability surfaced — see `docs/postmortem-deactivate-group-frontrun.md`. References to it are retained for historical accuracy; the live contract has one fewer entrypoint and three fewer tests. The Membership VK is used at `verify_membership` only. The `active` field on `CommitmentEntry` and the `GroupInactive` error variant remain as defense-in-depth for any future re-introduction of deactivation but are unreachable in current production code paths.
+
 ## Context
 
 The user is shipping per-type Soroban contracts — one per governance type. `contracts/sep-democracy` already landed (PR #148, branch `feat/contract-sep-democracy`). This plan covers the second per-type contract: **sep-oligarchy**, the Oligarchy governance type. The design source is [`docs/oligarchy-update-testnet-design.md`](../../oligarchy-update-testnet-design.md), v0.1.4.

@@ -1,5 +1,7 @@
 # Proof of Soundness — `contracts/sep-oligarchy`
 
+> **Amendment (postmortem #153 phase 1):** Soundness invariants tied to `deactivate_group` describe a removed entrypoint. The mempool-front-run residual that this document originally acknowledged for `deactivate_group` is no longer reachable: there is no entrypoint that consumes a membership-VK-keyed proof to mutate live state. See `docs/postmortem-deactivate-group-frontrun.md` for rationale.
+
 **Scope:** the per-type Oligarchy Soroban contract at `contracts/sep-oligarchy/src/lib.rs` (revision: branch `feat/contract-sep-oligarchy`, branched off `design/oligarchy-update-testnet` v0.1.4).
 
 **Status:** informal soundness argument. Not a machine-checked proof. Intended as an audit anchor for the contract surface — the cryptographic core (Groth16, Poseidon, BLS12-381) is not re-proven here; it's relied upon as a black box and the trust assumptions are listed explicitly below.

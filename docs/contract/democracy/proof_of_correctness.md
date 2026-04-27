@@ -1,5 +1,7 @@
 # Proof of Correctness — `contracts/sep-democracy`
 
+> **Amendment (postmortem #153 phase 1):** Sections referencing `deactivate_group` describe a removed entrypoint. The live contract has 8 user-callable entrypoints, not 9. The Membership VK is used at `create_group` + `verify_membership` only; `verify_membership` no longer leaks a usable proof for any state-changing membership-VK-keyed entrypoint, since none exists. See `docs/postmortem-deactivate-group-frontrun.md` for rationale.
+
 **Scope:** the per-type Democracy Soroban contract at `contracts/sep-democracy/src/lib.rs` (revision: branch `feat/contract-sep-democracy`, commit `37fedab` and later).
 
 **Status:** informal correctness argument — for every input class permitted by the spec, the contract produces the spec-mandated state delta and event. Where the spec is ambiguous or aspirational (Phase A integration, ceremony), this document flags the gap rather than pretending it's covered.

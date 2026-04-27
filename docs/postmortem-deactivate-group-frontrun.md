@@ -19,7 +19,7 @@ The new per-type contracts (`sep-democracy`, `sep-oligarchy`, `sep-anarchy`) car
 
 The bug is not new. It is documented in the legacy contract as a known residual. What is new:
 
-- The per-type extraction (`sep-democracy` v0.5, `sep-oligarchy` v0.1.4, `sep-anarchy` v0) carried over the entrypoint *without* the warning blocks. A reviewer looking at the new contracts in isolation would not see the existing acknowledgment.
+- The per-type extraction (`sep-democracy`, `sep-oligarchy`, `sep-anarchy` — all `0.1.0` per their `Cargo.toml`) carried over the entrypoint *without* the warning blocks. A reviewer looking at the new contracts in isolation would not see the existing acknowledgment.
 - The `stellar-dev` skill audit re-flagged the issue from first principles, confirming it survives in the per-type code. This is the eval harness paying for itself: the audit fixture surfaced a structural issue against fresh contract source, which prompted re-grep of the legacy code, which surfaced the long-standing acknowledgment.
 
 ## The bug, in detail
@@ -82,7 +82,7 @@ Replacements available without any contract change:
 
 | Contract | `deactivate_group` location | Action |
 |---|---|---|
-| `sep-democracy` | `src/lib.rs:664-720` | Remove. ~5 tests in `src/test.rs` removed. Update `test-vectors.json`. |
+| `sep-democracy` | `src/lib.rs:664-722` | Remove. ~5 tests in `src/test.rs` removed. Update `test-vectors.json`. |
 | `sep-oligarchy` | `src/lib.rs:830-…` | Remove. ~5 tests removed. Update `test-vectors.json`. |
 | `sep-anarchy` | `src/lib.rs:672-…` | Remove. Tests + vectors. |
 | `sep-xxxx` (legacy) | `src/lib.rs:1858-…` | **Keep as-is.** Contract is on its retirement path; no new feature work, including bug-fixes that change the surface. The Re-audit Finding #4 documentation already in the source is the operator's notice. |
@@ -126,6 +126,8 @@ Each contract drop also removes:
 
 ## How this was found, in detail
 
+> **Path-resolution note.** The `evals/` paths cited in this section and in *References* below land on `main` only after PR #152 (`chore/vendor-stellar-dev-skill`) merges. If this doc reaches `main` first, the intra-repo links remain dangling until #152 lands; the doc's argument is self-contained either way.
+
 1. PR #152 vendored the [stellar/stellar-dev-skill](https://github.com/stellar/stellar-dev-skill) bundle into `.claude/skills/stellar-dev/` and built an A/B eval harness at `evals/`.
 2. Fixture `evals/skills/stellar-dev/fixtures/04_audit_sep_democracy.py` was added — it pipes `contracts/sep-democracy/src/lib.rs` through Claude with the skill's `security.md` / `common-pitfalls.md` / `contracts-soroban.md` references in context, and asks for a six-section structured audit.
 3. Run: `python evals/eval.py --skill stellar-dev --fixture 04_audit_sep_democracy --model claude-opus-4-7 --save`.
@@ -135,6 +137,6 @@ Each contract drop also removes:
 ## References
 
 - Audit run: `evals/reports/stellar-dev_2026-04-27_17-39-27.md`
-- Per-type contract sources: `contracts/sep-democracy/src/lib.rs:664-720`, `contracts/sep-oligarchy/src/lib.rs:830-…`, `contracts/sep-anarchy/src/lib.rs:672-…`
+- Per-type contract sources: `contracts/sep-democracy/src/lib.rs:664-722`, `contracts/sep-oligarchy/src/lib.rs:830-…`, `contracts/sep-anarchy/src/lib.rs:672-…`
 - Legacy acknowledgment of both replay vectors: `contracts/sep-xxxx/src/lib.rs:108-128` (high-level) and `:1828-1857` (`deactivate_group` doc-comment, Re-audit Finding #4)
 - Companion design docs (need updating in Phase 1): `docs/democracy-update-testnet-design.md`, `docs/oligarchy-update-testnet-design.md`, `docs/anarchy-update-testnet-design.md`

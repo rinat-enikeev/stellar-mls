@@ -1,5 +1,15 @@
 # SwiftMLS
 
+## Breaking changes
+
+- **v1.10.39+** (postmortem #153 phase 2) — removed:
+  - `SEPContractClient.deactivateGroup(_:)` public method
+  - `SEPDeactivateGroupRequest` request type
+
+  The corresponding `deactivate_group` entrypoint was removed from the per-type Soroban contracts (`sep-democracy`, `sep-oligarchy`, `sep-anarchy`) in v1.10.38 (postmortem #153 phase 1) due to an unfixable-at-the-contract-level mempool front-running vulnerability. Downstream code that imported either symbol must be updated; there is no v1-line replacement. See `docs/postmortem-deactivate-group-frontrun.md` for rationale and alternatives (TTL-driven group abandonment, admin VK rotation as suppression, quorum-driven sentinel `update_commitment`).
+
+  Read-side observation of the contract's `active: bool` field — `OnChainStatus.deactivated`, `OnChainVerificationResult.Inactive`, "Group deactivated" badge UI — is unchanged. The field is retained on `CommitmentEntry` as defense-in-depth; it remains `true` in any group created against the per-type contracts in production code paths.
+
 Swift SDK for:
 
 - commitment construction

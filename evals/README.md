@@ -49,7 +49,22 @@ python evals/eval.py --skill stellar-dev --model claude-opus-4-7
 
 # Save raw responses + summary.json under evals/outputs/<skill>/:
 python evals/eval.py --skill stellar-dev --save
+
+# Render a timestamped human-readable report from the saved outputs.
+# Lands at evals/reports/<skill>_<YYYY-MM-DD_HH-MM-SS>.md (tracked).
+python evals/report.py --skill stellar-dev
+python evals/report.py --skill stellar-dev --tag opus-baseline
 ```
+
+## Reports
+
+`evals/outputs/` is gitignored (raw API responses balloon the diff and
+leak prompt phrasing into history). `evals/reports/` is tracked —
+running `evals/report.py --skill <name>` after a `--save` run emits a
+single Markdown file with the summary table, per-fixture scorer grid,
+and the full with/without responses inside collapsible `<details>`
+blocks. The filename carries a UTC timestamp so successive runs stack
+chronologically without overwriting each other.
 
 ## What gets sent to the API
 

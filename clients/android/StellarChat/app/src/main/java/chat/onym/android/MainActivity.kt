@@ -29,7 +29,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -123,6 +125,16 @@ private enum class Tab(val route: String, val label: String, val icon: ImageVect
 private val defaultTab = Tab.Chats
 private val tabs = listOf(Tab.Contacts, Tab.Chats, Tab.Search, Tab.Settings)
 private val tabRoutes = tabs.map { it.route }.toSet()
+
+// Guard against rapid back-button taps popping past the current screen.
+// During a pop transition the current entry leaves RESUMED before the next
+// entry becomes RESUMED; without this check, a second tap fires a second pop
+// and the stack can be emptied, leaving a blank screen.
+private fun NavController.popBackStackIfResumed(): Boolean {
+    val entry = currentBackStackEntry ?: return false
+    if (!entry.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return false
+    return popBackStack()
+}
 
 @Composable
 fun StellarChatNavHost(
@@ -266,7 +278,7 @@ fun StellarChatNavHost(
 
                 ChatScreen(
                     viewModel = chatViewModel,
-                    onBack = { navController.popBackStack() },
+                    onBack = { navController.popBackStackIfResumed() },
                     onGroupInfo = { navController.navigate("groupinfo/$groupId") },
                     contactAliasStore = groupListViewModel.contactAliasStore,
                     onUnpinEpoch = {
@@ -296,7 +308,7 @@ fun StellarChatNavHost(
                     keyManager = groupListViewModel.keyManager,
                     groupListViewModel = groupListViewModel,
                     invitationTransport = groupListViewModel.invitationTransport,
-                    onBack = { navController.popBackStack() },
+                    onBack = { navController.popBackStackIfResumed() },
                     onNavigateToChat = { groupId ->
                         navController.navigate("chat/$groupId") {
                             popUpTo("create") { inclusive = true }
@@ -314,7 +326,7 @@ fun StellarChatNavHost(
                 JoinGroupScreen(
                     viewModel = joinViewModel,
                     groupListViewModel = groupListViewModel,
-                    onBack = { navController.popBackStack() },
+                    onBack = { navController.popBackStackIfResumed() },
                     onGroupJoined = { group ->
                         // Mark as published if on-chain verification passed
                         if (joinViewModel.verificationResult is chat.onym.android.onchain.OnChainVerificationResult.Verified) {
@@ -333,7 +345,7 @@ fun StellarChatNavHost(
                         }
                         groupListViewModel.addGroup(group)
                         groupListViewModel.announceMemberJoined(group)
-                        navController.popBackStack()
+                        navController.popBackStackIfResumed()
                     }
                 )
             }
@@ -369,28 +381,28 @@ fun StellarChatNavHost(
             composable("relays") {
                 RelaysScreen(
                     viewModel = groupListViewModel,
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStackIfResumed() }
                 )
             }
 
             composable("blossom_servers") {
                 BlossomServersScreen(
                     viewModel = groupListViewModel,
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStackIfResumed() }
                 )
             }
 
             composable("stellar_contract") {
                 StellarContractScreen(
                     viewModel = groupListViewModel,
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStackIfResumed() }
                 )
             }
 
             composable("advanced_settings") {
                 AdvancedSettingsScreen(
                     viewModel = groupListViewModel,
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStackIfResumed() }
                 )
             }
 
@@ -399,11 +411,11 @@ fun StellarChatNavHost(
                 if (phrase != null) {
                     RecoveryPhraseScreen(
                         recoveryPhrase = phrase,
-                        onBack = { navController.popBackStack() }
+                        onBack = { navController.popBackStackIfResumed() }
                     )
                 } else {
                     // Legacy (pre-BIP39) install — no recovery phrase available
-                    LegacyIdentityScreen(onBack = { navController.popBackStack() })
+                    LegacyIdentityScreen(onBack = { navController.popBackStackIfResumed() })
                 }
             }
 
@@ -428,7 +440,7 @@ fun StellarChatNavHost(
                             }
                         }
                     },
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStackIfResumed() }
                 )
             }
 
@@ -443,7 +455,7 @@ fun StellarChatNavHost(
                     group = group,
                     invitationTransport = groupListViewModel.invitationTransport,
                     keyManager = groupListViewModel.keyManager,
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStackIfResumed() }
                 )
             }
 
@@ -518,7 +530,7 @@ fun StellarChatNavHost(
                     },
                     contactAliasStore = groupListViewModel.contactAliasStore,
                     dao = groupListViewModel.store.dao,
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStackIfResumed() }
                 )
             }
 
@@ -543,7 +555,7 @@ fun StellarChatNavHost(
                         }
                     },
                     contactAliasStore = groupListViewModel.contactAliasStore,
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStackIfResumed() }
                 )
             }
 
@@ -560,7 +572,7 @@ fun StellarChatNavHost(
                     inviterX25519Hex = inviter,
                     nonceHex = nonce,
                     groupListViewModel = groupListViewModel,
-                    onDone = { navController.popBackStack() }
+                    onDone = { navController.popBackStackIfResumed() }
                 )
             }
 
@@ -585,12 +597,12 @@ fun StellarChatNavHost(
                         groupListViewModel.addGroup(group)
                         groupListViewModel.announceMemberJoined(group)
                         groupListViewModel.removePendingInvitation(invitation.id)
-                        navController.popBackStack()
+                        navController.popBackStackIfResumed()
                     },
                     onDecline = { invitation ->
                         groupListViewModel.removePendingInvitation(invitation.id)
                     },
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStackIfResumed() }
                 )
             }
         }

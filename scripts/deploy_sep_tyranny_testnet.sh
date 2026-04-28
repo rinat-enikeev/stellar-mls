@@ -17,6 +17,12 @@ set -euo pipefail
 #   * Generating real fixtures (TyrannyCreateCircuit + TyrannyUpdateCircuit
 #     don't exist in any prior keyset). Operator supplies dev VKs via
 #     FIXTURE_DIR.
+#
+# Alias state note: this script registers `--alias $ALIAS` (default
+# `sep-tyranny-testnet`) inside CONFIG_DIR. When PERSIST_IDENTITY=1 the
+# alias survives between runs in $HOME/.config/stellar; iterating locally
+# with the same alias may collide with stellar's prior-deploy bookkeeping.
+# Override ALIAS=... or set PERSIST_IDENTITY=0 (default) for ephemeral runs.
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
@@ -43,6 +49,11 @@ ARTIFACT_DIR="$WORK_DIR/artifacts"
 #   $FIXTURE_DIR/vk-update-{small,medium,large}.json       (5 IC points)
 FIXTURE_DIR="${FIXTURE_DIR:-$REPO_ROOT/keyset-tyranny-dev}"
 
+# Cleanup matrix: KEEP_ARTIFACTS=1 disables the trap entirely, so the
+# ephemeral CONFIG_DIR (which holds the deployer's private key under
+# PERSIST_IDENTITY=0) is left on disk for forensics. Operators choosing
+# KEEP_ARTIFACTS=1 with PERSIST_IDENTITY=0 should treat
+# /tmp/sep-tyranny-stellar-config.* as private-key material.
 cleanup() {
     if [ "$KEEP_ARTIFACTS" != "1" ]; then
         rm -rf "$WORK_DIR"

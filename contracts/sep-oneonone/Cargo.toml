@@ -1,0 +1,35 @@
+[package]
+name = "sep-oneonone-contract"
+version = "0.1.0"
+edition = "2021"
+description = "Soroban smart contract for SEP 1v1: per-type immutable two-party group. No update path, no deactivate, no quorum, no admin set, no tier parameter (tier=0 hardcoded)."
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+doctest = false
+
+[dependencies]
+# Pinned with `=` (not `^=`) because soroban-sdk 25.3.1 raised its rustc
+# floor to 1.91, which the dev-toolchain doesn't currently meet. Bumping
+# this needs a coordinated rustup update — don't loosen casually.
+soroban-sdk = "=25.3.0"
+
+[dev-dependencies]
+soroban-sdk = { version = "=25.3.0", features = ["testutils"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true
+
+[profile.release-with-logs]
+inherits = "release"
+debug-assertions = true

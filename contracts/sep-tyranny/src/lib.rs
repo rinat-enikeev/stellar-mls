@@ -802,18 +802,16 @@ fn u64_to_u256_be(val: u64) -> [u8; 32] {
     bytes
 }
 
-/// Pairing check for a Groth16 proof under a 5-IC layout:
+/// Three shape-specific Groth16 verifiers, one per VK family. Kept
+/// shape-specific (rather than collapsed into a single arity-parameterized
+/// helper) so each IC count and public-input layout is visible at the
+/// helper level for audit:
 ///
-///   IC[1] · in1 + IC[2] · in2 + IC[3] · in3 + IC[4] · in4   (+ IC[0] base)
-///
-/// Used by both the 4-IC Create-VK call (with `in4 = 0` packed into a
-/// dummy slot — actually Create has 4 IC, so we need a separate
-/// helper) and 5-IC Update-VK call. To keep verifiers shape-specific
-/// and auditable, this file has three: `verify_membership_proof`
-/// (3-IC, public inputs `(commitment, epoch)`), `verify_create_proof`
-/// (4-IC, public inputs `(commitment, epoch, admin_pubkey_commitment)`),
-/// and `verify_update_proof` (5-IC, public inputs `(c_old, epoch_old,
-/// c_new, admin_pubkey_commitment)`).
+///   * `verify_membership_proof` — 3 IC, public inputs `(commitment, epoch)`
+///   * `verify_create_proof`     — 4 IC, public inputs `(commitment, epoch,
+///                                  admin_pubkey_commitment)`
+///   * `verify_update_proof`     — 5 IC, public inputs `(c_old, epoch_old,
+///                                  c_new, admin_pubkey_commitment)`
 
 /// Verify a 3-IC-point Membership proof. Public inputs:
 ///   IC[1] · commitment + IC[2] · epoch (+ IC[0] base).

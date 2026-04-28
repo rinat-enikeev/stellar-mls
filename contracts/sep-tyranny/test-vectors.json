@@ -79,7 +79,7 @@
         "ic_count": 5,
         "ic_layout": ["base", "c_old", "epoch_old", "c_new", "admin_pubkey_commitment"],
         "used_by": ["update_commitment"],
-        "note": "TyrannyUpdateCircuit. 3 wire-supplied scalars (c_old, epoch_old, c_new) + 1 contract-supplied (admin_pubkey_commitment from current.admin_pubkey_commitment). Witness: admin BLS secret key + member trees before/after."
+        "note": "TyrannyUpdateCircuit. 3 wire-supplied scalars (c_old, epoch_old, c_new) + 1 contract-supplied (admin_pubkey_commitment, read from DataKey::AdminCommitment(group_id) — its own storage slot, NOT a CommitmentEntry field). Witness: admin BLS secret key + member trees before/after."
       }
     ],
     "ic_ordering_canonical": "MUST match the Tyranny circuit family's allocation order. Pinned per design §5.1."
@@ -113,7 +113,7 @@
       "c_old (from wire)",
       "epoch_old (from wire)",
       "c_new (from wire)",
-      "admin_pubkey_commitment (from current.admin_pubkey_commitment in storage)"
+      "admin_pubkey_commitment (from DataKey::AdminCommitment(group_id) in storage — its own per-group slot, not a CommitmentEntry field)"
     ],
     "vk_kind": "Update (5 IC points: base + 4 public inputs)",
     "canonical_encoding_rules": [
@@ -124,14 +124,13 @@
   },
 
   "storage_layout": {
-    "description": "Storage entries written by the contract. Per-type Tyranny means `group_type` is implicit in the contract address. CommitmentEntry adds `admin_pubkey_commitment` vs sibling templates — pinned at create, never mutated by update_commitment.",
+    "description": "Storage entries written by the contract. Per-type Tyranny means `group_type` is implicit in the contract address. The admin's BLS pubkey commitment lives in its own per-group slot (`DataKey::AdminCommitment(group_id)`) rather than as a CommitmentEntry field — avoids ~2KB/group of duplication across HISTORY_WINDOW=64 snapshots, and gives the immutable per-group anchor a dedicated invariant.",
     "commitment_entry": {
       "fields": [
         { "name": "commitment", "type": "BytesN<32>", "rule": "Poseidon commitment; canonical Fr encoding" },
         { "name": "epoch", "type": "u64", "rule": "starts at 0, increments by 1 per successful update_commitment" },
         { "name": "timestamp", "type": "u64", "rule": "ledger timestamp when this state was recorded" },
-        { "name": "tier", "type": "u32", "rule": "0=Small, 1=Medium, 2=Large; fixed at create_group, never mutated" },
-        { "name": "admin_pubkey_commitment", "type": "BytesN<32>", "rule": "Poseidon hash of the admin's BLS pubkey; pinned at create_group, NEVER mutated by update_commitment. The Update circuit binds this as a public input proven against the prover's witness (the admin's secret key)." }
+        { "name": "tier", "type": "u32", "rule": "0=Small, 1=Medium, 2=Large; fixed at create_group, never mutated" }
       ]
     },
     "removed_vs_per_type_template": [
@@ -149,6 +148,7 @@
       { "name": "CreateVK(tier)", "value_type": "VerificationKeyData", "storage": "persistent", "note": "Tyranny Create-circuit VK for tier 0/1/2; 4 IC points" },
       { "name": "UpdateVK(tier)", "value_type": "VerificationKeyData", "storage": "persistent", "note": "Tyranny Update-circuit VK for tier 0/1/2; 5 IC points" },
       { "name": "Group(group_id)", "value_type": "CommitmentEntry", "storage": "persistent", "note": "current group state" },
+      { "name": "AdminCommitment(group_id)", "value_type": "BytesN<32>", "storage": "persistent", "note": "Poseidon hash of the admin's BLS pubkey; pinned at create_group, NEVER written by any other entrypoint. The Update circuit binds this as its 4th public input (read by update_commitment from this slot, NOT carried on the wire). Stored in its own per-group slot rather than as a CommitmentEntry field to avoid duplicating an immutable value across History snapshots." },
       { "name": "History(group_id)", "value_type": "Vec<CommitmentEntry>", "storage": "persistent", "note": "rolling-window history; capped at HISTORY_WINDOW=64; pruned FIFO" },
       { "name": "UsedProof(proof_hash)", "value_type": "()", "storage": "persistent (TTL ~30 days via LEDGER_BUMP)", "note": "global-nullifier scope" },
       { "name": "GroupCount(tier)", "value_type": "u32", "storage": "instance", "note": "active group count per tier; checked against MAX_GROUPS_PER_TIER (10000) in create_group. Monotonic increment-only since `deactivate_group` is not present (postmortem #153) — no decrement path; one-way ratchet. Operationally fine at testnet scale." }

@@ -8,7 +8,7 @@ The contract implements the spec in `docs/tyranny-update-testnet-design.md`:
 
 - Stores a Poseidon commitment representing a member tree, plus a Poseidon commitment to the admin's BLS pubkey, pinned at creation.
 - Verifies a 4-IC Create-circuit proof against `(commitment, epoch=0, admin_pubkey_commitment)` at create.
-- Verifies a 5-IC Update-circuit proof against `(c_old, epoch_old, c_new, admin_pubkey_commitment)` at each `update_commitment`, where `admin_pubkey_commitment` is contract-supplied from `current.admin_pubkey_commitment` (not on the wire).
+- Verifies a 5-IC Update-circuit proof against `(c_old, epoch_old, c_new, admin_pubkey_commitment)` at each `update_commitment`, where `admin_pubkey_commitment` is contract-supplied from `DataKey::AdminCommitment(group_id)` (a per-group storage slot separate from `CommitmentEntry`; not on the wire).
 - Verifies a 3-IC Membership-circuit proof against the stored `(commitment, epoch)` at read time.
 - Allows only admin-gated VK rotation and admin-gated restricted-mode toggling.
 - Has no `deactivate_group` (postmortem #153).
@@ -23,7 +23,7 @@ The `test_vectors_consistency` inline test enforces that the contract's `Error` 
 | §5 Entrypoint surface (8 + constructor) | `lib.rs::SepTyrannyContract` impl block |
 | §5.1 Three VKs (3/4/5 IC, distinct circuits) | `VkKind` enum, three `verify_*_proof` helpers, three storage keys (`VK`, `CreateVK`, `UpdateVK`) |
 | §5.2 `caller` is auth gate, not bound into the proof | `create_group` calls `caller.require_auth()` then `verify_create_proof(...)` — verifier ignores `caller` |
-| §6 Storage layout: `CommitmentEntry { commitment, epoch, timestamp, tier, admin_pubkey_commitment }` | `CommitmentEntry` struct |
+| §6 Storage layout: `CommitmentEntry { commitment, epoch, timestamp, tier }` + separate `DataKey::AdminCommitment(group_id) → BytesN<32>` | `CommitmentEntry` struct + `DataKey::AdminCommitment` |
 | §7 Errors (14 reachable, intentional gaps) | `Error` enum |
 | §8 `MAX_GROUPS_PER_TIER = 10_000` monotonic increment-only | `create_group` reads `GroupCount(tier)`, rejects if `>= MAX_GROUPS_PER_TIER`, increments after success |
 | §9 Wire formats: 3-input Membership, 3-input Create (epoch=0 enforced), 3-input Update (admin_pubkey_commitment supplied by contract) | `MembershipPublicInputs`, `CreatePublicInputs`, `UpdatePublicInputs` types + the per-entrypoint check sequences |
@@ -32,7 +32,7 @@ The `test_vectors_consistency` inline test enforces that the contract's `Error` 
 
 | ID | Invariant | How enforced |
 |---|---|---|
-| I1 | `admin_pubkey_commitment` is invariant under `update_commitment`. | `update_commitment` writes `new_entry.admin_pubkey_commitment = current.admin_pubkey_commitment`. The wire payload `UpdatePublicInputs` does not carry an `admin_pubkey_commitment` field — it cannot be supplied by the caller. |
+| I1 | `admin_pubkey_commitment` is invariant under `update_commitment`. | `update_commitment` does not write to `DataKey::AdminCommitment(group_id)` — only `create_group` does. The wire payload `UpdatePublicInputs` does not carry an `admin_pubkey_commitment` field — it cannot be supplied by the caller. There is no `update_admin` entrypoint in v0. |
 | I2 | Epoch monotonic-by-1. | `update_commitment` rejects `wire.epoch_old != current.epoch` with `PublicInputsMismatch`; computes `new_epoch = current.epoch.checked_add(1)` and surfaces overflow as `InvalidEpoch`. |
 | I3 | `GroupCount(tier)` is monotonic increment-only. | `create_group` increments after success; no entrypoint decrements. |
 | I4 | Replay protection. | `check_proof_replay` reads `UsedProof(hash)` before verification; `record_proof` writes after verification. |
@@ -49,7 +49,7 @@ Tyranny ships without `deactivate_group`. A leaked Membership-VK proof (3-IC) ca
 
 A leaked Create-VK proof can be replayed at `create_group`, but only with the same `commitment` + `admin_pubkey_commitment` the prover authored, against a different `group_id` (the contract requires fresh `group_id`; existing entry triggers `GroupAlreadyExists`). Benign griefing — same shape as create-time front-running on the other per-type contracts.
 
-A leaked Update-VK proof binds a specific `(c_old, epoch_old, c_new)` and is locked to a specific `current.admin_pubkey_commitment`. An attacker replaying it against a different group fails because `current.commitment != c_old` (PublicInputsMismatch) or `current.admin_pubkey_commitment` differs (verify fails). Replaying against the same group fails because `record_proof` consumed the nullifier post-verify.
+A leaked Update-VK proof binds a specific `(c_old, epoch_old, c_new)` and is locked to a specific `admin_pubkey_commitment`. An attacker replaying it against a different group fails because `current.commitment != c_old` (PublicInputsMismatch) or the target group's `AdminCommitment(group_id)` differs (verify fails). Replaying against the same group fails because `record_proof` consumed the nullifier post-verify.
 
 ## What's NOT proved here
 

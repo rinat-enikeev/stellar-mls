@@ -130,9 +130,12 @@ pub struct RestrictedModeChanged {
 ///   * No `member_count`, no `occupancy_commitment` (Tyranny is
 ///     value-agnostic to count)
 ///   * No `threshold_numerator` (single admin, no quorum)
-///   * Adds `admin_pubkey_commitment`: Poseidon hash of admin's BLS
-///     pubkey, pinned at create_group, NEVER mutated by
-///     update_commitment.
+///
+/// `admin_pubkey_commitment` lives in its own per-group storage slot
+/// (`DataKey::AdminCommitment(group_id)`) rather than as a field
+/// here. It is invariant for a group's lifetime; carrying it on
+/// every history snapshot would duplicate ~2KB per group at
+/// HISTORY_WINDOW=64 with no informational gain.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitmentEntry {
@@ -140,7 +143,6 @@ pub struct CommitmentEntry {
     pub epoch: u64,
     pub timestamp: u64,
     pub tier: u32,
-    pub admin_pubkey_commitment: BytesN<32>,
 }
 
 /// Public inputs supplied to `verify_membership`. 2 wire fields → 3 IC.
@@ -215,6 +217,11 @@ pub enum DataKey {
     /// Tyranny Update-circuit VK per tier (persistent).
     UpdateVK(u32),
     Group(BytesN<32>),
+    /// Per-group admin pubkey commitment (Poseidon hash of admin's BLS
+    /// pubkey). Pinned at create_group, never mutated. Stored in its
+    /// own slot rather than as a CommitmentEntry field to avoid
+    /// duplicating an immutable value across `History` snapshots.
+    AdminCommitment(BytesN<32>),
     History(BytesN<32>),
     UsedProof(BytesN<32>),
     GroupCount(u32),
@@ -443,11 +450,14 @@ impl SepTyrannyContract {
             epoch: 0,
             timestamp,
             tier,
-            admin_pubkey_commitment: admin_pubkey_commitment.clone(),
         };
         env.storage()
             .persistent()
             .set(&DataKey::Group(group_id.clone()), &entry);
+        env.storage().persistent().set(
+            &DataKey::AdminCommitment(group_id.clone()),
+            &admin_pubkey_commitment,
+        );
         env.storage().persistent().set(
             &DataKey::History(group_id.clone()),
             &Vec::<CommitmentEntry>::new(&env),
@@ -498,6 +508,12 @@ impl SepTyrannyContract {
 
         Self::check_proof_replay(&env, &proof)?;
 
+        // admin_pubkey_commitment is INVARIANT under update_commitment;
+        // read from its dedicated storage slot, NOT from
+        // CommitmentEntry (which doesn't carry it). update_commitment
+        // never touches DataKey::AdminCommitment(group_id).
+        let admin_commitment = Self::load_admin_commitment(&env, &group_id)?;
+
         let vk = Self::load_update_vk(&env, current.tier)?;
         if !verify_update_proof(
             &env,
@@ -506,7 +522,7 @@ impl SepTyrannyContract {
             &public_inputs.c_old,
             public_inputs.epoch_old,
             &public_inputs.c_new,
-            &current.admin_pubkey_commitment,
+            &admin_commitment,
         ) {
             return Err(Error::InvalidProof);
         }
@@ -520,8 +536,6 @@ impl SepTyrannyContract {
             epoch: new_epoch,
             timestamp,
             tier: current.tier,
-            // admin_pubkey_commitment is INVARIANT under update_commitment.
-            admin_pubkey_commitment: current.admin_pubkey_commitment,
         };
         env.storage()
             .persistent()
@@ -618,6 +632,13 @@ impl SepTyrannyContract {
             .ok_or(Error::GroupNotFound)
     }
 
+    fn load_admin_commitment(env: &Env, group_id: &BytesN<32>) -> Result<BytesN<32>, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::AdminCommitment(group_id.clone()))
+            .ok_or(Error::GroupNotFound)
+    }
+
     fn group_exists(env: &Env, group_id: &BytesN<32>) -> bool {
         env.storage()
             .persistent()
@@ -662,6 +683,17 @@ impl SepTyrannyContract {
         {
             env.storage().persistent().extend_ttl(
                 &DataKey::Group(group_id.clone()),
+                LEDGER_THRESHOLD,
+                LEDGER_BUMP,
+            );
+        }
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::AdminCommitment(group_id.clone()))
+        {
+            env.storage().persistent().extend_ttl(
+                &DataKey::AdminCommitment(group_id.clone()),
                 LEDGER_THRESHOLD,
                 LEDGER_BUMP,
             );

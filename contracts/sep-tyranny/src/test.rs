@@ -233,11 +233,14 @@ fn inject_group(
             epoch,
             timestamp: env.ledger().timestamp(),
             tier,
-            admin_pubkey_commitment: admin_pubkey_commitment.clone(),
         };
         env.storage()
             .persistent()
             .set(&DataKey::Group(group_id.clone()), &entry);
+        env.storage().persistent().set(
+            &DataKey::AdminCommitment(group_id.clone()),
+            admin_pubkey_commitment,
+        );
         env.storage().persistent().set(
             &DataKey::History(group_id.clone()),
             &Vec::<CommitmentEntry>::new(env),
@@ -652,27 +655,37 @@ fn test_update_commitment_rejects_unknown_group() {
 
 #[test]
 fn test_update_commitment_does_not_mutate_admin_pubkey_commitment() {
-    // Set up a group with a non-zero admin_pubkey_commitment, then
-    // attempt update_commitment. The update will fail at the verifier
-    // (mock proof), but the test asserts the field is unchanged either
-    // way. (For a successful update with real proofs, the same
-    // assertion would hold per the contract's invariant.)
+    // Set up a group with a known admin_pubkey_commitment in its
+    // dedicated DataKey::AdminCommitment(group_id) slot, then attempt
+    // update_commitment. The update will fail at the verifier (mock
+    // proof), but the test asserts the admin commitment is unchanged
+    // either way. The same assertion would hold under a successful
+    // update because update_commitment NEVER writes to AdminCommitment.
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
     let group_id = BytesN::from_array(&env, &[26u8; 32]);
     let z = canonical_zero(&env);
-    let apc = canonical_zero(&env); // canonical Fr; distinct value would also work but z is simplest
+    let apc = canonical_zero(&env);
     inject_group(&env, &contract_id, &group_id, &z, &apc, 0, 0);
-    let pre = client.get_commitment(&group_id);
-    assert_eq!(pre.admin_pubkey_commitment, apc);
+
+    let load_admin = || -> BytesN<32> {
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .get(&DataKey::AdminCommitment(group_id.clone()))
+                .expect("AdminCommitment must exist after inject_group")
+        })
+    };
+    let pre_admin = load_admin();
+    assert_eq!(pre_admin, apc);
 
     let pi = upi(&env, &z, 0, &z);
     let _ = client.try_update_commitment(&group_id, &mock_proof(&env, b"u-no-mutate"), &pi);
 
-    let post = client.get_commitment(&group_id);
+    let post_admin = load_admin();
     assert_eq!(
-        post.admin_pubkey_commitment, apc,
-        "admin_pubkey_commitment must be invariant under update_commitment"
+        post_admin, apc,
+        "admin_pubkey_commitment (DataKey::AdminCommitment) must be invariant under update_commitment"
     );
 }
 
@@ -844,7 +857,15 @@ fn test_get_commitment_returns_current_state() {
     let entry = client.get_commitment(&group_id);
     assert_eq!(entry.commitment, z);
     assert_eq!(entry.epoch, 0);
-    assert_eq!(entry.admin_pubkey_commitment, z);
+    // admin_pubkey_commitment is in its own storage slot, not on
+    // CommitmentEntry. Read it directly to confirm injection.
+    let stored_admin: BytesN<32> = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::AdminCommitment(group_id.clone()))
+            .unwrap()
+    });
+    assert_eq!(stored_admin, z);
 }
 
 #[test]

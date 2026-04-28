@@ -202,7 +202,7 @@ fun ChatScreen(
                 )
             }
             val governanceType = viewModel.group?.groupType
-            if (governanceType != null && !governanceBannerDismissed) {
+            if (governanceType != null && !governanceBannerDismissed && !chat.onym.android.viewmodel.GroupListViewModel.isDemoMode) {
                 GovernanceBanner(
                     groupType = governanceType,
                     onDismiss = {

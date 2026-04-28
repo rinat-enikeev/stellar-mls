@@ -123,7 +123,10 @@ if ! stellar keys fund "$IDENTITY" --config-dir "$CONFIG_DIR" --network "$NETWOR
     fi
 fi
 
-echo "==> Deploying contract to $NETWORK"
+echo "==> Deploying contract to $NETWORK with constructor args (atomic deploy+init)"
+# Audit-followup Finding #5: run `__constructor` in the same transaction
+# as the upload, so no third party can front-run `initialize` between
+# deploy and setup.
 CONTRACT_ID="$(
     stellar contract deploy \
         --config-dir "$CONFIG_DIR" \
@@ -131,6 +134,14 @@ CONTRACT_ID="$(
         --source-account "$IDENTITY" \
         --alias "$ALIAS" \
         --wasm "$WASM_PATH" \
+        -- \
+        --admin "$DEPLOYER_ADDRESS" \
+        --vk-small-file-path "$FIXTURE_DIR/vk-small.json" \
+        --vk-medium-file-path "$FIXTURE_DIR/vk-medium.json" \
+        --vk-large-file-path "$FIXTURE_DIR/vk-large.json" \
+        --update-vk-small-file-path "$FIXTURE_DIR/vk-update-small.json" \
+        --update-vk-medium-file-path "$FIXTURE_DIR/vk-update-medium.json" \
+        --update-vk-large-file-path "$FIXTURE_DIR/vk-update-large.json" \
         | tr -d '\n'
 )"
 
@@ -138,21 +149,6 @@ if [ -z "$CONTRACT_ID" ]; then
     echo "failed to capture deployed contract id" >&2
     exit 1
 fi
-
-echo "==> Initializing contract with test verification keys (6: membership + update per tier)"
-stellar contract invoke \
-    --config-dir "$CONFIG_DIR" \
-    --network "$NETWORK" \
-    --id "$CONTRACT_ID" \
-    --source-account "$IDENTITY" \
-    -- initialize \
-    --admin "$DEPLOYER_ADDRESS" \
-    --vk-small-file-path "$FIXTURE_DIR/vk-small.json" \
-    --vk-medium-file-path "$FIXTURE_DIR/vk-medium.json" \
-    --vk-large-file-path "$FIXTURE_DIR/vk-large.json" \
-    --update-vk-small-file-path "$FIXTURE_DIR/vk-update-small.json" \
-    --update-vk-medium-file-path "$FIXTURE_DIR/vk-update-medium.json" \
-    --update-vk-large-file-path "$FIXTURE_DIR/vk-update-large.json" >/dev/null
 
 echo "==> create_group"
 stellar contract invoke \

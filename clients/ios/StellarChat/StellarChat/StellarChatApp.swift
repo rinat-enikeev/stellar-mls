@@ -104,6 +104,10 @@ struct StellarChatApp: App {
             ContentView()
                 .environment(appState)
                 .task {
+                    if AppState.isDemoMode {
+                        DemoFixtures.seed(into: appState)
+                        return
+                    }
                     await appState.startInboxListener()
                     appDelegate.pushManager = appState.pushManager
                     appDelegate.appState = appState
@@ -154,6 +158,22 @@ final class AppState {
     /// group-ID-derived salt means any client can recompute it without
     /// needing extra persisted state. Future ceremonies that rotate the
     /// admin set will bind a fresh salt via `update_admin_commitment`.
+    /// True when launched for screenshot capture. Accepts:
+    ///   - `--demo` / `-demo` (manual `xcrun simctl launch … --demo`)
+    ///   - bare `demo true` (Maestro's `arguments: { demo: true }` lands as
+    ///     two separate untagged strings in `ProcessInfo.arguments`)
+    static let isDemoMode: Bool = {
+        let args = ProcessInfo.processInfo.arguments
+        if args.contains("--demo") || args.contains("-demo") { return true }
+        if let demoIdx = args.firstIndex(of: "demo"), demoIdx > 0 {
+            let value = args.indices.contains(demoIdx + 1) ? args[demoIdx + 1] : ""
+            if value.lowercased() == "true" || value == "1" || value.lowercased() == "yes" {
+                return true
+            }
+        }
+        return UserDefaults.standard.bool(forKey: "demo")
+    }()
+
     static func deriveAdminSalt(groupID: Data) -> Data {
         var input = Data()
         input.append(contentsOf: Array("sep-admin-salt-v1".utf8))
@@ -287,6 +307,11 @@ final class AppState {
     }()
 
     init() {
+        if Self.isDemoMode {
+            // Skip the onboarding sheet — ContentView reads this via @AppStorage.
+            UserDefaults.standard.set(true, forKey: "hasSeenOnboarding")
+        }
+
         do {
             self.keyManager = try KeyManager()
         } catch {
@@ -367,7 +392,9 @@ final class AppState {
         chatTransport.currentMembers = groups.flatMap(\.members)
         setupChatHandler()
         setupProtocolHandler()
-        Task { await connectAndSubscribeAllGroups() }
+        if !Self.isDemoMode {
+            Task { await connectAndSubscribeAllGroups() }
+        }
     }
 
     /// Replace the active key manager after a BIP39 restore.
@@ -778,32 +805,6 @@ final class AppState {
             salt: group.salt,
             tier: group.tier
         )
-    }
-
-    // MARK: - Group Deactivation
-
-    /// M-18: Deactivation requires explicit confirmation since it is irreversible on-chain.
-    /// The `confirmed` parameter must be `true` — callers should show a confirmation dialog first.
-    func deactivateGroupOnChain(_ group: ChatGroup, confirmed: Bool = false) async throws {
-        guard confirmed else {
-            throw ChatError.verificationFailed("Deactivation requires explicit confirmation")
-        }
-        guard let service = onChainService else {
-            throw ChatError.contractNotConfigured
-        }
-
-        let response = try await service.deactivateGroup(
-            groupIDData: group.groupIDData,
-            members: group.members,
-            blsSecretKey: keyManager.blsSecretKey,
-            epoch: group.epoch,
-            salt: group.salt,
-            tier: group.tier
-        )
-
-        if !response.accepted {
-            throw ChatError.onChainPublishFailed(response.message ?? "Deactivation rejected")
-        }
     }
 
     // MARK: - Blockchain-First Epoch Transition

@@ -3,6 +3,7 @@ package chat.onym.android.model
 import chat.onym.android.crypto.KeyAttestation
 import com.stellarmls.mls.SEPCommitmentBuilder
 import com.stellarmls.mls.SEPGroupMemberLeaf
+import com.stellarmls.mls.SEPGroupType
 import com.stellarmls.mls.SEPMemberTransportBundle
 import com.stellarmls.mls.SEPTier
 import org.json.JSONArray
@@ -23,6 +24,9 @@ data class BootstrapPayload(
     val relayHints: List<String>,
     val salt: ByteArray,              // 32 bytes
     val tierRawValue: Int,
+    /** Governance type of the invited group. Defaults to Anarchy (0) for
+     *  backward compatibility with older bootstrap payloads. */
+    val groupTypeRawValue: Int = SEPGroupType.ANARCHY.id,
     val commitment: ByteArray?,
     val senderNostrPubkey: String,
     val senderAttestation: KeyAttestation? = null,
@@ -46,6 +50,7 @@ data class BootstrapPayload(
             aKey.size - bKey.size
         }
         val tier = SEPTier.entries.find { it.id == tierRawValue } ?: SEPTier.LARGE
+        val groupType = SEPGroupType.fromId(groupTypeRawValue)
         return ChatGroup(
             id = groupIDHex,
             name = name,
@@ -56,7 +61,8 @@ data class BootstrapPayload(
             epoch = epoch,
             salt = salt,
             commitment = commitment,
-            tier = tier
+            tier = tier,
+            groupType = groupType
         )
     }
 
@@ -69,6 +75,7 @@ data class BootstrapPayload(
         obj.put("relayHints", JSONArray(relayHints))
         obj.put("salt", android.util.Base64.encodeToString(salt, android.util.Base64.NO_WRAP))
         obj.put("tierRawValue", tierRawValue)
+        obj.put("groupTypeRawValue", groupTypeRawValue)
         obj.put("senderNostrPubkey", senderNostrPubkey)
         if (commitment != null) {
             obj.put("commitment", android.util.Base64.encodeToString(commitment, android.util.Base64.NO_WRAP))
@@ -115,6 +122,7 @@ data class BootstrapPayload(
                 relayHints = group.relayHints,
                 salt = group.salt,
                 tierRawValue = group.tier.id,
+                groupTypeRawValue = group.groupType.id,
                 commitment = group.commitment,
                 senderNostrPubkey = senderPubkey,
                 senderAttestation = attestation,
@@ -184,6 +192,7 @@ data class BootstrapPayload(
                 relayHints = relayHints,
                 salt = android.util.Base64.decode(obj.getString("salt"), android.util.Base64.NO_WRAP),
                 tierRawValue = obj.getInt("tierRawValue"),
+                groupTypeRawValue = obj.optInt("groupTypeRawValue", SEPGroupType.ANARCHY.id),
                 commitment = commitment,
                 senderNostrPubkey = obj.getString("senderNostrPubkey"),
                 senderAttestation = attestation,

@@ -29,6 +29,7 @@ struct CreateGroupView: View {
     @State private var onChainStatus: OnChainPublishStatus = .idle
     @State private var invitationStatuses: [String: InvitationStatus] = [:]
     @State private var showRawInviteCode = false
+    @State private var linkCopied = false
 
     private enum Step { case identity, people }
 
@@ -772,13 +773,21 @@ struct CreateGroupView: View {
                     HStack(spacing: 0) {
                         Button {
                             UIPasteboard.general.string = inviteLink
+                            UINotificationFeedbackGenerator().notificationOccurred(.success)
+                            withAnimation(.snappy) { linkCopied = true }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                withAnimation(.snappy) { linkCopied = false }
+                            }
                         } label: {
-                            Label("Copy Link", systemImage: "link")
+                            Label(
+                                linkCopied ? "Copied!" : "Copy Link",
+                                systemImage: linkCopied ? "checkmark" : "link"
+                            )
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 14)
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(linkCopied ? Color.green : Color.accentColor)
 
                         Divider().frame(height: 44)
 

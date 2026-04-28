@@ -40,6 +40,35 @@ const LEDGER_THRESHOLD: u32 = 17_280;
 /// TTL bump amount for persistent storage (ledgers, ~30 days).
 const LEDGER_BUMP: u32 = 518_400;
 
+/// TTL bump target for `GroupCounted` receipts (~60 days).
+///
+/// Audit re-review Finding #3: the per-group receipt that enables
+/// `reconcile_tier_count` MUST outlive the group's `GroupV2` entry so
+/// that after the group goes cold (no calls, `GroupV2` expires) there
+/// is still a window during which anyone can observe the dangling
+/// tier-count slot and clean it up. Using a bump twice the group TTL
+/// gives operators a ~30-day grace window after cold-group expiry to
+/// run reconciliation. Stored in persistent storage (not instance)
+/// so each receipt carries its own expiry and does not consume the
+/// ~64KB shared instance budget.
+const GROUP_COUNTED_LEDGER_BUMP: u32 = LEDGER_BUMP * 2;
+
+/// TTL threshold for `GroupCounted` receipt refreshes.
+///
+/// Round-3 audit: Soroban `extend_ttl(threshold, extend_to)` only
+/// extends when `current_ttl < threshold`. If we used the default
+/// `LEDGER_THRESHOLD` here, a `bump_group` call made shortly before
+/// `GroupV2` expiry would refresh the group to `LEDGER_BUMP` but
+/// skip the receipt (its remaining TTL is still comfortably above
+/// `LEDGER_THRESHOLD`). If the group is then abandoned, the receipt
+/// and the group could expire within a handful of ledgers of each
+/// other — collapsing the reconciliation grace window we are trying
+/// to guarantee. Setting the receipt's threshold to
+/// `LEDGER_BUMP + LEDGER_THRESHOLD` means every bump that refreshes
+/// the group also refreshes the receipt's margin, restoring the
+/// full `LEDGER_BUMP` grace window after cold-group expiry.
+const GROUP_COUNTED_LEDGER_THRESHOLD: u32 = LEDGER_BUMP + LEDGER_THRESHOLD;
+
 /// Maximum number of active groups allowed per tier (M-4: storage abuse prevention).
 /// The admin can increase this limit by re-deploying with a higher value.
 const MAX_GROUPS_PER_TIER: u32 = 10_000;
@@ -60,22 +89,55 @@ fn tier_capacity(tier: u32) -> u32 {
     }
 }
 
-// Replay-nullifier operation tags (audit-2026-04 MEDIUM-3/LOW-1).
+// Replay-nullifier scoping — see `proof_hash`.
 //
-// Scoping the nullifier by `(op_tag, group_id, proof_bytes)` instead of a
-// global `sha256(proof_bytes)` has two effects:
-//   1. Replay is still impossible within the same (op, group) pair because
-//      circuits bind their public inputs, so a proof verifying twice against
-//      identical public inputs is a true replay.
-//   2. Benign cross-context reuse (e.g. the same membership proof used for
-//      both `verify_membership` and `deactivate_group`) no longer hits a
-//      spurious `ProofReplay`, and per-group nullifier growth is bounded by
-//      the group's own operation count rather than global activity.
-const OP_CREATE: u8 = 1;
-const OP_UPDATE: u8 = 2;
-const OP_UPDATE_DEMOCRACY: u8 = 3;
-const OP_UPDATE_ADMIN: u8 = 4;
-const OP_DEACTIVATE: u8 = 5;
+// The nullifier is a global `sha256(proof.a || proof.b || proof.c)`:
+// once ANY proof bytes have been submitted to ANY state-changing
+// entrypoint, those exact bytes cannot be resubmitted to ANY entrypoint
+// on ANY group. This is intentionally the strongest available contract-
+// level scope because the MembershipCircuit does not bind `group_id` or
+// an operation tag, so two groups sharing `(commitment, epoch)` — e.g.
+// a deliberate clone of a target group's initial membership tree —
+// would otherwise accept the same proof bytes on both groups.
+//
+// An earlier revision of this contract tried `sha256(group_id || proof)`
+// to bound per-group storage growth, but that weakened cross-group
+// protection: an attacker who observed a proof against group A could
+// replay it against a cloned group B. The storage-growth concern is
+// subsumed by `MAX_GROUPS_PER_TIER` and by the natural TTL expiry of
+// `UsedProof` entries.
+//
+// ── What contract-level nullifiers CANNOT close ────────────────────
+//
+// 1. Pre-inclusion mempool / front-run replay. The nullifier is only
+//    recorded after the honest caller's transaction lands. A watcher
+//    that sees the pending transaction can resubmit the same proof
+//    bytes to `deactivate_group` and win ordering. `verify_membership`
+//    itself is non-state-changing and leaks the proof to any observer
+//    of the RPC simulation. Contract-level nullifiers protect only
+//    post-inclusion replay; pre-inclusion protection requires the
+//    circuit to bind an operation tag (so a VERIFY proof is not a
+//    valid DEACTIVATE proof) plus `group_id` and the calling address.
+//
+// 2. Long-lived groups whose `UsedProof` entries expire. TTL is
+//    `LEDGER_BUMP` (~30 days). A group that never advances
+//    `(commitment, epoch)` allows a create-time proof to be replayed
+//    once its nullifier has expired. Extending per-proof TTL forever
+//    is not a contract-only fix (rent is unbounded). Enumerating
+//    per-group nullifiers grows without bound and still enables
+//    pre-inclusion replay.
+//
+// ── Real closure: MembershipCircuit v2 ─────────────────────────────
+//
+// A circuit rotation that binds — at minimum — an operation tag
+// (CREATE / VERIFY / DEACTIVATE / UPDATE / UPDATE_ADMIN), `group_id`,
+// and a per-group monotonic `proof_nonce` as public inputs would make
+// a leaked proof useless outside the exact op+group+nonce it was
+// generated for. Optional additions: `caller` (with
+// `require_auth()`), `expires_at_ledger`, and an `intent_hash` for
+// challenge-bound attestations. Tracked as the v2 circuit follow-up;
+// until then the current global nullifier is defence-in-depth, not
+// primary replay protection.
 
 // ================================================================
 // Errors
@@ -155,6 +217,10 @@ pub enum Error {
     /// validates VK points at install time and proof points at verify time,
     /// so invalid-subgroup inputs can never reach `pairing_check`.
     InvalidPoint = 26,
+    /// `reconcile_tier_count` was called on a group whose state storage is
+    /// still live. The correct decrement path is `deactivate_group`.
+    /// Audit-followup Finding #6.
+    GroupStillActive = 27,
 }
 
 // ================================================================
@@ -202,6 +268,17 @@ pub struct GroupDeactivated {
     pub group_id: BytesN<32>,
     pub final_epoch: u64,
     pub timestamp: u64,
+}
+
+/// Audit-followup Finding #6: emitted by `reconcile_tier_count` so
+/// operators can audit tier-counter reconciliations.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TierCountReconciled {
+    #[topic]
+    pub group_id: BytesN<32>,
+    pub tier: u32,
+    pub new_count: u32,
 }
 
 // ================================================================
@@ -458,6 +535,38 @@ pub enum DataKey {
     GroupCount(u32),
     /// When true, only the admin can create new groups (N-26 access control).
     RestrictedMode,
+    /// Per-group "this id contributed +1 to GroupCount(tier)" receipt.
+    ///
+    /// Stored in PERSISTENT storage with its own TTL
+    /// (`GROUP_COUNTED_LEDGER_BUMP`, ~60 days — twice `LEDGER_BUMP`).
+    /// The invariant we depend on is:
+    ///
+    ///   GroupCounted(id) expiry > GroupV2(id) expiry + LEDGER_BUMP
+    ///
+    /// An intermediate audit revision put this receipt in INSTANCE
+    /// storage to guarantee the above without a custom TTL, but
+    /// instance storage is bounded (~64KB shared across all groups),
+    /// which would have capped live groups per tier well below
+    /// `MAX_GROUPS_PER_TIER`. Persistent storage with an explicit
+    /// longer TTL gives the same reconciliation guarantee without the
+    /// capacity regression.
+    ///
+    /// The refresh cadence matters: round-3 audit observed that
+    /// `extend_ttl(threshold, extend_to)` only extends when the
+    /// current TTL is below `threshold`, so the receipt uses a
+    /// *larger* threshold (`GROUP_COUNTED_LEDGER_THRESHOLD =
+    /// LEDGER_BUMP + LEDGER_THRESHOLD`) than the group. This means
+    /// every `bump_group` call that extends `GroupV2` also extends
+    /// the receipt, keeping the reconciliation grace window at a
+    /// full `LEDGER_BUMP` rather than collapsing it when a bump
+    /// lands shortly before group expiry.
+    ///
+    /// Written at every group-creation path; deleted by
+    /// `deactivate_group` or `reconcile_tier_count`. The stored value
+    /// is the tier the group was counted in, so reconciliation knows
+    /// which `GroupCount(tier)` slot to decrement without trusting
+    /// caller input.
+    GroupCounted(BytesN<32>),
 }
 
 // ================================================================
@@ -471,6 +580,40 @@ pub struct SepXxxxContract;
 impl SepXxxxContract {
     // ---- Admin ----
 
+    /// Soroban constructor — runs atomically as part of contract deployment.
+    ///
+    /// Audit-followup Finding #5: deploy+init-in-one-txn closes the window
+    /// where a front-runner could call `initialize` with their own keys
+    /// between deploy and the legitimate init call. Requires `admin` auth
+    /// the same way `initialize` does; modern Soroban deploys sign both the
+    /// deploy and the constructor invocation together.
+    ///
+    /// Arguments, checks, and side-effects are identical to `initialize`.
+    /// `initialize` is retained as a migration path for contracts that were
+    /// deployed before this constructor existed (pre-v1.10.18 testnet /
+    /// mainnet instances) and for test environments that deploy raw WASM.
+    pub fn __constructor(
+        env: Env,
+        admin: Address,
+        vk_small: VerificationKeyData,
+        vk_medium: VerificationKeyData,
+        vk_large: VerificationKeyData,
+        update_vk_small: VerificationKeyData,
+        update_vk_medium: VerificationKeyData,
+        update_vk_large: VerificationKeyData,
+    ) -> Result<(), Error> {
+        Self::do_initialize(
+            &env,
+            admin,
+            vk_small,
+            vk_medium,
+            vk_large,
+            update_vk_small,
+            update_vk_medium,
+            update_vk_large,
+        )
+    }
+
     /// Initialize the contract with verification keys for all three tiers.
     ///
     /// Must be called exactly once. The `admin` address is recorded and
@@ -478,8 +621,34 @@ impl SepXxxxContract {
     /// exactly 3 IC points (commitment + epoch); each update VK must have
     /// exactly 4 IC points (c_old + epoch_old + c_new). The update VKs are
     /// introduced by the #59 fix to close the `update_commitment` binding gap.
+    ///
+    /// For new deployments prefer `__constructor`, which runs atomically
+    /// with deploy. This entrypoint is retained so pre-constructor contract
+    /// instances can still be initialized post-hoc.
     pub fn initialize(
         env: Env,
+        admin: Address,
+        vk_small: VerificationKeyData,
+        vk_medium: VerificationKeyData,
+        vk_large: VerificationKeyData,
+        update_vk_small: VerificationKeyData,
+        update_vk_medium: VerificationKeyData,
+        update_vk_large: VerificationKeyData,
+    ) -> Result<(), Error> {
+        Self::do_initialize(
+            &env,
+            admin,
+            vk_small,
+            vk_medium,
+            vk_large,
+            update_vk_small,
+            update_vk_medium,
+            update_vk_large,
+        )
+    }
+
+    fn do_initialize(
+        env: &Env,
         admin: Address,
         vk_small: VerificationKeyData,
         vk_medium: VerificationKeyData,
@@ -633,6 +802,109 @@ impl SepXxxxContract {
         Ok(())
     }
 
+    /// Post-audit Finding #4: extend the TTL of all shared verification-key
+    /// storage entries (per-tier Membership VKs, per-tier Update VKs,
+    /// per-group-type Update VKs, and the AdminUpdate VK).
+    ///
+    /// Permissionless — anyone who cares about contract liveness (admin
+    /// automation, watchdog scripts, dependent clients) can keep the
+    /// verification machinery alive. `bump_group_ttl` does NOT bump these
+    /// keys because per-group bumps would pay unnecessary cost on every
+    /// group touch; a single `bump_vks` call amortises the cost globally.
+    ///
+    /// Silently no-ops for keys that have never been installed.
+    pub fn bump_vks(env: Env) -> Result<(), Error> {
+        Self::require_initialized(&env)?;
+        let storage = env.storage().persistent();
+        for tier in 0u32..=2 {
+            if storage.has(&DataKey::VK(tier)) {
+                storage.extend_ttl(&DataKey::VK(tier), LEDGER_THRESHOLD, LEDGER_BUMP);
+            }
+            if storage.has(&DataKey::UpdateVK(tier)) {
+                storage.extend_ttl(&DataKey::UpdateVK(tier), LEDGER_THRESHOLD, LEDGER_BUMP);
+            }
+            // Per-group-type update VKs. Democracy (2) is the only shape
+            // currently defined; loop over known `group_type` values.
+            for group_type in [2u32] {
+                if storage.has(&DataKey::UpdateVKByType(tier, group_type)) {
+                    storage.extend_ttl(
+                        &DataKey::UpdateVKByType(tier, group_type),
+                        LEDGER_THRESHOLD,
+                        LEDGER_BUMP,
+                    );
+                }
+            }
+        }
+        if storage.has(&DataKey::AdminUpdateVK) {
+            storage.extend_ttl(&DataKey::AdminUpdateVK, LEDGER_THRESHOLD, LEDGER_BUMP);
+        }
+        // Instance storage carries the contract admin, restricted-mode flag,
+        // and per-tier GroupCount — bump it here too so an automation that
+        // only calls `bump_vks` also keeps those alive.
+        env.storage()
+            .instance()
+            .extend_ttl(LEDGER_THRESHOLD, LEDGER_BUMP);
+        Ok(())
+    }
+
+    /// Audit-followup Finding #6: permissionlessly reconcile
+    /// `GroupCount(tier)` after a group has gone cold — its `GroupV2` /
+    /// legacy `Group` entry has expired without `deactivate_group` ever
+    /// being called — so a tier cannot be permanently pinned at the M-4
+    /// limit by abandoned groups.
+    ///
+    /// Authorisation is cryptographic-at-creation, not sender-based:
+    ///   1. `GroupCounted(group_id)` must still be present. This receipt
+    ///      is written at every creation path and deleted by
+    ///      `deactivate_group` after decrement, so its presence proves the
+    ///      group was once counted and has not yet been reconciled.
+    ///   2. Neither `GroupV2(group_id)` nor legacy `Group(group_id)` may
+    ///      be present. If either is, the group still exists and the
+    ///      correct decrement path is `deactivate_group`.
+    ///
+    /// Decrements `GroupCount(tier)` (tier read from the receipt) by one
+    /// and removes the receipt so a second call cannot double-decrement.
+    ///
+    /// Returns `GroupStillActive` if the group's storage is still live and
+    /// `GroupNotFound` if no reconciliation receipt exists (either never
+    /// created at this contract, already reconciled, or both the group and
+    /// receipt TTLs lapsed).
+    pub fn reconcile_tier_count(env: Env, group_id: BytesN<32>) -> Result<(), Error> {
+        Self::require_initialized(&env)?;
+
+        if Self::group_exists(&env, &group_id) {
+            return Err(Error::GroupStillActive);
+        }
+
+        let receipt_key = DataKey::GroupCounted(group_id.clone());
+        let tier: u32 = env
+            .storage()
+            .persistent()
+            .get(&receipt_key)
+            .ok_or(Error::GroupNotFound)?;
+
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::GroupCount(tier))
+            .unwrap_or(0);
+        if count > 0 {
+            env.storage()
+                .instance()
+                .set(&DataKey::GroupCount(tier), &(count - 1));
+        }
+        env.storage().persistent().remove(&receipt_key);
+
+        TierCountReconciled {
+            group_id,
+            tier,
+            new_count: count.saturating_sub(1),
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
     // ---- Group Operations ----
 
     /// Create a new private membership group (Anarchy governance).
@@ -679,6 +951,25 @@ impl SepXxxxContract {
     /// `member_count` is persisted as informational state for Anarchy (not
     /// enforced) and will be used as an authoritative quorum basis by the
     /// Democracy circuit when Phase 3 lands.
+    ///
+    /// **Audit-followup Findings #1-full and #2 — deferred to circuit work.**
+    /// The MembershipCircuit as currently compiled binds only `commitment`
+    /// and `epoch` as public inputs. It does NOT bind `group_id` or
+    /// `group_type`. Consequences the contract cannot close alone:
+    ///   * A proof created for one (commitment, epoch=0) pair verifies for
+    ///     another group that happens to land on the same commitment at
+    ///     epoch 0. `group_id` is checked as a public input here but is
+    ///     NOT part of the SNARK statement; nullifier scoping by
+    ///     `group_id` (Finding #1-partial, landed) only blocks same-group
+    ///     replay.
+    ///   * `group_type` is trusted from the caller. If two clients agree
+    ///     off-chain on the governance policy but one submits
+    ///     `group_type = 0` (Anarchy) on-chain, the on-chain record is
+    ///     Anarchy and `update_commitment` bypasses governance. The ZK
+    ///     proof cannot attest to the governance type.
+    /// Full closure requires re-generating the MembershipCircuit to bind
+    /// both fields as public inputs, then a coordinated circuit + VK
+    /// rotation. Tracked as a follow-up PR.
     pub fn create_group_v2(
         env: Env,
         caller: Address,
@@ -781,14 +1072,14 @@ impl SepXxxxContract {
             return Err(Error::TierGroupLimitReached);
         }
 
-        Self::check_proof_replay(&env, OP_CREATE, &group_id, &proof)?;
+        Self::check_proof_replay(&env, &proof)?;
 
         let vk = Self::load_vk(&env, tier)?;
         if !verify_groth16_proof(&env, &vk, &proof, &commitment, 0) {
             return Err(Error::InvalidProof);
         }
 
-        Self::record_proof(&env, OP_CREATE, &group_id, &proof);
+        Self::record_proof(&env, &proof);
 
         let timestamp = env.ledger().timestamp();
         let entry = CommitmentEntryV2 {
@@ -811,6 +1102,18 @@ impl SepXxxxContract {
         env.storage()
             .instance()
             .set(&DataKey::GroupCount(tier), &(count + 1));
+        // Audit-followup Finding #6: receipt enabling permissionless
+        // `reconcile_tier_count` after cold-group expiry. Stored in
+        // persistent storage with its own longer TTL so the receipt
+        // outlives the group entry (re-audit Finding #3 — instance
+        // storage would cap active groups well below MAX_GROUPS_PER_TIER).
+        let receipt_key = DataKey::GroupCounted(group_id.clone());
+        env.storage().persistent().set(&receipt_key, &tier);
+        env.storage().persistent().extend_ttl(
+            &receipt_key,
+            GROUP_COUNTED_LEDGER_THRESHOLD,
+            GROUP_COUNTED_LEDGER_BUMP,
+        );
         Self::bump_group(&env, &group_id);
 
         GroupCreated {
@@ -840,6 +1143,14 @@ impl SepXxxxContract {
     /// `AdminUpdateCircuit` VK lands). The creator's only unique role is
     /// seeding the initial admin set: after creation the creator holds
     /// no special privilege beyond that of any other admin.
+    ///
+    /// **Audit-followup Finding #2 — deferred to circuit work.** The
+    /// MembershipCircuit does not bind `group_type` as a public input, so
+    /// the contract cannot cryptographically verify that the caller is
+    /// creating an Oligarchy vs. an Anarchy vs. a Democracy. Governance-
+    /// type integrity today rests on off-chain client discipline. See the
+    /// `create_group_v2` doc comment for the full threat model and the
+    /// planned circuit-rotation follow-up.
     pub fn create_oligarchy_group(
         env: Env,
         caller: Address,
@@ -905,14 +1216,14 @@ impl SepXxxxContract {
             return Err(Error::TierGroupLimitReached);
         }
 
-        Self::check_proof_replay(&env, OP_CREATE, &group_id, &proof)?;
+        Self::check_proof_replay(&env, &proof)?;
 
         let vk = Self::load_vk(&env, tier)?;
         if !verify_groth16_proof(&env, &vk, &proof, &commitment, 0) {
             return Err(Error::InvalidProof);
         }
 
-        Self::record_proof(&env, OP_CREATE, &group_id, &proof);
+        Self::record_proof(&env, &proof);
 
         let timestamp = env.ledger().timestamp();
         let entry = CommitmentEntryV2 {
@@ -952,6 +1263,17 @@ impl SepXxxxContract {
         env.storage()
             .instance()
             .set(&DataKey::GroupCount(tier), &(count + 1));
+        // Audit-followup Finding #6: reconciliation receipt for oligarchy.
+        // Persistent storage with longer TTL than the group itself, so
+        // `reconcile_tier_count` still works after cold-group expiry
+        // (re-audit Finding #3).
+        let receipt_key = DataKey::GroupCounted(group_id.clone());
+        env.storage().persistent().set(&receipt_key, &tier);
+        env.storage().persistent().extend_ttl(
+            &receipt_key,
+            GROUP_COUNTED_LEDGER_THRESHOLD,
+            GROUP_COUNTED_LEDGER_BUMP,
+        );
         Self::bump_group(&env, &group_id);
 
         GroupCreated {
@@ -1034,7 +1356,7 @@ impl SepXxxxContract {
             return Err(Error::InvalidCommitmentEncoding);
         }
 
-        Self::check_proof_replay(&env, OP_UPDATE, &group_id, &proof)?;
+        Self::check_proof_replay(&env, &proof)?;
 
         let vk = Self::load_update_vk(&env, current.tier)?;
         if !verify_groth16_proof_update(
@@ -1048,7 +1370,7 @@ impl SepXxxxContract {
             return Err(Error::InvalidProof);
         }
 
-        Self::record_proof(&env, OP_UPDATE, &group_id, &proof);
+        Self::record_proof(&env, &proof);
 
         let timestamp = env.ledger().timestamp();
 
@@ -1101,6 +1423,20 @@ impl SepXxxxContract {
     /// On success, `member_count_new` is persisted into the V2 entry. The
     /// rest follows the same proof-replay/archive/event emission pattern as
     /// `update_commitment`.
+    ///
+    /// **Audit-followup Finding #3 — deferred to circuit work.** The
+    /// on-chain `member_count` is the authoritative quorum denominator
+    /// *once it is trusted*, but the value stored at create time is the
+    /// creator's unchecked declaration: the MembershipCircuit does not
+    /// bind `member_count` to the Merkle tree's actual size, and the
+    /// DemocracyUpdateCircuit binds `member_count_old` as a public input
+    /// without proving it equals the tree's size either. Consequence: a
+    /// lying creator can declare `member_count = 1` on a 1000-member
+    /// group and the first democracy update goes through with quorum = 1.
+    /// Subsequent updates are self-consistent but rooted in the lie. Full
+    /// closure requires the MembershipCircuit to prove `member_count ==
+    /// tree_size` at creation (and the DemocracyUpdateCircuit to prove
+    /// it continues to hold). Tracked alongside Findings #1-full and #2.
     pub fn update_commitment_democracy(
         env: Env,
         group_id: BytesN<32>,
@@ -1159,7 +1495,7 @@ impl SepXxxxContract {
             return Err(Error::InvalidCommitmentEncoding);
         }
 
-        Self::check_proof_replay(&env, OP_UPDATE_DEMOCRACY, &group_id, &proof)?;
+        Self::check_proof_replay(&env, &proof)?;
 
         let vk = Self::load_update_vk_by_type(&env, current.tier, 2)?;
         if !verify_groth16_proof_democracy_update(
@@ -1175,7 +1511,7 @@ impl SepXxxxContract {
             return Err(Error::InvalidProof);
         }
 
-        Self::record_proof(&env, OP_UPDATE_DEMOCRACY, &group_id, &proof);
+        Self::record_proof(&env, &proof);
 
         let timestamp = env.ledger().timestamp();
         Self::archive_entry(&env, &group_id, &current);
@@ -1279,7 +1615,7 @@ impl SepXxxxContract {
             return Err(Error::InvalidCommitmentEncoding);
         }
 
-        Self::check_proof_replay(&env, OP_UPDATE_ADMIN, &group_id, &proof)?;
+        Self::check_proof_replay(&env, &proof)?;
 
         let vk = Self::load_admin_update_vk(&env)?;
         // Reuse the UpdateCircuit verifier — same 3 public inputs, 4 IC
@@ -1296,7 +1632,7 @@ impl SepXxxxContract {
             return Err(Error::InvalidProof);
         }
 
-        Self::record_proof(&env, OP_UPDATE_ADMIN, &group_id, &proof);
+        Self::record_proof(&env, &proof);
 
         env.storage()
             .persistent()
@@ -1342,11 +1678,31 @@ impl SepXxxxContract {
             .unwrap_or(0u64))
     }
 
-    /// Verify a membership proof against the current group state.
+    /// Verify a membership proof against the current group state
+    /// (read-only, non-consuming).
     ///
-    /// Read-only — does not modify contract state. Proofs submitted here
-    /// are NOT recorded, so the same proof can be re-verified and can
-    /// still be used for state-changing operations.
+    /// **Semantic: this is read-only.** The proof is checked against
+    /// the current `(commitment, epoch)` stored for the group, but
+    /// nothing is written — no nullifier is burnt, no TTL is bumped.
+    /// Callers can safely invoke this with `--send no` / simulation-
+    /// only RPC calls; the relayer and smoke scripts rely on that.
+    ///
+    /// **What this does NOT do.** Calling `verify_membership`
+    /// successfully offers NO protection against the same proof bytes
+    /// later being replayed into a state-changing entrypoint
+    /// (`deactivate_group`, `update_commitment`, etc.) — by this
+    /// caller or by any observer of the simulation / mempool. If a
+    /// caller needs that guarantee they MUST call
+    /// `consume_membership_proof` instead, which records the
+    /// nullifier. See the module-level "Replay-nullifier scoping"
+    /// comment for the full story on what contract-level nullifiers
+    /// can and cannot close.
+    ///
+    /// **Trust model.** The bool returned is a statement about the
+    /// proof and the group state at the observed ledger. It is not a
+    /// replay-protective credential. UIs that show "you are a member"
+    /// should use this; security-sensitive attestations should use
+    /// `consume_membership_proof`.
     pub fn verify_membership(
         env: Env,
         group_id: BytesN<32>,
@@ -1375,6 +1731,76 @@ impl SepXxxxContract {
         Ok(valid)
     }
 
+    /// Verify a membership proof and burn its nullifier.
+    ///
+    /// **Semantic: this IS state-changing and fails-closed.** On
+    /// success the proof is recorded in the `UsedProof` set, so the
+    /// same proof bytes cannot be re-submitted to any state-changing
+    /// entrypoint on any group. On verification failure the call
+    /// returns `Err(InvalidProof)` — there is no `Ok(false)` branch,
+    /// so off-chain consumers can treat a successful inclusion as an
+    /// on-chain attestation and do not need to parse a bool return.
+    /// Use this when the caller needs the on-chain guarantee "this
+    /// proof is mine, nobody else can reuse it" — e.g. a signed
+    /// attestation that a given address was a member at a given
+    /// ledger without exposing the proof to frontrun-style reuse
+    /// into `deactivate_group`.
+    ///
+    /// Callers MUST submit this as a real transaction (not
+    /// `--send no` / simulation); simulated calls do not persist the
+    /// nullifier and therefore confer no replay protection.
+    ///
+    /// **What this still does NOT close.**
+    ///   * Pre-inclusion mempool frontrun: an observer of the pending
+    ///     transaction can race the honest caller with the same proof
+    ///     bytes. Circuit-level fix required (bind an operation tag
+    ///     and `caller` as public inputs).
+    ///   * TTL-aged replay: once the `UsedProof` entry for a proof
+    ///     expires (~`LEDGER_BUMP` ledgers), the bytes become
+    ///     replayable again. Bounded only by ledger-level
+    ///     economics; circuit-level fix required for unconditional
+    ///     expiry protection.
+    ///
+    /// See the module-level "Replay-nullifier scoping" comment and
+    /// the deactivate_group doc for the full residual-exposure model.
+    pub fn consume_membership_proof(
+        env: Env,
+        group_id: BytesN<32>,
+        proof: Groth16Proof,
+        public_inputs: PublicInputs,
+    ) -> Result<(), Error> {
+        Self::require_initialized(&env)?;
+
+        let state = Self::load_group_v2(&env, &group_id)?;
+
+        if !state.active {
+            return Err(Error::GroupInactive);
+        }
+
+        if public_inputs.commitment != state.commitment
+            || public_inputs.epoch != state.epoch
+        {
+            return Err(Error::PublicInputsMismatch);
+        }
+
+        Self::check_proof_replay(&env, &proof)?;
+
+        let vk = Self::load_vk(&env, state.tier)?;
+        if !verify_groth16_proof(
+            &env,
+            &vk,
+            &proof,
+            &state.commitment,
+            state.epoch,
+        ) {
+            return Err(Error::InvalidProof);
+        }
+
+        Self::record_proof(&env, &proof);
+        Self::bump_group(&env, &group_id);
+        Ok(())
+    }
+
     /// Deactivate a group (requires membership proof).
     ///
     /// After deactivation `verify_membership` and `get_state` still work,
@@ -1398,6 +1824,37 @@ impl SepXxxxContract {
     /// quorum becomes unreachable).
     ///
     /// N-14: Uses proof-based authorization only (same rationale as `update_commitment`).
+    ///
+    /// **Re-audit Finding #4 — known residual exposure (circuit-level).**
+    /// Two distinct replay paths remain open that contract-level code
+    /// cannot close:
+    ///
+    ///   1. **Pre-inclusion mempool frontrun.** The deactivate proof
+    ///      is visible in the pending transaction before it is mined.
+    ///      An observer can submit `deactivate_group` with the same
+    ///      proof and may win ordering. Nullifier burning here is
+    ///      post-inclusion only. (Note: `epoch` is ALREADY bound as a
+    ///      MembershipCircuit public input, so "bind epoch" is not
+    ///      the missing piece — what is missing is an OPERATION TAG
+    ///      and `caller` binding, so a proof produced for VERIFY
+    ///      cannot be reused for DEACTIVATE and a proof produced by
+    ///      one address cannot be stolen by another.)
+    ///   2. **TTL-aged proof replay.** `UsedProof` entries expire
+    ///      after `LEDGER_BUMP` (~30 days). A group that stays at
+    ///      `(commitment, epoch)` for longer than that can be
+    ///      deactivated by replaying ANY earlier membership proof
+    ///      whose nullifier has since expired — including the
+    ///      create-time proof, if the group has never been updated.
+    ///      Contract-level mitigations (per-group nullifier lists,
+    ///      keeping the nullifier set forever) all have unbounded-
+    ///      growth or rent problems; the v2-circuit fix is a per-
+    ///      group monotonic `proof_nonce` bound as a public input so
+    ///      stale proofs stop verifying regardless of nullifier TTL.
+    ///
+    /// Operator mitigation today: periodically call
+    /// `update_commitment` even for no-op membership changes so the
+    /// epoch advances and stale proofs stop verifying via public-
+    /// input mismatch before their nullifier expires.
     pub fn deactivate_group(
         env: Env,
         group_id: BytesN<32>,
@@ -1417,14 +1874,14 @@ impl SepXxxxContract {
             return Err(Error::PublicInputsMismatch);
         }
 
-        Self::check_proof_replay(&env, OP_DEACTIVATE, &group_id, &proof)?;
+        Self::check_proof_replay(&env, &proof)?;
 
         let vk = Self::load_vk(&env, current.tier)?;
         if !verify_groth16_proof(&env, &vk, &proof, &current.commitment, current.epoch) {
             return Err(Error::InvalidProof);
         }
 
-        Self::record_proof(&env, OP_DEACTIVATE, &group_id, &proof);
+        Self::record_proof(&env, &proof);
 
         let timestamp = env.ledger().timestamp();
         let deactivated = CommitmentEntryV2 {
@@ -1446,6 +1903,18 @@ impl SepXxxxContract {
             env.storage()
                 .instance()
                 .set(&DataKey::GroupCount(current.tier), &(count - 1));
+        }
+        // Audit-followup Finding #6: clear the reconciliation receipt so
+        // `reconcile_tier_count` cannot double-decrement. Persistent
+        // storage per re-audit Finding #3.
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::GroupCounted(group_id.clone()))
+        {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::GroupCounted(group_id.clone()));
         }
 
         GroupDeactivated {
@@ -1663,6 +2132,15 @@ impl SepXxxxContract {
         // Bump whichever key variant is present. After the first V2 write
         // the legacy keys are removed, so post-migration calls no-op on
         // the legacy branches.
+        //
+        // Post-audit Finding #4: also bump the per-group oligarchy
+        // metadata keys (`AdminSet`, `AdminEpoch`). These are persistent
+        // per-group entries and are required for `update_admin_commitment`
+        // to function; leaving them unbumped while `GroupV2` is renewed
+        // would let oligarchy admin rotation silently break long-lived
+        // groups. Shared VK entries are bumped via a separate public
+        // `bump_vks` entrypoint so anyone concerned with contract liveness
+        // (not just callers touching one group) can refresh them.
         if env
             .storage()
             .persistent()
@@ -1707,54 +2185,78 @@ impl SepXxxxContract {
                 LEDGER_BUMP,
             );
         }
-        // Bump instance storage TTL to prevent admin key loss.
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::AdminSet(group_id.clone()))
+        {
+            env.storage().persistent().extend_ttl(
+                &DataKey::AdminSet(group_id.clone()),
+                LEDGER_THRESHOLD,
+                LEDGER_BUMP,
+            );
+        }
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::AdminEpoch(group_id.clone()))
+        {
+            env.storage().persistent().extend_ttl(
+                &DataKey::AdminEpoch(group_id.clone()),
+                LEDGER_THRESHOLD,
+                LEDGER_BUMP,
+            );
+        }
+        // Re-audit Finding #3: the `GroupCounted` reconciliation
+        // receipt lives in persistent storage with a longer TTL than
+        // the group itself, so extend it separately. The invariant
+        // `receipt_expiry > group_expiry + LEDGER_BUMP` is what lets
+        // `reconcile_tier_count` observe the dangling tier-count slot
+        // after a cold group's `GroupV2` has expired. Round-3 audit:
+        // the receipt uses `GROUP_COUNTED_LEDGER_THRESHOLD` — not the
+        // default `LEDGER_THRESHOLD` — so every bump that extends
+        // `GroupV2` also refreshes the receipt, preventing the case
+        // where a late bump refreshes the group but skips the receipt
+        // and collapses the reconciliation window.
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::GroupCounted(group_id.clone()))
+        {
+            env.storage().persistent().extend_ttl(
+                &DataKey::GroupCounted(group_id.clone()),
+                GROUP_COUNTED_LEDGER_THRESHOLD,
+                GROUP_COUNTED_LEDGER_BUMP,
+            );
+        }
+        // Bump instance storage TTL (admin key, GroupCount tier
+        // counters). Does not cover per-group receipts anymore.
         env.storage()
             .instance()
             .extend_ttl(LEDGER_THRESHOLD, LEDGER_BUMP);
     }
 
-    /// Compute the replay nullifier for a proof, scoped to `(op_tag, group_id)`.
+    /// Compute the global replay nullifier for a proof.
     ///
-    /// Audit-2026-04 MEDIUM-3 + LOW-1: the preimage is
-    /// `op_tag || group_id || proof.a || proof.b || proof.c`. Domain-separation
-    /// by operation and group means nullifiers can only collide when the same
-    /// caller submits the same proof to the same operation on the same group —
-    /// which is the exact replay this check exists to prevent, and matches the
-    /// cryptographic binding of the Groth16 public inputs. Benign cross-
-    /// context reuse (e.g. surfacing a membership proof to `verify_membership`
-    /// and then again to `deactivate_group`) no longer hits a spurious
-    /// `ProofReplay`.
-    ///
-    /// Migration note: any `DataKey::UsedProof` entries written under the
-    /// pre-audit global scheme become orphaned but cannot enable a replay —
-    /// circuits bind public inputs, so a proof that verified in one context
-    /// cannot verify in a different one. Stale entries expire via TTL
-    /// (`LEDGER_BUMP` ~30 days).
-    fn proof_hash(
-        env: &Env,
-        op_tag: u8,
-        group_id: &BytesN<32>,
-        proof: &Groth16Proof,
-    ) -> BytesN<32> {
+    /// Preimage: `proof.a || proof.b || proof.c`. See the module-level
+    /// "Replay-nullifier scoping" comment for why this is deliberately
+    /// unscoped: the MembershipCircuit does not bind `group_id` or an
+    /// operation tag, so a proof valid for one `(commitment, epoch)`
+    /// pair is accepted by ANY entrypoint on ANY group that happens to
+    /// share those public inputs. Scoping by `group_id` would re-open
+    /// cross-group replay against deliberately-cloned groups.
+    fn proof_hash(env: &Env, proof: &Groth16Proof) -> BytesN<32> {
         let mut preimage = Bytes::new(env);
-        preimage.append(&Bytes::from_array(env, &[op_tag]));
-        preimage.append(&Bytes::from_slice(env, &group_id.to_array()));
         preimage.append(&Bytes::from_slice(env, proof.a.to_array().as_slice()));
         preimage.append(&Bytes::from_slice(env, proof.b.to_array().as_slice()));
         preimage.append(&Bytes::from_slice(env, proof.c.to_array().as_slice()));
         env.crypto().sha256(&preimage).into()
     }
 
-    /// Reject if this proof has already been submitted to this operation on
-    /// this group. Replay protection is scoped per `(op_tag, group_id)` —
-    /// see [`proof_hash`] for the design rationale (audit-2026-04 MEDIUM-3 + LOW-1).
-    fn check_proof_replay(
-        env: &Env,
-        op_tag: u8,
-        group_id: &BytesN<32>,
-        proof: &Groth16Proof,
-    ) -> Result<(), Error> {
-        let hash = Self::proof_hash(env, op_tag, group_id, proof);
+    /// Reject if these proof bytes have already been submitted anywhere.
+    /// See [`proof_hash`] for the design rationale.
+    fn check_proof_replay(env: &Env, proof: &Groth16Proof) -> Result<(), Error> {
+        let hash = Self::proof_hash(env, proof);
         if env
             .storage()
             .persistent()
@@ -1765,15 +2267,10 @@ impl SepXxxxContract {
         Ok(())
     }
 
-    /// Record a proof nullifier so it cannot be replayed on the same
-    /// `(op_tag, group_id)` pair.
-    fn record_proof(
-        env: &Env,
-        op_tag: u8,
-        group_id: &BytesN<32>,
-        proof: &Groth16Proof,
-    ) {
-        let hash = Self::proof_hash(env, op_tag, group_id, proof);
+    /// Record a proof nullifier so the same bytes cannot be replayed
+    /// anywhere in the contract.
+    fn record_proof(env: &Env, proof: &Groth16Proof) {
+        let hash = Self::proof_hash(env, proof);
         env.storage()
             .persistent()
             .set(&DataKey::UsedProof(hash.clone()), &true);
@@ -2105,12 +2602,94 @@ mod test {
     use super::*;
     use soroban_sdk::testutils::Address as _;
 
+    /// Audit-followup Finding #5: contracts register with `__constructor`
+    /// args now — the constructor initialises admin + all VKs atomically at
+    /// deploy time, so tests start with a fully-initialised contract.
+    /// Tests that exercised the old `initialize` entrypoint still cover
+    /// `AlreadyInitialized` via `try_initialize` on an already-constructed
+    /// client; tests that wanted input-validation panics now get them at
+    /// `env.register` time (the constructor propagates the typed contract
+    /// error verbatim).
     fn setup_env() -> (Env, SepXxxxContractClient<'static>, Address) {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register(SepXxxxContract, ());
-        let client = SepXxxxContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
+        let vk = mock_vk(&env);
+        let uvk = mock_update_vk(&env);
+        let contract_id = env.register(
+            SepXxxxContract,
+            (
+                admin.clone(),
+                vk.clone(),
+                vk.clone(),
+                vk.clone(),
+                uvk.clone(),
+                uvk.clone(),
+                uvk,
+            ),
+        );
+        let client = SepXxxxContractClient::new(&env, &contract_id);
+        (env, client, admin)
+    }
+
+    /// Register the contract with an arbitrary membership VK (for the
+    /// slot that would otherwise use `mock_vk`) so we can drive the
+    /// constructor's VK-length / subgroup validation paths. All other
+    /// slots use valid mocks.
+    ///
+    /// The bad VK is built via a closure so its `BytesN` objects are
+    /// bound to the same `Env` used for `env.register`. Building the VK
+    /// on a different `Env` and passing it in would trigger a
+    /// "mis-tagged object reference" host error.
+    fn setup_env_bad_membership_vk(
+        build_bad_vk: impl FnOnce(&Env) -> VerificationKeyData,
+    ) -> (Env, SepXxxxContractClient<'static>, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let bad_vk = build_bad_vk(&env);
+        let good_vk = mock_vk(&env);
+        let uvk = mock_update_vk(&env);
+        // `env.register` panics if the constructor errors; tests that
+        // drive this helper use `#[should_panic]` to catch the panic.
+        let contract_id = env.register(
+            SepXxxxContract,
+            (
+                admin.clone(),
+                bad_vk,
+                good_vk.clone(),
+                good_vk,
+                uvk.clone(),
+                uvk.clone(),
+                uvk,
+            ),
+        );
+        let client = SepXxxxContractClient::new(&env, &contract_id);
+        (env, client, admin)
+    }
+
+    fn setup_env_bad_update_vk(
+        build_bad_update_vk: impl FnOnce(&Env) -> VerificationKeyData,
+    ) -> (Env, SepXxxxContractClient<'static>, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let bad_update_vk = build_bad_update_vk(&env);
+        let vk = mock_vk(&env);
+        let good_update = mock_update_vk(&env);
+        let contract_id = env.register(
+            SepXxxxContract,
+            (
+                admin.clone(),
+                vk.clone(),
+                vk.clone(),
+                vk,
+                bad_update_vk,
+                good_update.clone(),
+                good_update,
+            ),
+        );
+        let client = SepXxxxContractClient::new(&env, &contract_id);
         (env, client, admin)
     }
 
@@ -2179,80 +2758,59 @@ mod test {
         }
     }
 
+    /// Smoke test: `setup_env` registers the contract via `__constructor`,
+    /// which means a successful return here is itself proof that the
+    /// constructor wrote the admin + VK slots without erroring.
     #[test]
     fn test_initialize() {
-        let (env, client, admin) = setup_env();
-        let vk = mock_vk(&env);
-        let uvk = mock_update_vk(&env);
-        client.initialize(&admin, &vk, &vk, &vk, &uvk, &uvk, &uvk);
+        let (_env, _client, _admin) = setup_env();
     }
 
-    #[test]
-    #[should_panic(expected = "Error(Contract, #2)")]
-    fn test_double_initialize_rejected() {
-        let (env, client, admin) = setup_env();
-        let vk = mock_vk(&env);
-        let uvk = mock_update_vk(&env);
-        client.initialize(&admin, &vk, &vk, &vk, &uvk, &uvk, &uvk);
-        client.initialize(&admin, &vk, &vk, &vk, &uvk, &uvk, &uvk);
-    }
+    // Double-initialize rejection is covered by
+    // `test_constructor_initializes_atomically`, which uses
+    // `try_initialize` to assert `AlreadyInitialized` without exhausting
+    // the test budget on a second full VK validation pass.
 
+    /// The constructor rejects a membership VK with the wrong IC length.
+    /// `env.register` unwraps the host error, so the `#[should_panic]`
+    /// matcher sees the typed contract error verbatim.
     #[test]
     #[should_panic(expected = "Error(Contract, #9)")]
     fn test_invalid_vk_length_rejected() {
-        let (env, client, admin) = setup_env();
-        let g1 = BytesN::from_array(&env, &[0u8; 96]);
-        let g2 = BytesN::from_array(&env, &[0u8; 192]);
-
-        let bad_vk = VerificationKeyData {
-            alpha_g1: g1.clone(),
-            beta_g2: g2.clone(),
-            gamma_g2: g2.clone(),
-            delta_g2: g2,
-            ic: vec![&env, g1.clone(), g1],
-        };
-        let good_vk = mock_vk(&env);
-        let uvk = mock_update_vk(&env);
-
-        client.initialize(&admin, &bad_vk, &good_vk, &good_vk, &uvk, &uvk, &uvk);
+        let _ = setup_env_bad_membership_vk(|env| {
+            let g1 = valid_g1(env, b"bad-alpha");
+            let g2 = valid_g2(env, b"bad-beta");
+            VerificationKeyData {
+                alpha_g1: g1.clone(),
+                beta_g2: g2.clone(),
+                gamma_g2: g2.clone(),
+                delta_g2: g2,
+                ic: vec![env, g1.clone(), g1],
+            }
+        });
     }
 
+    /// The constructor rejects an update VK with 3 IC points (needs 4).
     #[test]
     #[should_panic(expected = "Error(Contract, #9)")]
     fn test_invalid_update_vk_length_rejected() {
-        // Update VK with 3 IC points (should be 4).
-        let (env, client, admin) = setup_env();
-        let g1 = BytesN::from_array(&env, &[0u8; 96]);
-        let g2 = BytesN::from_array(&env, &[0u8; 192]);
-        let bad_update_vk = VerificationKeyData {
-            alpha_g1: g1.clone(),
-            beta_g2: g2.clone(),
-            gamma_g2: g2.clone(),
-            delta_g2: g2,
-            ic: vec![&env, g1.clone(), g1.clone(), g1],
-        };
-        let good_vk = mock_vk(&env);
-        let good_update_vk = mock_update_vk(&env);
-
-        client.initialize(
-            &admin,
-            &good_vk,
-            &good_vk,
-            &good_vk,
-            &bad_update_vk,
-            &good_update_vk,
-            &good_update_vk,
-        );
+        let _ = setup_env_bad_update_vk(|env| {
+            let g1 = valid_g1(env, b"u-bad-alpha");
+            let g2 = valid_g2(env, b"u-bad-beta");
+            VerificationKeyData {
+                alpha_g1: g1.clone(),
+                beta_g2: g2.clone(),
+                gamma_g2: g2.clone(),
+                delta_g2: g2,
+                ic: vec![env, g1.clone(), g1.clone(), g1],
+            }
+        });
     }
 
     #[test]
     #[should_panic(expected = "Error(Contract, #5)")]
     fn test_group_not_found() {
-        let (env, client, admin) = setup_env();
-        let vk = mock_vk(&env);
-        let uvk = mock_update_vk(&env);
-        client.initialize(&admin, &vk, &vk, &vk, &uvk, &uvk, &uvk);
-
+        let (env, client, _admin) = setup_env();
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         client.get_state(&group_id);
     }
@@ -2260,11 +2818,7 @@ mod test {
     #[test]
     #[should_panic(expected = "Error(Contract, #8)")]
     fn test_invalid_tier_rejected() {
-        let (env, client, admin) = setup_env();
-        let vk = mock_vk(&env);
-        let uvk = mock_update_vk(&env);
-        client.initialize(&admin, &vk, &vk, &vk, &uvk, &uvk, &uvk);
-
+        let (env, client, _admin) = setup_env();
         let caller = Address::generate(&env);
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
@@ -2276,29 +2830,17 @@ mod test {
         client.create_group(&caller, &group_id, &commitment, &3u32, &mock_proof(&env), &pi);
     }
 
-    #[test]
-    #[should_panic(expected = "Error(Contract, #1)")]
-    fn test_not_initialized_rejected() {
-        let (env, client, _admin) = setup_env();
-        let caller = Address::generate(&env);
-        let group_id = BytesN::from_array(&env, &[1u8; 32]);
-        let commitment = BytesN::from_array(&env, &[2u8; 32]);
-        let pi = PublicInputs {
-            commitment: commitment.clone(),
-            epoch: 0,
-        };
-
-        client.create_group(&caller, &group_id, &commitment, &0u32, &mock_proof(&env), &pi);
-    }
+    // NOTE: post-Finding #5 there is no test-reachable uninitialised-
+    // contract state — `setup_env` registers the contract via
+    // `__constructor`, which writes the admin + VK slots atomically. The
+    // `NotInitialized` error path still exists in production for pre-
+    // constructor contracts deployed before v1.10.19 and not yet migrated
+    // via the legacy `initialize` entrypoint.
 
     #[test]
     #[should_panic(expected = "Error(Contract, #10)")]
     fn test_public_inputs_mismatch_on_create() {
-        let (env, client, admin) = setup_env();
-        let vk = mock_vk(&env);
-        let uvk = mock_update_vk(&env);
-        client.initialize(&admin, &vk, &vk, &vk, &uvk, &uvk, &uvk);
-
+        let (env, client, _admin) = setup_env();
         let caller = Address::generate(&env);
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
@@ -2313,11 +2855,7 @@ mod test {
     #[test]
     #[should_panic(expected = "Error(Contract, #10)")]
     fn test_public_inputs_wrong_epoch_on_create() {
-        let (env, client, admin) = setup_env();
-        let vk = mock_vk(&env);
-        let uvk = mock_update_vk(&env);
-        client.initialize(&admin, &vk, &vk, &vk, &uvk, &uvk, &uvk);
-
+        let (env, client, _admin) = setup_env();
         let caller = Address::generate(&env);
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
@@ -2338,12 +2876,12 @@ mod test {
     // Additional Helpers
     // ================================================================
 
-    /// Initialize the contract and return the contract address too.
+    /// `setup_env` already initialises the contract via `__constructor`
+    /// (audit-followup Finding #5); this wrapper just also returns the
+    /// contract address for tests that want to reach into storage via
+    /// `env.as_contract`.
     fn setup_initialized() -> (Env, SepXxxxContractClient<'static>, Address, Address) {
         let (env, client, admin) = setup_env();
-        let vk = mock_vk(&env);
-        let uvk = mock_update_vk(&env);
-        client.initialize(&admin, &vk, &vk, &vk, &uvk, &uvk, &uvk);
         let contract_id = client.address.clone();
         (env, client, admin, contract_id)
     }
@@ -2411,20 +2949,17 @@ mod test {
         });
     }
 
-    /// Record a proof nullifier as used in contract storage, scoped to
-    /// `(op_tag, group_id)` (audit-2026-04 MEDIUM-3). Must match the
-    /// hashing scheme in `proof_hash`.
+    /// Record a proof nullifier as used in contract storage. Must match
+    /// the hashing scheme in `proof_hash` (global, no group_id scope).
+    /// `_group_id` is retained in the signature for call-site legibility.
     fn inject_used_proof(
         env: &Env,
         contract_id: &Address,
-        op_tag: u8,
-        group_id: &BytesN<32>,
+        _group_id: &BytesN<32>,
         proof: &Groth16Proof,
     ) {
         env.as_contract(contract_id, || {
             let mut preimage = Bytes::new(env);
-            preimage.append(&Bytes::from_array(env, &[op_tag]));
-            preimage.append(&Bytes::from_slice(env, &group_id.to_array()));
             preimage.append(&Bytes::from_slice(env, proof.a.to_array().as_slice()));
             preimage.append(&Bytes::from_slice(env, proof.b.to_array().as_slice()));
             preimage.append(&Bytes::from_slice(env, proof.c.to_array().as_slice()));
@@ -2546,20 +3081,6 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #1)")]
-    fn test_update_commitment_not_initialized() {
-        let (env, client, _admin) = setup_env();
-        let group_id = BytesN::from_array(&env, &[1u8; 32]);
-        let commitment = BytesN::from_array(&env, &[2u8; 32]);
-        let upi = UpdatePublicInputs {
-            c_old: commitment.clone(),
-            epoch_old: 0,
-            c_new: c_new_ok(&env),
-        };
-        client.update_commitment(&group_id, &mock_proof(&env), &upi);
-    }
-
-    #[test]
     #[should_panic(expected = "Error(Contract, #5)")]
     fn test_update_commitment_group_not_found() {
         let (env, client, _admin, _cid) = setup_initialized();
@@ -2675,7 +3196,7 @@ mod test {
         let (env, client, _admin, contract_id) = setup_initialized();
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let proof = mock_proof(&env);
-        inject_used_proof(&env, &contract_id, OP_CREATE, &group_id, &proof);
+        inject_used_proof(&env, &contract_id, &group_id, &proof);
 
         let caller = Address::generate(&env);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
@@ -2695,7 +3216,7 @@ mod test {
         inject_group(&env, &contract_id, &group_id, &commitment, 5, 0);
 
         let proof = mock_proof(&env);
-        inject_used_proof(&env, &contract_id, OP_UPDATE, &group_id, &proof);
+        inject_used_proof(&env, &contract_id, &group_id, &proof);
 
         let upi = UpdatePublicInputs {
             c_old: commitment.clone(),
@@ -2714,7 +3235,7 @@ mod test {
         inject_group(&env, &contract_id, &group_id, &commitment, 5, 0);
 
         let proof = mock_proof(&env);
-        inject_used_proof(&env, &contract_id, OP_DEACTIVATE, &group_id, &proof);
+        inject_used_proof(&env, &contract_id, &group_id, &proof);
 
         let pi = PublicInputs {
             commitment: commitment.clone(),
@@ -2800,6 +3321,111 @@ mod test {
             epoch: 99, // doesn't match stored epoch 3
         };
         client.verify_membership(&group_id, &mock_proof(&env), &pi);
+    }
+
+    /// Re-audit Finding #1: `verify_membership` is now read-only
+    /// again (the split-API fix). A previously-burnt nullifier MUST
+    /// NOT block it — replay protection is the job of
+    /// `consume_membership_proof` instead. The call still returns
+    /// `false` because the mock proof doesn't verify cryptographically,
+    /// but importantly it does not panic with `ProofReplay (#12)`.
+    #[test]
+    fn test_verify_membership_is_read_only_ignores_nullifier() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        let commitment = BytesN::from_array(&env, &[2u8; 32]);
+        inject_group(&env, &contract_id, &group_id, &commitment, 3, 0);
+
+        let proof = mock_proof(&env);
+        inject_used_proof(&env, &contract_id, &group_id, &proof);
+
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 3,
+        };
+        // Returns false (proof does not verify), but does not panic
+        // with ProofReplay — read-only path bypasses the nullifier check.
+        assert!(!client.verify_membership(&group_id, &proof, &pi));
+    }
+
+    /// Re-audit Finding #1: `consume_membership_proof` is the
+    /// state-changing variant that DOES enforce the nullifier. A
+    /// pre-recorded nullifier must block it before the verifier runs.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #12)")]
+    fn test_consume_membership_proof_rejects_replayed_proof() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        let commitment = BytesN::from_array(&env, &[2u8; 32]);
+        inject_group(&env, &contract_id, &group_id, &commitment, 3, 0);
+
+        let proof = mock_proof(&env);
+        inject_used_proof(&env, &contract_id, &group_id, &proof);
+
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 3,
+        };
+        client.consume_membership_proof(&group_id, &proof, &pi);
+    }
+
+    /// Re-audit Finding #1: `consume_membership_proof` must surface
+    /// the same `PublicInputsMismatch` + `GroupNotFound` error paths
+    /// as `verify_membership`, and must be callable.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #10)")]
+    fn test_consume_membership_proof_public_inputs_mismatch() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        let commitment = BytesN::from_array(&env, &[2u8; 32]);
+        inject_group(&env, &contract_id, &group_id, &commitment, 3, 0);
+
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 99,
+        };
+        client.consume_membership_proof(&group_id, &mock_proof(&env), &pi);
+    }
+
+    /// Round-3 audit Finding #2: `consume_membership_proof` MUST
+    /// fail-closed on an invalid proof. Previously it returned
+    /// `Ok(false)` — a successful transaction that burnt no
+    /// nullifier and silently attested nothing. With the fix, an
+    /// unverifiable proof panics with `Error::InvalidProof (#7)`,
+    /// so tx inclusion is equivalent to a valid attestation.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #7)")]
+    fn test_consume_membership_proof_rejects_invalid_proof() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        let commitment = BytesN::from_array(&env, &[2u8; 32]);
+        inject_group(&env, &contract_id, &group_id, &commitment, 3, 0);
+
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 3,
+        };
+        client.consume_membership_proof(&group_id, &mock_proof(&env), &pi);
+    }
+
+    /// Round-3 audit Finding #1: `consume_membership_proof` MUST
+    /// reject proofs against deactivated groups. The docs promise a
+    /// membership *in an active group*; without the active-check the
+    /// contract would still burn a nullifier and return `Ok(())` on a
+    /// retired group, violating that invariant.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #6)")]
+    fn test_consume_membership_proof_rejects_inactive_group() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[1u8; 32]);
+        let commitment = BytesN::from_array(&env, &[2u8; 32]);
+        inject_inactive_group(&env, &contract_id, &group_id, &commitment, 3, 0);
+
+        let pi = PublicInputs {
+            commitment: commitment.clone(),
+            epoch: 3,
+        };
+        client.consume_membership_proof(&group_id, &mock_proof(&env), &pi);
     }
 
     /// Regression: `verify_membership` must resolve V2-native groups (those
@@ -2895,14 +3521,6 @@ mod test {
         client.update_vk(&VkKind::Membership, &0u32, &wrong_vk);
     }
 
-    #[test]
-    #[should_panic(expected = "Error(Contract, #1)")]
-    fn test_update_vk_not_initialized() {
-        let (env, client, _admin) = setup_env();
-        let vk = mock_vk(&env);
-        client.update_vk(&VkKind::Membership, &0u32, &vk);
-    }
-
     // ================================================================
     // Tier Limits — M-4
     // ================================================================
@@ -2989,13 +3607,6 @@ mod test {
         let (_env, client, _admin, _cid) = setup_initialized();
         client.set_restricted_mode(&true);
         client.set_restricted_mode(&false);
-    }
-
-    #[test]
-    #[should_panic(expected = "Error(Contract, #1)")]
-    fn test_set_restricted_mode_requires_init() {
-        let (_env, client, _admin) = setup_env();
-        client.set_restricted_mode(&true);
     }
 
     // ================================================================
@@ -4553,23 +5164,21 @@ mod test {
     #[test]
     #[should_panic(expected = "Error(")]
     fn test_initialize_rejects_invalid_vk_point() {
-        let (env, client, admin) = setup_env();
-        let bad_g1 = BytesN::from_array(&env, &[0u8; 96]);
-        let bad_vk = VerificationKeyData {
-            alpha_g1: bad_g1.clone(),
-            beta_g2: valid_g2(&env, b"beta"),
-            gamma_g2: valid_g2(&env, b"gamma"),
-            delta_g2: valid_g2(&env, b"delta"),
-            ic: vec![
-                &env,
-                valid_g1(&env, b"ic0"),
-                valid_g1(&env, b"ic1"),
-                valid_g1(&env, b"ic2"),
-            ],
-        };
-        let good_vk = mock_vk(&env);
-        let uvk = mock_update_vk(&env);
-        client.initialize(&admin, &bad_vk, &good_vk, &good_vk, &uvk, &uvk, &uvk);
+        let _ = setup_env_bad_membership_vk(|env| {
+            let bad_g1 = BytesN::from_array(env, &[0u8; 96]);
+            VerificationKeyData {
+                alpha_g1: bad_g1.clone(),
+                beta_g2: valid_g2(env, b"beta"),
+                gamma_g2: valid_g2(env, b"gamma"),
+                delta_g2: valid_g2(env, b"delta"),
+                ic: vec![
+                    env,
+                    valid_g1(env, b"ic0"),
+                    valid_g1(env, b"ic1"),
+                    valid_g1(env, b"ic2"),
+                ],
+            }
+        });
     }
 
     /// MEDIUM-1 + LOW-3: `update_vk` rejects a replacement VK with
@@ -4635,21 +5244,19 @@ mod test {
         client.create_group(&caller, &group_id, &non_canonical, &0u32, &mock_proof(&env), &pi);
     }
 
-    /// MEDIUM-3 + LOW-1: nullifiers are scoped per `(op_tag, group_id)`.
-    /// An already-used nullifier for a different `op_tag` must NOT block
-    /// this operation (rejection would come from downstream validation —
-    /// public-inputs mismatch etc. — not from `ProofReplay`).
+    /// Post-audit Finding #1 (partial contract-level fix): a nullifier
+    /// burned on any operation against a group blocks any subsequent
+    /// operation on that group with the same proof. No per-op scoping.
     #[test]
     #[should_panic(expected = "Error(Contract, #12)")]
-    fn test_replay_within_same_op_blocked() {
+    fn test_replay_within_same_group_blocked() {
         let (env, client, _admin, contract_id) = setup_initialized();
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
         inject_group(&env, &contract_id, &group_id, &commitment, 5, 0);
 
         let proof = mock_proof(&env);
-        // Same op + same group ⇒ ProofReplay.
-        inject_used_proof(&env, &contract_id, OP_UPDATE, &group_id, &proof);
+        inject_used_proof(&env, &contract_id, &group_id, &proof);
 
         let upi = UpdatePublicInputs {
             c_old: commitment.clone(),
@@ -4659,12 +5266,14 @@ mod test {
         client.update_commitment(&group_id, &proof, &upi);
     }
 
-    /// MEDIUM-3 + LOW-1: replay from a *different* group on the same op
-    /// does not block the call — the nullifier is group-scoped. The call
-    /// still fails (it's a malformed proof against a mock VK), but the
-    /// failure reason must NOT be `ProofReplay` (#12).
+    /// Finding #1 (post-fix): the nullifier is GLOBAL. A proof burned on
+    /// any group blocks re-submission of the same proof bytes on any
+    /// other group. This defeats the "clone a target group at the same
+    /// (commitment, epoch) and replay the observed proof" attack that
+    /// the earlier group-scoped preimage allowed.
     #[test]
-    fn test_replay_nullifier_group_scoped() {
+    #[should_panic(expected = "Error(Contract, #12)")]
+    fn test_replay_nullifier_blocks_cross_group() {
         let (env, client, _admin, contract_id) = setup_initialized();
         let group_a = BytesN::from_array(&env, &[1u8; 32]);
         let group_b = BytesN::from_array(&env, &[2u8; 32]);
@@ -4672,51 +5281,192 @@ mod test {
         inject_group(&env, &contract_id, &group_b, &commitment, 5, 0);
 
         let proof = mock_proof(&env);
-        // Burn the nullifier under group A; group B must not see a replay.
-        inject_used_proof(&env, &contract_id, OP_UPDATE, &group_a, &proof);
+        // Burn the nullifier as if the proof had already been spent on
+        // group A. With a global nullifier it should also block group B.
+        inject_used_proof(&env, &contract_id, &group_a, &proof);
 
         let upi = UpdatePublicInputs {
             c_old: commitment.clone(),
             epoch_old: 5,
             c_new: c_new_ok(&env),
         };
-        let res = client.try_update_commitment(&group_b, &proof, &upi);
-        // The call MUST fail (the mock proof cannot pass the pairing check),
-        // but it must NOT fail for replay — that's the regression this guards.
-        assert!(res.is_err(), "expected update_commitment to fail");
-        match res {
-            Err(Ok(Error::ProofReplay)) => {
-                panic!("replay nullifier leaked across groups")
-            }
-            _ => {}
-        }
+        client.update_commitment(&group_b, &proof, &upi);
     }
 
-    /// MEDIUM-3 + LOW-1: replay from a *different* op on the same group
-    /// does not block the call. Same argument as the cross-group test.
+    /// Post-audit Finding #1: a nullifier burned on one operation on a
+    /// group (e.g. a create-time membership proof) MUST block a
+    /// different operation on the same group (e.g. deactivate) when the
+    /// same proof bytes are submitted. This is the cross-entrypoint
+    /// replay that the 2026-04 op-tag-scoped scheme regressed.
     #[test]
-    fn test_replay_nullifier_op_scoped() {
+    #[should_panic(expected = "Error(Contract, #12)")]
+    fn test_replay_across_ops_same_group_blocked() {
         let (env, client, _admin, contract_id) = setup_initialized();
         let group_id = BytesN::from_array(&env, &[1u8; 32]);
         let commitment = BytesN::from_array(&env, &[2u8; 32]);
         inject_group(&env, &contract_id, &group_id, &commitment, 5, 0);
 
         let proof = mock_proof(&env);
-        // Burn the nullifier under DEACTIVATE; UPDATE must not see a replay.
-        inject_used_proof(&env, &contract_id, OP_DEACTIVATE, &group_id, &proof);
+        // Burn the nullifier once (as if deactivate had already run).
+        inject_used_proof(&env, &contract_id, &group_id, &proof);
 
+        // An update attempt on the same group with the same proof must
+        // be rejected as a replay.
         let upi = UpdatePublicInputs {
             c_old: commitment.clone(),
             epoch_old: 5,
             c_new: c_new_ok(&env),
         };
-        let res = client.try_update_commitment(&group_id, &proof, &upi);
-        assert!(res.is_err(), "expected update_commitment to fail");
-        match res {
-            Err(Ok(Error::ProofReplay)) => {
-                panic!("replay nullifier leaked across operations")
-            }
-            _ => {}
-        }
+        client.update_commitment(&group_id, &proof, &upi);
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Audit-followup Finding #5 — `__constructor` atomic deploy+init
+    // ───────────────────────────────────────────────────────────────────
+
+    /// Deploying with constructor args initialises the contract atomically;
+    /// a subsequent `initialize` call is rejected with `AlreadyInitialized`.
+    #[test]
+    fn test_constructor_initializes_atomically() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vk = mock_vk(&env);
+        let uvk = mock_update_vk(&env);
+
+        let contract_id = env.register(
+            SepXxxxContract,
+            (
+                admin.clone(),
+                vk.clone(),
+                vk.clone(),
+                vk.clone(),
+                uvk.clone(),
+                uvk.clone(),
+                uvk.clone(),
+            ),
+        );
+        let client = SepXxxxContractClient::new(&env, &contract_id);
+
+        // Constructor should have written admin + VKs. A post-deploy
+        // initialize call MUST be rejected.
+        let res = client.try_initialize(&admin, &vk, &vk, &vk, &uvk, &uvk, &uvk);
+        assert!(matches!(res, Err(Ok(Error::AlreadyInitialized))));
+
+        // And the happy-path post-init operations still work — prove the
+        // admin slot is populated by exercising an admin-gated entrypoint.
+        client.set_restricted_mode(&true);
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Audit-followup Finding #6 — permissionless `reconcile_tier_count`
+    // ───────────────────────────────────────────────────────────────────
+
+    /// With the group's persistent state absent and a `GroupCounted`
+    /// receipt present, `reconcile_tier_count` decrements the per-tier
+    /// counter by one and removes the receipt so a second call fails.
+    #[test]
+    fn test_reconcile_tier_count_decrements_when_group_gone() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let tier = 1u32;
+        let group_id = BytesN::from_array(&env, &[42u8; 32]);
+
+        // Simulate a create-then-expire history: no `Group` / `GroupV2`
+        // entry survives, but the tier counter is still +1 and the
+        // reconciliation receipt is still in persistent storage
+        // (re-audit Finding #3: receipt has its own longer TTL so it
+        // outlives the group entry).
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .set(&DataKey::GroupCount(tier), &3u32);
+            env.storage()
+                .persistent()
+                .set(&DataKey::GroupCounted(group_id.clone()), &tier);
+        });
+
+        client.reconcile_tier_count(&group_id);
+
+        env.as_contract(&contract_id, || {
+            let count: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::GroupCount(tier))
+                .unwrap();
+            assert_eq!(count, 2);
+            assert!(
+                !env.storage()
+                    .persistent()
+                    .has(&DataKey::GroupCounted(group_id.clone())),
+                "receipt must be removed so we cannot double-decrement"
+            );
+        });
+    }
+
+    /// Calling `reconcile_tier_count` on an id that still has live
+    /// persistent state MUST fail with `GroupStillActive`.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #27)")]
+    fn test_reconcile_tier_count_rejects_live_group() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[9u8; 32]);
+        let commitment = BytesN::from_array(&env, &[8u8; 32]);
+        inject_group(&env, &contract_id, &group_id, &commitment, 0, 0);
+
+        // Write the receipt — does not matter that `inject_group` didn't —
+        // so `reconcile_tier_count` reaches the liveness check.
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::GroupCounted(group_id.clone()), &0u32);
+        });
+
+        client.reconcile_tier_count(&group_id);
+    }
+
+    /// Calling `reconcile_tier_count` without any reconciliation receipt
+    /// fails with `GroupNotFound`. This prevents a caller from forcing a
+    /// decrement against an arbitrary id that was never counted.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #5)")]
+    fn test_reconcile_tier_count_rejects_missing_receipt() {
+        let (env, client, _admin, _contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[7u8; 32]);
+        client.reconcile_tier_count(&group_id);
+    }
+
+    /// A normal `deactivate_group` flow MUST clear the receipt, so a
+    /// subsequent `reconcile_tier_count` finds nothing to reconcile (and
+    /// therefore cannot double-decrement).
+    #[test]
+    #[should_panic(expected = "Error(Contract, #5)")]
+    fn test_reconcile_no_op_after_clean_deactivation() {
+        let (env, client, _admin, contract_id) = setup_initialized();
+        let group_id = BytesN::from_array(&env, &[11u8; 32]);
+        let commitment = BytesN::from_array(&env, &[12u8; 32]);
+
+        // Simulate a freshly-deactivated group: persistent state cleared,
+        // counter holds zero, receipt was removed by `deactivate_group`.
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .set(&DataKey::GroupCount(0u32), &0u32);
+        });
+        // (no `GroupCounted` entry, no `GroupV2`/`Group` entry)
+        let _ = commitment;
+
+        client.reconcile_tier_count(&group_id);
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Audit-followup Finding #4 — `bump_group` covers admin keys;
+    // `bump_vks` covers shared keys.
+    // ───────────────────────────────────────────────────────────────────
+
+    /// `bump_vks` is callable by any account — liveness is not admin-gated.
+    #[test]
+    fn test_bump_vks_callable_by_anyone() {
+        let (_env, client, _admin, _contract_id) = setup_initialized();
+        client.bump_vks();
     }
 }

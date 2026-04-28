@@ -29,3 +29,19 @@ android {
         }
     }
 }
+
+// Pick up freshly built Rust .so files from `build/android/jniLibs/` (the default
+// output of `scripts/build-android.sh`) so a rebuild is consumed without a manual
+// copy. No-op on a fresh clone where that dir is absent — the committed .so under
+// src/main/jniLibs/ is the fallback. Hooked into preBuild so it runs before AGP
+// merges JNI sources.
+val syncRustNativeLibs by tasks.registering(Copy::class) {
+    val freshlyBuilt = layout.projectDirectory.dir("../build/android/jniLibs")
+    onlyIf { freshlyBuilt.asFile.exists() }
+    from(freshlyBuilt)
+    into(layout.projectDirectory.dir("src/main/jniLibs"))
+}
+
+tasks.named("preBuild") {
+    dependsOn(syncRustNativeLibs)
+}

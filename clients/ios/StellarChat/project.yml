@@ -23,15 +23,16 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.onym.ios
         INFOPLIST_KEY_CFBundleDisplayName: Onym
-        MARKETING_VERSION: "1.10.18"
-        CURRENT_PROJECT_VERSION: 63
+        MARKETING_VERSION: "1.10.41"
+        CURRENT_PROJECT_VERSION: 85
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: NO
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        TARGETED_DEVICE_FAMILY: "1,2"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
         CODE_SIGN_ENTITLEMENTS: StellarChat/StellarChat.entitlements
@@ -123,8 +124,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: chat.onym.ios.NotificationService
-        MARKETING_VERSION: "1.10.18"
-        CURRENT_PROJECT_VERSION: 63
+        MARKETING_VERSION: "1.10.41"
+        CURRENT_PROJECT_VERSION: 85
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: StellarChatNotificationService/Info.plist

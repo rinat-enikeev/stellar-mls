@@ -5,6 +5,12 @@ DerivedData/
 *.xcworkspace/xcuserdata/
 xcuserdata/
 
+# Xcode project is generated from project.yml via `xcodegen generate`
+# (CI runs this in .github/workflows/{pr,release}.yml). Keep it untracked
+# so xcodebuild's automatic edits (template var resolution, fileType
+# rewrites) don't churn the repo.
+*.xcodeproj/
+
 # SwiftPM
 .build/
 .swiftpm/

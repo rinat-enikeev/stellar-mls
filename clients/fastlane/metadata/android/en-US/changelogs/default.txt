@@ -1,9 +1,1 @@
-Initial release of Onym.
-
-- End-to-end encrypted group messaging over Nostr relays
-- Zero-knowledge membership proofs on Stellar blockchain
-- QR code and link-based group invitations
-- Encrypted voice messages and media sharing
-- Voice and video calls
-- Push notifications with on-device decryption
-- Cross-platform compatibility with iOS
+Bug fixes, stability improvements, and refreshed app icon.

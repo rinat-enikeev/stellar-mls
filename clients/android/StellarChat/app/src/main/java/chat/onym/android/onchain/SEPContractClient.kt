@@ -138,17 +138,6 @@ class SEPContractClient(
         return SEPVerifyMembershipResponse.fromJson(json)
     }
 
-    fun deactivateGroup(
-        groupID: ByteArray,
-        proof: ByteArray,
-        commitment: ByteArray,
-        epoch: Long
-    ): SEPSubmissionResponse {
-        val payload = buildDeactivateGroupPayload(groupID, proof, commitment, epoch)
-        val json = transport.invoke(contractID, "deactivate_group", payload)
-        return SEPSubmissionResponse.fromJson(json)
-    }
-
     fun getState(groupID: ByteArray): SEPCommitmentEntry {
         val payload = buildGetStatePayload(groupID)
         val json = transport.invoke(contractID, "get_state", payload)

@@ -13,6 +13,9 @@ struct BootstrapPayload: Codable, Equatable {
     let relayHints: [String]
     let salt: Data              // 32 bytes
     let tierRawValue: Int
+    /// Governance type of the invited group. Defaults to Anarchy (0) for
+    /// backward compatibility with older bootstrap payloads.
+    let groupTypeRawValue: UInt32
     let commitment: Data?
     let senderNostrPubkey: String
     let senderAttestation: KeyAttestation?
@@ -22,6 +25,56 @@ struct BootstrapPayload: Codable, Equatable {
     /// incoming invitation to their pending InvitedContact row. Absent for
     /// regular group invites.
     let onboardReplyNonce: String?
+
+    init(
+        groupID: Data,
+        groupSecret: Data,
+        name: String,
+        epoch: UInt64,
+        members: [SEPGroupMemberLeaf],
+        relayHints: [String],
+        salt: Data,
+        tierRawValue: Int,
+        groupTypeRawValue: UInt32 = SEPGroupType.anarchy.rawValue,
+        commitment: Data?,
+        senderNostrPubkey: String,
+        senderAttestation: KeyAttestation? = nil,
+        senderTransportBundle: SEPMemberTransportBundle? = nil,
+        onboardReplyNonce: String? = nil
+    ) {
+        self.groupID = groupID
+        self.groupSecret = groupSecret
+        self.name = name
+        self.epoch = epoch
+        self.members = members
+        self.relayHints = relayHints
+        self.salt = salt
+        self.tierRawValue = tierRawValue
+        self.groupTypeRawValue = groupTypeRawValue
+        self.commitment = commitment
+        self.senderNostrPubkey = senderNostrPubkey
+        self.senderAttestation = senderAttestation
+        self.senderTransportBundle = senderTransportBundle
+        self.onboardReplyNonce = onboardReplyNonce
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        groupID = try c.decode(Data.self, forKey: .groupID)
+        groupSecret = try c.decode(Data.self, forKey: .groupSecret)
+        name = try c.decode(String.self, forKey: .name)
+        epoch = try c.decode(UInt64.self, forKey: .epoch)
+        members = try c.decode([SEPGroupMemberLeaf].self, forKey: .members)
+        relayHints = try c.decode([String].self, forKey: .relayHints)
+        salt = try c.decode(Data.self, forKey: .salt)
+        tierRawValue = try c.decode(Int.self, forKey: .tierRawValue)
+        groupTypeRawValue = try c.decodeIfPresent(UInt32.self, forKey: .groupTypeRawValue) ?? SEPGroupType.anarchy.rawValue
+        commitment = try c.decodeIfPresent(Data.self, forKey: .commitment)
+        senderNostrPubkey = try c.decode(String.self, forKey: .senderNostrPubkey)
+        senderAttestation = try c.decodeIfPresent(KeyAttestation.self, forKey: .senderAttestation)
+        senderTransportBundle = try c.decodeIfPresent(SEPMemberTransportBundle.self, forKey: .senderTransportBundle)
+        onboardReplyNonce = try c.decodeIfPresent(String.self, forKey: .onboardReplyNonce)
+    }
 
     /// Build a bootstrap payload from a ChatGroup, including the sender's key attestation and transport bundle.
     static func from(
@@ -40,6 +93,7 @@ struct BootstrapPayload: Codable, Equatable {
             relayHints: group.relayHints.map(\.absoluteString),
             salt: group.salt,
             tierRawValue: group.tier.rawValue,
+            groupTypeRawValue: group.groupType.rawValue,
             commitment: group.commitment,
             senderNostrPubkey: senderPubkey,
             senderAttestation: attestation,
@@ -67,7 +121,8 @@ struct BootstrapPayload: Codable, Equatable {
             epoch: epoch,
             salt: salt,
             commitment: commitment,
-            tier: SEPTier(rawValue: tierRawValue) ?? .large
+            tier: SEPTier(rawValue: tierRawValue) ?? .large,
+            groupType: SEPGroupType(rawValue: groupTypeRawValue) ?? .anarchy
         )
     }
 }

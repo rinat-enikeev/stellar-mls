@@ -24,7 +24,7 @@ open StellarChat.xcodeproj
 # Select an iPhone 17.0+ simulator → Cmd+R
 ```
 
-If XcodeGen is not available, you can open the checked-in `.xcodeproj` directly, but regenerating is recommended after any `project.yml` change.
+The `.xcodeproj` is generated from `project.yml` and is not checked in — run `xcodegen generate` before opening Xcode (and again after any `project.yml` change).
 
 ## Usage
 
@@ -168,7 +168,7 @@ StellarChat/
 | Salt distribution via protocol messages (`SEPSaltRequest`/`SEPSaltResponse`) | SEP-XXXX | Implemented |
 | Salt history and offline recovery (last 64 epochs) | SEP-XXXX | Implemented |
 | Salt request rate limiting (H-5) | SEP-XXXX | Implemented |
-| Group deactivation with ZK proof authorization (M-18) | SEP-XXXX | Implemented |
+| ~~Group deactivation with ZK proof authorization (M-18)~~ | SEP-XXXX | Removed in postmortem #153 (front-running unfixable at contract level) |
 | Key attestation creation and verification | SEP-XXXX §1.1 | Implemented |
 | Sender attestation embedded in state updates | SEP-XXXX | Implemented |
 | BLS sender authentication on all messages (H-4) | NIP-XX | Implemented |
@@ -242,7 +242,7 @@ This app is wire-compatible with the Android StellarChat app. Both use identical
 - ~~**Fee decoupling**: Relayer transport (`SEPRelayerTransport`) with bearer token auth, so the Stellar account paying fees is not the group member~~
 - ~~**Salt distribution**: Per-epoch salt distributed via `SEPSaltRequest`/`SEPSaltResponse` protocol messages, with rate limiting (H-5) and offline recovery (last 64 epochs)~~
 - ~~**Key attestation distribution**: `KeyAttestation` embedded in `SEPGroupStateUpdate` messages as `senderAttestation`, verified on receive~~
-- ~~**Group deactivation**: Any member with a valid ZK proof can permanently freeze a group (M-18 confirmation required)~~
+- ~~**Group deactivation**: Any member with a valid ZK proof can permanently freeze a group (M-18 confirmation required)~~ — **removed** in postmortem #153 phase 2; the entrypoint had a front-running vulnerability that could not be closed at the contract level. See `docs/postmortem-deactivate-group-frontrun.md`.
 
 ### Phase 5: Future
 

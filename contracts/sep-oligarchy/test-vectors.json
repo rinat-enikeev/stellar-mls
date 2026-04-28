@@ -1,0 +1,442 @@
+{
+  "description": "Canonical test vectors for the SEP Oligarchy Soroban contract (`contracts/sep-oligarchy`). This file is the single source of truth for the contract's ABI: every error code, enum value, validation boundary, wire shape, dispatch routing, and bitmap-to-field-element packing rule below MUST match the contract's source. The `test_vectors_consistency` inline test loads this file and asserts the contract's `Error` enum, `tier_capacity`, and IC-point constants match these values byte-for-byte. Vectors that depend on Poseidon / Groth16 outputs are deliberately omitted: those are produced by the Phase A `prove_oligarchy_v2` reference implementation (per `docs/oligarchy-update-testnet-design.md` §6) and added to a future `cross-platform-test-vectors.json` extension. The vectors here cover the contract surface only.",
+  "version": 1,
+  "design_doc": "docs/oligarchy-update-testnet-design.md",
+  "design_doc_version": "0.1.4",
+  "contract_source": "contracts/sep-oligarchy/src/lib.rs",
+  "architecture_note": "This contract is the per-type Oligarchy contract — one of the eventual four (Anarchy, OneOnOne, Democracy, Oligarchy). The `group_type` discriminator is implicit in the contract address; there is no polymorphic `update_commitment` dispatch, no `group_type` field in storage, no `UpdateByType(u32)` VK kind, no type-confusion guard. The §4.7.4 design-doc privacy benefit (selector hiding) collapses for the per-type architecture — chain observers learn the group type from the contract address itself, the same publicness class as `tier`. Wire shape is byte-identical to sep-democracy (5 scalars + 192-byte proof) so on-chain calls are indistinguishable on payload bytes alone — only the contract-address dimension differentiates.",
+
+  "error_codes": {
+    "description": "Numeric values of `Error` variants (`#[contracterror] #[repr(u32)]`). Per-type Oligarchy contract drops everything tied to multi-type dispatch (UnknownGroupType, GroupTypeMismatch), 1v1 (OneOnOneImmutable, Invalid1v1Tier), v1 democracy artifacts (MemberCountMismatch, MemberCountOutOfRange, DemocracyInputMissing), the unreachable UnknownVkKind=16 (VkKind exhaustively matched), and the v0.1.3-removed admin-root surface (MissingAdminRoot, AdminRootMismatch, Reserved22 — admin_root is a circuit-internal private witness in v0.1.4). Adds InvalidThreshold per §4.7.6 (admin quorum threshold) and InvalidInitialMembership=30 for the §4.8 zero-member create rejection (in-circuit floor, surfaced for ABI discoverability).",
+    "vectors": [
+      { "name": "NotInitialized", "code": 1 },
+      { "name": "AlreadyInitialized", "code": 2 },
+      { "name": "Reserved3", "code": 3, "note": "previously Unauthorized; admin checks now use require_auth() which panics" },
+      { "name": "GroupAlreadyExists", "code": 4 },
+      { "name": "GroupNotFound", "code": 5 },
+      { "name": "GroupInactive", "code": 6 },
+      { "name": "InvalidProof", "code": 7 },
+      { "name": "InvalidTier", "code": 8 },
+      { "name": "InvalidVkLength", "code": 9 },
+      { "name": "PublicInputsMismatch", "code": 10 },
+      { "name": "InvalidEpoch", "code": 11 },
+      { "name": "ProofReplay", "code": 12 },
+      { "name": "TierGroupLimitReached", "code": 13 },
+      { "name": "AdminOnly", "code": 14, "note": "create_oligarchy_group in restricted mode rejects non-admin callers (caller != admin after caller.require_auth)" },
+      { "name": "InvalidCommitmentEncoding", "code": 15 },
+      { "name": "InvalidPoint", "code": 26 },
+      { "name": "GroupStillActive", "code": 27 },
+      { "name": "InvalidThreshold", "code": 28, "note": "create_oligarchy_group rejects admin_threshold_numerator < 1 || > 100; per design v0.1.4 §4.7.6" },
+      { "name": "InvalidInitialMembership", "code": 30, "note": "Reserved slot in the error number-space for symmetry with the prover-side `BelowMinMember` / `BelowMinAdmin` errors per design §4.8. The contract does NOT surface this code: circuit-level rejections from in-circuit popcount floors collapse to `InvalidProof=7` at the contract boundary (the contract has no Poseidon host and cannot recompute floors itself). Reserved purely as a placeholder so a future revision that promotes the floor check to contract-side enforcement (e.g., if the design grows a separate `member_count_initial` / `admin_count_initial` wire field) has a stable error code waiting." }
+    ],
+    "dropped_from_sep_xxxx": [
+      { "name": "UnknownVkKind", "code": 16, "reason": "VkKind is exhaustively matched in update_vk; the variant was unreachable. Same elision as sep-democracy." },
+      { "name": "OneOnOneImmutable", "code": 17, "reason": "no 1v1 in this contract" },
+      { "name": "UnknownGroupType", "code": 18, "reason": "single-type contract" },
+      { "name": "MissingAdminRoot", "code": 19, "reason": "v0.1.3 design fix: admin_root is now a circuit-internal private witness, not stored on-chain" },
+      { "name": "AdminRootMismatch", "code": 20, "reason": "same as above; no on-chain admin_root means no mismatch error path" },
+      { "name": "DemocracyInputMissing", "code": 21, "reason": "v2 has no count public inputs that could be missing" },
+      { "name": "Reserved22", "code": 22, "reason": "Oligarchy NotAdmin reservation made obsolete by the proof-IS-the-auth model" },
+      { "name": "Invalid1v1Tier", "code": 23, "reason": "no 1v1 in this contract" },
+      { "name": "MemberCountMismatch", "code": 24, "reason": "v1 democracy artifact; v2 uses occupancy_commitment" },
+      { "name": "MemberCountOutOfRange", "code": 25, "reason": "v1 democracy artifact; v2 internalises count constraints in-circuit" },
+      { "name": "GroupTypeMismatch", "code": 29, "reason": "no polymorphic dispatch in single-type contract" }
+    ]
+  },
+
+  "tier": {
+    "description": "Member tier index → tree depth → leaf capacity (per-tier bitmap slot count, NOT the per-tier group cap). The contract MUST reject `member_tier > 2` with `InvalidTier`. Admin tier is fixed at Small (depth=5, 32 slots) per design §4.6 and is NOT a contract argument. Pinned by `tier_capacity()` in the contract; orthogonal to the cross-group `MAX_GROUPS_PER_TIER` cap (see `create_oligarchy_group_validation` rules).",
+    "vectors": [
+      { "tier": 0, "name": "Small", "depth": 5, "capacity": 32 },
+      { "tier": 1, "name": "Medium", "depth": 8, "capacity": 256 },
+      { "tier": 2, "name": "Large", "depth": 11, "capacity": 2048 }
+    ],
+    "rejected_tiers": [
+      { "tier": 3, "expected_error": "InvalidTier" },
+      { "tier": 100, "expected_error": "InvalidTier" },
+      { "tier": 4294967295, "expected_error": "InvalidTier" }
+    ],
+    "admin_tier_fixed": {
+      "depth": 5,
+      "slot_capacity": 32,
+      "rationale": "design §4.6 — admin sets are deliberately small, fixed cap reduces ceremony scope (one admin VK shape across all member tiers), §11 follow-up if a real use case demands more"
+    }
+  },
+
+  "max_groups_per_tier": {
+    "description": "Cross-group cap enforced by create_oligarchy_group: per-member-tier active-group count must be < MAX_GROUPS_PER_TIER, else TierGroupLimitReached. Per-tier slot capacity (32/256/2048) caps members within a single group; this caps the number of groups at each member tier on the contract.",
+    "value": 10000,
+    "rule": "GroupCount(member_tier) MUST be < 10000 at create_oligarchy_group; exceeded → TierGroupLimitReached"
+  },
+
+  "vk_kind_enum": {
+    "description": "Three VK kinds for this contract. No `UpdateByType(u32)` because group_type is constant (Oligarchy). Membership VK is used by verify_membership (opens against the member tree only, parallel to sep-democracy's membership VK). Create VK is used only by create_oligarchy_group and binds the verbose §4.8 tuple as public inputs (rather than trusting wire-supplied occupancy_commitment as sep-democracy does — the verbose binding closes the create-time self-DoS sep-democracy still carries). Update VK is used only by update_commitment. (`deactivate_group` was removed in postmortem #153 — see docs/postmortem-deactivate-group-frontrun.md.)",
+    "vectors": [
+      {
+        "name": "Membership",
+        "ic_count": 3,
+        "ic_layout": ["base", "commitment", "epoch"],
+        "used_by": ["verify_membership"],
+        "note": "opens against the member tree only — chat-capacity proof, not admin-tree proof. Admin authorization for state changes is done via the Update VK's K-signer subset, NOT via this VK."
+      },
+      {
+        "name": "Create",
+        "ic_count": 7,
+        "ic_layout": ["base", "commitment", "epoch", "occupancy_commitment", "member_root", "admin_root", "salt_initial"],
+        "used_by": ["create_oligarchy_group"],
+        "note": "v0.1.4 §4.8 verbose binding. Six public inputs (positions 1-6) bind the create-time tuple so a malicious creator cannot supply a bogus `occupancy_commitment` (no self-DoS). The 6th input `salt_initial` covers `c_old`'s salt; `salt_occ_initial` is bundled into `occupancy_commitment` itself per §4.7.2 v0.1.4 and not a separate IC point."
+      },
+      {
+        "name": "Update",
+        "ic_count": 7,
+        "ic_layout": ["base", "c_old", "epoch_old", "c_new", "occupancy_commitment_old", "occupancy_commitment_new", "admin_threshold_numerator"],
+        "used_by": ["update_commitment"],
+        "note": "v0.1.4 oligarchy update circuit per design §4.7.3. The 6 actual public inputs (positions 1-6) include 5 wire-supplied scalars and 1 contract-supplied scalar (admin_threshold_numerator, read from current.admin_threshold_numerator at verify time per §4.7.6). The 7th IC point is the threshold."
+      }
+    ],
+    "ic_ordering_canonical": "MUST match the v0.1.4 oligarchy circuit's allocation order. Any drift between client prover and contract verifier on this ordering produces silent verify failures. Pinned per design §4.7.6."
+  },
+
+  "create_oligarchy_group_validation": {
+    "description": "Per-call validation in `create_oligarchy_group`. Single-type contract — no per-type dispatch. admin_threshold_numerator must be present and in [1, 100].",
+    "rules": [
+      "member_tier ∈ {0, 1, 2}; out of range → InvalidTier",
+      "admin_threshold_numerator ∈ [1, 100]; out of range → InvalidThreshold",
+      "group_id MUST NOT already be assigned to a live or inactive group; collision → GroupAlreadyExists",
+      "commitment, occupancy_commitment_initial, member_root, admin_root, salt_initial MUST all be canonical Fr encodings (Fr::from_bytes ∘ Fr::to_bytes round-trip); non-canonical → InvalidCommitmentEncoding",
+      "GroupCount(member_tier) MUST be < MAX_GROUPS_PER_TIER (10000); exceeded → TierGroupLimitReached",
+      "if RestrictedMode is true: caller MUST equal Admin, else AdminOnly (caller.require_auth() runs first)",
+      "proof MUST verify under the create VK at `member_tier` against the supplied (commitment, epoch=0, occupancy_commitment_initial, member_root, admin_root, salt_initial) public inputs; failure → InvalidProof",
+      "proof_hash(proof) MUST NOT be in UsedProof storage; collision → ProofReplay"
+    ],
+    "admin_threshold_numerator_validation": {
+      "valid_vectors": [
+        { "admin_threshold_numerator": 1, "semantics": "single-vote-passes (degenerate; allowed by spec)" },
+        { "admin_threshold_numerator": 50, "semantics": "simple admin majority (default per UI; non-strict — ties pass per §4.7.6)" },
+        { "admin_threshold_numerator": 51, "semantics": "strict admin majority (ties fail)" },
+        { "admin_threshold_numerator": 67, "semantics": "two-thirds admin supermajority" },
+        { "admin_threshold_numerator": 75, "semantics": "three-quarters admin supermajority" },
+        { "admin_threshold_numerator": 100, "semantics": "unanimous admin consent" }
+      ],
+      "invalid_vectors": [
+        { "admin_threshold_numerator": 0, "expected_error": "InvalidThreshold" },
+        { "admin_threshold_numerator": 101, "expected_error": "InvalidThreshold" },
+        { "admin_threshold_numerator": 200, "expected_error": "InvalidThreshold" },
+        { "admin_threshold_numerator": 255, "expected_error": "InvalidThreshold" }
+      ]
+    }
+  },
+
+  "domain_tags": {
+    "description": "Field-element domain tags used inside Poseidon hash inputs. Pinned per design §10.1 Q1 (Phase-A blocker). Codified in the planned `src/circuit/domain_tags.rs` (in the prover repo, NOT in this contract — the contract verifies proofs but doesn't compute Poseidon hashes itself). The contract is value-agnostic to these tags; they're listed here for cross-implementation reference. v0.1.4 NOTE: the new `salt_occ` private witness is NOT a new domain tag — it is an extra Poseidon input absorbed by the combine hash (see §4.7.2). The six-tag set 1..=6 is unchanged.",
+    "vectors": [
+      { "name": "DOMAIN_MEMBER", "value_decimal": 1, "value_hex": "0000000000000000000000000000000000000000000000000000000000000001", "used_for": "Poseidon(DOMAIN_MEMBER, Poseidon(sk)) — member-tree leaf" },
+      { "name": "DOMAIN_TOMBSTONE", "value_decimal": 2, "value_hex": "0000000000000000000000000000000000000000000000000000000000000002", "used_for": "Poseidon(DOMAIN_TOMBSTONE, 0) — tombstone leaf constant (shared across both trees)" },
+      { "name": "DOMAIN_OCCUPANCY", "value_decimal": 3, "value_hex": "0000000000000000000000000000000000000000000000000000000000000003", "used_for": "Poseidon(DOMAIN_OCCUPANCY, fold(member_bitmap)) — member-tree occupancy intermediate (circuit-internal in v0.1.3+)" },
+      { "name": "DOMAIN_ADMIN", "value_decimal": 4, "value_hex": "0000000000000000000000000000000000000000000000000000000000000004", "used_for": "Poseidon(DOMAIN_ADMIN, Poseidon(sk)) — admin-tree leaf prefix; disjoint from DOMAIN_MEMBER so the same secret key produces distinct leaves in the two trees" },
+      { "name": "DOMAIN_ADMIN_OCCUPANCY", "value_decimal": 5, "value_hex": "0000000000000000000000000000000000000000000000000000000000000005", "used_for": "Poseidon(DOMAIN_ADMIN_OCCUPANCY, fold(admin_bitmap)) — admin-tree occupancy intermediate (circuit-internal)" },
+      { "name": "DOMAIN_COMBINED_OCCUPANCY", "value_decimal": 6, "value_hex": "0000000000000000000000000000000000000000000000000000000000000006", "used_for": "Poseidon(DOMAIN_COMBINED_OCCUPANCY, member_intermediate, admin_intermediate) bundled with `salt_occ` per §4.7.2 v0.1.4 — the salted combined commitment exposed on the wire" }
+    ]
+  },
+
+  "occupancy_bitmap_fold": {
+    "description": "Per design §4.7.2, member-tree and admin-tree bitmaps are independently folded into Fr scalars at BITS_PER_FELT = 252 bits per scalar. Each scalar packs 252 bitmap bits in little-endian order: bit i of the bitmap is bit (i mod 252) of scalar (i div 252). The high bits 252-255 of every scalar MUST be zero (Fr modulus is ~2^254.86, so the high 3 bits cannot all be 1). The contract is value-agnostic to the bitmap encoding (it sees only the 32-byte combined occupancy_commitment hash output); these vectors are reference for cross-implementation testing of provers against this contract. v0.1.4 NOTE: bitmap fold itself is unchanged from v0.1.3 — the salt is added at the combine layer, not at the fold.",
+    "bits_per_felt": 252,
+    "member_scalar_count_by_tier": [
+      { "tier": 0, "depth": 5, "bitmap_bits": 32, "scalar_count": 1 },
+      { "tier": 1, "depth": 8, "bitmap_bits": 256, "scalar_count": 2, "note": "256 bits / 252 = 2 scalars; 4 high bits of scalar 1 are zero-padded" },
+      { "tier": 2, "depth": 11, "bitmap_bits": 2048, "scalar_count": 9, "note": "2048 bits / 252 = 9 scalars; 220 high bits of scalar 8 are zero-padded" }
+    ],
+    "admin_scalar_count": {
+      "depth": 5,
+      "bitmap_bits": 32,
+      "scalar_count": 1,
+      "note": "admin tier fixed at Small per §4.6; 32 bits packs into one Fr scalar trivially"
+    },
+    "bit_packing_rule": "bitmap[i] occupies bit position (i mod 252) of scalar (i div 252), little-endian within the scalar. Bits 252-255 of every produced scalar MUST be 0.",
+    "tier_0_examples": [
+      { "description": "All slots empty (pre-creation reference)", "bitmap_decimal": 0, "expected_scalars_be_hex": ["0000000000000000000000000000000000000000000000000000000000000000"] },
+      { "description": "Slot 0 active (creator-only state at create_oligarchy_group time)", "bitmap_decimal": 1, "expected_scalars_be_hex": ["0000000000000000000000000000000000000000000000000000000000000001"] },
+      { "description": "Slots 0 and 1 active (after first member join, no tombstones)", "bitmap_decimal": 3, "expected_scalars_be_hex": ["0000000000000000000000000000000000000000000000000000000000000003"] },
+      { "description": "All 32 slots active (Small tier maximum)", "bitmap_decimal": 4294967295, "expected_scalars_be_hex": ["00000000000000000000000000000000000000000000000000000000ffffffff"] }
+    ],
+    "admin_examples": [
+      { "description": "Slot 0 active (creator-only admin)", "bitmap_decimal": 1, "expected_scalars_be_hex": ["0000000000000000000000000000000000000000000000000000000000000001"] },
+      { "description": "Slots 0 and 1 active (creator + 1 promoted)", "bitmap_decimal": 3, "expected_scalars_be_hex": ["0000000000000000000000000000000000000000000000000000000000000003"] },
+      { "description": "All 32 admin slots active (lifetime cap reached)", "bitmap_decimal": 4294967295, "expected_scalars_be_hex": ["00000000000000000000000000000000000000000000000000000000ffffffff"] }
+    ],
+    "high_bits_zero_assertion": {
+      "description": "Every produced scalar MUST have bits 252-255 equal to 0 (canonical-Fr requirement). Implementations MUST reject (or refuse to produce) any scalar where the top byte (BE) has any of the high 4 bits set.",
+      "rejection_examples_be_hex": [
+        "f000000000000000000000000000000000000000000000000000000000000000",
+        "1000000000000000000000000000000000000000000000000000000000000000",
+        "8000000000000000000000000000000000000000000000000000000000000000"
+      ]
+    }
+  },
+
+  "membership_count_constraints": {
+    "description": "v0.1.4 internalises all count-derived rules into the circuit (design §4.7.3). The contract no longer reads any count from storage on the update path. The values below describe what the v0.1.4 oligarchy circuit is required to enforce, expressed as bitmap popcount conditions; they are reproduced as test vectors so the inline `prove_oligarchy_v2_*` cases (in the prover repo) and the contract integration tests have a single source of truth.",
+    "popcount_constraints": [
+      {
+        "rule": "popcount(member_bitmap_new) ≥ 1 (member floor)",
+        "rationale": "preserves at-least-one-member invariant; was contract-only in v1, now in-circuit per §4.2.1",
+        "valid_examples": [
+          { "popcount_old": 1, "popcount_new": 1, "valid": true, "context": "no-op epoch advance / key rotation" },
+          { "popcount_old": 1, "popcount_new": 2, "valid": true, "context": "single member added" },
+          { "popcount_old": 2, "popcount_new": 1, "valid": true, "context": "single member removed; floor preserved" }
+        ],
+        "invalid_examples": [
+          { "popcount_old": 1, "popcount_new": 0, "valid": false, "expected_outcome": "BelowMinCount (prover-side); InvalidProof (contract-side)" }
+        ]
+      },
+      {
+        "rule": "popcount(admin_bitmap_new) ≥ 1 (admin floor)",
+        "rationale": "prevents last-admin demotion (group-bricking); in-circuit per §4.7.3 #6",
+        "valid_examples": [
+          { "popcount_old": 1, "popcount_new": 1, "valid": true, "context": "no-op admin epoch / key rotation" },
+          { "popcount_old": 1, "popcount_new": 2, "valid": true, "context": "single admin promoted" },
+          { "popcount_old": 2, "popcount_new": 1, "valid": true, "context": "one admin demoted; floor preserved" }
+        ],
+        "invalid_examples": [
+          { "popcount_old": 1, "popcount_new": 0, "valid": false, "expected_outcome": "BelowMinAdmin (prover-side); InvalidProof (contract-side)" }
+        ]
+      },
+      {
+        "rule": "|popcount(target_bitmap_new) − popcount(target_bitmap_old)| ≤ 1 (single-leaf delta on target tree only)",
+        "rationale": "matches the single-signer-subset proof shape from §4.2; multi-signer transitions are deferred to Phase F. The non-target tree must be byte-identical between old and new (constraint #8).",
+        "valid_examples": [
+          { "context": "target_tree=member, member_old=5, member_new=5", "valid": true },
+          { "context": "target_tree=member, member_old=5, member_new=6", "valid": true },
+          { "context": "target_tree=admin, admin_old=2, admin_new=3", "valid": true }
+        ],
+        "invalid_examples": [
+          { "context": "target_tree=member, member_old=5, member_new=7 (delta > 1)", "valid": false, "expected_outcome": "InvalidProof" },
+          { "context": "target_tree=member, but admin tree also changed (constraint #8 violated)", "valid": false, "expected_outcome": "InvalidProof" }
+        ]
+      },
+      {
+        "rule": "popcount(member_bitmap) ≤ 2^member_depth AND popcount(admin_bitmap) ≤ 32 (ceilings)",
+        "rationale": "implicit in the bitmaps' fixed lengths; no explicit constraint required for the member tree. Admin tier cap = 32 per §4.6.",
+        "tier_0_max_member_popcount": 32,
+        "tier_1_max_member_popcount": 256,
+        "tier_2_max_member_popcount": 2048,
+        "max_admin_popcount": 32
+      },
+      {
+        "rule": "100·K ≥ admin_threshold_numerator · popcount(admin_bitmap_old) (admin quorum, non-strict — ties pass)",
+        "rationale": "configurable per group (§4.7.6); K is the number of admin signers in the proof. K=1 is the single-admin-signer subset baseline (§4.2). Non-strict >= means admin_threshold=50 with admin_old=2, K=1 (100 ≥ 100) passes — natural reading of 'simple admin majority = at least half'.",
+        "single_signer_examples": [
+          { "admin_threshold_numerator": 50, "admin_count_old": 1, "K": 1, "valid": true, "calc": "100·1 ≥ 50·1 ⟺ 100 ≥ 50" },
+          { "admin_threshold_numerator": 50, "admin_count_old": 2, "K": 1, "valid": true, "calc": "100·1 ≥ 50·2 ⟺ 100 ≥ 100", "note": "tie passes" },
+          { "admin_threshold_numerator": 50, "admin_count_old": 3, "K": 1, "valid": false, "calc": "100·1 ≥ 50·3 ⟺ 100 ≥ 150 false", "note": "single-admin-signer hits the limit at admin_count_old ≥ 3" },
+          { "admin_threshold_numerator": 51, "admin_count_old": 2, "K": 1, "valid": false, "calc": "100·1 ≥ 51·2 ⟺ 100 ≥ 102 false", "note": "strict-admin-majority threshold rejects the tie" },
+          { "admin_threshold_numerator": 67, "admin_count_old": 1, "K": 1, "valid": true, "calc": "100·1 ≥ 67·1 ⟺ 100 ≥ 67" },
+          { "admin_threshold_numerator": 67, "admin_count_old": 2, "K": 1, "valid": false, "calc": "100·1 ≥ 67·2 ⟺ 100 ≥ 134 false" },
+          { "admin_threshold_numerator": 100, "admin_count_old": 1, "K": 1, "valid": true, "calc": "100·1 ≥ 100·1 ⟺ 100 ≥ 100" },
+          { "admin_threshold_numerator": 100, "admin_count_old": 2, "K": 1, "valid": false, "calc": "100·1 ≥ 100·2 ⟺ 100 ≥ 200 false" }
+        ],
+        "single_signer_max_admin_old_by_threshold": {
+          "comment": "For K=1, max admin_count_old supported is floor(100 / admin_threshold_numerator)",
+          "table": [
+            { "admin_threshold_numerator": 50, "max_admin_old_for_k1": 2, "covers_transitions": ["1→2", "2→3 admin"] },
+            { "admin_threshold_numerator": 51, "max_admin_old_for_k1": 1, "covers_transitions": ["1→2 admin"] },
+            { "admin_threshold_numerator": 67, "max_admin_old_for_k1": 1, "covers_transitions": ["1→2 admin"] },
+            { "admin_threshold_numerator": 75, "max_admin_old_for_k1": 1, "covers_transitions": ["1→2 admin"] },
+            { "admin_threshold_numerator": 100, "max_admin_old_for_k1": 1, "covers_transitions": ["1→2 admin"] }
+          ]
+        }
+      }
+    ]
+  },
+
+  "create_public_inputs_wire_format": {
+    "description": "Wire encoding of `CreatePublicInputs` for create_oligarchy_group. Verbose v0.1.4 §4.8 binding: contract receives all six public inputs explicitly so the create proof binds member_root, admin_root, salt_initial, occupancy_commitment_initial, commitment_initial, epoch=0 — closing the create-time self-DoS sep-democracy still carries.",
+    "wire_fields": [
+      { "name": "commitment", "type": "BytesN<32>", "fr_canonical": true, "rule": "create-time bundled-roots commitment; non-canonical → InvalidCommitmentEncoding" },
+      { "name": "epoch", "type": "u64", "rule": "MUST equal 0 at create; otherwise PublicInputsMismatch" },
+      { "name": "occupancy_commitment", "type": "BytesN<32>", "fr_canonical": true, "rule": "non-canonical → InvalidCommitmentEncoding" },
+      { "name": "member_root", "type": "BytesN<32>", "fr_canonical": true, "rule": "create-time only; not persisted; non-canonical → InvalidCommitmentEncoding" },
+      { "name": "admin_root", "type": "BytesN<32>", "fr_canonical": true, "rule": "create-time only; not persisted; non-canonical → InvalidCommitmentEncoding" },
+      { "name": "salt_initial", "type": "BytesN<32>", "fr_canonical": true, "rule": "create-time only; not persisted; non-canonical → InvalidCommitmentEncoding" }
+    ],
+    "groth16_public_inputs": [
+      "commitment (from wire)",
+      "epoch=0 (from wire)",
+      "occupancy_commitment (from wire)",
+      "member_root (from wire)",
+      "admin_root (from wire)",
+      "salt_initial (from wire)"
+    ],
+    "vk_kind": "Create (7 IC points: base + 6 public inputs)",
+    "canonical_encoding_rules": [
+      "Every BytesN<32> field MUST round-trip through Fr::from_bytes ∘ Fr::to_bytes; non-canonical encodings are rejected with InvalidCommitmentEncoding.",
+      "u64 epoch uses Soroban's native big-endian XDR encoding; epoch MUST equal 0 at create.",
+      "Public-input ordering for Groth16 verification is fixed: positions 1-6 in the listed order. salt_occ_initial is NOT a separate public input — it is bundled into occupancy_commitment per §4.7.2 v0.1.4 and consumed inside the circuit."
+    ]
+  },
+
+  "update_commitment_public_inputs_wire_format": {
+    "description": "Wire encoding of `UpdateCommitmentPublicInputs`. Single Oligarchy variant (no discriminated union — the contract is Oligarchy-only). Encoded as a Soroban `#[contracttype]` struct. Five wire-supplied scalars; the verifier consumes a 6-public-input vector at proof verification — the 6th input (admin_threshold_numerator) is supplied by the contract from current.admin_threshold_numerator. Byte-identical in shape to sep-democracy's update wire payload.",
+    "wire_fields": [
+      { "name": "c_old", "type": "BytesN<32>", "fr_canonical": true, "rule": "MUST equal current.commitment, else PublicInputsMismatch" },
+      { "name": "epoch_old", "type": "u64", "rule": "MUST equal current.epoch, else PublicInputsMismatch" },
+      { "name": "c_new", "type": "BytesN<32>", "fr_canonical": true, "rule": "non-canonical → InvalidCommitmentEncoding" },
+      { "name": "occupancy_commitment_old", "type": "BytesN<32>", "fr_canonical": true, "rule": "MUST equal current.occupancy_commitment, else PublicInputsMismatch" },
+      { "name": "occupancy_commitment_new", "type": "BytesN<32>", "fr_canonical": true, "rule": "non-canonical → InvalidCommitmentEncoding" }
+    ],
+    "groth16_public_inputs": [
+      "c_old (from wire)",
+      "epoch_old (from wire)",
+      "c_new (from wire)",
+      "occupancy_commitment_old (from wire)",
+      "occupancy_commitment_new (from wire)",
+      "admin_threshold_numerator (from current.admin_threshold_numerator; NOT on the wire — design §4.7.6)"
+    ],
+    "vk_kind": "Update (7 IC points: base + 6 public inputs)",
+    "canonical_encoding_rules": [
+      "Every BytesN<32> commitment field MUST round-trip through Fr::from_bytes ∘ Fr::to_bytes; non-canonical encodings are rejected with InvalidCommitmentEncoding.",
+      "u64 epoch_old uses Soroban's native big-endian XDR encoding.",
+      "Public-input ordering for Groth16 verification is fixed: positions 1-5 from wire (in the listed order), position 6 from contract storage."
+    ]
+  },
+
+  "storage_layout": {
+    "description": "Storage entries written by the contract. Per-type Oligarchy means `group_type` is implicit in the contract address (not a stored field), and v0.1.4's combined+salted occupancy_commitment replaces v1's member_count + admin_count + admin_root.",
+    "commitment_entry": {
+      "fields": [
+        { "name": "commitment", "type": "BytesN<32>", "rule": "Poseidon bundled-roots commitment per §4.7.2; canonical Fr encoding" },
+        { "name": "epoch", "type": "u64", "rule": "starts at 0, increments by 1 per successful update_commitment" },
+        { "name": "timestamp", "type": "u64", "rule": "ledger timestamp when this state was recorded" },
+        { "name": "tier", "type": "u32", "rule": "member tier: 0=Small, 1=Medium, 2=Large; fixed at create_oligarchy_group, never mutated. Admin tier is fixed at Small (depth=5, 32 slots) and NOT stored — implicit per design §4.6." },
+        { "name": "active", "type": "bool", "rule": "always true in current contract — `deactivate_group` was removed in postmortem #153, so no production code path sets this to false. Field + GroupInactive guard retained as defense-in-depth for any future re-introduction of deactivation." },
+        { "name": "occupancy_commitment", "type": "BytesN<32>", "rule": "salted combined Poseidon commitment per §4.7.2 v0.1.4; canonical Fr encoding; replaces v1's member_count + admin_count" },
+        { "name": "admin_threshold_numerator", "type": "u32", "rule": "1..=100; fixed at create_oligarchy_group, never mutated by update_commitment per design §4.7.6. Stored as u32 (matches contract); the value range fits in u8 but the storage type matches the wire-supplied tier type for consistency." }
+      ]
+    },
+    "removed_vs_sep_xxxx": [
+      { "field": "group_type", "rationale": "single-type contract; the contract address IS the discriminator" },
+      { "field": "member_count", "rationale": "v1 democracy artifact; v0.1.4 commits to the bitmap via combined occupancy_commitment instead, hiding the count" },
+      { "field": "admin_count", "rationale": "would defeat §3.5 hiding (chain observer reading the cached count gets exact admin-set size); v0.1.3+ commits via combined occupancy_commitment" },
+      { "field": "admin_root", "rationale": "v0.1.3 §3.5 fix — admin_root reading defeats the 'which tree changed' hiding; admin_root is now a circuit-internal private witness reconstructed off-chain by group members" },
+      { "field": "salt_occ", "rationale": "v0.1.4 — salt is a per-epoch private witness, not stored on chain; distributed off-chain via SEPSaltResponse.occupancySalt per §4.4" }
+    ],
+    "data_keys": [
+      { "name": "Admin", "value_type": "Address", "storage": "instance", "note": "contract admin; required for update_vk and set_restricted_mode" },
+      { "name": "RestrictedMode", "value_type": "bool", "storage": "instance", "note": "when true, only the admin may call create_oligarchy_group; toggled by set_restricted_mode (admin-only). Default false." },
+      { "name": "VK(tier)", "value_type": "VerificationKeyData", "storage": "persistent", "note": "membership-circuit VK for member tier 0/1/2; 3 IC points; opens against the member tree only" },
+      { "name": "CreateVK(tier)", "value_type": "VerificationKeyData", "storage": "persistent", "note": "create-circuit VK for member tier 0/1/2; 7 IC points; binds the verbose §4.8 tuple" },
+      { "name": "UpdateVK(tier)", "value_type": "VerificationKeyData", "storage": "persistent", "note": "v0.1.4 oligarchy update VK for member tier 0/1/2; 7 IC points. NO `group_type` second key — single-type contract." },
+      { "name": "Group(group_id)", "value_type": "CommitmentEntry", "storage": "persistent", "note": "current group state" },
+      { "name": "History(group_id)", "value_type": "Vec<CommitmentEntry>", "storage": "persistent", "note": "rolling-window history of past entries; capped at HISTORY_WINDOW=64; pruned FIFO" },
+      { "name": "UsedProof(proof_hash)", "value_type": "()", "storage": "persistent (TTL ~30 days via LEDGER_BUMP)", "note": "global-nullifier scope per design §11" },
+      { "name": "GroupCount(tier)", "value_type": "u32", "storage": "instance", "note": "active group count per member tier; checked against MAX_GROUPS_PER_TIER (10000) in create_oligarchy_group. Monotonic increment-only since `deactivate_group` was removed (postmortem #153) — no decrement path exists; the cap is now a one-way ratchet. Operationally fine at testnet scale; if mainnet ever approaches 10k groups/tier, the architecture itself needs revisiting." }
+    ]
+  },
+
+  "admin_entrypoints": {
+    "description": "Admin-gated entrypoints. All require admin.require_auth(); panic on unauth. There is no separate `set_admin` entrypoint — admin is fixed at __constructor.",
+    "vectors": [
+      {
+        "name": "update_vk",
+        "args": [
+          { "name": "kind", "type": "VkKind", "values": ["Membership", "Create", "Update"] },
+          { "name": "tier", "type": "u32", "rule": "must be ≤ 2 else InvalidTier" },
+          { "name": "new_vk", "type": "VerificationKeyData", "rule": "IC length matches `kind` (3 / 7 / 7); subgroup-valid; else InvalidVkLength / InvalidPoint" }
+        ],
+        "purpose": "design §4.6 fingerprint-coordination triplet — rotate Membership / Create / Update VK at a tier"
+      },
+      {
+        "name": "set_restricted_mode",
+        "args": [
+          { "name": "restricted", "type": "bool" }
+        ],
+        "purpose": "when restricted=true, create_oligarchy_group rejects non-admin callers with AdminOnly. Storage: DataKey::RestrictedMode (instance). Default value (key absent) is treated as false."
+      }
+    ]
+  },
+
+  "queries": {
+    "description": "Read-only entrypoints. None require auth. All return Result<_, Error>.",
+    "vectors": [
+      { "name": "get_commitment", "args": [{"name": "group_id", "type": "BytesN<32>"}], "returns": "CommitmentEntry", "errors": ["GroupNotFound"] },
+      { "name": "get_history", "args": [{"name": "group_id", "type": "BytesN<32>"}, {"name": "max_entries", "type": "u32", "rule": "tail-truncated to most-recent `max_entries`; if max_entries ≥ history.len() returns all entries"}], "returns": "Vec<CommitmentEntry>", "errors": ["GroupNotFound"] },
+      { "name": "verify_membership", "args": [{"name": "group_id", "type": "BytesN<32>"}, {"name": "proof", "type": "Groth16Proof"}, {"name": "public_inputs", "type": "PublicInputs"}], "returns": "bool", "errors": ["GroupNotFound", "PublicInputsMismatch"], "note": "returns Ok(false) on bad proof rather than InvalidProof — read-only verifier semantics. Opens against the member tree (chat-capacity proof)." },
+      { "name": "bump_group_ttl", "args": [{"name": "group_id", "type": "BytesN<32>"}], "returns": "()", "errors": ["GroupNotFound"], "note": "permissionless TTL bump for long-lived groups" }
+    ]
+  },
+
+  "epoch_invariant": {
+    "description": "v0.1.4 keeps v1's monotonic-by-1 epoch rule. update_commitment increments stored.epoch by exactly 1 on success.",
+    "vectors": [
+      { "stored_epoch": 0, "wire_epoch_old": 0, "valid": true, "post_epoch": 1 },
+      { "stored_epoch": 5, "wire_epoch_old": 5, "valid": true, "post_epoch": 6 },
+      { "stored_epoch": 5, "wire_epoch_old": 4, "valid": false, "expected_error": "PublicInputsMismatch" },
+      { "stored_epoch": 5, "wire_epoch_old": 6, "valid": false, "expected_error": "PublicInputsMismatch" },
+      { "stored_epoch": 18446744073709551615, "wire_epoch_old": 18446744073709551615, "valid": false, "expected_error": "InvalidEpoch", "note": "u64 overflow on checked_add" }
+    ]
+  },
+
+  "proof_replay_protection": {
+    "description": "Global nullifier scope. The nullifier is sha256(proof.a || proof.b || proof.c) over the 384-byte uncompressed proof bytes. Scope is global per contract: the same 384 bytes used at any state-changing entrypoint on any group consume the nullifier.",
+    "rules": [
+      "Once a proof's bytes have been recorded by record_proof, any subsequent entrypoint call with byte-identical proof.a||proof.b||proof.c is rejected with ProofReplay.",
+      "TTL of UsedProof entries is LEDGER_BUMP (~30 days). After expiry the same proof bytes can be re-used; long-lived groups require periodic state advancement to keep nullifiers alive (mitigated by recording fresh proofs at successful state-changing entrypoints — record_proof bumps UsedProof TTL, but bump_group_ttl does NOT touch UsedProof entries since they are keyed by proof_hash with contract-global scope, not per-group).",
+      "Pre-inclusion mempool replay is NOT closed by the contract-level nullifier — see existing notes in `contracts/sep-xxxx/src/lib.rs` for the circuit-level v0.1.4 (operation tag binding) that would close that."
+    ]
+  },
+
+  "tests_to_implement": {
+    "description": "Inline test names that the `#[cfg(test)] mod test` block in `contracts/sep-oligarchy/src/lib.rs` MUST cover. The `test_vectors_consistency` test loads this very file and asserts the contract's `Error` enum / tier mapping / IC-point constants match the values pinned above. Every other entry in this list maps 1:1 to a `#[test] fn` in the inline module.",
+    "tests": [
+      "test_initialize",
+      "test_invalid_membership_vk_length_rejected",
+      "test_invalid_create_vk_length_rejected",
+      "test_invalid_update_vk_length_rejected",
+      "test_create_oligarchy_group_happy_path",
+      "test_create_oligarchy_group_rejects_invalid_tier",
+      "test_create_oligarchy_group_rejects_invalid_threshold_zero",
+      "test_create_oligarchy_group_rejects_invalid_threshold_above_100",
+      "test_create_oligarchy_group_accepts_threshold_50",
+      "test_create_oligarchy_group_accepts_threshold_67",
+      "test_create_oligarchy_group_accepts_threshold_100",
+      "test_create_oligarchy_group_rejects_duplicate_group_id",
+      "test_create_oligarchy_group_rejects_non_canonical_commitment",
+      "test_create_oligarchy_group_rejects_non_canonical_occupancy_commitment",
+      "test_create_oligarchy_group_rejects_non_canonical_member_root",
+      "test_create_oligarchy_group_rejects_non_canonical_admin_root",
+      "test_create_oligarchy_group_rejects_non_canonical_salt_initial",
+      "test_create_oligarchy_group_rejects_invalid_proof",
+      "test_create_oligarchy_group_restricted_mode_rejects_non_admin",
+      "test_create_oligarchy_group_enforces_tier_group_limit",
+      "test_update_commitment_happy_path",
+      "test_update_commitment_rejects_stale_c_old",
+      "test_update_commitment_rejects_stale_occupancy_commitment_old",
+      "test_update_commitment_rejects_wrong_epoch_old",
+      "test_update_commitment_rejects_non_canonical_c_new",
+      "test_update_commitment_rejects_non_canonical_occupancy_commitment_new",
+      "test_update_commitment_rejects_replayed_proof",
+      "test_update_commitment_rejects_inactive_group",
+      "test_update_commitment_rejects_unknown_group",
+      "test_update_commitment_admin_threshold_pinned_to_storage",
+      "test_verify_membership_happy_path",
+      "test_verify_membership_rejects_wrong_commitment",
+      "test_verify_membership_rejects_wrong_epoch",
+      "test_verify_membership_rejects_inactive_group",
+      "test_update_vk_requires_auth",
+      "test_update_vk_rotates_membership_vk",
+      "test_update_vk_rotates_create_vk",
+      "test_update_vk_rotates_update_vk",
+      "test_update_vk_rejects_invalid_tier",
+      "test_update_vk_rejects_create_vk_arity_mismatch",
+      "test_get_commitment_returns_current_state",
+      "test_get_commitment_rejects_unknown_group",
+      "test_get_history_returns_chronological_entries",
+      "test_get_history_rejects_unknown_group",
+      "test_archive_entry_appends_and_prunes",
+      "test_bump_group_ttl_extends_group_storage",
+      "test_bump_group_ttl_rejects_unknown_group",
+      "test_vectors_consistency"
+    ]
+  }
+}

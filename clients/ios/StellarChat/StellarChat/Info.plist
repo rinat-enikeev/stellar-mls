@@ -45,5 +45,12 @@
 	<string>Onym needs photo library access to share encrypted images in group chats.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Onym needs microphone access to record voice messages.</string>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+		<key>UIImageName</key>
+		<string>LaunchLogo</string>
+	</dict>
 </dict>
 </plist>

@@ -18,6 +18,125 @@
       "screenshots": [],
       "versions": [
         {
+          "version": "1.10.41",
+          "date": "2026-04-28",
+          "localizedDescription": "Release 1.10.41",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
+          "version": "1.10.40",
+          "date": "2026-04-28",
+          "localizedDescription": "Release 1.10.40",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
+          "version": "1.10.39",
+          "date": "2026-04-27",
+          "localizedDescription": "Release 1.10.39",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
+          "version": "1.10.38",
+          "date": "2026-04-27",
+          "localizedDescription": "Release 1.10.38",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
+          "version": "1.10.37",
+          "date": "2026-04-27",
+          "localizedDescription": "Release 1.10.37",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
+          "version": "1.10.36",
+          "date": "2026-04-27",
+          "localizedDescription": "Release 1.10.36",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
+          "version": "1.10.35",
+          "date": "2026-04-27",
+          "localizedDescription": "Release 1.10.35",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
+          "version": "1.10.34",
+          "date": "2026-04-27",
+          "localizedDescription": "Release 1.10.34",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
+          "version": "1.10.33",
+          "date": "2026-04-27",
+          "localizedDescription": "Release 1.10.33",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
+          "version": "1.10.32",
+          "date": "2026-04-27",
+          "localizedDescription": "Release 1.10.32",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
+          "version": "1.10.31",
+          "date": "2026-04-27",
+          "localizedDescription": "Release 1.10.31",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
+          "version": "1.10.29",
+          "date": "2026-04-27",
+          "localizedDescription": "Release 1.10.29",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
+          "version": "1.10.28",
+          "date": "2026-04-27",
+          "localizedDescription": "Release 1.10.28",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
+          "version": "1.10.22",
+          "date": "2026-04-24",
+          "localizedDescription": "Release 1.10.22",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
+          "version": "1.10.21",
+          "date": "2026-04-24",
+          "localizedDescription": "Release 1.10.21",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
+          "version": "1.10.20",
+          "date": "2026-04-24",
+          "localizedDescription": "Release 1.10.20",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
+          "version": "1.10.19",
+          "date": "2026-04-24",
+          "localizedDescription": "Release 1.10.19",
+          "downloadURL": "",
+          "size": 0
+        },
+        {
           "version": "1.10.18",
           "date": "2026-04-24",
           "localizedDescription": "Release 1.10.18",

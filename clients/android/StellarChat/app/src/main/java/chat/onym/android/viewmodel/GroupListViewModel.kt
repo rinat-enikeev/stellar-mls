@@ -288,76 +288,81 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
             onNewPushToken(token)
         }
 
-        // Load contact aliases
-        viewModelScope.launch {
-            try {
-                contactAliasStore.load(store.dao)
-            } catch (e: Exception) {
-                Log.e("GroupListVM", "Failed to load contact aliases", e)
-            }
-        }
-
-        // Load invited contacts (Telegram-invite tracking)
-        viewModelScope.launch {
-            try {
-                invitedContactStore.load(store.dao)
-            } catch (e: Exception) {
-                Log.e("GroupListVM", "Failed to load invited contacts", e)
-            }
-        }
-
-        // Load persisted groups, messages, and initialize salt history
-        viewModelScope.launch {
-            try {
-                val loaded = store.loadGroups().map { applyLocalPushState(it) }
-                Log.d("GroupListVM", "Loaded ${loaded.size} groups from store")
-                groups.addAll(loaded)
-                // Populate push states from local preferences
-                for (g in loaded) { pushEnabledStates[g.id] = g.pushNotificationsEnabled }
-                // Populate currentMembers from all persisted groups
-                transport.currentMembers.addAll(loaded.flatMap { it.members })
-                for (group in loaded) {
-                    storeSalt(group.id, group.epoch, group.salt)
-                    // Load persisted chat messages
-                    try {
-                        val msgs = store.loadMessages(group.id)
-                        chatMessages[group.id] = msgs
-                        seenMessageIDs[group.id] = java.util.Collections.synchronizedSet(msgs.map { it.id }.toMutableSet())
-                    } catch (e: Exception) {
-                        Log.e("GroupListVM", "Failed to load messages for group ${group.id.take(8)}", e)
-                    }
-                    // Load transport bundles
-                    try {
-                        val bundles = store.loadTransportBundles(group.id)
-                        if (bundles.isNotEmpty()) {
-                            transportBundles[group.id] = bundles.toMutableMap()
-                        }
-                    } catch (_: Exception) { }
-                    // Load epoch snapshots
-                    try {
-                        val snapshots = store.loadEpochSnapshots(group.id)
-                        if (snapshots.isNotEmpty()) {
-                            epochSnapshots[group.id] = java.util.concurrent.ConcurrentHashMap(snapshots)
-                        }
-                    } catch (_: Exception) { }
+        if (isDemoMode) {
+            chat.onym.android.DemoFixtures.seed(this)
+            isRelayConnected = true
+        } else {
+            // Load contact aliases
+            viewModelScope.launch {
+                try {
+                    contactAliasStore.load(store.dao)
+                } catch (e: Exception) {
+                    Log.e("GroupListVM", "Failed to load contact aliases", e)
                 }
-            } catch (e: Exception) {
-                Log.e("GroupListVM", "Failed to load groups from store", e)
             }
-            // Clean up expired pending rekeys (>24h) on startup
-            try {
-                val allPending = store.loadAllPendingRekeys()
-                val now = System.currentTimeMillis()
-                val expiryMs = 24 * 60 * 60 * 1000L
-                for (record in allPending) {
-                    if (now - record.createdAt > expiryMs) {
-                        store.deletePendingRekey(record.groupID, record.epoch)
-                    }
-                }
-            } catch (_: Exception) { }
 
-            // Always connect to relays, even if group loading fails
-            connectIfNeeded()
+            // Load invited contacts (Telegram-invite tracking)
+            viewModelScope.launch {
+                try {
+                    invitedContactStore.load(store.dao)
+                } catch (e: Exception) {
+                    Log.e("GroupListVM", "Failed to load invited contacts", e)
+                }
+            }
+
+            // Load persisted groups, messages, and initialize salt history
+            viewModelScope.launch {
+                try {
+                    val loaded = store.loadGroups().map { applyLocalPushState(it) }
+                    Log.d("GroupListVM", "Loaded ${loaded.size} groups from store")
+                    groups.addAll(loaded)
+                    // Populate push states from local preferences
+                    for (g in loaded) { pushEnabledStates[g.id] = g.pushNotificationsEnabled }
+                    // Populate currentMembers from all persisted groups
+                    transport.currentMembers.addAll(loaded.flatMap { it.members })
+                    for (group in loaded) {
+                        storeSalt(group.id, group.epoch, group.salt)
+                        // Load persisted chat messages
+                        try {
+                            val msgs = store.loadMessages(group.id)
+                            chatMessages[group.id] = msgs
+                            seenMessageIDs[group.id] = java.util.Collections.synchronizedSet(msgs.map { it.id }.toMutableSet())
+                        } catch (e: Exception) {
+                            Log.e("GroupListVM", "Failed to load messages for group ${group.id.take(8)}", e)
+                        }
+                        // Load transport bundles
+                        try {
+                            val bundles = store.loadTransportBundles(group.id)
+                            if (bundles.isNotEmpty()) {
+                                transportBundles[group.id] = bundles.toMutableMap()
+                            }
+                        } catch (_: Exception) { }
+                        // Load epoch snapshots
+                        try {
+                            val snapshots = store.loadEpochSnapshots(group.id)
+                            if (snapshots.isNotEmpty()) {
+                                epochSnapshots[group.id] = java.util.concurrent.ConcurrentHashMap(snapshots)
+                            }
+                        } catch (_: Exception) { }
+                    }
+                } catch (e: Exception) {
+                    Log.e("GroupListVM", "Failed to load groups from store", e)
+                }
+                // Clean up expired pending rekeys (>24h) on startup
+                try {
+                    val allPending = store.loadAllPendingRekeys()
+                    val now = System.currentTimeMillis()
+                    val expiryMs = 24 * 60 * 60 * 1000L
+                    for (record in allPending) {
+                        if (now - record.createdAt > expiryMs) {
+                            store.deletePendingRekey(record.groupID, record.epoch)
+                        }
+                    }
+                } catch (_: Exception) { }
+
+                // Always connect to relays, even if group loading fails
+                connectIfNeeded()
+            }
         }
     }
 
@@ -1019,6 +1024,12 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     companion object {
+        /** True when launched for screenshot capture (Maestro `demo=true` extra).
+         *  Set by `MainActivity.onCreate` BEFORE the viewModel is referenced.
+         *  When true, the viewModel skips relay/push startup and seeds synthetic
+         *  groups via `DemoFixtures` so the chat list renders immediately. */
+        var isDemoMode: Boolean = false
+
         /** Known-good Soroban RPC endpoints (M-13). */
         val KNOWN_RPC_ENDPOINTS = listOf(
             "https://soroban-testnet.stellar.org",
@@ -2669,6 +2680,7 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Called when push token is refreshed — re-register all push-enabled groups. */
     fun onNewPushToken(token: String) {
+        if (isDemoMode) return
         viewModelScope.launch {
             val mgr = getOrCreatePushManager() ?: return@launch
             val pushGroups = groups.filter { it.pushNotificationsEnabled }
@@ -3461,50 +3473,6 @@ class GroupListViewModel(application: Application) : AndroidViewModel(applicatio
                         }
                     }
                 } catch (_: Exception) { }
-            }
-        }
-    }
-
-    // -- Group Deactivation --
-
-    /**
-     * Deactivate a group on-chain. Any member with a valid proof can deactivate.
-     * M-18: [confirmed] must be true — callers should show a confirmation dialog first,
-     * since deactivation is irreversible on-chain.
-     */
-    fun deactivateGroupOnChain(group: ChatGroup, confirmed: Boolean = false, onResult: (Result<Unit>) -> Unit) {
-        if (!confirmed) {
-            onResult(Result.failure(IllegalStateException("Deactivation requires explicit confirmation")))
-            return
-        }
-        val service = onChainService
-        if (service == null) {
-            onResult(Result.failure(ChatError.ContractNotConfigured))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                val response = withContext(Dispatchers.IO) {
-                    service.deactivateGroup(
-                        groupIDData = group.groupIDData,
-                        members = group.members,
-                        blsSecretKey = keyManager.blsSecretKey,
-                        epoch = group.epoch,
-                        salt = group.salt,
-                        tier = group.tier
-                    )
-                }
-                if (response.accepted) {
-                    onResult(Result.success(Unit))
-                } else {
-                    onResult(Result.failure(
-                        ChatError.OnChainPublishFailed(response.message ?: "Deactivation rejected")
-                    ))
-                }
-            } catch (e: Exception) {
-                onResult(Result.failure(
-                    ChatError.OnChainPublishFailed(e.message ?: "Unknown error")
-                ))
             }
         }
     }

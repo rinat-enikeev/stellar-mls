@@ -1,23 +1,121 @@
 \section{Related Work}
 \label{sec:related}
 
-% Three sub-clusters:
-%
-%   \subsection{Prior taxonomies of zkSNARKs}
-%     Survey papers that classify SNARKs by setup, by argument system,
-%     by hash family. None to our knowledge index by deployment
-%     constraint (host function, anchor chain).
-%
-%   \subsection{Privacy-preserving group protocols}
-%     Signal Private Group System, MLS Delivery Service privacy work,
-%     anonymous credentials lineage. These define the threat model
-%     space but assume an application-layer operator; this paper
-%     surveys the operator-free alternative.
-%
-%   \subsection{SoKs in privacy/ZK}
-%     Prior SoK papers in adjacent areas (privacy-preserving payments,
-%     anonymous credentials, mixnets). Position our contribution as
-%     filling the design-space gap for the registry primitive
-%     specifically.
+We position this SoK against three prior literature clusters: surveys
+and taxonomies of zero-knowledge proof systems, prior work on
+privacy-preserving group protocols, and prior SoKs in adjacent
+privacy-preserving primitive areas. The first cluster overlaps
+directly with our taxonomic ambition; the second and third overlap
+with the problem class.
 
-TODO: draft after §8 lock.
+\subsection{Surveys and taxonomies of zero-knowledge proof systems}
+
+The cryptographic literature contains substantial survey work on
+zero-knowledge proof systems. Treatments index variously by
+construction family --- pairing-based versus IPA-based versus FRI-based
+--- by setup posture --- per-circuit, universal-updatable, transparent
+--- or by underlying hardness assumption.
+
+What distinguishes the present work from these surveys is the
+indexing axis. Existing surveys treat the proof system as the
+primary object of interest and the deployment context as a
+consequence; we invert this and treat the deployment constraint
+(anchor chain, host functions, fee economics) as the primary axis,
+with the proof system following as a derived choice. This inversion
+is what makes the cross-axis dependency analysis of
+\S\ref{sec:dimensions-deps} legible and what justifies the
+profile-conditional recommendations of
+\S\ref{sec:recommendations}. A purely cryptographic taxonomy would
+not produce \S\ref{sec:rec-jurisdiction}'s ``none of C1--C6''
+non-recommendation, because the cryptographic-taxonomy lens does not
+weight operational constraints.
+
+\paragraph{TODO §9 verification pass.} Lock specific citation
+keys to: (i) the Nitulescu zk-SNARK introduction, (ii) the
+B\"unz et al.\ Bulletproofs / IPA lineage, (iii) any
+ePrint surveys post-2020 that index zkSNARKs by deployment
+constraint. The §9 research pass is the
+citation-heavy half of this section's work.
+
+\subsection{Privacy-preserving group protocols}
+
+The closest prior work to the registry abstraction of
+\S\ref{sec:problem} is Signal's Private Group
+System~\cite{chase-2019-signal-pgs}, which closes group-membership
+metadata against an honest-but-curious application-layer operator
+using anonymous credentials. The Signal construction differs from
+the registry abstraction in two respects. First, it places an
+application-layer operator in the trust path; the registry
+abstraction's contribution is precisely to remove that operator.
+Second, it does not anchor state on a public ledger; this is a
+property the operator-removal trade is in exchange for. The two
+constructions are complementary rather than competing: an MLS-shaped
+deployment using Signal's credential machinery for membership and
+a registry of the kind surveyed here for state anchoring would
+combine their guarantees.
+
+Tornado Cash~\cite{pertsev-2019-tornado} and
+Semaphore~\cite{semaphore-2024} are direct instantiations of the
+registry abstraction with single-relation, fixed-policy
+configurations. They sit at C2 in the taxonomy and have driven the
+substantial ecosystem of BN254-precompile-aware tooling that
+configurations C2 and C5 inherit. Both pre-date the host-function
+heterogeneity that makes this paper's taxonomy necessary.
+
+\paragraph{TODO §9 verification pass.} Cite specific MLS architecture
+papers (Beurdouche et al.\ MLS, the IETF MLS RFC) and the Coconut
+threshold-credential lineage (Sonnino et al.) as the two-cluster
+basis for ``privacy-preserving group protocols outside our
+abstraction.''
+
+\subsection{SoKs in adjacent primitive areas}
+
+The SoK genre has been applied to several adjacent privacy-preserving
+primitive classes: privacy-preserving payments and mixers,
+anonymous credentials, decentralized identity, and mixnets. These
+prior SoKs have established the methodology of comparing
+constructions against an explicit threat model with profile-conditional
+recommendations, which the present work follows. The methodological
+debt is direct.
+
+The substantive distinction from each:
+\begin{itemize}
+  \item Privacy-preserving-payments SoKs treat a different primitive
+    --- value transfer with confidential amounts and unlinkable
+    senders --- and frame the problem around mixer constructions and
+    confidential-transaction protocols. Tornado Cash sits in both
+    that primitive class and ours; the per-payment relation differs
+    structurally from the per-state-transition relation we treat as
+    canonical.
+  \item Anonymous-credentials SoKs index along a different axis:
+    issuer / prover / verifier roles, predicate expressivity, and
+    revocation handling. The registry abstraction does not have an
+    issuer in the credential sense.
+  \item Mixnet SoKs target a different threat model:
+    network-observer-only adversaries with active routing
+    capability. The registry abstraction's threat model includes the
+    chain-validator as a party, which mixnet literature
+    typically excludes by construction.
+  \item Decentralized-identity SoKs assemble the credential, registry,
+    and revocation primitives into composite systems. The present
+    work treats one of those primitives (the registry) in isolation.
+\end{itemize}
+
+\paragraph{TODO §9 verification pass.} Lock keys to specific SoKs in
+each adjacent area. At minimum: a privacy-preserving-payments SoK,
+an anonymous-credentials SoK, a mixnet SoK, and a
+decentralized-identity SoK. The structural claims above are defensible
+independently but would be strengthened by direct citations.
+
+\subsection{Position}
+
+Our contribution is the deployment-constraint-indexed taxonomy of
+\S\ref{sec:dimensions}, the cross-axis dependency analysis of
+\S\ref{sec:dimensions-deps}, and the profile-conditional
+recommendations of \S\ref{sec:recommendations}. Prior work has either
+(a) surveyed the cryptography without the deployment constraints, or
+(b) constructed individual systems that instantiate one point in our
+design space. We are not aware of a prior SoK that takes the
+metadata-hiding-group-registry primitive as the unit of comparison
+and indexes by deployment constraint. The present work occupies that
+position.

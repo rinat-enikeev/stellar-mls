@@ -1,26 +1,217 @@
 \section{Migration Paths}
 \label{sec:migration}
 
-% For each starting configuration in §5: enumerate the concrete
-% transformations that would yield a PQ-ready endpoint.
-%
-% Categorize each transformation as:
-%   (a) ready today (tooling exists, just engineering work);
-%   (b) blocked on host functions (verifier cost prohibitive without);
-%   (c) blocked on tooling (no production-grade implementation);
-%   (d) blocked on cryptographic open problems (no construction).
-%
-% Figure 2: TikZ DAG in figures/migration-graph.tex showing reachable
-% PQ-ready endpoints from each starting configuration.
-%
-% Critical citations:
-%   - Stellar Protocol 22 ledger entry for BLS12-381 host functions
-%     (justifies "Plonky3 path is type-(b) blocked").
-%   - Plonky3 README / spec (current readiness level).
-%   - STARK-on-Ethereum gas measurements (justifies type-(b) for
-%     Eth L1 transparent-setup migration).
-%
-% Compromise table: for each non-blocked migration, what is given up
-% (proof size grows, prover time grows, ceremony complexity, etc.).
+We now ask: starting from each configuration in
+\S\ref{sec:configurations}, what transformations would be required to
+reach a post-quantum-ready endpoint, and what blocks each
+transformation? We categorize every transformation into one of four
+blocker classes:
 
-TODO: draft after §5 lock.
+\begin{enumerate}
+  \item[(a)] \textbf{Ready today.} The destination configuration is
+    deployable; the transformation is engineering work against
+    existing libraries and host functions.
+  \item[(b)] \textbf{Blocked on host functions.} The destination is
+    cryptographically defined and supported by mature libraries, but
+    on the chosen anchor chain the verifier would run in pure
+    bytecode at prohibitive gas cost. Unblocked by a chain-protocol
+    upgrade adding the relevant precompile or host function.
+  \item[(c)] \textbf{Blocked on tooling maturity.} The destination is
+    cryptographically defined but lacks a production-grade
+    implementation (no audited library, no compiler from the
+    relation language to the proving system, no battle-tested setup
+    procedure). Unblocked by engineering work outside the deploying
+    team's scope.
+  \item[(d)] \textbf{Blocked on cryptographic open problems.} The
+    destination configuration would require a construction that does
+    not yet exist in the literature, or one whose security is open.
+    Unblocked only by research progress.
+\end{enumerate}
+
+Figure~\ref{fig:migration} renders the resulting migration DAG;
+\input{figures/migration-graph}
+each subsection discusses transformations from one starting point.
+
+\subsection{From C1 (Stellar + BLS12-381 + Groth16)}
+\label{sec:mig-c1}
+
+Three migration paths to a PQ-ready endpoint:
+
+\begin{description}
+  \item[\textsc{C1 $\to$ C7} (in-place SNARK swap):] retain the
+    Stellar anchor, swap Groth16 for Plonky3 / FRI. Class
+    \textbf{(b)}: Plonky3 itself is mature enough for production use,
+    but Stellar Protocol 22's host-function set (BLS12-381 pairings
+    only~\cite{stellar-cap-0058}) does not accelerate FRI
+    verification. Pure-WASM FRI verification is one to two orders of
+    magnitude more expensive than C1's pairing-precompile path. A
+    Stellar protocol upgrade adding Goldilocks-arithmetic and
+    Merkle-friendly hash host functions would unblock this path; we
+    discuss the technical shape of such a CAP in
+    \S\ref{sec:open}.
+  \item[\textsc{C1 $\to$ C6} (anchor change to StarkNet or similar):]
+    abandon the Stellar anchor and re-deploy on a chain whose
+    verification host is FRI-aware. Class \textbf{(a)}: the
+    transformation is implementable today against existing tooling.
+    Trade-offs: validator-set composition changes (StarkNet's prover
+    is currently centralized; Stellar's $\sim$30-validator SCP is
+    qualitatively different), fee market changes, and the team must
+    re-audit against a different runtime.
+  \item[\textsc{C1 $\to$ C1+lattice} (lattice-based pairings):]
+    retain Stellar and Groth16-shaped relation but instantiate over a
+    PQ-secure lattice-based pairing-replacement. Class \textbf{(d)}:
+    no such construction exists.
+\end{description}
+
+\subsection{From C2 (Ethereum L1 + BN254 + Groth16)}
+\label{sec:mig-c2}
+
+\begin{description}
+  \item[\textsc{C2 $\to$ STARK on L1} (in-place SNARK swap):] swap
+    Groth16 for STARK on Ethereum L1. Class \textbf{(b)}:
+    Ethereum L1 has BN254 precompiles (EIP-196/197) and is acquiring
+    BLS12-381 precompiles via EIP-2537~\cite{eip-2537}, but no FRI
+    host function is on the road-map; pure-bytecode verification is
+    prohibitive at L1 gas prices.
+  \item[\textsc{C2 $\to$ C6} (anchor change to StarkNet):] re-deploy
+    on a FRI-aware L2. Class \textbf{(a)}. Trade-offs: introduces the
+    L2 sequencer trust layer; the L1-anchor-only fallback present in
+    rollup architectures partially mitigates this.
+  \item[\textsc{C2 $\to$ C1} (curve and SNARK retained, anchor and
+    host changed):] re-deploy on Stellar. Class \textbf{(a)}; the
+    transformation is purely operational. Does not improve PQ
+    posture; included for completeness as a non-PQ migration that
+    nonetheless changes the trust posture.
+\end{description}
+
+\subsection{From C3 (Aztec + UltraPlonk)}
+\label{sec:mig-c3}
+
+\begin{description}
+  \item[\textsc{C3 $\to$ STARK-Aztec} (in-place SNARK family swap):]
+    re-implement the Aztec rollup machinery on a hash-based proof
+    system, retaining the verifier-as-rollup posture. Class
+    \textbf{(c)}: UltraPlonk-on-BN254 is deeply load-bearing in the
+    Aztec architecture (the Noir compiler, the proving server, the
+    sequencer's batched-proof aggregator); a STARK-based replacement
+    is engineering scale outside the registry deployer's scope.
+  \item[\textsc{C3 $\to$ C6} (anchor change):] migrate the registry's
+    relations to a STARK-based L2 (StarkNet). Class \textbf{(a)} for
+    the relation re-implementation, but the application loses
+    Aztec's privacy-as-execution-model semantics. The PQ posture
+    improves; the privacy posture changes shape.
+\end{description}
+
+\subsection{From C4 (Mina + Pickles + Pasta)}
+\label{sec:mig-c4}
+
+\begin{description}
+  \item[\textsc{C4 $\to$ FRI-Pickles} (in-place commitment-scheme
+    swap):] replace Pasta-cycle commitments with a hash-based
+    commitment scheme. Class \textbf{(c)}: Mina's road-map
+    discusses this (Kimchi has a PQ trajectory) but no
+    production-grade implementation exists. The recursion structure
+    of Pickles is an active research area for hash-based
+    re-instantiation.
+  \item[\textsc{C4 $\to$ C6} (anchor change):] re-deploy on
+    StarkNet. Class \textbf{(a)} for the registry, but the
+    application loses the protocol-level recursion that makes Mina
+    distinctive.
+\end{description}
+
+\subsection{From C5 (L2 + Plonky2/3 + KZG over BN254)}
+\label{sec:mig-c5}
+
+C5 is the most interesting starting point because the inner prover is
+already FRI-based; only the outer KZG wrap is post-quantum-broken.
+
+\begin{description}
+  \item[\textsc{C5 $\to$ STARK-wrapped C5} (outer-wrap swap):]
+    replace the KZG wrap with a STARK wrap and submit the wrapped
+    proof to the L1 verifier. Class \textbf{(b)}: Ethereum L1 lacks
+    a FRI host function; the wrapped proof verifies in pure bytecode
+    at uneconomical gas. On an L1 with FRI host functions, this is
+    Class (a).
+  \item[\textsc{C5 $\to$ C6} (drop the L1 anchor):] settle directly
+    on a FRI-aware L2 such as StarkNet, eliminating the need for the
+    KZG wrap entirely. Class \textbf{(a)}. The L1-anchor-only
+    fallback property is lost; configurations that depend on it must
+    decline this migration.
+\end{description}
+
+\subsection{From C6 (STARK over Goldilocks)}
+\label{sec:mig-c6}
+
+C6 is already PQ-ready. Migrations from C6 are about
+\emph{portability} rather than PQ posture: which chains can host the
+configuration?
+
+\begin{description}
+  \item[\textsc{C6 portability to Stellar}:] equivalent to the
+    \textsc{C1 $\to$ C7} path. Class \textbf{(b)}.
+  \item[\textsc{C6 portability to Ethereum L1}:] equivalent to the
+    \textsc{C2 $\to$ STARK-on-L1} path. Class \textbf{(b)}.
+  \item[\textsc{C6 portability to FRI-aware L2}:] Class \textbf{(a)};
+    StarkNet, Polygon zkEVM with FRI inner layer, and similar chains
+    accept the configuration directly.
+\end{description}
+
+\subsection{From C7 (hypothetical Stellar + Plonky3 + FRI)}
+\label{sec:mig-c7}
+
+C7 is the asymmetric case: it is post-quantum-ready and would inhabit
+the host-function-cheap regime were it deployable, but it is not. The
+sole migration is the host-function unblock.
+
+\begin{description}
+  \item[\textsc{Stellar protocol upgrade adding FRI host functions}:]
+    Class \textbf{(b)}. The technical shape of such an upgrade is a
+    Goldilocks-arithmetic precompile, a Poseidon2-or-Rescue host
+    function, and ideally an NTT primitive; CAP-style proposals
+    along these lines do not exist at the time of writing. We
+    estimate the engineering scale at one to two
+    chain-protocol-upgrade cycles, plus the validator-side activation
+    process; we do not estimate the political feasibility, which is
+    the load-bearing variable in practice.
+\end{description}
+
+\subsection{Migration matrix}
+\label{sec:migration-matrix}
+
+\begin{table}[t]
+  \centering
+  \caption{Migration blocker class for each (start, end) pair where
+    the end is a PQ-ready configuration. ``--'' indicates the
+    transformation is undefined or trivially the identity.
+    Table~\ref{tab:migration} populates the off-diagonal cells of
+    \S\ref{sec:configurations}.}
+  \label{tab:migration}
+  \begin{tabular}{lccc}
+    \toprule
+    Start & $\to$ C6 & $\to$ C7 & lattice path \\
+    \midrule
+    C1 & (a) & (b) & (d) \\
+    C2 & (a) & ---  & (d) \\
+    C3 & (a)$^\ast$ & --- & (d) \\
+    C4 & (a)$^\ast$ & (c)$^\dagger$ & (d) \\
+    C5 & (a) & (b) & (d) \\
+    C6 & ---  & (b) & (d) \\
+    C7 & (b) & ---  & (d) \\
+    \bottomrule
+  \end{tabular}
+  \\[0.5em]
+  \footnotesize
+  $^\ast$ The migration is technically Class (a) but loses
+    application-relevant semantics (verifier-as-rollup for C3,
+    protocol-level recursion for C4). \\
+  $^\dagger$ FRI-Pickles is the C4 in-place migration; included
+    for completeness in the C7-shaped destination column.
+\end{table}
+
+The matrix carries one observation that drives \S\ref{sec:open}: no
+column is uniformly Class (a). Either the migration is operational
+(anchor change), losing some property; or it is blocked on host
+functions; or it is blocked on tooling; or it is open. The
+deployment recommendations of \S\ref{sec:recommendations} navigate
+this landscape by starting position and priority weighting rather
+than by attempting to identify a globally dominant migration.

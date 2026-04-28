@@ -1,0 +1,102 @@
+\section{Introduction}
+\label{sec:intro}
+
+A metadata-hiding group registry, in the sense we use the term, is a
+public-state object that records the membership of a group as an
+opaque commitment and admits state transitions only on production of a
+zero-knowledge proof that some authorization predicate holds against
+the prior state. Tornado Cash~\cite{pertsev-2019-tornado} fits this
+shape with the predicate ``a member of the deposit set is unspending a
+specific note''; Semaphore~\cite{semaphore-2024} fits it with ``a
+member of an identity tree is signaling exactly once for a given
+external nullifier''; Aztec~\cite{aztec-2024} fits it as the
+application execution model rather than as a single contract; the
+recent Stellar Ecosystem Proposal at~\cite{sep-onym} fits it with
+group membership and per-epoch update authorization. The shape is
+identifiable without committing to a curve, a SNARK system, or an
+anchor chain.
+
+The literature, however, treats the curve, SNARK, and chain as
+bundled. A reader who wants to compare designs --- to ask whether a
+given deployment should anchor on Stellar or on an Ethereum L2,
+whether Groth16~\cite{groth-2016-onpairing} or Halo2 is more
+appropriate for a given trust posture, whether the verifier should
+ride a precompile or run in pure bytecode --- has no taxonomy to read
+against. Existing surveys of zero-knowledge constructions index by
+proof system or by hash family, not by the deployment constraints that
+in practice determine which proof system is reachable. The
+post-quantum migration question for this class of system is
+particularly affected: it is not currently catalogued which migration
+paths are technically blocked, which are economically infeasible, and
+which are ready to ship.
+
+This paper systematizes the design space.
+
+\subsection*{What this paper is, and is not}
+
+This is a Systematization of Knowledge paper. It is not a new
+construction, not a new proof, and not an experience report. The
+contribution is a taxonomy and a set of measurements taken against
+that taxonomy, with one caveat about measurement scope:
+
+\begin{itemize}
+  \item For non-onym configurations, we cite published benchmark
+    numbers and date-stamp them. We do not re-measure third-party
+    systems on uniform hardware; uniform-hardware re-measurement of
+    every cell would be a separate paper, and we believe the available
+    cited numbers are sufficient for the cross-configuration
+    comparisons we draw.
+  \item For the Stellar~+~BLS12-381~+~Groth16 row, we run a
+    first-party benchmark harness (\S\ref{sec:analysis},
+    appendix). One row of every comparison table is therefore
+    authoritative under our own measurement protocol; the rest are
+    cited.
+\end{itemize}
+
+We do not argue that any one configuration is the right configuration.
+The recommendations in \S\ref{sec:recommendations} are conditional on
+deployment profile --- a cost-optimized profile, a
+post-quantum-prioritized profile, a censorship-resistance-prioritized
+profile, and a jurisdictional-constraints-prioritized profile each
+land on a different point in the design space.
+
+\subsection*{Contributions}
+
+\begin{enumerate}
+  \item \textbf{A six-axis taxonomy} (\S\ref{sec:dimensions}): anchor
+    chain, SNARK system, curve/hash pair, post-quantum stance, trusted
+    setup model, and verification host. We argue that these axes are
+    materially orthogonal --- real systems pick a point per axis ---
+    against the more common framing that bundles them.
+  \item \textbf{Per-dimension cost, trust, and post-quantum
+    analysis} (\S\ref{sec:analysis}). Five tables: verification cost
+    (in 2026-04 USD), proof size, prover wall-clock, trust
+    assumptions, and post-quantum class.
+  \item \textbf{Seven concrete configurations}
+    (\S\ref{sec:configurations}) as labeled points in the taxonomy,
+    including one ``hypothetical Stellar~+~Plonky3~+~FRI'' point that
+    is currently blocked at the host-function layer. The blocked
+    configuration is included precisely because it makes the
+    host-function axis legible.
+  \item \textbf{A migration-path catalogue} (\S\ref{sec:migration})
+    classifying every starting-to-PQ-ready transformation as one of:
+    ready today, blocked on host functions, blocked on tooling
+    maturity, or blocked on cryptographic open problems.
+  \item \textbf{Profile-driven deployment recommendations}
+    (\S\ref{sec:recommendations}) that map each of four operational
+    priorities to its dominant configuration in the taxonomy, with
+    explicit non-recommendations for the cases where no configuration
+    in the surveyed space is appropriate.
+\end{enumerate}
+
+\subsection*{Paper map}
+
+\S\ref{sec:problem} states the problem class abstractly and fixes a
+threat model. \S\ref{sec:dimensions} introduces the six design axes.
+\S\ref{sec:analysis} populates the per-axis tables.
+\S\ref{sec:configurations} catalogues seven concrete configurations.
+\S\ref{sec:migration} surveys migration paths and what blocks them.
+\S\ref{sec:recommendations} maps deployment profiles to
+configurations. \S\ref{sec:open} enumerates open problems made visible
+by the taxonomy. \S\ref{sec:related} positions the contribution
+against prior work. \S\ref{sec:conclusion} concludes.

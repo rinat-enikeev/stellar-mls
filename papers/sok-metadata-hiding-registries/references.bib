@@ -1,0 +1,99 @@
+% SoK references — grown continuously as each section is researched.
+% Conventions:
+%   - Cite-key: firstauthor-year-shortword (e.g. groth-2016-onpairing)
+%   - DOI or eprint URL in the `note` field for arXiv / IACR ePrint preprints
+%   - For benchmark numbers cited from blog posts / repositories, include
+%     the access date in the `note` field — these are not stable sources
+%
+% Skeleton of cite groups (entries added as sections are researched):
+%
+%   ─── SNARK constructions ──────────────────────────────────────────
+%   groth-2016-onpairing             % Groth16
+%   gabizon-2019-plonk               % PLONK
+%   bowe-2019-halo                   % Halo / Halo2
+%   ben-sasson-2018-stark            % STARK
+%   polygon-zero-2022-plonky2        % Plonky2
+%   plonky3-spec                     % Plonky3
+%   kothapalli-2022-nova             % Nova
+%   setty-2020-spartan               % Spartan
+%
+%   ─── Curves and pairings ──────────────────────────────────────────
+%   barreto-2003-bls12               % BLS12 family
+%   barreto-2005-bn254               % BN254
+%   kim-barbulescu-2016              % Discount on BN254 security
+%   hopwood-2020-pasta               % Pasta cycle
+%
+%   ─── Anchor chains ────────────────────────────────────────────────
+%   stellar-cap-0058                 % BLS12-381 host functions (Protocol 22)
+%   ethereum-eip-197                 % BN254 pairing precompile
+%   aztec-yellow-paper
+%   mina-spec
+%
+%   ─── Privacy primitives / motivating systems ──────────────────────
+%   pertsev-2019-tornado-cash
+%   chase-2019-signal-private-group
+%   semaphore-spec
+%   sep-onym                         % the Stellar SEP under §5.1
+%
+%   ─── SoK / survey precedents ──────────────────────────────────────
+%   bunz-2018-sok-zk
+%   mohanta-2019-sok-blockchain-privacy
+
+% First entry — present so the scaffolding PDF builds. More added during
+% per-section research passes.
+
+@inproceedings{groth-2016-onpairing,
+  author    = {Jens Groth},
+  title     = {On the Size of Pairing-based Non-interactive Arguments},
+  booktitle = {Advances in Cryptology -- {EUROCRYPT} 2016},
+  year      = 2016,
+  pages     = {305--326},
+  doi       = {10.1007/978-3-662-49896-5\_11}
+}
+
+% TODO §9 research pass: verify exact citation form (the Tornado Cash
+% paper is published as a self-described whitepaper, not a peer-reviewed
+% venue). Author list and date verified at https://docs.tornado.eth.
+@misc{pertsev-2019-tornado,
+  author       = {Alexey Pertsev and Roman Semenov and Roman Storm},
+  title        = {Tornado {C}ash: a Non-Custodial, Private, Trustless
+                  Transactions Protocol on {E}thereum},
+  year         = 2019,
+  howpublished = {Whitepaper},
+  note         = {Accessed via project documentation; cite-key locked
+                  pending §9 verification.}
+}
+
+% Semaphore is a protocol/spec maintained by the Privacy and Scaling
+% Explorations group. There is no canonical academic publication;
+% cite the spec as the authoritative source.
+@misc{semaphore-2024,
+  author       = {{Privacy and Scaling Explorations}},
+  title        = {Semaphore Protocol Specification},
+  year         = 2024,
+  howpublished = {\url{https://docs.semaphore.pse.dev/}},
+  note         = {TODO §9: lock to a specific commit hash on
+                  the semaphore repository for reproducibility.}
+}
+
+% Aztec citation: yellow paper / protocol spec. Defer detailed
+% cite-form to §9 — paper is in flux as the project moves through
+% versions.
+@misc{aztec-2024,
+  author       = {{Aztec Network}},
+  title        = {Aztec Protocol Specification},
+  year         = 2024,
+  howpublished = {\url{https://docs.aztec.network/}},
+  note         = {TODO §9: pin to specific spec version.}
+}
+
+% The Stellar Ecosystem Proposal under discussion in this branch.
+% Cited as a primary source for one of the seven configurations
+% in §5. Cite-form may move to a published SEP number once accepted.
+@misc{sep-onym,
+  author       = {Rinat Enikeev},
+  title        = {{SEP-XXXX}: SNARK-Gated Group Registry on Stellar},
+  year         = 2026,
+  howpublished = {Stellar Ecosystem Proposal Draft v0.0.6},
+  note         = {Draft; cite-key locked pending acceptance.}
+}

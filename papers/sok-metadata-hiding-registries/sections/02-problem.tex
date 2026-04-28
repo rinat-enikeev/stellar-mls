@@ -1,0 +1,29 @@
+\section{Problem Definition}
+\label{sec:problem}
+
+% Generic problem: a registry that records group state (membership,
+% epoch, parameters); admits state changes that hide the actor and
+% per-action membership while keeping the transition publicly verifiable.
+%
+% Threat model:
+%   - Active adversary may submit forged proofs (defended by SNARK
+%     soundness).
+%   - Honest-but-curious validators / RPC operators (defended by
+%     zero-knowledge property + commitment hiding).
+%   - Passive network observer (defended by commitment hiding +
+%     fee-payer / submission-pattern obfuscation, separate from the
+%     SNARK itself).
+%   - Compromised setup contributor (per-circuit Groth16): explicitly
+%     in scope; out-of-scope assumptions are flagged.
+%
+% Properties to formalize:
+%   - Soundness — only valid transitions are accepted.
+%   - Privacy — actor/membership not revealed beyond the registry's
+%     public state.
+%   - Liveness — honest member can always advance state when the
+%     authorization rule permits.
+%
+% Distill from: docs/protocol-soundness-analysis.md, docs/sep.md (without
+% onym-specific framing).
+
+TODO: draft after §1 lock.

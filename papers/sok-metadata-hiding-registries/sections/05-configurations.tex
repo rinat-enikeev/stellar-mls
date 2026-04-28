@@ -1,0 +1,45 @@
+\section{Concrete Configurations}
+\label{sec:configurations}
+
+% Seven points in the design space. Each subsection: anchor chain,
+% SNARK, curve/hash, setup, host story; then a one-paragraph fit
+% summary citing §4 numbers.
+%
+%   \subsection{Stellar + BLS12-381 + Groth16 + Poseidon (the SEP
+%     deployment)}
+%     The Stellar Ecosystem Proposal described in [\cite{sep-onym}]
+%     uses Groth16 over BLS12-381 with Poseidon as the in-circuit hash
+%     and SHA-256 as outer binding. Verification uses the BLS12-381
+%     pairing host function added in Stellar Protocol 22.
+%
+%   \subsection{Ethereum L1 + BN254 + Groth16 (Tornado Cash, Semaphore)}
+%     The classical configuration; precompile-supported BN254 pairing.
+%     BN254's security degraded to ~100 bits after 2016 attacks
+%     [\cite{kim-barbulescu}] — relevant for migration discussion.
+%
+%   \subsection{Aztec + Noir + UltraPlonk}
+%     Built-in privacy chain; the SNARK is the application layer's
+%     execution model, not a bolt-on. Higher baseline cost; partial PQ
+%     posture only insofar as PLONK can in principle be instantiated
+%     over PQ commitments.
+%
+%   \subsection{Mina + Pickles}
+%     Recursive proofs over Pasta cycle; the protocol's PQ trajectory
+%     via Kimchi is conjectural but documented.
+%
+%   \subsection{Plonky2 + KZG over BN254 anchored on L2}
+%     Performance king for prover time; verification anchored on an L2
+%     to amortize gas. Not PQ.
+%
+%   \subsection{STARK over Goldilocks anchored anywhere}
+%     PQ-secure (FRI). Proof sizes 50–200 KB; high gas cost outside
+%     of dedicated ZK-rollup chains.
+%
+%   \subsection{Hypothetical Stellar + Plonky3 + FRI (blocked)}
+%     Demonstrates the host-function gap: a transparent-setup PQ-secure
+%     verifier on Stellar would run in pure WASM at orders-of-magnitude
+%     higher cost than the BLS12-381-host-accelerated pairing path. See
+%     \S\ref{sec:migration} for the protocol changes that would unblock
+%     this configuration.
+
+TODO: draft after §4 lock.

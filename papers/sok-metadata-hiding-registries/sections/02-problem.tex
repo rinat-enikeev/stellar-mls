@@ -1,29 +1,126 @@
 \section{Problem Definition}
 \label{sec:problem}
 
-% Generic problem: a registry that records group state (membership,
-% epoch, parameters); admits state changes that hide the actor and
-% per-action membership while keeping the transition publicly verifiable.
-%
-% Threat model:
-%   - Active adversary may submit forged proofs (defended by SNARK
-%     soundness).
-%   - Honest-but-curious validators / RPC operators (defended by
-%     zero-knowledge property + commitment hiding).
-%   - Passive network observer (defended by commitment hiding +
-%     fee-payer / submission-pattern obfuscation, separate from the
-%     SNARK itself).
-%   - Compromised setup contributor (per-circuit Groth16): explicitly
-%     in scope; out-of-scope assumptions are flagged.
-%
-% Properties to formalize:
-%   - Soundness — only valid transitions are accepted.
-%   - Privacy — actor/membership not revealed beyond the registry's
-%     public state.
-%   - Liveness — honest member can always advance state when the
-%     authorization rule permits.
-%
-% Distill from: docs/protocol-soundness-analysis.md, docs/sep.md (without
-% onym-specific framing).
+We fix the problem class abstractly so that the rest of the paper can
+reason about it without committing to a curve, a SNARK, or an anchor
+chain.
 
-TODO: draft after §1 lock.
+\subsection{The registry abstraction}
+
+A \emph{metadata-hiding group registry} is a public-state object that
+holds, at epoch $t$, an opaque commitment $\sigma_t$ to the group's
+authorization-relevant state. The registry exposes one operation,
+$\mathsf{advance}(\sigma_t, \pi, \sigma_{t+1}, \mathsf{aux}_t)$, where
+$\pi$ is a zero-knowledge proof of a public relation
+$R_{\mathsf{auth}}(\sigma_t, \sigma_{t+1}, \mathsf{aux}_t; w)$ for some
+witness $w$ known only to the proving party. The registry accepts the
+operation, replaces $\sigma_t$ by $\sigma_{t+1}$, and emits an event
+visible to any reader; it rejects the operation otherwise.
+
+We deliberately leave four structural choices open:
+\begin{itemize}
+  \item Whether $\sigma_t$ commits to a single membership set, a tree
+    of sets, or a more general state. Tornado-shaped systems have a
+    single set; SEP-shaped systems have a per-group commitment indexed
+    by a public group identifier.
+  \item Whether $R_{\mathsf{auth}}$ is fixed or parameterized by group
+    type. Fixed-relation systems have one circuit; multi-policy
+    systems have a family of relations addressed by a tag.
+  \item Whether the registry tracks a per-epoch nullifier set (as in
+    Tornado-style spend systems) or only the latest commitment.
+  \item Whether $\mathsf{aux}_t$ permits public side-information that
+    legibly mutates with state transitions (e.g.\ a member-count
+    delta) or insists on opaque state transitions only.
+\end{itemize}
+
+The taxonomy in \S\ref{sec:dimensions} is orthogonal to all four
+choices. The configurations in \S\ref{sec:configurations} then
+populate them differently.
+
+\subsection{Threat model}
+
+We consider the following parties.
+
+\paragraph{Prover.} A party that submits an
+$\mathsf{advance}(\cdot)$ call. The prover may be Byzantine: malformed
+proofs, replay of previously-valid proofs, malleated proofs, and
+collusion with chain operators are all in scope. The prover's
+knowledge of a witness $w$ is the only thing that distinguishes a
+legitimate authorization from an attempt.
+
+\paragraph{Observer.} A passive party with read access to the chain
+and to network paths between provers and the registry, including RPC
+operators and validators that can correlate broadcast time with
+ledger close. The observer is the adversary against \emph{privacy}:
+their goal is to learn, from $\sigma_t$ alone or from $\sigma_t$ in
+conjunction with side information, anything they would not learn from
+the publicly-announced parameters of the group (size tier, group
+type, public group identifier where applicable).
+
+\paragraph{Chain.} The set of validators responsible for the registry's
+host ledger, modeled as honest-but-curious within their consensus
+rules. We do not model a Byzantine chain; configurations whose
+soundness depends on validator behavior beyond ``apply the published
+state-transition rule'' are out of scope. The host's host functions
+or precompiles --- pairing verification, hashing primitives ---
+inherit the chain's security model.
+
+\paragraph{Setup contributor.} For configurations with a per-circuit
+or universal-updatable trusted setup, every participant in the setup
+ceremony is a party. A single honest contributor suffices to render
+the aggregate trapdoor unknown. Under a fully-malicious setup, every
+soundness claim derived from the SNARK is vacuous; this is a known
+property of pairing-based SNARKs and we treat it as an unconditional
+constraint, not a graceful degradation.
+
+\paragraph{Side-channel observer.} A party with auxiliary information
+not present on chain --- application-layer telemetry, fee-payer
+linkage, transport-layer signing keys, traffic analysis. The
+information-theoretic guarantees this paper analyzes do not extend to
+side channels; the recommendations in \S\ref{sec:recommendations}
+flag operational measures that do or do not help against this party,
+but the formal properties do not.
+
+\subsection{Properties}
+
+We name three properties at the precise-but-informal level appropriate
+for an SoK; the formal statements live in the construction papers
+cited in \S\ref{sec:related}.
+
+\begin{property}[Authorization soundness]
+For any probabilistic polynomial-time prover not in possession of a
+witness $w$ to $R_{\mathsf{auth}}(\sigma_t, \sigma_{t+1},
+\mathsf{aux}_t; \cdot)$, the registry advances state from $\sigma_t$
+to $\sigma_{t+1}$ only with cryptographic-soundness-error
+probability. ``Soundness'' here is read as
+\emph{simulation-extractability} when the SNARK is malleable (e.g.\
+plain Groth16~\cite{groth-2016-onpairing}), and as plain
+knowledge-soundness only when malleability is structurally ruled out.
+\end{property}
+
+\begin{property}[Privacy of advancement]
+The registry's public footprint --- $\sigma_t$, $\sigma_{t+1}$, and
+the chain-level metadata of the $\mathsf{advance}$ transaction --- is
+information-theoretically independent of the witness $w$ and of any
+identity associated with the proving member, conditional on the
+publicly-announced group parameters. Side-channel leakage outside the
+chain is excluded; \S\ref{sec:configurations} discusses operational
+mitigations per configuration.
+\end{property}
+
+\begin{property}[Liveness]
+For any state $\sigma_t$ and any honest party in possession of a
+witness $w$ such that $R_{\mathsf{auth}}(\sigma_t, \sigma_{t+1},
+\mathsf{aux}_t; w)$ holds for some $\sigma_{t+1}$, that party can
+construct a proof and submit a transaction that the registry will
+accept, given access to the chain and to a relayer for fee payment if
+required. Liveness against censoring relayers and against censoring
+validators is a property of the anchor chain (\S\ref{sec:dimensions})
+and not of the SNARK.
+\end{property}
+
+These three properties recur as columns in the comparison tables of
+\S\ref{sec:analysis}: soundness folds into the SNARK system and curve
+choice, privacy folds into the curve, hash, and (transitively) the
+chain's metadata-leakage envelope, and liveness folds into the
+anchor-chain choice.

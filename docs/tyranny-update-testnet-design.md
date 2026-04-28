@@ -33,7 +33,7 @@ There is no `update_admin` entrypoint in v0 — the admin is fixed at creation. 
 | Acknowledged residuals (NOT closed) | Why / Mitigation |
 |---|---|
 | Update cadence | Inherent to public ledger. Each `update_commitment` advances epoch with a fresh timestamp; an observer sees per-group activity rhythm regardless of cryptography. Same residual as the other per-type contracts. |
-| Stellar tx-submitter address | `update_commitment` has no `caller.require_auth()` (the proof IS the auth), and the proof itself is zero-knowledge. **But** Stellar requires *some* account to sign + pay fees for the transaction. If the admin submits from their own wallet, their Stellar address appears in the tx envelope. **Mitigation: clients MUST route through `SEPRelayerTransport`** (sep-XXXX §4.1 fee decoupling) — the relayer signs and submits, the relayer's address appears, not the admin's. This is a client-integration responsibility, not a contract-level guarantee. The same applies to `create_group` (which DOES `caller.require_auth()` — admin's signing wallet leaks unless the relayer creates on their behalf). |
+| Stellar tx-submitter address | `update_commitment` has no `caller.require_auth()` (the proof IS the auth), and the proof itself is zero-knowledge. **But** Stellar requires *some* account to sign + pay fees for the transaction. If the admin submits from their own wallet, their Stellar address appears in the tx envelope. **Mitigation: clients MUST route through `SEPRelayerTransport`** ([`docs/sep.md` §5 "Transaction Submission and Fee Decoupling"](sep.md)) — the relayer signs and submits, the relayer's address appears, not the admin's. This is a client-integration responsibility, not a contract-level guarantee. The same applies to `create_group` (which DOES `caller.require_auth()` — admin's signing wallet leaks unless the relayer creates on their behalf). |
 | Group existence + tier | The contract address itself is observable. Anyone querying the contract can enumerate created groups via the `Group(group_id)` keys. |
 
 The privacy claim of v0 is: **same admin operating multiple Tyranny groups produces uncorrelated on-chain artifacts** — assuming the admin uses a relayer for transaction submission (closes the address-leak residual) and doesn't reveal the admin pubkey through other channels. The cryptographic core of that claim lives in the per-group binding documented in §5.1.
@@ -78,7 +78,9 @@ The Update circuit's witness includes the admin's BLS secret key; the circuit co
 Poseidon(admin_pubkey, group_id_fr) == admin_pubkey_commitment
 ```
 
-and proves the prover knows the secret key behind that pubkey. **`group_id_fr` is the per-group salt that closes cross-group commitment linkability** (see §3.1): `group_id_fr = Fr::from_u256(U256::from_be_bytes(group_id))`, derived deterministically by the contract from the 32 group_id bytes. Same group_id always yields the same Fr; different group_ids yield different Frs with overwhelming probability.
+and proves the prover knows the secret key behind that pubkey. **`group_id_fr` is the per-group salt that closes cross-group commitment linkability** (see §3.1): `group_id_fr = Fr::from_u256(U256::from_be_bytes(group_id))`, derived deterministically by the contract from the 32 group_id bytes. Same group_id always yields the same Fr; different group_ids yield different Frs with overwhelming probability **assuming `group_id` is uniformly random**.
+
+Implementation note for clients: `group_id` is reduced mod the BLS12-381 scalar field order `r` (which is ~2^254). Two `group_id`s differing only in the top ~2 bits will collide on `group_id_fr`. **Clients MUST generate `group_id` from a CSPRNG** (e.g., 32 bytes of `os.urandom`) rather than from low-entropy or attacker-influenced sources — collisions on the high bits weaken the per-group binding's privacy property. This is enforced by client convention, not by the contract; if a future product needs structured group_ids, the protocol gains a domain-tag-prefixed Poseidon hash at the contract level instead of `Fr::from_u256` directly.
 
 The same circuit constrains the new member tree to differ from the old by **≤1 leaf** (single-leaf-delta).
 
@@ -221,15 +223,17 @@ public_inputs: MembershipPublicInputs  // { commitment, epoch }
 
 ## 11. Test plan
 
-Inline tests parallel to `sep-anarchy`'s pattern. **~37 tests** total (smaller than Anarchy's 36 because no `deactivate_group` paths, but offset by the additional `update_commitment` admin-binding test and the additional `get_history` coverage; PR-Y will pin the exact count via `test_vectors_consistency`).
+Inline tests parallel to `sep-anarchy`'s pattern. **~41 tests** total (comparable to Anarchy's 36 — net positive from the additional admin-binding tests, the per-group `group_id_fr` derivation, and `get_history` slice-coverage; PR-Y pins the exact count via `test_vectors_consistency`).
 
-- Initialization (4): happy path + 3 IC-arity rejections (Membership=3, Create=4, Update=5 — all are total IC count, public-input count is one less in each case).
-- `create_group` (11): happy path, invalid tier, duplicate id, non-canonical commitment, non-canonical admin_pubkey_commitment, invalid proof, restricted-mode admin-only + admin-can-create (positive), group-count cap, replay protection, public-inputs mismatch.
-- `update_commitment` (7): happy path, stale c_old, wrong epoch_old, non-canonical c_new, replayed proof, unknown group, **`admin_pubkey_commitment` invariance** (set up a group, attempt update, assert the admin commitment is unchanged whether or not the proof verifies). Note: a literal `epoch-overflow` (`u64::MAX → checked_add`) test is structurally unreachable at testnet scale and would require injecting the boundary state via `as_contract`; covered transitively by the `wire.epoch_old != current.epoch` rejection on the `u64::MAX` boundary case rather than as a dedicated `InvalidEpoch`-from-overflow test.
-- `verify_membership` (4): happy path, wrong commitment, wrong epoch, unknown group.
-- Admin entrypoints (6): `update_vk_requires_auth`, `set_restricted_mode_requires_auth`, rotates Membership / Create / Update, invalid tier.
-- Queries (4): `get_commitment` {happy, unknown}, `get_history` {happy, unknown}, `bump_group_ttl` {happy, unknown}. (Counted as 6 calls grouped into 4 entrypoint coverage rows; PR-Y will surface the actual `#[test] fn` count.)
-- ABI pin (1): `test_vectors_consistency`.
+- **Initialization (4)**: happy path + 3 IC-arity rejections. Membership = 3 IC (2 public inputs + base), Create = 5 IC (4 public inputs + base), Update = 6 IC (5 public inputs + base). The IC-arity rejection tests feed VKs one IC short of the expected count and assert `InvalidVkLength`.
+- **`create_group` (11)**: happy path, invalid tier, duplicate id, non-canonical commitment, non-canonical admin_pubkey_commitment, invalid proof, restricted-mode admin-only + admin-can-create (positive), group-count cap, replay protection, public-inputs mismatch.
+- **`update_commitment` (8)**: happy path, stale c_old, wrong epoch_old, non-canonical c_new, replayed proof, unknown group, **`admin_pubkey_commitment` invariance** (set up a group, attempt update, assert the admin commitment is unchanged whether or not the proof verifies), **epoch-overflow** (inject `current.epoch = u64::MAX` via `as_contract`, attempt update with matching `epoch_old`; assert `InvalidEpoch (11)`. Pins the `checked_add`-precedes-PIM ordering at the boundary; the path is unreachable at testnet scale by natural advancement but the ordering matters for forward-compat).
+- **`verify_membership` (4)**: happy path, wrong commitment, wrong epoch, unknown group.
+- **Admin entrypoints (6)**: `update_vk_requires_auth`, `set_restricted_mode_requires_auth`, rotates Membership / Create / Update, invalid tier.
+- **Queries (7)**: `get_commitment` {happy, unknown}, `bump_group_ttl` {happy, unknown}, `get_history` {most-recent-suffix slicing happy, full-when-max-exceeds, unknown}. The `get_history` suffix-slicing coverage closes the off-by-one risk on `start = history.len() - cap`.
+- **ABI pin (1)**: `test_vectors_consistency` — loads `test-vectors.json` and asserts error codes / IC counts (3/5/6) / `MAX_GROUPS_PER_TIER` / `tier_capacity` / total test count match the contract byte-for-byte.
+
+Optional follow-up (not blocking v0): a **negative-auth pin** for `update_commitment` — call without `mock_all_auths` and assert the entrypoint reaches the verifier rather than panicking on `caller.require_auth()`. This locks the privacy invariant ("update_commitment does NOT require caller auth — proof IS the authorization") against future regressions. Same shape as Anarchy's analogous pattern; PR-Y will land it if testutils ergonomics permit.
 
 Mock-proof strategy parallels Anarchy: `valid_g{1,2}` via `hash_to_g{1,2}`; happy-path tests assert `InvalidProof` (verifier reached but pairing fails on mock).
 

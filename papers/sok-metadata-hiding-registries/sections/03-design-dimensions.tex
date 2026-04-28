@@ -1,37 +1,198 @@
 \section{Design Dimensions}
 \label{sec:dimensions}
 
-% Six orthogonal axes. The orthogonality argument is the conceptual
-% contribution — show that real-world systems pick a point per axis
-% rather than bundling decisions.
-%
-%   \subsection{Anchor chain}
-%     Stellar, Ethereum L1, Ethereum L2 (Base/Optimism/Arbitrum/zkSync),
-%     Solana, Aztec, Mina, Bitcoin (inscriptions), no-chain (DA-only).
-%
-%   \subsection{SNARK system}
-%     Groth16, Plonk (vanilla / UltraPlonk), Halo2, STARK, Plonky2,
-%     Plonky3, Nova / Hypernova, Spartan.
-%
-%   \subsection{Curve / hash pair}
-%     BLS12-381, BN254, BLS12-377, Pasta (Pallas/Vesta), Goldilocks
-%     (no curve — STARK/Plonky2 over a 64-bit prime).
-%
-%   \subsection{Post-quantum stance}
-%     (a) Pairing-based / classical EC: broken under Shor.
-%     (b) Hash-based (FRI/STARK): PQ-conjectured assuming hash CR.
-%     (c) Lattice-based: emerging; not in any deployed config.
-%
-%   \subsection{Trusted setup}
-%     Per-circuit (Groth16), universal updateable (Plonk/KZG),
-%     transparent (FRI/STARK/IPA).
-%
-%   \subsection{Verification host}
-%     Native precompile / host function vs. pure-bytecode contract.
-%     This axis is the hidden constraint that drives chain choice
-%     for production deployments.
-%
-% Figure 1: TikZ diagram in figures/design-space-axes.tex showing
-% the axes with example points marked.
+We propose six design dimensions for a metadata-hiding group registry:
+the anchor chain, the SNARK system, the curve and in-circuit hash, the
+post-quantum stance, the trusted-setup model, and the verification
+host. The dimensions are not mathematically independent --- a curve
+choice constrains the available SNARK family, and the verification
+host axis constrains the curve --- but each imposes a binding
+constraint that the others do not subsume. We treat them as a
+decomposition of the bundled triple (curve, SNARK, chain) that
+existing literature most often presents, and devote
+\S\ref{sec:dimensions-deps} to the cross-axis dependencies that
+remain.
 
-TODO: draft after §2 lock.
+\subsection{Anchor chain}
+\label{sec:dim-chain}
+
+The anchor chain is the public ledger that hosts the registry contract
+and stores $\sigma_t$. It determines validator-set composition, the
+chain's censorship-resistance posture, transaction-fee economics, and
+the menu of available host functions. We consider Stellar (Soroban),
+Ethereum L1, Ethereum L2 rollups (Base, Optimism, Arbitrum, zkSync,
+StarkNet), Solana, Aztec, Mina, Bitcoin with inscription-style data
+attachment, and a no-chain configuration that uses an availability
+layer (Celestia, EigenDA) without execution. The no-chain
+configuration is meaningful only if the predicate that admits state
+transitions can be enforced off-chain by a quorum of operators; it
+trades chain-level finality for unbounded throughput and is
+out-of-scope for the deployment profiles we recommend in
+\S\ref{sec:recommendations}.
+
+\subsection{SNARK system}
+\label{sec:dim-snark}
+
+The SNARK system is the proof construction itself. We consider
+Groth16~\cite{groth-2016-onpairing}, PLONK~\cite{gabizon-2019-plonk}
+and its UltraPlonk variant, Halo and Halo2~\cite{bowe-2019-halo},
+transparent STARKs~\cite{ben-sasson-2018-stark},
+Plonky2~\cite{plonky2-2022} and Plonky3~\cite{plonky3-spec} as
+hash-based instantiations targeting low-latency proving,
+Nova~\cite{kothapalli-2022-nova} and its descendants as folding-scheme
+recursion engines, and Spartan~\cite{setty-2020-spartan} as a
+transparent-setup option without FRI. The choice fixes the proof's
+asymptotic and concrete sizes, the prover's working-memory and
+parallelism profile, and the post-quantum class
+(\S\ref{sec:dim-pq}).
+
+\subsection{Curve and in-circuit hash}
+\label{sec:dim-curve}
+
+For pairing-based and curve-based SNARKs, the elliptic curve and the
+hash function chosen for in-circuit use jointly determine R1CS or
+custom-gate constraint counts and the on-chain verifier's primitive
+dependencies. We consider BLS12-381~\cite{bowe-2017-bls12381},
+BN254~\cite{barreto-2005-bn254} (with the security re-evaluation
+of~\cite{kim-barbulescu-2016} as a load-bearing footnote), the
+BLS12-377 / BW6-761 cycle used for SNARK-of-SNARK constructions, the
+Pallas/Vesta cycle (``Pasta'')~\cite{hopwood-2020-pasta} used by Halo2
+and Mina, and the Goldilocks 64-bit prime field used by Plonky2/3.
+The in-circuit hash is the second half of the pair: Poseidon and
+Poseidon2 are common across pairing-based and FRI-based systems,
+Rescue-Prime appears in STARK-friendly contexts, Pedersen hashing
+predates Poseidon and is still in use in Sapling-derived constructions,
+and SHA-2 family hashes appear when the constraint cost is acceptable
+or unavoidable (e.g.\ for outer binding to chain-level data).
+
+\subsection{Post-quantum stance}
+\label{sec:dim-pq}
+
+We classify configurations into three post-quantum classes:
+\begin{enumerate}
+  \item \textbf{Pairing-based}: soundness reduces to discrete-log on a
+    pairing-friendly curve. Broken under a sufficiently large quantum
+    computer running Shor's algorithm. Includes Groth16 over
+    BLS12-381 / BN254 / BLS12-377, KZG-based PLONK and Halo2
+    instantiations.
+  \item \textbf{Classical-EC, non-pairing}: soundness reduces to
+    discrete-log on an elliptic curve without pairings. Also broken
+    under Shor. Includes IPA-based commitments
+    (Halo2 over Pasta, Spartan-on-EC).
+  \item \textbf{Hash-based}: soundness reduces to collision-resistance
+    of an underlying hash. Conjectured post-quantum-secure under the
+    standard model assumption that the hash remains
+    collision-resistant against quantum adversaries; concretely this
+    is Grover-resistance with appropriate output sizing. Includes
+    STARKs and Plonky2/3.
+\end{enumerate}
+A fourth class --- lattice-based SNARKs --- is emerging in the
+literature and is not yet represented in any deployed configuration we
+survey. We flag it in \S\ref{sec:open}.
+
+The three-class division collapses several finer distinctions; in
+particular, ``conjectured PQ-secure'' is doing real work, because the
+Grover speedup interacts with Fiat-Shamir security amplification in
+ways that change concrete parameter choices~\cite{don-2019-fiat-shamir}.
+The PQ-posture comparison table (\S\ref{sec:analysis}) records the
+specific assumption each configuration relies on rather than the
+class label alone.
+
+\subsection{Trusted setup}
+\label{sec:dim-setup}
+
+Trusted-setup posture is a function of the SNARK choice but is the
+operationally most-visible decision and so deserves its own axis. We
+distinguish:
+\begin{enumerate}
+  \item \textbf{Per-circuit setup}: each relation requires its own
+    Phase-2 ceremony. Groth16 is the canonical example. The ceremony
+    is reusable across deployments of the same relation but not across
+    relation changes; relation upgrades require a fresh ceremony.
+  \item \textbf{Universal updatable setup}: a single Phase-1 ceremony
+    is shared across all relations of a given size; new contributors
+    can extend the ceremony without restarting. PLONK and Marlin are
+    canonical examples.
+  \item \textbf{Transparent setup}: no ceremony. STARKs, Plonky2/3,
+    Halo2-with-IPA, and Spartan are transparent. The trade-off is
+    typically larger proof size and (for FRI-based systems) higher
+    verifier work.
+\end{enumerate}
+The number of contributors required for a given setup to be
+soundness-bearing is one; trustworthiness against the trapdoor is
+maximised when at least one contributor in fact destroyed their
+toxic waste. Multi-contributor MPC ceremonies make this more credible
+but do not change the formal property.
+
+\subsection{Verification host}
+\label{sec:dim-host}
+
+The verification host axis is whether the chain provides native
+support for the SNARK's verifier primitives or whether the verifier
+runs in the chain's general-purpose bytecode. Three regimes:
+
+\begin{enumerate}
+  \item \textbf{Native precompile / host function}: the chain exposes
+    a built-in callable that performs (e.g.) a BLS12-381 pairing or
+    a BN254 G1 multi-scalar multiplication at gas costs orders of
+    magnitude lower than a bytecode implementation. Examples:
+    Ethereum's BN254 precompile (EIP-197), Stellar Protocol 22's
+    BLS12-381 host functions~\cite{stellar-cap-0058},
+    Mina's built-in Pickles verifier.
+  \item \textbf{Pure bytecode}: the verifier is a contract
+    implementation in the chain's VM language with no native
+    acceleration for SNARK primitives. Verification cost scales with
+    the bytecode interpreter's per-operation overhead.
+  \item \textbf{Verifier-as-rollup}: the chain itself is a SNARK-rollup
+    whose execution model is the SNARK verifier, so application-level
+    proofs are checked by the same machinery that validates the
+    chain. Aztec is the canonical example.
+\end{enumerate}
+
+This axis is the binding constraint that makes the
+``Stellar~+~Plonky3~+~FRI'' configuration in \S\ref{sec:configurations}
+hypothetical. Stellar Protocol 22 added BLS12-381 host functions but
+no FRI host functions; a transparent-setup PQ-secure verifier on
+Stellar would run in pure bytecode and incur orders-of-magnitude
+higher gas. The same constraint forces Ethereum L1 deployments toward
+BN254 over BLS12-381 in the absence of EIP-2537.
+
+\subsection{Cross-axis dependencies}
+\label{sec:dimensions-deps}
+
+The six axes carry the following hard dependencies:
+
+\begin{itemize}
+  \item \emph{SNARK $\to$ trusted-setup}. Groth16 forces per-circuit;
+    PLONK forces universal-updatable; STARK / Plonky2 / Plonky3 force
+    transparent. The trusted-setup axis is reducible in theory, but
+    operationally distinct because the ceremony's
+    multi-contributor-MPC posture is independent of the SNARK choice.
+  \item \emph{SNARK $\to$ post-quantum stance}. Pairing-based SNARKs
+    are not PQ; hash-based SNARKs are PQ-conjectured. PQ posture is
+    therefore reducible to (SNARK, curve), but again the
+    operationally-relevant question --- ``which Grover security level
+    does this configuration target?'' --- is one further refinement.
+  \item \emph{Anchor chain $\to$ verification host}. The available
+    host functions are a property of the chain. Stellar gives
+    BLS12-381 pairings; Ethereum gives BN254; Mina gives Pickles;
+    Aztec gives UltraPlonk-as-execution-model.
+  \item \emph{Verification host $\to$ curve / hash}. The available
+    host functions transitively constrain the curve choice when
+    in-bytecode verification is uneconomical.
+\end{itemize}
+
+The remaining cells of the (axis $\times$ axis) dependency matrix are
+soft. The taxonomy's value is that it makes the dependency direction
+explicit: a designer who fixes the chain for non-cryptographic reasons
+(team familiarity, regulatory posture, fee economics) is implicitly
+fixing four of the six axes via the dependency chain
+chain~$\to$~host~$\to$~curve~$\to$~SNARK~$\to$~setup, and the only
+remaining freedom is the in-circuit hash choice.
+
+Figure~\ref{fig:axes} renders the six axes with example configurations
+from \S\ref{sec:configurations} placed at their corresponding points;
+the dependency arrows above are visualised as directed edges between
+axes.
+
+\input{figures/design-space-axes}

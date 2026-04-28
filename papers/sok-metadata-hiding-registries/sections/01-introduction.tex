@@ -66,8 +66,10 @@ land on a different point in the design space.
   \item \textbf{A six-axis taxonomy} (\S\ref{sec:dimensions}): anchor
     chain, SNARK system, curve/hash pair, post-quantum stance, trusted
     setup model, and verification host. We argue that these axes are
-    materially orthogonal --- real systems pick a point per axis ---
-    against the more common framing that bundles them.
+    the right granularity for design discussion, decomposing the
+    bundled (curve, SNARK, chain) framing that existing literature
+    most often presents into its constituent decisions; cross-axis
+    dependencies are made explicit rather than collapsed.
   \item \textbf{Per-dimension cost, trust, and post-quantum
     analysis} (\S\ref{sec:analysis}). Five tables: verification cost
     (in 2026-04 USD), proof size, prover wall-clock, trust

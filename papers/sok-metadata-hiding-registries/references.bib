@@ -97,3 +97,132 @@
   howpublished = {Stellar Ecosystem Proposal Draft v0.0.6},
   note         = {Draft; cite-key locked pending acceptance.}
 }
+
+% ─── §3 SNARK constructions ──────────────────────────────────────────
+
+@misc{gabizon-2019-plonk,
+  author       = {Ariel Gabizon and Zachary J.\ Williamson and Oana Ciobotaru},
+  title        = {{PLONK}: Permutations over {L}agrange-bases for
+                  {O}ecumenical Noninteractive arguments of Knowledge},
+  year         = 2019,
+  howpublished = {Cryptology {ePrint} Archive, Paper 2019/953},
+  note         = {\url{https://eprint.iacr.org/2019/953}.}
+}
+
+@misc{bowe-2019-halo,
+  author       = {Sean Bowe and Jack Grigg and Daira Hopwood},
+  title        = {Halo: Recursive Proof Composition without a Trusted
+                  Setup},
+  year         = 2019,
+  howpublished = {Cryptology {ePrint} Archive, Paper 2019/1021},
+  note         = {\url{https://eprint.iacr.org/2019/1021}.
+                  TODO §9: {Halo}2 is the deployed iteration; verify
+                  whether to cite Halo (this entry) or the {Halo}2
+                  spec / {Z}cash docs separately.}
+}
+
+@misc{ben-sasson-2018-stark,
+  author       = {Eli Ben-Sasson and Iddo Bentov and Yinon Horesh and
+                  Michael Riabzev},
+  title        = {Scalable, transparent, and post-quantum secure
+                  computational integrity},
+  year         = 2018,
+  howpublished = {Cryptology {ePrint} Archive, Paper 2018/046},
+  note         = {\url{https://eprint.iacr.org/2018/046}.}
+}
+
+@misc{plonky2-2022,
+  author       = {{Polygon Zero}},
+  title        = {Plonky2: Fast Recursive Arguments with {PLONK} and {FRI}},
+  year         = 2022,
+  howpublished = {\url{https://github.com/0xPolygonZero/plonky2/blob/main/plonky2/plonky2.pdf}},
+  note         = {TODO §9: lock to specific commit hash.}
+}
+
+@misc{plonky3-spec,
+  author       = {{Plonky3 Authors}},
+  title        = {Plonky3 Specification},
+  year         = 2024,
+  howpublished = {\url{https://github.com/Plonky3/Plonky3}},
+  note         = {TODO §9: lock to specific commit hash; verify
+                  authorship line.}
+}
+
+@inproceedings{kothapalli-2022-nova,
+  author       = {Abhiram Kothapalli and Srinath Setty and Ioanna Tzialla},
+  title        = {{Nova}: Recursive Zero-Knowledge Arguments from
+                  Folding Schemes},
+  booktitle    = {Advances in Cryptology -- {CRYPTO} 2022},
+  year         = 2022,
+  note         = {TODO §9: verify exact pages and DOI.}
+}
+
+@inproceedings{setty-2020-spartan,
+  author       = {Srinath Setty},
+  title        = {{Spartan}: Efficient and General-Purpose
+                  {zkSNARKs} without Trusted Setup},
+  booktitle    = {Advances in Cryptology -- {CRYPTO} 2020},
+  year         = 2020,
+  note         = {TODO §9: verify exact pages and DOI.}
+}
+
+% ─── §3 curves and security ──────────────────────────────────────────
+
+@misc{bowe-2017-bls12381,
+  author       = {Sean Bowe},
+  title        = {{BLS12-381}: New zk-{SNARK} Elliptic Curve Construction},
+  year         = 2017,
+  howpublished = {Electric Coin Company blog post},
+  note         = {TODO §9: replace with a more durable citation if one
+                  exists; the canonical published reference for the
+                  curve choice is this blog post and the Sapling
+                  protocol spec.}
+}
+
+@inproceedings{barreto-2005-bn254,
+  author       = {Paulo S.\ L.\ M.\ Barreto and Michael Naehrig},
+  title        = {Pairing-Friendly Elliptic Curves of Prime Order},
+  booktitle    = {Selected Areas in Cryptography -- {SAC} 2005},
+  year         = 2005,
+  note         = {TODO §9: verify exact pages and DOI.}
+}
+
+@inproceedings{kim-barbulescu-2016,
+  author       = {Taechan Kim and Razvan Barbulescu},
+  title        = {Extended Tower Number Field Sieve: A New
+                  Complexity for the Medium Prime Case},
+  booktitle    = {Advances in Cryptology -- {CRYPTO} 2016},
+  year         = 2016,
+  note         = {Effectively reduced {BN254} security from $\sim$128
+                  bits to $\sim$100 bits. TODO §9: verify exact
+                  pages and DOI.}
+}
+
+@misc{hopwood-2020-pasta,
+  author       = {Daira Hopwood},
+  title        = {The {Pasta} Curves for {Halo}2 and Beyond},
+  year         = 2020,
+  howpublished = {Electric Coin Company blog post},
+  note         = {TODO §9: verify date and replace with durable URL.}
+}
+
+@inproceedings{don-2019-fiat-shamir,
+  author       = {Jelle Don and Serge Fehr and Christian Majenz and
+                  Christian Schaffner},
+  title        = {Security of the {F}iat-{S}hamir Transformation in the
+                  Quantum Random-Oracle Model},
+  booktitle    = {Advances in Cryptology -- {CRYPTO} 2019},
+  year         = 2019,
+  note         = {TODO §9: verify exact pages and DOI.}
+}
+
+% ─── §3 host functions ───────────────────────────────────────────────
+
+@misc{stellar-cap-0058,
+  author       = {{Stellar Development Foundation}},
+  title        = {{CAP-0058}: Soroban {BLS12-381} Host Functions},
+  year         = 2024,
+  howpublished = {\url{https://github.com/stellar/stellar-protocol/blob/master/core/cap-0058.md}},
+  note         = {Activated in Stellar Protocol 22. TODO §9: lock to
+                  specific commit / activation block.}
+}

@@ -1,45 +1,214 @@
 \section{Concrete Configurations}
 \label{sec:configurations}
 
-% Seven points in the design space. Each subsection: anchor chain,
-% SNARK, curve/hash, setup, host story; then a one-paragraph fit
-% summary citing §4 numbers.
-%
-%   \subsection{Stellar + BLS12-381 + Groth16 + Poseidon (the SEP
-%     deployment)}
-%     The Stellar Ecosystem Proposal described in [\cite{sep-onym}]
-%     uses Groth16 over BLS12-381 with Poseidon as the in-circuit hash
-%     and SHA-256 as outer binding. Verification uses the BLS12-381
-%     pairing host function added in Stellar Protocol 22.
-%
-%   \subsection{Ethereum L1 + BN254 + Groth16 (Tornado Cash, Semaphore)}
-%     The classical configuration; precompile-supported BN254 pairing.
-%     BN254's security degraded to ~100 bits after 2016 attacks
-%     [\cite{kim-barbulescu}] — relevant for migration discussion.
-%
-%   \subsection{Aztec + Noir + UltraPlonk}
-%     Built-in privacy chain; the SNARK is the application layer's
-%     execution model, not a bolt-on. Higher baseline cost; partial PQ
-%     posture only insofar as PLONK can in principle be instantiated
-%     over PQ commitments.
-%
-%   \subsection{Mina + Pickles}
-%     Recursive proofs over Pasta cycle; the protocol's PQ trajectory
-%     via Kimchi is conjectural but documented.
-%
-%   \subsection{Plonky2 + KZG over BN254 anchored on L2}
-%     Performance king for prover time; verification anchored on an L2
-%     to amortize gas. Not PQ.
-%
-%   \subsection{STARK over Goldilocks anchored anywhere}
-%     PQ-secure (FRI). Proof sizes 50–200 KB; high gas cost outside
-%     of dedicated ZK-rollup chains.
-%
-%   \subsection{Hypothetical Stellar + Plonky3 + FRI (blocked)}
-%     Demonstrates the host-function gap: a transparent-setup PQ-secure
-%     verifier on Stellar would run in pure WASM at orders-of-magnitude
-%     higher cost than the BLS12-381-host-accelerated pairing path. See
-%     \S\ref{sec:migration} for the protocol changes that would unblock
-%     this configuration.
+This section catalogues seven concrete configurations as labeled
+points in the taxonomy of \S\ref{sec:dimensions}. The labels C1
+through C7 used in the comparison tables of \S\ref{sec:analysis} are
+fixed here. Each subsection states the six axis values, the
+relation(s) the configuration commonly carries, and a short fit
+summary that cross-references the relevant cells of
+Tables~\ref{tab:cost}--\ref{tab:pq}. Section~\ref{sec:migration}
+discusses migration paths between configurations;
+Section~\ref{sec:recommendations} maps deployment profiles to them.
 
-TODO: draft after §4 lock.
+\subsection{C1 --- Stellar + BLS12-381 + Groth16 + Poseidon}
+\label{sec:cfg-c1}
+
+\textbf{Axes.} Anchor chain: Stellar (Soroban). SNARK: Groth16.
+Curve / in-circuit hash: BLS12-381 / Poseidon, with SHA-256 as the
+outer commitment binding. PQ stance: pairing-based, broken under
+Shor. Trusted setup: per-circuit MPC ceremony. Verification host:
+native BLS12-381 pairing host functions added in Stellar Protocol
+22~\cite{stellar-cap-0058}.
+
+\textbf{Relations.} The SEP draft at~\cite{sep-onym} carries a
+membership relation $R_{\mathsf{Mem}}$ and an update relation
+$R_{\mathsf{Upd}}$, the latter binding both the old and new
+commitments and the epoch counter; per-policy variants (single-admin,
+single-member, quorum, fixed-set) are addressed by separate verifying
+keys under one shared contract entry-point family.
+
+\textbf{Fit summary.} Cheap-end of the verification-cost regime
+(Table~\ref{tab:cost}); 192-byte proofs by virtue of Groth16
+constant-size proofs (Table~\ref{tab:proof-size}); per-circuit setup
+ceremony is the dominant residual trust assumption beyond the SNARK's
+algebraic-group-model heuristics. Not post-quantum.
+
+\subsection{C2 --- Ethereum L1 + BN254 + Groth16 + Poseidon}
+\label{sec:cfg-c2}
+
+\textbf{Axes.} Anchor chain: Ethereum L1. SNARK: Groth16.
+Curve / hash: BN254 / Poseidon (Pedersen-or-MiMC in older
+deployments). PQ stance: pairing-based. Trusted setup: per-circuit
+MPC. Verification host: BN254 pairing precompile (EIP-197) and G1
+add / scalar-mul precompiles (EIP-196).
+
+\textbf{Relations.} The original Tornado Cash deposit-spend
+construction~\cite{pertsev-2019-tornado} fits this configuration with
+a single-relation circuit binding the deposit-tree root, a nullifier,
+and an external recipient. Semaphore~\cite{semaphore-2024} fits it
+with an identity-tree relation parameterized by an external nullifier
+for one-shot signaling.
+
+\textbf{Fit summary.} The classical configuration in the literature.
+Verification cost dominated by the BN254 pairing precompile and one
+G1 MSM; well-characterised at $\sim$200K--250K gas for a single
+proof. The
+Kim--Barbulescu attack~\cite{kim-barbulescu-2016} reduced the
+practical security of BN254 from the originally targeted $\sim$128
+classical bits to $\sim$100 bits, which is the load-bearing
+post-quantum-irrelevant footnote on this configuration's continued
+deployment. EIP-2537 (BLS12-381 precompiles on Ethereum L1) would
+unlock a migration to the same security level as C1 but at the time
+of writing has not been activated.
+
+\subsection{C3 --- Aztec + UltraPlonk + BN254}
+\label{sec:cfg-c3}
+
+\textbf{Axes.} Anchor chain: Aztec, an L2 SNARK-rollup whose
+execution model is itself a SNARK. SNARK: UltraPlonk (PLONK with
+custom gates and lookup arguments) implemented in Noir. Curve / hash:
+BN254 / Pedersen-or-Poseidon. PQ stance: pairing-based. Trusted
+setup: universal updatable (Aztec runs an Aztec-specific Phase-1
+ceremony that all relations share). Verification host:
+verifier-as-rollup --- the chain itself is the verifier.
+
+\textbf{Relations.} Application-defined; Aztec contracts compile to
+private functions whose witnesses include the relation and whose
+output is a proof checked by the rollup as a precondition for state
+transition.
+
+\textbf{Fit summary.} The verifier-as-rollup posture means that
+application-level proofs ride the same machinery that validates the
+chain, so verification cost is amortized across the rollup's batched
+proof aggregation. This is qualitatively different from C1 / C2
+verification cost and is reported in
+Table~\ref{tab:cost} in L2 gas units rather than as a single
+on-chain fee. Trade-offs: the sequencer is centralized in the
+current alpha, which dominates the trust posture; proofs are larger
+than Groth16 but smaller than FRI; and the entire deployment is a
+single-vendor stack at the time of writing.
+
+\subsection{C4 --- Mina + Pickles + Pasta}
+\label{sec:cfg-c4}
+
+\textbf{Axes.} Anchor chain: Mina. SNARK: Pickles, Mina's recursive
+proof-composition system based on Halo-style accumulator
+techniques~\cite{bowe-2019-halo}. Curve / hash:
+Pasta (Pallas/Vesta cycle)~\cite{hopwood-2020-pasta} / Poseidon. PQ
+stance: classical-EC non-pairing, broken under Shor.
+Trusted setup: transparent (Pickles uses no setup). Verification host:
+Mina's protocol-level Pickles verifier, equivalent to a built-in
+host function.
+
+\textbf{Relations.} Mina applications compose recursive proofs;
+zkApps express their state-transition predicate in OCaml, compiled to
+Pickles circuits.
+
+\textbf{Fit summary.} The transparent-setup-with-built-in-host
+combination is rare in the surveyed configurations. Recursion is
+load-bearing: every Mina block's state transition is itself a Pickles
+proof, so application-level proofs piggyback on the chain's recursive
+verification. Proofs are 10--20~KB owing to recursion overhead.
+Mina's $\sim$300-block-producer validator set sits between Stellar's
+$\sim$30 and Ethereum's $\sim$10$^6$ on the decentralization axis.
+
+\subsection{C5 --- L2 + Plonky2/3 + KZG over BN254}
+\label{sec:cfg-c5}
+
+\textbf{Axes.} Anchor chain: an Ethereum L2 (Polygon zkEVM in the
+canonical instance, but the configuration is L2-generic). SNARK:
+Plonky2 / Plonky3~\cite{plonky2-2022,plonky3-spec} for the
+inner-prover-time-optimized layer, with a final KZG wrap over BN254
+for L1 settlement compatibility. Curve / hash: Goldilocks at the
+inner layer, BN254 at the outer wrap; Poseidon is the canonical
+in-circuit hash. PQ stance: \emph{pairing-based} as deployed,
+because the outer KZG wrap is the load-bearing thing for L1
+verification --- the FRI inner layer is irrelevant to the
+post-quantum class of the configuration as a whole. Trusted setup:
+universal updatable (KZG ceremony shared with broader BN254
+ecosystem). Verification host: the L2 sequencer's batched proof
+verification on L1, ultimately calling the BN254 pairing precompile.
+
+\textbf{Relations.} Application-defined; the L2 architecture
+typically allows applications to ride the L2's general-purpose ZK
+execution.
+
+\textbf{Fit summary.} Frequently mis-classified as post-quantum
+because the inner prover is FRI-based; the post-quantum table
+(Table~\ref{tab:pq}) places it at level zero because the outer wrap
+is the verification-relevant component. Wins on prover wall-clock
+(Table~\ref{tab:prover-time}) by virtue of the FRI inner layer.
+
+\subsection{C6 --- STARK over Goldilocks (anchor-agnostic)}
+\label{sec:cfg-c6}
+
+\textbf{Axes.} Anchor chain: variable; canonical instances anchor on
+StarkNet (an L2 whose verifier is FRI-friendly), but the same
+configuration could anchor on a chain that subsidizes large-proof
+verification. SNARK: STARK~\cite{ben-sasson-2018-stark}.
+Curve / hash: Goldilocks (no curve) / a STARK-friendly hash family
+(Rescue-Prime / Poseidon2 with appropriate rate). PQ stance:
+hash-based, conjectured PQ-secure under standard collision-resistance
+assumptions. Trusted setup: transparent. Verification host:
+chain-dependent --- StarkNet provides a built-in verifier; on a
+non-FRI-aware chain, verification is pure bytecode and prohibitively
+expensive.
+
+\textbf{Relations.} Application-defined; STARK relations are
+typically expressed in Cairo or a similar STARK-friendly DSL.
+
+\textbf{Fit summary.} The unique configuration in the surveyed set
+that combines transparent setup, hash-based post-quantum security,
+and a deployable verification host. Proof sizes 50--200~KB
+(Table~\ref{tab:proof-size}) are the load-bearing cost; verification
+cost is moderate on FRI-aware anchors and prohibitive elsewhere.
+
+\subsection{C7 --- Stellar + Plonky3 + FRI (hypothetical, blocked)}
+\label{sec:cfg-c7}
+
+\textbf{Axes.} Anchor chain: Stellar. SNARK: Plonky3 / FRI. Curve / hash:
+Goldilocks / Poseidon2 (no curve at the verification layer). PQ
+stance: hash-based, conjectured PQ-secure. Trusted setup: transparent.
+Verification host: \textbf{none} --- Stellar Protocol 22 added
+BLS12-381 host functions but no FRI host functions, no
+NTT host function, and no Goldilocks-arithmetic host function. A
+verifier for this configuration would run in pure WASM, with FRI
+folding and Merkle-path verification interpreted at WASM-level cost.
+
+\textbf{Relations.} Identical in shape to C1 (a membership and update
+pair) but realized in a Plonky3-style transparent-setup circuit.
+
+\textbf{Fit summary.} Included in the catalogue not as a deployment
+target but as the visible point that makes the host-function axis
+load-bearing. Pure-WASM verification of FRI on Stellar is estimated
+at one to two orders of magnitude more expensive than C1 in
+verification gas (Table~\ref{tab:cost}, model entry); in proof size
+it matches C6. The configuration becomes deployable only under the
+host-function gap-closing scenarios in
+\S\ref{sec:migration}.
+
+\subsection{Configurations not in the catalogue}
+
+The seven configurations cover the deployment-relevant points in the
+six-axis taxonomy of \S\ref{sec:dimensions} that we found documented
+in the open literature or in production-grade open-source
+implementations. We deliberately omit several adjacent points:
+
+\begin{itemize}
+  \item \textbf{Bitcoin + inscription-style data attachment}: BitVM
+    and adjacent schemes can in principle host SNARK verifiers, but
+    the verifier-host axis is sufficiently degenerate (verification
+    requires multi-step interactive challenges) that we treat it as a
+    distinct system class outside the registry abstraction.
+  \item \textbf{Solana + Light Protocol}: a real deployment that
+    fits the abstraction, omitted for space; its axis values would
+    place it close to C2 but on a different anchor chain with
+    different validator decentralization and host-function profile.
+  \item \textbf{Lattice-based SNARKs}: no production deployment we
+    are aware of; flagged as an open problem in \S\ref{sec:open}.
+  \item \textbf{No-chain (DA-layer-only)}: the
+    advancement abstraction collapses without a single-writer
+    consensus to enforce monotonicity; we treat this as a different
+    primitive.
+\end{itemize}

@@ -1,14 +1,22 @@
 \begin{table}[t]
   \centering
-  \caption{Post-quantum posture. (a) broken under Shor; (b) hash-based,
-    PQ-conjectured assuming hash CR; (c) lattice-based, emerging.
-    TODO populate.}
+  \caption{Post-quantum posture. Class labels follow the §3.4
+    enumeration: (P) pairing-based, (E) classical-EC non-pairing,
+    (H) hash-based / FRI. The ``Grover-resistant security level''
+    column states the post-quantum security against a generic
+    Grover attack on the underlying primitive.}
   \label{tab:pq}
-  \begin{tabularx}{\columnwidth}{lXX}
+  \begin{tabular}{lll}
     \toprule
-    Configuration & Class & Notes \\
+    Configuration & Class & Grover-resistant level \\
     \midrule
-    TODO & TODO & TODO \\
+    C1  & P  & 0 (DL on $\mathbb{G}_1$ broken) \\
+    C2  & P  & 0 \\
+    C3  & P  & 0 (KZG on BN254) \\
+    C4  & P  & 0 (Pasta DL) \\
+    C5  & P  & 0 (KZG on BN254) \\
+    C6  & H  & $\sim$100 bits (depending on hash) \\
+    C7$^\dagger$ & H & $\sim$100 bits (model) \\
     \bottomrule
-  \end{tabularx}
+  \end{tabular}
 \end{table}

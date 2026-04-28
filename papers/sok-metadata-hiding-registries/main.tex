@@ -70,4 +70,22 @@
 \bibliographystyle{IEEEtran}
 \bibliography{references}
 
+\appendices
+
+\section{Benchmark harness}
+\label{app:bench}
+
+The first-party measurements in row C1 of
+\S\ref{sec:analysis} are produced by the harness at
+\texttt{benchmarks/onym-groth16-bls12381/} in this paper's source
+tree. \texttt{methodology.md} documents the measurement contract
+(what is and is not timed; hardware and software pinning;
+\texttt{results.json} schema). \texttt{run.sh} executes the harness
+and writes \texttt{results.json}, which the table cells in
+Tables~\ref{tab:cost}--\ref{tab:pq} consume via generated
+\texttt{.tex} snippets. Per-call sampling instrumentation is
+deferred from this draft pending a dedicated benchmark
+binary; the current harness reports a coarse
+\texttt{wall\_clock\_ms\_total} only.
+
 \end{document}

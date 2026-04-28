@@ -665,7 +665,18 @@ fn test_update_commitment_does_not_mutate_admin_pubkey_commitment() {
     let contract_id = client.address.clone();
     let group_id = BytesN::from_array(&env, &[26u8; 32]);
     let z = canonical_zero(&env);
-    let apc = canonical_zero(&env);
+    // Use a distinct, non-zero canonical Fr for admin_pubkey_commitment
+    // so the post-update assertion has discriminative power: a
+    // hypothetical bug that overwrites APC with zero (e.g.,
+    // `Default::default()` slip) would now be caught, where
+    // `apc = canonical_zero` would let it pass silently.
+    let apc = BytesN::from_array(&env, &[
+        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42,
+        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42,
+        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42,
+        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42,
+    ]);
+    assert_ne!(apc, z, "discriminative APC must differ from canonical_zero");
     inject_group(&env, &contract_id, &group_id, &z, &apc, 0, 0);
 
     let load_admin = || -> BytesN<32> {
@@ -687,6 +698,25 @@ fn test_update_commitment_does_not_mutate_admin_pubkey_commitment() {
         post_admin, apc,
         "admin_pubkey_commitment (DataKey::AdminCommitment) must be invariant under update_commitment"
     );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn test_update_commitment_rejects_epoch_overflow() {
+    // u64::MAX epoch_old → checked_add(1) overflows → InvalidEpoch (11).
+    // The contract runs checked_add BEFORE the PublicInputsMismatch check,
+    // so even with matching wire epoch_old==u64::MAX, the caller sees
+    // InvalidEpoch first (NOT PublicInputsMismatch). At one update/sec
+    // this boundary is ~5.8×10^11 years away — practically unreachable —
+    // but the path is real and worth pinning so a future code change
+    // that reorders the checks doesn't silently degrade behavior.
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[27u8; 32]);
+    let z = canonical_zero(&env);
+    inject_group(&env, &contract_id, &group_id, &z, &z, 0, u64::MAX);
+    let pi = upi(&env, &z, u64::MAX, &z);
+    client.update_commitment(&group_id, &mock_proof(&env, b"u-overflow"), &pi);
 }
 
 // ================================================================
@@ -896,6 +926,67 @@ fn test_bump_group_ttl_rejects_unknown_group() {
     client.bump_group_ttl(&BytesN::from_array(&env, &[98u8; 32]));
 }
 
+/// Helper: inject a group + push N synthetic CommitmentEntry snapshots
+/// into its History so we can exercise the suffix-slicing in
+/// `get_history` directly.
+fn inject_group_with_history(
+    env: &Env,
+    contract_id: &Address,
+    group_id: &BytesN<32>,
+    snapshots: u64,
+) {
+    let z = canonical_zero(env);
+    inject_group(env, contract_id, group_id, &z, &z, 0, 0);
+    env.as_contract(contract_id, || {
+        let mut history: Vec<CommitmentEntry> = Vec::new(env);
+        for i in 0..snapshots {
+            history.push_back(CommitmentEntry {
+                commitment: BytesN::from_array(env, &[(i & 0xff) as u8; 32]),
+                epoch: i,
+                timestamp: 1000 + i,
+                tier: 0,
+            });
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::History(group_id.clone()), &history);
+    });
+}
+
+#[test]
+fn test_get_history_returns_most_recent_max_entries() {
+    // History has 5 entries (epochs 0..5); ask for the most-recent 2.
+    // Should return entries with epoch 3 and 4.
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[50u8; 32]);
+    inject_group_with_history(&env, &contract_id, &group_id, 5);
+    let history = client.get_history(&group_id, &2u32);
+    assert_eq!(history.len(), 2);
+    assert_eq!(history.get(0).unwrap().epoch, 3);
+    assert_eq!(history.get(1).unwrap().epoch, 4);
+}
+
+#[test]
+fn test_get_history_returns_full_when_max_exceeds_size() {
+    // History has 5 entries; ask for 100. Should return all 5.
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[51u8; 32]);
+    inject_group_with_history(&env, &contract_id, &group_id, 5);
+    let history = client.get_history(&group_id, &100u32);
+    assert_eq!(history.len(), 5);
+    assert_eq!(history.get(0).unwrap().epoch, 0);
+    assert_eq!(history.get(4).unwrap().epoch, 4);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn test_get_history_rejects_unknown_group() {
+    let (env, client, _admin) = setup_env();
+    client.get_history(&BytesN::from_array(&env, &[96u8; 32]), &10u32);
+}
+
 // ================================================================
 // 7. test-vectors.json consistency (1 test)
 // ================================================================
@@ -964,5 +1055,5 @@ fn test_vectors_consistency() {
     let test_count = v["tests_to_implement"]["categories"]["total"]
         .as_u64()
         .unwrap();
-    assert_eq!(test_count, 37, "test count pin drift");
+    assert_eq!(test_count, 41, "test count pin drift");
 }

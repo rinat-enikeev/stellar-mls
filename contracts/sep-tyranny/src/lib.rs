@@ -495,6 +495,12 @@ impl SepTyrannyContract {
 
         let current = Self::load_group(&env, &group_id)?;
 
+        // Epoch-overflow check precedes PublicInputsMismatch by design:
+        // at `current.epoch == u64::MAX`, callers see `InvalidEpoch` (11)
+        // regardless of `wire.epoch_old`. Pinned by
+        // `test_update_commitment_rejects_epoch_overflow`. ~5.8×10^11
+        // years at one update/sec — practically unreachable, but the
+        // ordering is intentional so the boundary error is uniform.
         let new_epoch = current.epoch.checked_add(1).ok_or(Error::InvalidEpoch)?;
 
         if public_inputs.c_old != current.commitment

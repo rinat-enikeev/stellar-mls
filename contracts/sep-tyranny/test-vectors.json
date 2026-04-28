@@ -27,11 +27,17 @@
     "not_declared_aligned_with_siblings": [
       { "name": "Reserved3", "code": 3, "reason": "reserved for sibling-contract numbering alignment; no current use" },
       { "name": "GroupInactive", "code": 6, "reason": "no active flag, no deactivate path" },
+      { "name": "UnknownVkKind", "code": 16, "reason": "VkKind exhaustively matched in update_vk; the variant is unreachable" },
       { "name": "OneOnOneImmutable", "code": 17, "reason": "no 1v1 in this contract" },
+      { "name": "UnknownGroupType", "code": 18, "reason": "single-type contract" },
       { "name": "MissingAdminRoot", "code": 19, "reason": "no admin tree (single pinned pubkey hash, not a Merkle root)" },
       { "name": "AdminRootMismatch", "code": 20, "reason": "no admin tree" },
+      { "name": "DemocracyInputMissing", "code": 21, "reason": "Democracy artifact" },
+      { "name": "Reserved22", "code": 22, "reason": "Oligarchy NotAdmin reservation" },
       { "name": "Invalid1v1Tier", "code": 23, "reason": "no 1v1 in this contract" },
       { "name": "MemberCountMismatch", "code": 24, "reason": "Tyranny is value-agnostic to count" },
+      { "name": "MemberCountOutOfRange", "code": 25, "reason": "Tyranny is value-agnostic to count" },
+      { "name": "GroupStillActive", "code": 27, "reason": "no active flag, no deactivate path" },
       { "name": "InvalidThreshold", "code": 28, "reason": "no quorum (single admin)" },
       { "name": "GroupTypeMismatch", "code": 29, "reason": "single-type contract" },
       { "name": "InvalidInitialMembership", "code": 30, "reason": "no in-circuit floor" }
@@ -244,17 +250,21 @@
       "test_get_commitment_rejects_unknown_group",
       "test_bump_group_ttl_extends_group_storage",
       "test_bump_group_ttl_rejects_unknown_group",
+      "test_get_history_returns_most_recent_max_entries",
+      "test_get_history_returns_full_when_max_exceeds_size",
+      "test_get_history_rejects_unknown_group",
+      "test_update_commitment_rejects_epoch_overflow",
       "test_vectors_consistency"
     ],
     "categories": {
       "initialization": 4,
       "create_group": 11,
-      "update_commitment": 7,
+      "update_commitment": 8,
       "verify_membership": 4,
       "admin_entrypoints": 6,
-      "queries": 4,
+      "queries": 7,
       "abi_pin": 1,
-      "total": 37
+      "total": 41
     }
   }
 }

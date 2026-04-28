@@ -538,8 +538,6 @@
       ]
     ],
     [],
-    [],
-    [],
     []
   ],
   "ledger": {
@@ -585,13 +583,13 @@
                     "symbol": "AdminCommitment"
                   },
                   {
-                    "bytes": "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"
+                    "bytes": "1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b"
                   }
                 ]
               },
               "durability": "persistent",
               "val": {
-                "bytes": "4242424242424242424242424242424242424242424242424242424242424242"
+                "bytes": "0000000000000000000000000000000000000000000000000000000000000000"
               }
             }
           },
@@ -855,7 +853,7 @@
                     "symbol": "Group"
                   },
                   {
-                    "bytes": "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"
+                    "bytes": "1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b"
                   }
                 ]
               },
@@ -875,7 +873,7 @@
                       "symbol": "epoch"
                     },
                     "val": {
-                      "u64": "0"
+                      "u64": "18446744073709551615"
                     }
                   },
                   {
@@ -915,7 +913,7 @@
                     "symbol": "History"
                   },
                   {
-                    "bytes": "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"
+                    "bytes": "1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b"
                   }
                 ]
               },

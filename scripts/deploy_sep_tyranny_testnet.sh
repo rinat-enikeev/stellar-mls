@@ -173,7 +173,32 @@ echo "Contract ID: $CONTRACT_ID"
 echo "Stellar config dir: $CONFIG_DIR"
 echo "Temporary artifacts dir: $WORK_DIR"
 echo
-# TODO(phase-a): post-deploy smoke (create_group → update_commitment →
+
+# Liveness smoke: bump_group_ttl on a never-existed group MUST return
+# Error(Contract, #5) (GroupNotFound). The entrypoint is permissionless
+# (no auth setup needed), reachable without TyrannyCreate/Update
+# fixtures, and proves the contract is responsive to invocations
+# before Phase A real-fixture work lands. SKIP_SMOKE=1 to skip.
+if [ "${SKIP_SMOKE:-0}" != "1" ]; then
+    echo "==> Liveness smoke: bump_group_ttl against unknown group (expects #5 GroupNotFound)"
+    SMOKE_OUT="$(stellar contract invoke \
+        --config-dir "$CONFIG_DIR" \
+        --network "$NETWORK" \
+        --source-account "$IDENTITY" \
+        --id "$CONTRACT_ID" \
+        -- \
+        bump_group_ttl \
+        --group-id 0000000000000000000000000000000000000000000000000000000000000000 \
+        2>&1 || true)"
+    if echo "$SMOKE_OUT" | grep -q 'Error(Contract, #5)'; then
+        echo "    smoke OK — contract responded with GroupNotFound"
+    else
+        echo "    smoke unexpected output (continuing — Phase A real-fixture smoke covers full path):" >&2
+        echo "$SMOKE_OUT" | head -10 >&2
+    fi
+fi
+
+# TODO(phase-a): full post-deploy smoke (create_group → update_commitment →
 # verify_membership). Requires TyrannyCreateCircuit + TyrannyUpdateCircuit
 # fixture generator and dev proving keys.
 

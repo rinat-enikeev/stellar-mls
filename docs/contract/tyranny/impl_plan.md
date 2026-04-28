@@ -78,21 +78,23 @@ Verbatim helpers: `validate_vk_points`, `validate_proof_points`, `is_canonical_f
 
 ## Test coverage
 
-37 inline tests, mapped 1:1 to entries in `test-vectors.json#tests_to_implement.tests`:
+41 inline tests, mapped 1:1 to entries in `test-vectors.json#tests_to_implement.tests`:
 
 - 4 initialization (happy + 3 IC-arity rejections).
 - 11 `create_group` (happy, invalid tier, duplicate, non-canonical commitment, non-canonical admin_pubkey_commitment, invalid proof, restricted-mode {non-admin rejected, admin allowed}, group-count cap, replay protection, public-input mismatch).
-- 7 `update_commitment` (happy, stale c_old, wrong epoch_old, non-canonical c_new, replayed proof, unknown group, admin_pubkey_commitment invariance).
+- 8 `update_commitment` (happy, stale c_old, wrong epoch_old, non-canonical c_new, replayed proof, unknown group, admin_pubkey_commitment invariance, epoch overflow).
 - 4 `verify_membership` (happy, wrong commitment, wrong epoch, unknown group).
 - 6 admin entrypoints (update_vk_requires_auth, set_restricted_mode_requires_auth, rotates Membership/Create/Update, invalid_tier).
-- 4 queries (get_commitment {happy, unknown}, bump_group_ttl {happy, unknown}).
+- 7 queries (get_commitment {happy, unknown}, bump_group_ttl {happy, unknown}, get_history {most-recent slice, full-when-max-exceeds, unknown}).
 - 1 ABI pin (`test_vectors_consistency`).
 
 ## LOC
 
-- `src/lib.rs`: 959 LOC (vs. sep-anarchy 975, sep-democracy ~1000, sep-oligarchy ~1250, sep-oneonone 589).
-- `src/test.rs`: ~720 LOC.
-- `test-vectors.json`: ~165 lines.
+Order of magnitude (counts drift slightly with comment rewrites):
+
+- `src/lib.rs`: ~1000 LOC (vs. sep-anarchy ~975, sep-democracy ~1000, sep-oligarchy ~1250, sep-oneonone ~590).
+- `src/test.rs`: ~1050 LOC.
+- `test-vectors.json`: ~270 lines.
 
 ## Out of scope
 

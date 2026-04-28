@@ -33,7 +33,7 @@ The `test_vectors_consistency` inline test enforces that the contract's `Error` 
 | ID | Invariant | How enforced |
 |---|---|---|
 | I1 | `admin_pubkey_commitment` is invariant under `update_commitment`. | `update_commitment` does not write to `DataKey::AdminCommitment(group_id)` — only `create_group` does. The wire payload `UpdatePublicInputs` does not carry an `admin_pubkey_commitment` field — it cannot be supplied by the caller. There is no `update_admin` entrypoint in v0. |
-| I2 | Epoch monotonic-by-1. | `update_commitment` rejects `wire.epoch_old != current.epoch` with `PublicInputsMismatch`; computes `new_epoch = current.epoch.checked_add(1)` and surfaces overflow as `InvalidEpoch`. |
+| I2 | Epoch monotonic-by-1. | `update_commitment` computes `new_epoch = current.epoch.checked_add(1)?` **first** — overflow surfaces as `InvalidEpoch` regardless of wire-supplied `epoch_old`. After the overflow check, `wire.epoch_old != current.epoch` is rejected with `PublicInputsMismatch`. So at the `current.epoch == u64::MAX` boundary, callers always see `InvalidEpoch`, never `PublicInputsMismatch` — the ordering is intentional and pinned by `test_update_commitment_rejects_epoch_overflow`. |
 | I3 | `GroupCount(tier)` is monotonic increment-only. | `create_group` increments after success; no entrypoint decrements. |
 | I4 | Replay protection. | `check_proof_replay` reads `UsedProof(hash)` before verification; `record_proof` writes after verification. |
 | I5 | All stored VKs have correct IC count + subgroup-valid points. | `__constructor` and `update_vk` check `vk.ic.len()` against `expected_ic` and call `validate_vk_points(vk)`. |
@@ -65,8 +65,8 @@ A leaked Update-VK proof binds a specific `(c_old, epoch_old, c_new)` and is loc
 - `test_initialize` + `test_invalid_{membership,create,update}_vk_length_rejected` enforce I5.
 - `test_create_group_rejects_non_canonical_{commitment,admin_pubkey_commitment}` + `test_update_commitment_rejects_non_canonical_c_new` enforce I6.
 - `test_create_group_rejects_replayed_proof` + `test_update_commitment_rejects_replayed_proof` enforce I4.
-- `test_update_commitment_rejects_wrong_epoch_old` enforces I2 (mismatch path); the overflow path (`InvalidEpoch`) is structurally covered by `checked_add` + the same `wire.epoch_old != current.epoch` rejection on the boundary case.
+- `test_update_commitment_rejects_wrong_epoch_old` enforces the `PublicInputsMismatch` path of I2; `test_update_commitment_rejects_epoch_overflow` (added in PR #159 review) enforces the `InvalidEpoch`-from-overflow path by injecting `current.epoch = u64::MAX`. The two together pin the ordering: overflow check precedes PIM check, so at the `u64::MAX` boundary callers see `InvalidEpoch` (11), never `PublicInputsMismatch` (10).
 - `test_create_group_enforces_tier_group_limit` enforces I3 (ceiling side); no decrement test because no decrement path exists.
 - `test_update_vk_requires_auth` + `test_set_restricted_mode_requires_auth` enforce I7.
 - `test_update_commitment_does_not_mutate_admin_pubkey_commitment` enforces I1 — sets up a group, attempts an `update_commitment` (fails at the verifier with mock proofs), reads back state, asserts `admin_pubkey_commitment` unchanged. The same assertion would hold under a successful update per the code at `update_commitment`'s `new_entry` construction.
-- `test_verify_membership_happy_path` + `test_verify_membership_returns_false_on_invalid_proof`-style behavior pin I8 (verify_membership doesn't `Err(InvalidProof)`; happy path with mock proof returns `Ok(false)`).
+- `test_verify_membership_happy_path` pins I8: with a mock proof the verifier reaches `pairing_check`, which returns `false`, and `verify_membership` returns `Ok(false)` (the test asserts `assert!(!result)`) — NOT `Err(InvalidProof)`.

@@ -1,7 +1,7 @@
-# Onym Row Benchmark Methodology
+# C1 Row Benchmark Methodology
 
 This document specifies how the first-party numbers in the SoK's
-Stellar+Groth16+BLS12-381 row are measured. It is the contract that
+C1 row (Stellar + BLS12-381 + Groth16) are measured. It is the contract that
 `run.sh` must satisfy. Re-running `run.sh` regenerates `results.json`,
 which the LaTeX tables `\input{}` from.
 

@@ -17,5 +17,5 @@ main.pdf
 
 # Benchmark outputs — committed only when refreshed deliberately for
 # the SoK's reference-machine measurement; not during normal dev.
-benchmarks/onym-groth16-bls12381/results.json
-benchmarks/onym-groth16-bls12381/*.tex
+benchmarks/c1/results.json
+benchmarks/c1/*.tex

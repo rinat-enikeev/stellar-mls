@@ -1,6 +1,6 @@
 PAPER := main
 LATEXMK := latexmk
-BENCH_DIR := benchmarks/onym-groth16-bls12381
+BENCH_DIR := benchmarks/c1
 
 .PHONY: all clean distclean benchmarks watch anon
 
@@ -25,7 +25,7 @@ distclean:
 	rm -f *.bbl *.run.xml
 
 benchmarks:
-	@echo "Running onym-groth16-bls12381 benchmark harness..."
+	@echo "Running C1 (Stellar+BLS12-381+Groth16) benchmark harness..."
 	bash $(BENCH_DIR)/run.sh
 	@echo "Results written to $(BENCH_DIR)/results.json"
 	@echo "Re-run 'make' to regenerate PDF with updated table cells."

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Onym row benchmark harness for the SoK paper.
+# C1 row benchmark harness for the SoK paper.
 # See methodology.md in the same directory for the measurement contract.
 #
 # Usage:  bash run.sh [--reference]
@@ -139,5 +139,5 @@ echo "    new bench bin) so prover_time_ms samples can be collected"
 echo "    per ring size."
 echo "  - Implement testnet verifier_gas_stroops measurement (requires"
 echo "    STELLAR_RPC_URL and a deployed verifier contract)."
-echo "  - Generate tab-cost-comparison-row-onym.tex,"
-echo "    tab-proof-size-row-onym.tex, etc. from results.json."
+echo "  - Generate tab-cost-comparison-row-c1.tex,"
+echo "    tab-proof-size-row-c1.tex, etc. from results.json."

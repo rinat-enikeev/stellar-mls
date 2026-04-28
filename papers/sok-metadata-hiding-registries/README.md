@@ -18,7 +18,7 @@ make            # build main.pdf
 make watch      # continuous rebuild (latexmk -pvc)
 make clean      # remove aux files, keep PDF
 make distclean  # remove all generated files including PDF
-make benchmarks # re-run the onym row benchmark harness
+make benchmarks # re-run the C1 row benchmark harness
 ```
 
 ## Anonymization for double-blind submission
@@ -42,7 +42,7 @@ redaction should be needed — but verify before submitting.
 | `sections/` | Eleven section files (00-abstract through 10-conclusion) |
 | `figures/` | TikZ source for Figures 1 (taxonomy) and 2 (migration DAG) |
 | `tables/` | Five comparison tables for §4 |
-| `benchmarks/onym-groth16-bls12381/` | First-party measurement harness for the onym row |
+| `benchmarks/c1/` | First-party measurement harness for the C1 row |
 | `references.bib` | BibTeX |
 
 ## Drafting workflow
@@ -52,9 +52,9 @@ order. Each section's lock-commit uses the format
 `paper(sok): finalize §N — <title>`. No work begins on section N+1
 until section N is locked.
 
-## Measurement methodology (onym row)
+## Measurement methodology (C1 row)
 
-See `benchmarks/onym-groth16-bls12381/methodology.md` for hardware,
+See `benchmarks/c1/methodology.md` for hardware,
 software, and pinned versions. The harness writes `results.json`; LaTeX
 table cells `\input{}` from generated `.tex` snippets so the PDF stays
 in sync with measurements when the benchmark is re-run.

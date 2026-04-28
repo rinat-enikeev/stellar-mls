@@ -6,7 +6,8 @@
 %
 % Build:  make           → main.pdf
 %         make clean
-%         make benchmarks → re-runs onym row, regenerates table cells
+%         make benchmarks → re-runs the C1 first-party row, regenerates
+%                           table cells from results.json
 
 \documentclass[conference]{IEEEtran}
 
@@ -66,7 +67,6 @@
 \input{sections/09-related-work}
 \input{sections/10-conclusion}
 
-\nocite{*}  % TODO: remove once real \cite calls exist; lets scaffolding build with empty body.
 \bibliographystyle{IEEEtran}
 \bibliography{references}
 
@@ -77,8 +77,7 @@
 
 The first-party measurements in row C1 of
 \S\ref{sec:analysis} are produced by the harness at
-\texttt{benchmarks/onym-groth16-bls12381/} in this paper's source
-tree. \texttt{methodology.md} documents the measurement contract
+\texttt{benchmarks/c1/} in this paper's source tree. \texttt{methodology.md} documents the measurement contract
 (what is and is not timed; hardware and software pinning;
 \texttt{results.json} schema). \texttt{run.sh} executes the harness
 and writes \texttt{results.json}, which the table cells in

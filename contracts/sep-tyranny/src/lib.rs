@@ -18,11 +18,18 @@
 //! # Verification
 //!
 //!   * Membership VK: 3 IC points, public inputs `(commitment, epoch)`
-//!   * Create VK:     4 IC points, public inputs `(commitment, epoch=0,
-//!                    admin_pubkey_commitment)`
-//!   * Update VK:     5 IC points, public inputs `(c_old, epoch_old,
-//!                    c_new, admin_pubkey_commitment)` — the last is
-//!                    contract-supplied from `current.admin_pubkey_commitment`
+//!   * Create VK:     5 IC points, public inputs `(commitment, epoch=0,
+//!                    admin_pubkey_commitment, group_id_fr)`
+//!   * Update VK:     6 IC points, public inputs `(c_old, epoch_old,
+//!                    c_new, admin_pubkey_commitment, group_id_fr)` —
+//!                    the last two are contract-supplied
+//!
+//! `admin_pubkey_commitment = Poseidon(admin_pubkey, group_id_fr)`.
+//! Per-group binding via `group_id_fr` (a deterministic Fr derived
+//! from the group_id bytes by the contract) closes cross-group
+//! linkability: same admin in two groups produces uncorrelated
+//! commitments to anyone who doesn't know `admin_pubkey`. Privacy-first
+//! property — see design doc §3 + §5.1.
 //!
 //! All curve operations use Soroban's BLS12-381 host functions.
 
@@ -43,8 +50,8 @@ const LEDGER_BUMP: u32 = 518_400;
 const MAX_GROUPS_PER_TIER: u32 = 10_000;
 
 const MEMBERSHIP_IC_POINTS: u32 = 3;
-const CREATE_IC_POINTS: u32 = 4;
-const UPDATE_IC_POINTS: u32 = 5;
+const CREATE_IC_POINTS: u32 = 5;
+const UPDATE_IC_POINTS: u32 = 6;
 
 #[cfg(test)]
 fn tier_capacity(tier: u32) -> u32 {
@@ -163,9 +170,11 @@ pub struct CreatePublicInputs {
 }
 
 /// Wire payload for `update_commitment`. 3 wire scalars; the verifier
-/// consumes a 4-public-input vector — the 4th input
+/// consumes a 5-public-input vector — the 4th input
 /// (`admin_pubkey_commitment`) is contract-supplied from
-/// `current.admin_pubkey_commitment`.
+/// `DataKey::AdminCommitment(group_id)`, and the 5th
+/// (`group_id_fr`) is derived deterministically from the group_id
+/// bytes by the contract.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UpdatePublicInputs {
@@ -439,7 +448,15 @@ impl SepTyrannyContract {
         Self::check_proof_replay(&env, &proof)?;
 
         let vk = Self::load_create_vk(&env, tier)?;
-        if !verify_create_proof(&env, &vk, &proof, &commitment, 0, &admin_pubkey_commitment) {
+        if !verify_create_proof(
+            &env,
+            &vk,
+            &proof,
+            &commitment,
+            0,
+            &admin_pubkey_commitment,
+            &group_id,
+        ) {
             return Err(Error::InvalidProof);
         }
         Self::record_proof(&env, &proof);
@@ -480,9 +497,13 @@ impl SepTyrannyContract {
 
     /// Advance the group's commitment. The Update circuit's witness
     /// includes the admin's BLS secret key; the circuit verifies
-    /// `Poseidon(admin_pubkey) == current.admin_pubkey_commitment`.
-    /// `admin_pubkey_commitment` is contract-supplied from storage as
-    /// the 4th public input — not on the wire.
+    /// `Poseidon(admin_pubkey, group_id_fr) == admin_pubkey_commitment`.
+    /// Of the 5 public inputs, 3 come from the wire (`c_old`,
+    /// `epoch_old`, `c_new`); the 4th (`admin_pubkey_commitment`) is
+    /// contract-supplied from `DataKey::AdminCommitment(group_id)`
+    /// storage; the 5th (`group_id_fr`) is derived deterministically
+    /// from `group_id` by the contract — closing cross-group
+    /// commitment linkability for the same admin.
     ///
     /// No `caller.require_auth()`: the Update proof IS the authorization.
     pub fn update_commitment(
@@ -529,6 +550,7 @@ impl SepTyrannyContract {
             public_inputs.epoch_old,
             &public_inputs.c_new,
             &admin_commitment,
+            &group_id,
         ) {
             return Err(Error::InvalidProof);
         }
@@ -808,6 +830,22 @@ fn u64_to_u256_be(val: u64) -> [u8; 32] {
     bytes
 }
 
+/// Derive a canonical Fr scalar from a group_id BytesN<32>. The
+/// 32 bytes are reinterpreted as a U256 (big-endian) and reduced
+/// mod r via `Fr::from_u256`. Same group_id → same Fr; different
+/// group_ids → different Fr (with overwhelming probability).
+///
+/// Used as the `group_id_fr` public input to both the Create and
+/// Update circuits to bind `admin_pubkey_commitment = Poseidon(
+/// admin_pubkey, group_id_fr)`. Closes cross-group commitment
+/// linkability — same admin in two groups produces uncorrelated
+/// on-chain admin commitments to chain observers who don't know
+/// `admin_pubkey`. See design doc §3.
+fn group_id_to_fr(env: &Env, group_id: &BytesN<32>) -> Fr {
+    let bytes = Bytes::from_array(env, &group_id.to_array());
+    Fr::from_u256(U256::from_be_bytes(env, &bytes))
+}
+
 /// Three shape-specific Groth16 verifiers, one per VK family. Kept
 /// shape-specific (rather than collapsed into a single arity-parameterized
 /// helper) so each IC count and public-input layout is visible at the
@@ -868,8 +906,15 @@ fn verify_membership_proof(
     bls.pairing_check(g1s, g2s)
 }
 
-/// Verify a 4-IC-point Create proof. Public inputs:
-///   IC[1] · commitment + IC[2] · epoch + IC[3] · admin_pubkey_commitment (+ IC[0] base).
+/// Verify a 5-IC-point Create proof. Public inputs:
+///
+///   IC[1] · commitment + IC[2] · epoch + IC[3] · admin_pubkey_commitment
+///   + IC[4] · group_id_fr   (+ IC[0] base)
+///
+/// `group_id_fr` is derived deterministically from the group_id BytesN<32>
+/// via `Fr::from_u256(U256::from_be_bytes(group_id))` and binds the proof
+/// to a specific group, closing cross-group commitment linkability for
+/// the same admin (privacy property — see design doc §3).
 fn verify_create_proof(
     env: &Env,
     vk: &VerificationKeyData,
@@ -877,6 +922,7 @@ fn verify_create_proof(
     commitment: &BytesN<32>,
     epoch: u64,
     admin_pubkey_commitment: &BytesN<32>,
+    group_id: &BytesN<32>,
 ) -> bool {
     if vk.ic.len() != CREATE_IC_POINTS {
         return false;
@@ -905,14 +951,16 @@ fn verify_create_proof(
     let ic1 = G1Affine::from_bytes(vk.ic.get(1).unwrap());
     let ic2 = G1Affine::from_bytes(vk.ic.get(2).unwrap());
     let ic3 = G1Affine::from_bytes(vk.ic.get(3).unwrap());
+    let ic4 = G1Affine::from_bytes(vk.ic.get(4).unwrap());
 
     let commitment_fr = Fr::from_bytes(commitment.clone());
     let epoch_bytes = Bytes::from_array(env, &u64_to_u256_be(epoch));
     let epoch_fr = Fr::from_u256(U256::from_be_bytes(env, &epoch_bytes));
     let admin_fr = Fr::from_bytes(admin_pubkey_commitment.clone());
+    let group_id_fr = group_id_to_fr(env, group_id);
 
-    let msm_points: Vec<G1Affine> = vec![env, ic1, ic2, ic3];
-    let msm_scalars: Vec<Fr> = vec![env, commitment_fr, epoch_fr, admin_fr];
+    let msm_points: Vec<G1Affine> = vec![env, ic1, ic2, ic3, ic4];
+    let msm_scalars: Vec<Fr> = vec![env, commitment_fr, epoch_fr, admin_fr, group_id_fr];
     let msm_result = bls.g1_msm(msm_points, msm_scalars);
     let vk_x = bls.g1_add(&ic0, &msm_result);
 
@@ -923,14 +971,15 @@ fn verify_create_proof(
     bls.pairing_check(g1s, g2s)
 }
 
-/// Verify a 5-IC-point Update proof. Public inputs in canonical order:
+/// Verify a 6-IC-point Update proof. Public inputs in canonical order:
 ///
 ///   IC[1] · c_old + IC[2] · epoch_old + IC[3] · c_new
-///   + IC[4] · admin_pubkey_commitment   (+ IC[0] base)
+///   + IC[4] · admin_pubkey_commitment + IC[5] · group_id_fr   (+ IC[0] base)
 ///
 /// `admin_pubkey_commitment` is contract-supplied (read from
-/// `current.admin_pubkey_commitment`); the other three come from the
-/// wire.
+/// `DataKey::AdminCommitment(group_id)`); `group_id_fr` is derived
+/// deterministically from the group_id bytes; the first three come
+/// from the wire.
 #[allow(clippy::too_many_arguments)]
 fn verify_update_proof(
     env: &Env,
@@ -940,6 +989,7 @@ fn verify_update_proof(
     epoch_old: u64,
     c_new: &BytesN<32>,
     admin_pubkey_commitment: &BytesN<32>,
+    group_id: &BytesN<32>,
 ) -> bool {
     if vk.ic.len() != UPDATE_IC_POINTS {
         return false;
@@ -972,15 +1022,17 @@ fn verify_update_proof(
     let ic2 = G1Affine::from_bytes(vk.ic.get(2).unwrap());
     let ic3 = G1Affine::from_bytes(vk.ic.get(3).unwrap());
     let ic4 = G1Affine::from_bytes(vk.ic.get(4).unwrap());
+    let ic5 = G1Affine::from_bytes(vk.ic.get(5).unwrap());
 
     let c_old_fr = Fr::from_bytes(c_old.clone());
     let c_new_fr = Fr::from_bytes(c_new.clone());
     let epoch_bytes = Bytes::from_array(env, &u64_to_u256_be(epoch_old));
     let epoch_fr = Fr::from_u256(U256::from_be_bytes(env, &epoch_bytes));
     let admin_fr = Fr::from_bytes(admin_pubkey_commitment.clone());
+    let group_id_fr = group_id_to_fr(env, group_id);
 
-    let msm_points: Vec<G1Affine> = vec![env, ic1, ic2, ic3, ic4];
-    let msm_scalars: Vec<Fr> = vec![env, c_old_fr, epoch_fr, c_new_fr, admin_fr];
+    let msm_points: Vec<G1Affine> = vec![env, ic1, ic2, ic3, ic4, ic5];
+    let msm_scalars: Vec<Fr> = vec![env, c_old_fr, epoch_fr, c_new_fr, admin_fr, group_id_fr];
     let msm_result = bls.g1_msm(msm_points, msm_scalars);
     let vk_x = bls.g1_add(&ic0, &msm_result);
 

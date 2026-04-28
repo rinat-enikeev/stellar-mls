@@ -52,6 +52,7 @@ fn mock_create_vk(env: &Env) -> VerificationKeyData {
             valid_g1(env, b"c-ic1"),
             valid_g1(env, b"c-ic2"),
             valid_g1(env, b"c-ic3"),
+            valid_g1(env, b"c-ic4"),
         ],
     }
 }
@@ -69,6 +70,7 @@ fn mock_update_vk(env: &Env) -> VerificationKeyData {
             valid_g1(env, b"u-ic2"),
             valid_g1(env, b"u-ic3"),
             valid_g1(env, b"u-ic4"),
+            valid_g1(env, b"u-ic5"),
         ],
     }
 }
@@ -292,7 +294,7 @@ fn test_invalid_create_vk_length_rejected() {
             beta_g2: g2.clone(),
             gamma_g2: g2.clone(),
             delta_g2: g2,
-            ic: vec![env, g1.clone(), g1.clone(), g1], // 3 IC points (need 4)
+            ic: vec![env, g1.clone(), g1.clone(), g1.clone(), g1], // 4 IC points (need 5)
         }
     });
 }
@@ -308,7 +310,7 @@ fn test_invalid_update_vk_length_rejected() {
             beta_g2: g2.clone(),
             gamma_g2: g2.clone(),
             delta_g2: g2,
-            ic: vec![env, g1.clone(), g1.clone(), g1.clone(), g1], // 4 IC points (need 5)
+            ic: vec![env, g1.clone(), g1.clone(), g1.clone(), g1.clone(), g1], // 5 IC points (need 6)
         }
     });
 }

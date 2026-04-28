@@ -65,7 +65,7 @@
   },
 
   "vk_kind_enum": {
-    "description": "Three VK kinds. Membership (3-IC, standard) for verify_membership. Create (4-IC) for create_group — binds the initial commitment + admin_pubkey_commitment. Update (5-IC) for update_commitment — binds (c_old, epoch_old, c_new, admin_pubkey_commitment), where the last is contract-supplied from storage. The update circuit's witness includes the admin's BLS secret key; the circuit constrains `Poseidon(admin_pubkey) == admin_pubkey_commitment` and proves the new member tree differs from the old by ≤1 leaf.",
+    "description": "Three VK kinds. Membership (3-IC, standard) for verify_membership. Create (5-IC) for create_group — binds the initial commitment + admin_pubkey_commitment + group_id_fr. Update (6-IC) for update_commitment — binds (c_old, epoch_old, c_new, admin_pubkey_commitment, group_id_fr), where the last two are contract-supplied (admin_pubkey_commitment from `DataKey::AdminCommitment(group_id)`, group_id_fr derived deterministically from the group_id bytes). The update circuit's witness includes the admin's BLS secret key; the circuit constrains `Poseidon(admin_pubkey, group_id_fr) == admin_pubkey_commitment` and proves the new member tree differs from the old by ≤1 leaf. **Per-group binding via `group_id_fr` closes cross-group commitment linkability**: same admin in two groups produces uncorrelated on-chain `admin_pubkey_commitment` values to chain observers (privacy-first property — see design doc §3).",
     "vectors": [
       {
         "name": "Membership",
@@ -75,17 +75,17 @@
       },
       {
         "name": "Create",
-        "ic_count": 4,
-        "ic_layout": ["base", "commitment", "epoch", "admin_pubkey_commitment"],
+        "ic_count": 5,
+        "ic_layout": ["base", "commitment", "epoch", "admin_pubkey_commitment", "group_id_fr"],
         "used_by": ["create_group"],
-        "note": "TyrannyCreateCircuit. epoch is hardcoded to 0 at create. admin_pubkey_commitment is supplied as a wire-input AND bound into the proof; the contract checks the wire value matches what's stored after the proof verifies."
+        "note": "TyrannyCreateCircuit. epoch is hardcoded to 0 at create. `admin_pubkey_commitment` is supplied as a wire input AND bound into the proof; the contract checks the wire value matches the entrypoint param. `group_id_fr` is derived by the contract via `Fr::from_u256(U256::from_be_bytes(group_id))` — a deterministic function of the 32 group_id bytes — and bound as an additional public input. Circuit constraint: `Poseidon(admin_pubkey, group_id_fr) == admin_pubkey_commitment`."
       },
       {
         "name": "Update",
-        "ic_count": 5,
-        "ic_layout": ["base", "c_old", "epoch_old", "c_new", "admin_pubkey_commitment"],
+        "ic_count": 6,
+        "ic_layout": ["base", "c_old", "epoch_old", "c_new", "admin_pubkey_commitment", "group_id_fr"],
         "used_by": ["update_commitment"],
-        "note": "TyrannyUpdateCircuit. 3 wire-supplied scalars (c_old, epoch_old, c_new) + 1 contract-supplied (admin_pubkey_commitment, read from DataKey::AdminCommitment(group_id) — its own storage slot, NOT a CommitmentEntry field). Witness: admin BLS secret key + member trees before/after."
+        "note": "TyrannyUpdateCircuit. 3 wire-supplied scalars (c_old, epoch_old, c_new) + 2 contract-supplied (admin_pubkey_commitment from `DataKey::AdminCommitment(group_id)`, group_id_fr derived deterministically from the group_id bytes). Witness: admin BLS secret key + member trees before/after. Circuit constraint: `Poseidon(admin_pubkey, group_id_fr) == admin_pubkey_commitment` AND member-tree-delta-≤-1."
       }
     ],
     "ic_ordering_canonical": "MUST match the Tyranny circuit family's allocation order. Pinned per design §5.1."
@@ -109,7 +109,7 @@
   },
 
   "update_commitment_public_inputs_wire_format": {
-    "description": "Wire encoding of UpdatePublicInputs. 3 wire-supplied scalars; the verifier consumes a 4-public-input vector at proof verification (last input contract-supplied admin_pubkey_commitment).",
+    "description": "Wire encoding of UpdatePublicInputs. 3 wire-supplied scalars; the verifier consumes a 5-public-input vector at proof verification (4th input contract-supplied admin_pubkey_commitment from storage; 5th input contract-derived group_id_fr from the group_id bytes).",
     "wire_fields": [
       { "name": "c_old", "type": "BytesN<32>", "fr_canonical": true, "rule": "MUST equal current.commitment, else PublicInputsMismatch" },
       { "name": "epoch_old", "type": "u64", "rule": "MUST equal current.epoch, else PublicInputsMismatch" },
@@ -119,13 +119,15 @@
       "c_old (from wire)",
       "epoch_old (from wire)",
       "c_new (from wire)",
-      "admin_pubkey_commitment (from DataKey::AdminCommitment(group_id) in storage — its own per-group slot, not a CommitmentEntry field)"
+      "admin_pubkey_commitment (from DataKey::AdminCommitment(group_id) in storage — its own per-group slot, not a CommitmentEntry field)",
+      "group_id_fr (derived deterministically from the entrypoint's group_id parameter via `Fr::from_u256(U256::from_be_bytes(group_id))` — same group_id always yields the same Fr; different group_ids yield different Frs with overwhelming probability)"
     ],
-    "vk_kind": "Update (5 IC points: base + 4 public inputs)",
+    "vk_kind": "Update (6 IC points: base + 5 public inputs)",
     "canonical_encoding_rules": [
       "Every BytesN<32> commitment field MUST round-trip through Fr::from_bytes ∘ Fr::to_bytes; non-canonical encodings are rejected with InvalidCommitmentEncoding.",
       "u64 epoch_old uses Soroban's native big-endian XDR encoding.",
-      "Public-input ordering for Groth16 verification is fixed: positions 1-3 from wire, position 4 from storage."
+      "group_id is BytesN<32>; the contract reduces it mod r via U256::from_be_bytes + Fr::from_u256 to produce group_id_fr (so any 32-byte group_id is valid input — no canonical-Fr requirement on group_id itself).",
+      "Public-input ordering for Groth16 verification is fixed: positions 1-3 from wire, position 4 from storage, position 5 contract-derived from group_id."
     ]
   },
 
@@ -154,7 +156,7 @@
       { "name": "CreateVK(tier)", "value_type": "VerificationKeyData", "storage": "persistent", "note": "Tyranny Create-circuit VK for tier 0/1/2; 4 IC points" },
       { "name": "UpdateVK(tier)", "value_type": "VerificationKeyData", "storage": "persistent", "note": "Tyranny Update-circuit VK for tier 0/1/2; 5 IC points" },
       { "name": "Group(group_id)", "value_type": "CommitmentEntry", "storage": "persistent", "note": "current group state" },
-      { "name": "AdminCommitment(group_id)", "value_type": "BytesN<32>", "storage": "persistent", "note": "Poseidon hash of the admin's BLS pubkey; pinned at create_group, NEVER written by any other entrypoint. The Update circuit binds this as its 4th public input (read by update_commitment from this slot, NOT carried on the wire). Stored in its own per-group slot rather than as a CommitmentEntry field to avoid duplicating an immutable value across History snapshots." },
+      { "name": "AdminCommitment(group_id)", "value_type": "BytesN<32>", "storage": "persistent", "note": "Poseidon(admin_pubkey, group_id_fr); pinned at create_group, NEVER written by any other entrypoint. Per-group-unique by construction — same admin in two different groups produces TWO DIFFERENT on-chain commitments because group_id_fr differs. Closes cross-group linkability for the same admin: an observer correlating two AdminCommitment values across groups can't conclude they share an admin without knowing admin_pubkey. Read by update_commitment + bound as the 4th public input to the Update VK; group_id_fr (5th input) is derived deterministically from the group_id bytes by the contract." },
       { "name": "History(group_id)", "value_type": "Vec<CommitmentEntry>", "storage": "persistent", "note": "rolling-window history; capped at HISTORY_WINDOW=64; pruned FIFO" },
       { "name": "UsedProof(proof_hash)", "value_type": "()", "storage": "persistent (TTL ~30 days via LEDGER_BUMP)", "note": "global-nullifier scope" },
       { "name": "GroupCount(tier)", "value_type": "u32", "storage": "instance", "note": "active group count per tier; checked against MAX_GROUPS_PER_TIER (10000) in create_group. Monotonic increment-only since `deactivate_group` is not present (postmortem #153) — no decrement path; one-way ratchet. Operationally fine at testnet scale." }

@@ -4,7 +4,7 @@ Status: v0 design doc · Targets per-type extraction parallel to `sep-democracy`
 
 ## 1. What this is, in one paragraph
 
-A Soroban contract for chat groups governed by a **single admin**. The admin's BLS pubkey is committed at creation time (Poseidon-hashed) and pinned for the group's lifetime. Only proofs that demonstrate knowledge of the admin's secret key can advance the group's membership commitment. Members can verify their own membership read-only; non-admins cannot mutate state. The admin's on-chain address is **not** exposed by `update_commitment` — the cryptographic binding hides their identity from chain observers, the same way Democracy's quorum hides individual voter identity.
+A Soroban contract for chat groups governed by a **single admin**. The admin's BLS pubkey is committed at creation time (`Poseidon(admin_pubkey, group_id_fr)`) and pinned for the group's lifetime. Only proofs that demonstrate knowledge of the admin's secret key can advance the group's membership commitment. Members can verify their own membership read-only; non-admins cannot mutate state. The admin's on-chain address is **not** exposed by `update_commitment` — the cryptographic binding hides their identity from chain observers, the same way Democracy's quorum hides individual voter identity. **Per-group binding via `group_id_fr`** ensures that the same admin in two different groups produces uncorrelated on-chain commitment values: an observer cannot link "this group's admin == that group's admin" without breaking Poseidon.
 
 ## 2. Why a separate contract (vs. Oligarchy K=1)
 
@@ -20,6 +20,23 @@ Net result: a smaller circuit family, smaller VK shapes, smaller storage entry, 
 Ships **without `deactivate_group`** from the start (per [`docs/postmortem-deactivate-group-frontrun.md`](postmortem-deactivate-group-frontrun.md)). Any Tyranny group can be wound down by the admin via `update_commitment` with an agreed sentinel `c_new` (clients interpret as "wound down"); the group's on-chain entry then ages out via TTL when the admin stops issuing updates.
 
 There is no `update_admin` entrypoint in v0 — the admin is fixed at creation. If the admin loses their BLS secret key, the group is unupdatable; the entry ages out. This is the same operational shape as Oligarchy's `salt_occ` loss case, but applied to a smaller set of keys (one, not many). Documented as an acknowledged operational limitation; admin rotation can land in v1 if needed.
+
+### 3.1 Privacy properties (privacy-first messenger context)
+
+| What's hidden cryptographically | How |
+|---|---|
+| Admin's BLS pubkey | Only `Poseidon(admin_pubkey, group_id_fr)` lands on-chain. The pubkey itself is the witness; chain observers see only the 32-byte hash. |
+| Admin's BLS secret key | Witness, never on-chain. The Update circuit's "knowledge of `admin_pubkey`'s secret" is enforced by the circuit, not by any on-chain artifact. |
+| Member identities | Standard Poseidon-committed member tree (parallel to Democracy / Oligarchy). |
+| **Cross-group admin linkability** | **Closed by per-group binding.** `admin_pubkey_commitment` for the same admin in two groups differs because `group_id_fr` differs (it's derived deterministically from the group_id bytes by the contract). Observer can't correlate two AdminCommitment values across groups without knowing `admin_pubkey`. |
+
+| Acknowledged residuals (NOT closed) | Why / Mitigation |
+|---|---|
+| Update cadence | Inherent to public ledger. Each `update_commitment` advances epoch with a fresh timestamp; an observer sees per-group activity rhythm regardless of cryptography. Same residual as the other per-type contracts. |
+| Stellar tx-submitter address | `update_commitment` has no `caller.require_auth()` (the proof IS the auth), and the proof itself is zero-knowledge. **But** Stellar requires *some* account to sign + pay fees for the transaction. If the admin submits from their own wallet, their Stellar address appears in the tx envelope. **Mitigation: clients MUST route through `SEPRelayerTransport`** (sep-XXXX §4.1 fee decoupling) — the relayer signs and submits, the relayer's address appears, not the admin's. This is a client-integration responsibility, not a contract-level guarantee. The same applies to `create_group` (which DOES `caller.require_auth()` — admin's signing wallet leaks unless the relayer creates on their behalf). |
+| Group existence + tier | The contract address itself is observable. Anyone querying the contract can enumerate created groups via the `Group(group_id)` keys. |
+
+The privacy claim of v0 is: **same admin operating multiple Tyranny groups produces uncorrelated on-chain artifacts** — assuming the admin uses a relayer for transaction submission (closes the address-leak residual) and doesn't reveal the admin pubkey through other channels. The cryptographic core of that claim lives in the per-group binding documented in §5.1.
 
 ## 4. What the contract is NOT
 
@@ -41,8 +58,8 @@ Eight user-callable entrypoints + the constructor. Same surface as `sep-anarchy`
 | `update_vk(env, kind: VkKind, tier: u32, new_vk)` | admin | VK rotation; `kind ∈ {Membership, Create, Update}`. |
 | `set_restricted_mode(env, restricted)` | admin | Toggles whether non-admin callers may invoke `create_group`. |
 | `bump_group_ttl(env, group_id)` | none | Permissionless TTL bump. |
-| `create_group(env, caller, group_id, commitment, tier, admin_pubkey_commitment, proof, public_inputs)` | `caller.require_auth()` + restricted-mode gate | Verifies a Create-circuit proof against `(commitment, epoch=0, admin_pubkey_commitment)`. Persists `Group(group_id)` (CommitmentEntry) + `AdminCommitment(group_id)`. |
-| `update_commitment(env, group_id, proof, public_inputs)` | none (proof IS auth) | Verifies an Update-circuit proof against `(c_old, epoch_old, c_new, admin_pubkey_commitment)`, where `admin_pubkey_commitment` is contract-supplied from `AdminCommitment(group_id)`. |
+| `create_group(env, caller, group_id, commitment, tier, admin_pubkey_commitment, proof, public_inputs)` | `caller.require_auth()` + restricted-mode gate | Verifies a Create-circuit proof against `(commitment, epoch=0, admin_pubkey_commitment, group_id_fr)`. Persists `Group(group_id)` (CommitmentEntry) + `AdminCommitment(group_id)`. |
+| `update_commitment(env, group_id, proof, public_inputs)` | none (proof IS auth) | Verifies an Update-circuit proof against `(c_old, epoch_old, c_new, admin_pubkey_commitment, group_id_fr)`, where `admin_pubkey_commitment` is contract-supplied from `AdminCommitment(group_id)` and `group_id_fr` is contract-derived from the `group_id` bytes. |
 | `verify_membership(env, group_id, proof, public_inputs) → bool` | none | Read-only. Verifies a Membership-circuit proof. |
 | `get_commitment(env, group_id) → CommitmentEntry` | none | Read-only state lookup. |
 | `get_history(env, group_id, max_entries) → Vec<CommitmentEntry>` | none | Read-only history (rolling window). |
@@ -52,10 +69,18 @@ Eight user-callable entrypoints + the constructor. Same surface as `sep-anarchy`
 | VK | IC | Public inputs | Used at |
 |---|---|---|---|
 | Membership | 3 | `(commitment, epoch)` | `verify_membership` |
-| Create | 4 | `(commitment, epoch=0, admin_pubkey_commitment)` | `create_group` |
-| Update | 5 | `(c_old, epoch_old, c_new, admin_pubkey_commitment)` — `admin_pubkey_commitment` contract-supplied | `update_commitment` |
+| Create | 5 | `(commitment, epoch=0, admin_pubkey_commitment, group_id_fr)` | `create_group` |
+| Update | 6 | `(c_old, epoch_old, c_new, admin_pubkey_commitment, group_id_fr)` — `admin_pubkey_commitment` contract-supplied from storage; `group_id_fr` contract-derived from `group_id` bytes | `update_commitment` |
 
-The Update circuit's witness includes the admin's BLS secret key; the circuit constrains `Poseidon(admin_pubkey) == admin_pubkey_commitment` and proves the prover knows the secret key behind that pubkey. The same circuit constrains the new member tree to differ from the old by **≤1 leaf** (single-leaf-delta).
+The Update circuit's witness includes the admin's BLS secret key; the circuit constrains:
+
+```
+Poseidon(admin_pubkey, group_id_fr) == admin_pubkey_commitment
+```
+
+and proves the prover knows the secret key behind that pubkey. **`group_id_fr` is the per-group salt that closes cross-group commitment linkability** (see §3.1): `group_id_fr = Fr::from_u256(U256::from_be_bytes(group_id))`, derived deterministically by the contract from the 32 group_id bytes. Same group_id always yields the same Fr; different group_ids yield different Frs with overwhelming probability.
+
+The same circuit constrains the new member tree to differ from the old by **≤1 leaf** (single-leaf-delta).
 
 Why ≤1: parity with the rest of the per-type family (Anarchy, Democracy, Oligarchy all enforce single-leaf-delta in their update circuits). Single-leaf-delta keeps the Update circuit small (one Merkle path verification, not N), keeps audit surface tractable, and matches the natural "one user joined / one user left / one key rotated" cadence of admin-driven membership changes. **Batching is a client-level concern**: the admin issues N sequential `update_commitment` calls for an N-leaf delta, advancing epoch by exactly 1 each time. Each on-chain Groth16 verify costs ~$0.05 at testnet rates, so a 50-member purge is ~$2.50 of gas — within tolerance for an admin-driven workflow. If a future product requires atomic batch-updates, that's a v1 circuit change (e.g., a `TyrannyBatchUpdateCircuit` with bounded `k`), not a v0 contract surface concern.
 
@@ -107,7 +132,9 @@ pub enum DataKey {
 - **Avoids history duplication.** The admin commitment is invariant for a group's lifetime. Storing it in `CommitmentEntry` would mean every entry pushed to `History(group_id)` carries the same 32-byte value — at `HISTORY_WINDOW = 64` snapshots, that's ~2 KB of duplication per group, ~20 MB across the `MAX_GROUPS_PER_TIER × tiers = 30,000`-group ceiling. Not catastrophic but pointless.
 - **Cleaner separation of concerns.** `CommitmentEntry` carries everything that varies per epoch (`commitment`, `epoch`, `timestamp`); `AdminCommitment` carries the fixed-at-create anchor. Each storage key has a single, auditable invariant.
 
-`update_commitment` reads both `Group(group_id)` (for `c_old` / `epoch_old`) and `AdminCommitment(group_id)` (for the 4th public input). One extra ledger access per update; negligible vs. the Groth16 verify cost.
+`update_commitment` reads both `Group(group_id)` (for `c_old` / `epoch_old`) and `AdminCommitment(group_id)` (for the 4th public input). The 5th public input (`group_id_fr`) is computed at runtime from the `group_id` parameter — no extra storage. One extra ledger access per update vs. a no-binding shape; negligible vs. the Groth16 verify cost.
+
+**The stored value at `AdminCommitment(group_id)` is per-group-unique by construction**: it's `Poseidon(admin_pubkey, group_id_fr)` for whatever `group_id` the slot is keyed under. Same admin operating two Tyranny groups → two different `group_id` → two different `group_id_fr` → two uncorrelated `AdminCommitment` values on-chain. An observer reading `AdminCommitment(A)` and `AdminCommitment(B)` cannot correlate "same admin behind both" without knowing `admin_pubkey` (which is the witness, never on-chain). This is the privacy property §3.1 claims.
 
 Fields removed from sibling templates:
 
@@ -158,7 +185,7 @@ proof: Groth16Proof
 public_inputs: PublicInputsCreate  // { commitment, epoch=0, admin_pubkey_commitment }
 ```
 
-The Create-circuit verifier opens 3 public inputs: positions 1-3 are `commitment`, `epoch=0`, `admin_pubkey_commitment` (in that order, IC[1..=3]; IC[0] base).
+The Create-circuit verifier opens 4 public inputs: positions 1-4 are `commitment`, `epoch=0`, `admin_pubkey_commitment`, `group_id_fr` (in that order, IC[1..=4]; IC[0] base). 5 IC points total. `group_id_fr` is contract-derived from the entrypoint's `group_id` parameter (`Fr::from_u256(U256::from_be_bytes(group_id))`) — not on the wire.
 
 ### `update_commitment`
 
@@ -168,7 +195,7 @@ proof: Groth16Proof
 public_inputs: UpdatePublicInputs  // { c_old, epoch_old, c_new }  // 3 wire scalars
 ```
 
-The Update-circuit verifier opens 4 public inputs: positions 1-3 are `c_old`, `epoch_old`, `c_new` (from wire); position 4 is `admin_pubkey_commitment` (read from `AdminCommitment(group_id)` storage). 5 IC points total (base + 4 inputs).
+The Update-circuit verifier opens 5 public inputs: positions 1-3 are `c_old`, `epoch_old`, `c_new` (from wire); position 4 is `admin_pubkey_commitment` (read from `AdminCommitment(group_id)` storage); position 5 is `group_id_fr` (contract-derived from `group_id` bytes). 6 IC points total (base + 5 inputs).
 
 The contract's epoch invariant: `current.epoch == public_inputs.epoch_old`, post-update `current.epoch = epoch_old + 1` (overflow → `InvalidEpoch`).
 
@@ -186,7 +213,7 @@ public_inputs: MembershipPublicInputs  // { commitment, epoch }
 
 | Phase | Status |
 |---|---|
-| **Phase A (circuits)** — `TyrannyCreateCircuit` (3 public inputs / 4 IC, witness includes initial member tree + admin BLS pubkey + secret key — proves `Poseidon(pubkey) == admin_pubkey_commitment`) and `TyrannyUpdateCircuit` (4 public inputs / 5 IC, witness includes admin secret key + member trees before/after — proves admin secret key matches the committed pubkey hash and new tree differs from old by ≤1 leaf). Membership is the standard 3-IC circuit (2 public inputs / 3 IC). **Phase A blockers exist.** No prior keyset has these circuits. PR-Y ships with mock-VK fixture wiring; the deploy script accepts `FIXTURE_DIR` of dev VKs. | Pending |
+| **Phase A (circuits)** — `TyrannyCreateCircuit` (4 public inputs / 5 IC, witness includes initial member tree + admin BLS pubkey + secret key — proves `Poseidon(admin_pubkey, group_id_fr) == admin_pubkey_commitment`) and `TyrannyUpdateCircuit` (5 public inputs / 6 IC, witness includes admin secret key + member trees before/after — proves the same per-group binding AND new tree differs from old by ≤1 leaf). Membership is the standard 3-IC circuit (2 public inputs / 3 IC). **`group_id_fr` is the per-group salt** that closes cross-group admin-linkability (see §3.1). **Phase A blockers exist.** No prior keyset has these circuits. PR-Y ships with mock-VK fixture wiring; the deploy script accepts `FIXTURE_DIR` of dev VKs. | Pending |
 | **Phase B (FFI)** — `generateTyrannyCreateProof`, `generateTyrannyUpdateProof` proof-generation paths in the Rust core. Bounded; ≤ 2 days once Phase A circuits are defined. | Pending |
 | **Phase C (contract)** — this design + PR-Y. | Owned by PR-Y |
 | **Phase D (clients)** — `swift-mls` SDK, iOS, Android. Out of scope for design + contract PRs. | Pending |

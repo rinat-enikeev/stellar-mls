@@ -673,6 +673,14 @@ impl SepTyrannyContract {
             .has(&DataKey::Group(group_id.clone()))
     }
 
+    // The three load_*_vk helpers each re-validate `tier > 2` even
+    // when their callers (create_group / update_commitment / update_vk
+    // / verify_membership) already validated it. The redundancy is
+    // intentional defense-in-depth: a future entrypoint or refactor
+    // that calls these helpers without an upstream tier check still
+    // surfaces `InvalidTier` rather than reading a wrong / missing
+    // VK slot. Same pattern as the sibling per-type contracts.
+
     fn load_membership_vk(env: &Env, tier: u32) -> Result<VerificationKeyData, Error> {
         if tier > 2 {
             return Err(Error::InvalidTier);
@@ -746,6 +754,14 @@ impl SepTyrannyContract {
         preimage.append(&Bytes::from_slice(env, proof.c.to_array().as_slice()));
         env.crypto().sha256(&preimage).into()
     }
+
+    // `check_proof_replay` and `record_proof` each recompute
+    // `proof_hash` rather than threading a precomputed hash through.
+    // Self-contained helpers are easier to audit (each does exactly
+    // one storage interaction; reordering or skipping one in a
+    // future change is locally obvious). The cost is one extra
+    // SHA-256 over 384 bytes per state-changing call — negligible
+    // vs. the Groth16 verify cost.
 
     fn check_proof_replay(env: &Env, proof: &Groth16Proof) -> Result<(), Error> {
         let hash = Self::proof_hash(env, proof);

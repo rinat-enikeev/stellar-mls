@@ -160,7 +160,7 @@ pub struct MembershipPublicInputs {
     pub epoch: u64,
 }
 
-/// Public inputs supplied to `create_group`. 3 wire fields → 4 IC.
+/// Public inputs supplied to `create_group`. 3 wire fields → 5 IC including contract-derived group_id_fr.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CreatePublicInputs {
@@ -852,10 +852,10 @@ fn group_id_to_fr(env: &Env, group_id: &BytesN<32>) -> Fr {
 /// helper level for audit:
 ///
 ///   * `verify_membership_proof` — 3 IC, public inputs `(commitment, epoch)`
-///   * `verify_create_proof`     — 4 IC, public inputs `(commitment, epoch,
-///                                  admin_pubkey_commitment)`
-///   * `verify_update_proof`     — 5 IC, public inputs `(c_old, epoch_old,
-///                                  c_new, admin_pubkey_commitment)`
+///   * `verify_create_proof`     — 5 IC, public inputs `(commitment, epoch,
+///                                  admin_pubkey_commitment, group_id_fr)`
+///   * `verify_update_proof`     — 6 IC, public inputs `(c_old, epoch_old,
+///                                  c_new, admin_pubkey_commitment, group_id_fr)`
 
 /// Verify a 3-IC-point Membership proof. Public inputs:
 ///   IC[1] · commitment + IC[2] · epoch (+ IC[0] base).

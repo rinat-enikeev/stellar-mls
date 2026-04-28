@@ -307,18 +307,6 @@ public struct SEPVerifyMembershipRequest: Codable, Equatable, Sendable {
     }
 }
 
-public struct SEPDeactivateGroupRequest: Codable, Equatable, Sendable {
-    public let groupID: Data
-    public let proof: Data
-    public let publicInputs: SEPPublicInputs
-
-    public init(groupID: Data, proof: Data, publicInputs: SEPPublicInputs) {
-        self.groupID = groupID
-        self.proof = proof
-        self.publicInputs = publicInputs
-    }
-}
-
 public struct SEPGetStateRequest: Codable, Equatable, Sendable {
     public let groupID: Data
 

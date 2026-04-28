@@ -98,10 +98,6 @@ public struct SEPContractClient {
         try await invoke("verify_membership", payload: request, responseType: SEPVerifyMembershipResponse.self)
     }
 
-    public func deactivateGroup(_ request: SEPDeactivateGroupRequest) async throws -> SEPSubmissionResponse {
-        try await invoke("deactivate_group", payload: request, responseType: SEPSubmissionResponse.self)
-    }
-
     public func getState(groupID: Data) async throws -> SEPCommitmentEntry {
         try await invoke(
             "get_state",

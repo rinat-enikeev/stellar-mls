@@ -35,8 +35,9 @@ set -euo pipefail
 #     Anarchy-shaped proofs that don't match the 7-IC-point Democracy
 #     update VK. A new generator (or a flag on the existing one) is
 #     needed before this script can exercise the full
-#     create_group → update_commitment → verify_membership → deactivate
-#     cycle. Today the script smoke-tests by deploying only.
+#     create_group → update_commitment → verify_membership cycle.
+#     Today the script smoke-tests by deploying only.
+#     (deactivate_group dropped — postmortem #153.)
 #   * VK files at $FIXTURE_DIR. Until Phase A produces the v2 VK
 #     bytes, this script accepts FIXTURE_DIR as an env var pointing
 #     at pre-generated v2 dev VKs (see design §4.6 dev-VK install
@@ -217,7 +218,7 @@ echo "Contract ID: $CONTRACT_ID"
 echo "Stellar config dir: $CONFIG_DIR"
 echo "Temporary artifacts dir: $WORK_DIR"
 echo
-echo "Next: smoke-test create_group → update_commitment → verify_membership → deactivate_group"
+echo "Next: smoke-test create_group → update_commitment → verify_membership"
 echo "      requires Phase A's prove_democracy_v2 + a v2 fixture generator (design §6 Phase A)."
 echo "      Bake those, then drop in the post-deploy smoke-test block from"
 echo "      scripts/deploy_sep_xxxx_testnet.sh as a follow-up."

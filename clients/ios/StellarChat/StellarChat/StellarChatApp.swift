@@ -807,32 +807,6 @@ final class AppState {
         )
     }
 
-    // MARK: - Group Deactivation
-
-    /// M-18: Deactivation requires explicit confirmation since it is irreversible on-chain.
-    /// The `confirmed` parameter must be `true` — callers should show a confirmation dialog first.
-    func deactivateGroupOnChain(_ group: ChatGroup, confirmed: Bool = false) async throws {
-        guard confirmed else {
-            throw ChatError.verificationFailed("Deactivation requires explicit confirmation")
-        }
-        guard let service = onChainService else {
-            throw ChatError.contractNotConfigured
-        }
-
-        let response = try await service.deactivateGroup(
-            groupIDData: group.groupIDData,
-            members: group.members,
-            blsSecretKey: keyManager.blsSecretKey,
-            epoch: group.epoch,
-            salt: group.salt,
-            tier: group.tier
-        )
-
-        if !response.accepted {
-            throw ChatError.onChainPublishFailed(response.message ?? "Deactivation rejected")
-        }
-    }
-
     // MARK: - Blockchain-First Epoch Transition
 
     /// The single entry point for all epoch-advancing operations on published groups.

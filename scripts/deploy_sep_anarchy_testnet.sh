@@ -195,10 +195,10 @@ echo "Stellar config dir: $CONFIG_DIR"
 echo "Temporary artifacts dir: $WORK_DIR"
 echo
 # TODO(phase-d): post-deploy smoke (create_group → update_commitment →
-# verify_membership → deactivate_group); not blocked on Phase A circuit
-# work since Anarchy reuses the existing keyset-v2 circuits and v1
-# proof-generation paths in src/prover. Adding the smoke-test block
-# is bounded by Phase D client routing.
+# verify_membership); not blocked on Phase A circuit work since Anarchy
+# reuses the existing keyset-v2 circuits and v1 proof-generation paths
+# in src/prover. Adding the smoke-test block is bounded by Phase D
+# client routing. (deactivate_group dropped — postmortem #153.)
 
 if [ "$KEEP_ARTIFACTS" = "1" ]; then
     trap - EXIT INT TERM

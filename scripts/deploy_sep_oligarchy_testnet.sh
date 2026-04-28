@@ -239,8 +239,8 @@ echo "Contract ID: $CONTRACT_ID"
 echo "Stellar config dir: $CONFIG_DIR"
 echo "Temporary artifacts dir: $WORK_DIR"
 echo
-# TODO(phase-A4): post-deploy smoke (create_oligarchy_group → update_commitment → verify_membership → deactivate_group); blocked on prove_oligarchy_v2 + fixture generator (design §6 Phase A4)
-echo "Next: smoke-test create_oligarchy_group → update_commitment → verify_membership → deactivate_group"
+# TODO(phase-A4): post-deploy smoke (create_oligarchy_group → update_commitment → verify_membership); blocked on prove_oligarchy_v2 + fixture generator (design §6 Phase A4). (deactivate_group dropped — postmortem #153.)
+echo "Next: smoke-test create_oligarchy_group → update_commitment → verify_membership"
 echo "      requires Phase A's prove_oligarchy_v2 + a v0.1.4 fixture generator (design §6 Phase A)."
 echo "      Bake those, then drop in the post-deploy smoke-test block from"
 echo "      scripts/deploy_sep_xxxx_testnet.sh as a follow-up."

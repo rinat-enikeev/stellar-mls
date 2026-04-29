@@ -1,47 +1,47 @@
-# fflonk + EF KZG Migration — Implementation Plan
+# PLONK + EF KZG Migration — Implementation Plan
 
-**Date:** 2026-04-29
-**Based on:** [`fflonk-migration-design.md`](fflonk-migration-design.md)
+**Date:** 2026-04-29 · revised 2026-04-30
+**Based on:** [`fflonk-migration-design.md`](fflonk-migration-design.md) v0.2
 **Motivated by:** [`postmortem-ceremony-data-loss.md`](postmortem-ceremony-data-loss.md)
-**Status:** Draft (v1 — turns the design into actionable phases)
-**Version:** 1.0
-**Target release:** keyset-fflonk-v1 / per-type contracts v2
+**Status:** Draft (v2 — locked in spike outcome; pre-implementation)
+**Version:** 2.0 — supersedes v1.0 after the v0.2 design-doc revision
+**Supersedes:** v1.0 (same file, pre-spike)
+**Target release:** keyset-plonk-v1 / per-type contracts v2
 
 ---
 
 ## Overview
 
-This document turns the fflonk migration design into a concrete, phase-by-phase
-execution plan. Every phase enumerates the files touched, the shape of the
-change, the tests that must pass, the verification step that proves the phase
-is done, and the prerequisite phases each step depends on.
+This document turns the [PLONK + EF KZG migration design](fflonk-migration-design.md) v0.2 into a concrete, phase-by-phase execution plan. Every phase enumerates the files touched, the shape of the change, the tests that must pass, the verification step that proves the phase is done, and the prerequisite phases each step depends on.
 
-The migration replaces the project's Groth16 + per-circuit MPC ceremony with
-**fflonk on BLS12-381 consuming Ethereum Foundation's 2023 KZG SRS**, and
-decommissions the entire ceremony operational surface
-(`ceremony-coordinator/`, `tools/ceremony/`, `crates/ceremony-wasm/`,
-`deploy/ceremony/`, three `scripts/install-*-vks-*.sh`, the `phase2_*` schema
-in the coordinator DB) along with the legacy monolithic `sep-xxxx` contract.
-The five per-type governance contracts (`sep-anarchy`, `sep-democracy`,
-`sep-oligarchy`, `sep-oneonone`, `sep-tyranny`) gain a new fflonk verifier
-path; their VKs become compiled-in `static` constants instead of per-tier
-storage entries.
+The migration replaces the project's Groth16 + per-circuit MPC ceremony with **TurboPlonk on BLS12-381 (via [`jf-plonk`](https://github.com/EspressoSystems/jellyfish)) consuming Ethereum Foundation's 2023 KZG SRS**, and decommissions the entire ceremony operational surface (`ceremony-coordinator/`, `tools/ceremony/`, `crates/ceremony-wasm/`, `deploy/ceremony/`, three `scripts/install-*-vks-*.sh`, the `phase2_*` schema in the coordinator DB) along with the legacy monolithic `sep-xxxx` contract. The five per-type governance contracts (`sep-anarchy`, `sep-democracy`, `sep-oligarchy`, `sep-oneonone`, `sep-tyranny`) gain a new PLONK verifier path; their VKs become compiled-in `static` constants instead of per-tier storage entries.
 
-The plan covers **six phases (A–F) across 38 numbered tasks** spanning the
-Rust core, five Soroban contracts, the ceremony decommission, two mobile
-client bundles, the FFI/JNI surface, and rollout coordination.
+The plan covers **six phases (A–F) across 38 numbered tasks** spanning the Rust core, five Soroban contracts, the ceremony decommission, two mobile client bundles, the FFI/JNI surface, and rollout coordination.
+
+### Summary of v1 → v2 changes
+
+The original v1.0 plan was written before the proving-stack spike; v2.0 corrects four assumptions and one omission:
+
+1. **Crate name & source.** v1 referenced `jellyfish = "0.4"` from crates.io; that crate doesn't exist (the published `jellyfish` is an unrelated phonetic-matching library). v2 uses `jf-plonk`/`jf-pcs`/`jf-relation` from the EspressoSystems/jellyfish git workspace, pinned to a release tag.
+2. **No fflonk aggregation work needed.** v1 assumed we'd implement KZG batched-opening aggregation ourselves to get the 2-pair verify shape. The spike confirmed jf-plonk's TurboPlonk verifier already does this (`plonk/src/proof_system/verifier.rs:201-256` performs a single `multi_pairing` on 2 G1×G2 pairs after Fiat-Shamir-combining the openings). Zero LoC of aggregation code on us.
+3. **SRS size.** v1 said ≈206 KB; correct figure is ≈400 KB (n=4096 G1 + 65 G2, uncompressed) extracted from a 253 MB EF transcript. The extraction is a build-time step.
+4. **One piece of crypto-adjacent code we own:** ~200-300 LoC SRS deserialiser. `jf-pcs::UnivariateUniversalParams<Bls12_381>` has no public from-bytes constructor, so we write a small parser to produce the struct shape jf-pcs accepts.
+5. **Single-crate repo, not a workspace.** v1 referred to `[workspace dependencies]`; the root `Cargo.toml` IS the package manifest. Soroban contracts each have their own crate roots and get separate dep edits in Phase C.
+
+The strategic choice (universal SRS via EF KZG, no project-run ceremony, deterministic per-circuit preprocessing, VK-as-bytecode) and the verify-cost target (1.3-1.7× Groth16) are unchanged. The 6-phase / 38-task structure is unchanged. Sub-PR partitioning preserved with a feature-flag rename: `feature = "fflonk"` → `feature = "plonk"`.
 
 ### Design inputs
 
 | Input | Source |
 |---|---|
-| Proving-system selection (fflonk on BLS12-381) | `fflonk-migration-design.md` §4.1 |
-| SRS source (EF 2023 KZG) | `fflonk-migration-design.md` §4.2 |
-| Architecture (no coordinator, VK-as-bytecode, deterministic preprocessing) | `fflonk-migration-design.md` §4.3, §4.4 |
-| Mobile bundle reshape | `fflonk-migration-design.md` §4.5 |
-| Phase boundaries A–F | `fflonk-migration-design.md` §6 |
-| Risk register | `fflonk-migration-design.md` §9 |
-| Open questions | `fflonk-migration-design.md` §10 |
+| Proving-system selection (TurboPlonk via jf-plonk on BLS12-381) | `fflonk-migration-design.md` v0.2 §4.1 |
+| SRS source (EF 2023 KZG, n=4096 G1 + 65 G2 set) | `fflonk-migration-design.md` v0.2 §4.2 |
+| Architecture (no coordinator, VK-as-bytecode, deterministic preprocessing) | `fflonk-migration-design.md` v0.2 §4.3, §4.4 |
+| Mobile bundle reshape | `fflonk-migration-design.md` v0.2 §4.5 |
+| Phase boundaries A–F | `fflonk-migration-design.md` v0.2 §6 |
+| Risk register | `fflonk-migration-design.md` v0.2 §9 |
+| Open questions | `fflonk-migration-design.md` v0.2 §10 |
+| Spike outcome (Q1 resolution) | `fflonk-migration-design.md` v0.2 preamble |
 | Postmortem reference for Phase A | `postmortem-ceremony-data-loss.md` |
 
 ### Out of scope
@@ -49,7 +49,7 @@ client bundles, the FFI/JNI surface, and rollout coordination.
 Per the design doc, the following are **deliberately deferred** and are *not*
 implementation targets in this plan:
 
-- Mainnet deployment of the fflonk-verifier contracts. Mainnet is downstream of
+- Mainnet deployment of the PLONK-verifier contracts. Mainnet is downstream of
   [`mainnet-deployment.md`](mainnet-deployment.md) and is its own gate.
 - Migrating existing testnet groups created against `sep-xxxx`. They continue
   to verify Groth16 proofs on the legacy contract until Phase F decommissions it.
@@ -75,24 +75,25 @@ implementation targets in this plan:
 These must hold at every implementation layer. Any departure is a bug, not a
 choice.
 
-- **One global universal SRS.** A single 4096-G1 + 65-G2 byte sequence (≈206
-  KB) is the source of truth for every circuit. Its SHA-256 hash is hardcoded
-  in `src/prover/srs.rs` and checked at build time. Two SRS bundles in the
-  workspace ⇒ build break.
+- **One global universal SRS.** A single 4096-G1 + 65-G2 byte sequence (≈400 KB
+  uncompressed; arkworks-encoded) is the source of truth for every circuit.
+  Its SHA-256 hash is pinned in `src/prover/srs/expected-hash.in` and asserted
+  at build time. Two SRS bundles in the repo ⇒ build break.
 - **EF KZG provenance, not self-run ceremony.** The embedded SRS bytes
-  reproduce — bit-for-bit — the EF 2023 KZG ceremony's published transcript.
-  Any other SRS source is a divergence from this plan and requires its own
-  design doc.
+  reproduce — bit-for-bit — the n=4096 PoT subset of the EF 2023 KZG
+  ceremony's published transcript. Any other SRS source is a divergence
+  from this plan and requires its own design doc.
 - **Verifier keys are static, not stored.** Each per-type contract embeds its
-  VK(s) as compile-time `&[u8]` constants (or
-  `lazy_static!`-decoded equivalents). `DataKey::VK(_)` and `DataKey::UpdateVK(_)`
-  cease to exist. There is no `update_vk` admin entrypoint.
+  VK(s) as compile-time `&[u8]` constants (or `lazy_static!`-decoded
+  equivalents). `DataKey::VK(_)` and `DataKey::UpdateVK(_)` cease to exist.
+  There is no `update_vk` admin entrypoint.
 - **Proof wire format is versioned.** `PlonkProof` carries a 1-byte version
-  prefix (`0x01` for fflonk-v1). Future proving-system swaps bump the prefix.
+  prefix (`0x01` for `plonk-v1`, the initial TurboPlonk shape). Future
+  proving-system swaps bump the prefix.
 - **No per-circuit setup.** `src/prover` does not call any "circuit-specific
-  setup" function. Per-circuit preprocessing (deriving the prover key + VK
-  from `(circuit, srs)`) is a deterministic build-time computation, run once
-  per circuit per workspace build.
+  setup" function. Per-circuit preprocessing
+  (`jf_plonk::PlonkKzgSnark::preprocess(&srs, &circuit)` → `(ProvingKey, VerifyingKey)`)
+  is a deterministic computation, run once per circuit per build.
 - **Public inputs unchanged.** The migration preserves each circuit's
   `(public_inputs)` tuple bit-for-bit — Membership: `(C, epoch)`; Update:
   `(C_old, epoch_old, C_new)`; Democracy: per the existing design doc.
@@ -106,15 +107,17 @@ choice.
 
 ### Sub-PR partitioning
 
-The plan is structured around 12 sub-PRs (`fflonk-pr-N`):
+The plan is structured around 12 sub-PRs (`plonk-pr-N`). Branches use the
+`plonk/<phase-letter>-<task-id>` naming pattern (e.g. `plonk/b1-cargo-deps`,
+`plonk/c2a-sep-anarchy-verifier`).
 
 | PR | Phase(s) | Mergeable independently? |
 |---|---|---|
 | 1 | A.1, A.2 | Yes — operational, no code |
-| 2 | B.1, B.2 | Yes — workspace deps + SRS embed; behind feature flag |
-| 3 | B.3 (membership), B.4 (membership-only prover) | Yes — under `feature = "fflonk"` |
+| 2 | B.1, B.2 | Yes — Cargo deps + SRS embed; behind `feature = "plonk"` |
+| 3 | B.3 (membership), B.4 (membership-only prover) | Yes — under `feature = "plonk"` |
 | 4 | B.3 (update + democracy), B.5, B.6 | Yes — depends on PR 3 |
-| 5 | C.1, C.6 | Yes — proof type lib + drop sep-xxxx from workspace |
+| 5 | C.1, C.6 | Yes — proof type definition + drop `sep-xxxx` from build |
 | 6 | C.2 — sep-anarchy verifier | Yes — depends on PR 4 |
 | 7 | C.2 — sep-democracy verifier | Yes — depends on PR 4 |
 | 8 | C.2 — sep-oligarchy + sep-oneonone + sep-tyranny verifiers | Yes — depends on PR 4 |
@@ -264,10 +267,11 @@ Move the postmortem header from "Decided" to "Complete."
 
 ## Phase B — Proving-system swap
 
-**Goal.** Replace `ark-groth16` with a fflonk-on-BLS12-381 implementation,
-embed EF KZG SRS, port the three circuits to PLONK custom gates, regenerate
-test vectors. Land everything behind a `feature = "fflonk"` flag so it can
-merge incrementally without breaking existing testnet flows.
+**Goal.** Replace `ark-groth16` with `jf-plonk` (TurboPlonk over BLS12-381),
+embed EF KZG SRS bytes plus the deserialiser glue jf-pcs requires, port the
+three circuits to jf-relation's TurboPlonk gate API, regenerate test vectors.
+Land everything behind a `feature = "plonk"` flag so it can merge
+incrementally without breaking existing testnet flows.
 
 **Effort.** 2–3 weeks engineering.
 
@@ -277,86 +281,165 @@ merge incrementally without breaking existing testnet flows.
 
 **Files.**
 
-- `/Users/programyzer/Developer/stellar-mls/Cargo.toml` (workspace root, lines 13–40)
-- `/Users/programyzer/Developer/stellar-mls/src/Cargo.toml` (sep-mls crate, if present)
+- `/Users/programyzer/Developer/stellar-mls/Cargo.toml` (root crate manifest — this repo is a single crate, not a Cargo workspace; root `Cargo.toml` IS the package, with `lib`/`staticlib`/`cdylib` outputs in `[lib]`)
 
 **Changes.**
 
 ```toml
-# Add (workspace deps):
-jellyfish = { version = "0.4", default-features = false, features = ["bls12-381"] }
-# Or arkworks-fflonk equivalent if jellyfish lacks fflonk. See §10 of the design doc.
+[dependencies]
+# --- existing arkworks core (kept) ---
+ark-bls12-381  = "0.4"
+ark-ff         = "0.4"
+ark-ec         = "0.4"
+ark-std        = "0.4"
+ark-serialize  = "0.4"
 
-# Make Groth16 optional behind a feature gate (do NOT remove yet):
-ark-groth16 = { version = "0.4", optional = true }
-ark-snark   = { version = "0.4", optional = true }
+# --- new: jf-plonk + jf-pcs from EspressoSystems/jellyfish ---
+# (Not on crates.io; pulled by git tag. Pin to a specific tag, never
+# `branch = "main"`. Vendor into `vendor/` if upstream destabilises.)
+jf-plonk = { git = "https://github.com/EspressoSystems/jellyfish", tag = "0.8.0", default-features = false, features = ["std"] }
+jf-pcs   = { git = "https://github.com/EspressoSystems/jellyfish", tag = "0.8.0", default-features = false, features = ["std"] }
+jf-relation = { git = "https://github.com/EspressoSystems/jellyfish", tag = "0.8.0", default-features = false, features = ["std"] }
+
+# --- Groth16 made optional behind feature gate (NOT removed yet) ---
+ark-groth16   = { version = "0.4", optional = true }
+ark-snark     = { version = "0.4", optional = true }
+ark-relations = { version = "0.4", optional = true }
+ark-r1cs-std  = { version = "0.4", optional = true }
+ark-crypto-primitives = { version = "0.4", features = ["crh", "merkle_tree", "sponge", "r1cs"], optional = true }
 
 [features]
-default = ["groth16"]
-groth16 = ["ark-groth16", "ark-snark"]
-fflonk = ["jellyfish"]
+default = ["std", "jni", "ffi", "groth16"]
+std     = []
+ffi     = []
+jni     = ["dep:jni"]
+groth16 = ["ark-groth16", "ark-snark", "ark-relations", "ark-r1cs-std", "ark-crypto-primitives"]
+plonk   = []  # jf-plonk and jf-pcs are not gated — they're always pulled, but
+              # `plonk`-feature-only modules only compile when this feature is on.
 ```
 
-- Both `groth16` and `fflonk` features exist simultaneously through the
-  end of Phase C. Groth16 is the default until C.2 ships for all five
-  contracts.
-- `ark-bls12-381`, `ark-ff`, `ark-ec`, `ark-serialize` stay (jellyfish
-  reuses arkworks types).
-- `ark-relations`, `ark-r1cs-std` stay during transition; deleted in
-  Phase E with the rest of the Groth16 surface.
+- Both `groth16` and `plonk` features exist simultaneously through the end of Phase C. `groth16` stays in `default` until C.2 ships for all five contracts.
+- `ark-bls12-381`, `ark-ff`, `ark-ec`, `ark-serialize`, `ark-std` stay (jf-plonk reuses these types).
+- `ark-relations`, `ark-r1cs-std`, `ark-crypto-primitives` move under the `groth16` feature gate; they are removed in Phase E with the rest of the Groth16 surface.
+- `jf-plonk` is pulled unconditionally because both prover modules eventually need it (the build under `feature = "groth16"` only compiles the legacy code paths but still resolves the dep tree). If pull-time is a concern, gate it under `[target.'cfg(feature = "plonk")'.dependencies]` instead.
 
-**Tests.** `cargo build --no-default-features --features groth16` and
-`cargo build --no-default-features --features fflonk` both succeed.
-Default build (`cargo build`) still passes.
+**Tests.**
+- `cargo build --no-default-features --features groth16,std,ffi,jni` succeeds.
+- `cargo build --no-default-features --features plonk,std,ffi,jni` succeeds.
+- `cargo build` (default, includes `groth16`) succeeds and is byte-identical to pre-PR-2 behaviour.
 
-**Verification.** CI green for all three feature combinations.
+**Verification.** CI green for all three feature combinations. `cargo tree` shows `jf-plonk` resolved to the pinned git tag.
 
 **Dependencies.** None.
 
-### B.2 — Embed EF KZG SRS + build-time hash check
+### B.2 — Embed EF KZG SRS + build-time hash check + jf-pcs deserialiser glue
 
 **Files.**
 
-- **(new)** `/Users/programyzer/Developer/stellar-mls/src/prover/srs.rs`
-- **(new)** `/Users/programyzer/Developer/stellar-mls/src/prover/srs/ef-kzg-2023.bin` (≈206 KB)
-- `/Users/programyzer/Developer/stellar-mls/src/prover/mod.rs:1-50` (add `pub mod srs;`)
-- **(new)** `/Users/programyzer/Developer/stellar-mls/build.rs` (workspace root)
+- **(new)** `/Users/programyzer/Developer/stellar-mls/scripts/build/fetch-ef-kzg.sh`
+- **(new)** `/Users/programyzer/Developer/stellar-mls/scripts/build/extract-ef-kzg.py`
+- **(new)** `/Users/programyzer/Developer/stellar-mls/src/prover/srs.rs` (≈200-300 LoC: deserialiser + glue)
+- **(new)** `/Users/programyzer/Developer/stellar-mls/src/prover/srs/ef-kzg-2023.bin` (≈400 KB extracted blob)
+- **(new)** `/Users/programyzer/Developer/stellar-mls/src/prover/srs/expected-hash.in` (one-line `[u8; 32]` literal, separately reviewed)
+- **(new)** `/Users/programyzer/Developer/stellar-mls/src/prover/srs/README.md` (provenance + reproduction commands)
+- `/Users/programyzer/Developer/stellar-mls/src/prover/mod.rs` — add `#[cfg(feature = "plonk")] pub mod srs;`
+- **(new)** `/Users/programyzer/Developer/stellar-mls/build.rs` (root crate)
 
 **Changes.**
 
-Step 1 — fetch + verify the SRS once, manually:
+Step 1 — extract the n=4096 PoT subset from the 253 MB EF transcript:
 
 ```bash
-# Download the EF 2023 KZG ceremony transcript and convert to the
-# arkworks-compatible byte layout. Document the exact command + hash
-# in src/prover/srs/README.md so it's reproducible.
-curl -fsSL https://ceremony.ethereum.org/api/v1/transcript \
-  | scripts/build/convert-kzg-to-arkworks.py \
-  > src/prover/srs/ef-kzg-2023.bin
-shasum -a 256 src/prover/srs/ef-kzg-2023.bin
-# expected: <hash recorded in src/prover/srs.rs>
+# scripts/build/fetch-ef-kzg.sh
+#!/usr/bin/env bash
+set -euo pipefail
+DEST=src/prover/srs/ef-kzg-2023-transcript.json
+curl -fsSL "https://seq.ceremony.ethereum.org/info/current_state" -o "$DEST"
+shasum -a 256 "$DEST"
+# Record the upstream transcript SHA-256 in src/prover/srs/README.md.
 ```
 
-Step 2 — `src/prover/srs.rs`:
+```python
+# scripts/build/extract-ef-kzg.py
+#
+# Parse the EF KZG transcript JSON, validate participant signatures
+# (BLS / BLS12-381 G2 sigs over each contributor's hash chain), extract
+# the n=4096 PoT subset (smallest of the four published sets), convert
+# to arkworks-uncompressed encoding, write to ef-kzg-2023.bin.
+#
+# Output layout (deterministic, big-endian, uncompressed):
+#   [0      ..   4]   "ARKK"                               (magic)
+#   [4      ..   8]   u32 le: SRS_VERSION = 1
+#   [8      ..  12]   u32 le: G1_COUNT = 4096
+#   [12     ..  16]   u32 le: G2_COUNT = 65
+#   [16     .. 393232]  4096 × 96-byte uncompressed G1Affine (x || y)
+#   [393232 .. 405712]    65 × 192-byte uncompressed G2Affine (x.c0 || x.c1 || y.c0 || y.c1)
+#
+# Total: 405,712 bytes ≈ 400 KB.
+import json, sys, hashlib, struct
+# ... transcript parsing, signature validation, point extraction ...
+```
+
+Step 2 — `src/prover/srs.rs` (≈200-300 LoC):
 
 ```rust
-//! Universal SRS for the fflonk prover.
+//! Universal SRS for the PLONK prover.
 //!
-//! Source: Ethereum Foundation 2023 KZG ceremony, finalised
-//! 2023-11-14, ≈141k contributors. Powers-of-tau over BLS12-381,
-//! 4096 G1 + 65 G2 elements, ≈206 KB on disk in arkworks
-//! uncompressed encoding.
+//! Source: Ethereum Foundation 2023 KZG ceremony, finalised 2023-11-14,
+//! ≈141k contributors. Powers-of-tau over BLS12-381, n=4096 G1 + 65 G2
+//! elements, ≈400 KB on disk in arkworks-uncompressed encoding.
 //!
-//! The hash check below makes it structurally impossible to ship the
-//! wrong SRS — the build fails on a mismatch.
+//! The build.rs hash check makes it structurally impossible to ship
+//! the wrong SRS — the build fails on a mismatch.
+
+#![cfg(feature = "plonk")]
+
+use ark_bls12_381::{Bls12_381, G1Affine, G2Affine};
+use ark_serialize::CanonicalDeserialize;
+use jf_pcs::prelude::UnivariateUniversalParams;
 
 const SRS_BYTES: &[u8] = include_bytes!("srs/ef-kzg-2023.bin");
-const SRS_SHA256: [u8; 32] = hex_literal::hex!(
-    "<EF KZG transcript hash, captured during B.2 download>"
-);
+const SRS_SHA256: [u8; 32] = include!("srs/expected-hash.in");
 
-pub fn srs() -> &'static [u8] {
-    SRS_BYTES
+pub fn raw_srs_bytes() -> &'static [u8] { SRS_BYTES }
+
+/// Deserialise the embedded SRS into the jf-pcs struct shape jf-plonk
+/// consumes. ~200 LoC of byte parsing — jf-pcs's
+/// `UnivariateUniversalParams` has no public from-bytes constructor.
+pub fn load_ef_kzg_srs() -> UnivariateUniversalParams<Bls12_381> {
+    // Verify magic + version
+    assert_eq!(&SRS_BYTES[0..4], b"ARKK", "SRS magic mismatch");
+    let version = u32::from_le_bytes(SRS_BYTES[4..8].try_into().unwrap());
+    assert_eq!(version, 1, "unsupported SRS version");
+
+    let g1_count = u32::from_le_bytes(SRS_BYTES[8..12].try_into().unwrap()) as usize;
+    let g2_count = u32::from_le_bytes(SRS_BYTES[12..16].try_into().unwrap()) as usize;
+    assert_eq!(g1_count, 4096);
+    assert_eq!(g2_count, 65);
+
+    let mut cursor = 16;
+    let mut powers_of_g = Vec::with_capacity(g1_count);
+    for _ in 0..g1_count {
+        let p = G1Affine::deserialize_uncompressed(&SRS_BYTES[cursor..cursor + 96])
+            .expect("invalid G1 point in embedded SRS");
+        powers_of_g.push(p);
+        cursor += 96;
+    }
+    let mut powers_of_h = Vec::with_capacity(g2_count);
+    for _ in 0..g2_count {
+        let p = G2Affine::deserialize_uncompressed(&SRS_BYTES[cursor..cursor + 192])
+            .expect("invalid G2 point in embedded SRS");
+        powers_of_h.push(p);
+        cursor += 192;
+    }
+    assert_eq!(cursor, SRS_BYTES.len(), "trailing bytes in embedded SRS");
+
+    UnivariateUniversalParams {
+        powers_of_g,
+        h: powers_of_h[0],
+        beta_h: powers_of_h[1],
+        powers_of_h,
+    }
 }
 
 #[cfg(test)]
@@ -365,46 +448,62 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     #[test]
-    fn embedded_srs_matches_ef_kzg_ceremony_hash() {
-        let actual = Sha256::digest(SRS_BYTES);
-        assert_eq!(
-            actual.as_slice(),
-            &SRS_SHA256[..],
-            "SRS bytes do not match EF KZG ceremony hash"
-        );
+    fn embedded_srs_matches_pinned_hash() {
+        let actual: [u8; 32] = Sha256::digest(SRS_BYTES).into();
+        assert_eq!(actual, SRS_SHA256, "SRS bytes do not match pinned hash");
+    }
+
+    #[test]
+    fn srs_loads_into_jf_pcs() {
+        let srs = load_ef_kzg_srs();
+        assert_eq!(srs.powers_of_g.len(), 4096);
+        assert_eq!(srs.powers_of_h.len(), 65);
+        // Sanity-check pairing identity: e([1]_1, [τ]_2) == e([τ]_1, [1]_2)
+        use ark_ec::pairing::Pairing;
+        let lhs = Bls12_381::pairing(srs.powers_of_g[0], srs.beta_h);
+        let rhs = Bls12_381::pairing(srs.powers_of_g[1], srs.h);
+        assert_eq!(lhs, rhs, "SRS does not satisfy powers-of-tau identity");
     }
 }
 ```
 
-Step 3 — `build.rs` (also enforces at compile time, not just test time):
+Step 3 — `build.rs` (root crate; enforces at compile time):
 
 ```rust
 fn main() {
     println!("cargo:rerun-if-changed=src/prover/srs/ef-kzg-2023.bin");
+    println!("cargo:rerun-if-changed=src/prover/srs/expected-hash.in");
+
+    // Skip SRS check if `plonk` feature is off — building groth16-only
+    // doesn't need the SRS bundle present.
+    if std::env::var("CARGO_FEATURE_PLONK").is_err() { return; }
+
     let bytes = std::fs::read("src/prover/srs/ef-kzg-2023.bin")
-        .expect("EF KZG SRS not present at src/prover/srs/ef-kzg-2023.bin");
+        .expect("EF KZG SRS missing — run scripts/build/fetch-ef-kzg.sh && scripts/build/extract-ef-kzg.py");
     let actual: [u8; 32] = sha2::Sha256::digest(&bytes).into();
-    let expected = include!("src/prover/srs/expected-hash.in");
+    let expected: [u8; 32] = {
+        let raw = std::fs::read_to_string("src/prover/srs/expected-hash.in")
+            .expect("expected-hash.in missing");
+        // Parse "[u8; 32] = [0x12, 0x34, ...]" form
+        parse_hash_array(&raw)
+    };
     assert_eq!(actual, expected, "SRS hash mismatch — refusing to build");
 }
 ```
 
-(`expected-hash.in` is a one-line `[u8; 32]` literal, kept separately so a
-file-replace attack on `srs/ef-kzg-2023.bin` requires also touching the
-hash file in the same commit.)
+(`expected-hash.in` is a one-line `[u8; 32]` literal kept separately from the binary so a file-replace attack on `ef-kzg-2023.bin` requires also touching the hash file in the same commit — visible in code review.)
 
 **Tests.**
 
-- `cargo test embedded_srs_matches_ef_kzg_ceremony_hash` — passes.
-- Tampering test: flip a byte in `ef-kzg-2023.bin`; `cargo build`
-  fails with "SRS hash mismatch."
+- `cargo test --features plonk embedded_srs_matches_pinned_hash` — passes.
+- `cargo test --features plonk srs_loads_into_jf_pcs` — passes; pairing identity sanity check confirms the deserialiser produced a valid SRS.
+- Tampering test: flip a byte in `ef-kzg-2023.bin`; `cargo build --features plonk` fails with "SRS hash mismatch — refusing to build."
 
-**Verification.** Both checks (build-time and test-time) green; tamper
-test reproduces the build failure.
+**Verification.** All three tests green on a clean checkout. The deserialiser glue is the highest-leverage code in Phase B — bug here corrupts every proof silently. Round-trip test against jf-pcs's own `gen_srs_for_testing()` output (B.4 dependency) is the second line of defence.
 
 **Dependencies.** B.1.
 
-### B.3 — Port circuits to PLONK custom gates
+### B.3 — Port circuits to jf-relation TurboPlonk gates
 
 **Files.**
 
@@ -416,17 +515,19 @@ test reproduces the build failure.
 
 Each circuit currently expresses constraints as
 `ConstraintSynthesizer<Bls12_381>::generate_constraints(&self, cs)`. Port to
-jellyfish's `Circuit::synthesize(&self, builder: &mut PlonkCircuit<Fr>)`.
+jf-relation's TurboPlonk circuit-builder API
+(`PlonkCircuit::<Fr>::new_turbo_plonk()` then accumulate gates).
 
 Mechanical mapping:
 
-| arkworks R1CS | jellyfish PLONK |
+| arkworks R1CS | jf-relation TurboPlonk |
 |---|---|
 | `cs.new_witness_variable(\|\| Ok(value))?` | `builder.create_variable(value)?` |
-| `cs.enforce_constraint(lc1, lc2, lc3)?` | `builder.mul_gate(a, b, c)?` or `builder.add_gate(...)` |
-| `Boolean::new_witness(...)?` | `builder.create_boolean_variable(...)?` |
-| Poseidon gadget from `ark-crypto-primitives` | `jellyfish::gadgets::poseidon` (already BLS12-381) |
-| Merkle membership gadget | `jellyfish::gadgets::merkle_tree` |
+| `cs.enforce_constraint(lc1, lc2, lc3)?` | `builder.mul_add_gate([a,b,c,d,o], &coeffs)?` (TurboPlonk's 5-wire gate) |
+| `Boolean::new_witness(...)?` | `builder.create_boolean_variable(value)?` |
+| `cs.new_input_variable(\|\| Ok(v))?` | `builder.create_public_variable(v)?` (must precede witness allocs) |
+| Poseidon gadget from `ark-crypto-primitives` | `jf-relation`'s Poseidon gadget on BLS12-381's scalar field — re-implement Poseidon parameters or use lookup table |
+| Merkle membership gadget | `jf-relation`'s Merkle gadget; tree depth and field unchanged |
 
 For each circuit, allocate **all public inputs first, in the same order
 as the existing R1CS** (preserves wire format compatibility):
@@ -455,20 +556,12 @@ are expected to fit.**
 
 **Tests.**
 
-- `src/circuit/tests.rs` — existing R1CS-correctness tests
-  (well-formed witness ⇒ verifies; tampered witness ⇒ rejects). Port
-  each test to use jellyfish's `prove` + `verify` instead of
-  `ConstraintSystem::is_satisfied()`.
-- New test: `prove_then_verify_round_trip<C: Circuit>` parameterised
-  on each of the three circuits + each tier.
-- New test: `cross-public-input-rejection` — generate a proof for
-  `(C, epoch)` then call `verify` with `(C', epoch)` — must reject.
+- `src/circuit/tests.rs` — existing R1CS-correctness tests (well-formed witness ⇒ verifies; tampered witness ⇒ rejects). Port each test to use `PlonkKzgSnark::prove` + `verify` instead of `ConstraintSystem::is_satisfied()`.
+- New test: `prove_then_verify_round_trip<C: Circuit>` parameterised on each of the three circuits + each tier.
+- New test: `cross-public-input-rejection` — generate a proof for `(C, epoch)` then call `verify` with `(C', epoch)` — must reject.
+- **Equivalence test (only available while both `groth16` and `plonk` features compile):** prove the same statement under both proving systems, confirm both verifiers accept; tamper a witness, confirm both verifiers reject. Catches port mistakes that change circuit semantics.
 
-**Verification.** All tests green; row-count targets in the table above
-hit (logged via `builder.num_rows()`). The wire encoding of public
-inputs is byte-identical to the existing implementation, asserted by a
-new test that round-trips through the existing
-`PublicInputs::serialize()` / `deserialize()`.
+**Verification.** All tests green; row-count targets in the table above hit (logged via `builder.gate_table_size()` or equivalent). The wire encoding of public inputs is byte-identical to the existing Groth16 implementation, asserted by a new test that round-trips through the existing `PublicInputs::serialize()` / `deserialize()`.
 
 **Dependencies.** B.2.
 
@@ -477,70 +570,104 @@ new test that round-trips through the existing
 **Files.**
 
 - `/Users/programyzer/Developer/stellar-mls/src/prover/mod.rs` (1,030 LOC)
-- **(new)** `/Users/programyzer/Developer/stellar-mls/src/prover/fflonk.rs`
+- **(new)** `/Users/programyzer/Developer/stellar-mls/src/prover/plonk.rs`
 - `/Users/programyzer/Developer/stellar-mls/src/prover/groth16.rs` (extracted from current `mod.rs`, kept under `feature = "groth16"`)
 
 **Changes.**
 
-Step 1 — split current `mod.rs` into two:
+Step 1 — split current `mod.rs`:
 
 ```rust
 // src/prover/mod.rs (new shape)
+#[cfg(feature = "plonk")]
 pub mod srs;
 
 #[cfg(feature = "groth16")]
 pub mod groth16;
-#[cfg(feature = "fflonk")]
-pub mod fflonk;
+#[cfg(feature = "plonk")]
+pub mod plonk;
 
-#[cfg(all(feature = "groth16", not(feature = "fflonk")))]
+// Re-export the active path (default = groth16 until Phase C ships;
+// plonk takes over once feature is the default in Phase E).
+#[cfg(all(feature = "groth16", not(feature = "plonk")))]
 pub use groth16::*;
-#[cfg(feature = "fflonk")]
-pub use fflonk::*;
+#[cfg(feature = "plonk")]
+pub use plonk::*;
 ```
 
-Step 2 — `src/prover/fflonk.rs`:
+Step 2 — `src/prover/plonk.rs`:
 
 ```rust
-use crate::circuit::{MembershipCircuit, UpdateCircuit, DemocracyUpdateCircuit};
-use crate::prover::srs::srs;
-use jellyfish::{plonk::Proof, PlonkType};
+//! TurboPlonk prover backed by jf-plonk + jf-pcs over the embedded
+//! EF KZG SRS.
 
-/// Preprocessed prover key + verifier key for one circuit.
-/// Computed once at startup; cached in a `OnceCell`.
-pub struct CircuitKeys {
-    pub pk: jellyfish::plonk::ProvingKey,
-    pub vk: jellyfish::plonk::VerifyingKey,
+use ark_bls12_381::{Bls12_381, Fr};
+use jf_plonk::{
+    proof_system::{PlonkKzgSnark, structs::{Proof, ProvingKey, VerifyingKey}},
+    transcript::SolidityTranscript,  // or RescueTranscript; pick at impl time
+};
+use jf_pcs::prelude::UnivariateUniversalParams;
+use jf_relation::{Arithmetization, Circuit};
+use std::sync::OnceLock;
+
+use crate::circuit::{MembershipCircuit, UpdateCircuit, DemocracyUpdateCircuit};
+use crate::prover::srs::load_ef_kzg_srs;
+
+/// The universal SRS, loaded once.
+static SRS: OnceLock<UnivariateUniversalParams<Bls12_381>> = OnceLock::new();
+fn srs() -> &'static UnivariateUniversalParams<Bls12_381> {
+    SRS.get_or_init(load_ef_kzg_srs)
 }
 
-pub fn preprocess<C: jellyfish::Circuit<...>>(circuit: &C) -> CircuitKeys {
-    let srs_bytes = srs();
-    let srs_obj = jellyfish::plonk::Srs::deserialize(srs_bytes).unwrap();
-    let (pk, vk) = jellyfish::plonk::preprocess(&srs_obj, circuit).unwrap();
+/// Preprocessed (proving_key, verifying_key) for one circuit. Cached
+/// per-circuit-tier in static OnceLocks at the call sites.
+pub struct CircuitKeys {
+    pub pk: ProvingKey<Bls12_381>,
+    pub vk: VerifyingKey<Bls12_381>,
+}
+
+pub fn preprocess<C>(circuit: &C) -> CircuitKeys
+where
+    C: Circuit<Fr> + Arithmetization<Fr>,
+{
+    let (pk, vk) = PlonkKzgSnark::<Bls12_381>::preprocess(srs(), circuit)
+        .expect("PLONK preprocessing failed");
     CircuitKeys { pk, vk }
 }
 
-pub fn prove<C>(circuit: &C, witness: &C::Witness) -> Proof
-where C: jellyfish::Circuit<...> { /* ... */ }
+pub fn prove<C, R: rand::RngCore + rand::CryptoRng>(
+    pk: &ProvingKey<Bls12_381>,
+    circuit: &C,
+    rng: &mut R,
+) -> Proof<Bls12_381>
+where
+    C: Circuit<Fr> + Arithmetization<Fr>,
+{
+    PlonkKzgSnark::<Bls12_381>::prove::<_, _, SolidityTranscript>(rng, circuit, pk, None)
+        .expect("PLONK prove failed")
+}
 
-pub fn verify<C>(vk: &VerifyingKey, public_inputs: &[Fr], proof: &Proof) -> bool
-{ /* ... */ }
+pub fn verify(
+    vk: &VerifyingKey<Bls12_381>,
+    public_inputs: &[Fr],
+    proof: &Proof<Bls12_381>,
+) -> bool {
+    PlonkKzgSnark::<Bls12_381>::verify::<SolidityTranscript>(vk, public_inputs, proof, None)
+        .is_ok()
+}
 ```
 
-Step 3 — wire the public-API functions (`generate_membership_proof()`
-etc.) to call the fflonk path under the feature flag. The function
-*signatures* don't change — only internals. This keeps
-`src/ffi.rs` untouched until Phase D.3.
+(API names approximate; reconciled against jf-plonk 0.8.0 during implementation. Transcript choice — `SolidityTranscript` keccak-based vs. `RescueTranscript` arithmetic — pinned in B.4 once we know which one Soroban's host SHA-256 reproduces most cheaply.)
+
+Step 3 — wire the public-API functions (`generate_membership_proof()` etc.) to call the PLONK path under the feature flag. The function *signatures* don't change — only internals. This keeps `src/ffi.rs` untouched until Phase D.3.
 
 **Tests.**
 
 - All existing `src/prover/tests.rs` tests pass under both features.
-- New `bench_prove` in `src/prover/benches/` measuring prover time per
-  circuit, per tier; logged for the rollout doc.
+- New `bench_prove` in `src/prover/benches/` measuring prover time per circuit, per tier; logged for the rollout doc.
+- Cross-system equivalence test (B.3 hook) confirms PLONK and Groth16 prove the same statement.
 
-**Verification.** End-to-end round trip — generate witness → prove with
-fflonk → verify with fflonk — for all 3 circuits × 3 tiers. Existing
-`cargo test --features groth16` still passes (Groth16 unchanged).
+**Verification.** End-to-end round trip — generate witness → `PlonkKzgSnark::prove` → `PlonkKzgSnark::verify` — for all 3 circuits × 3 tiers. Existing `cargo test --features groth16` still passes (Groth16 unchanged).
 
 **Dependencies.** B.3.
 
@@ -555,17 +682,17 @@ fflonk → verify with fflonk — for all 3 circuits × 3 tiers. Existing
 
 The existing test-vectors file pins (witness, public-inputs, expected
 proof bytes) for cross-platform verification. Extend with a parallel
-`fflonk` block:
+`plonk` block:
 
 ```json
 {
   "version": 2,
   "groth16": { /* existing */ },
-  "fflonk": {
+  "plonk": {
     "membership_small": {
       "witness": "...",
       "public_inputs": ["...", "..."],
-      "proof_hex": "01<900-byte hex>...",
+      "proof_hex": "01<≈900-byte hex>...",
       "vk_sha256": "..."
     },
     /* ... 6 more for membership × 3 tiers + update × 3 tiers + democracy */
@@ -573,18 +700,11 @@ proof bytes) for cross-platform verification. Extend with a parallel
 }
 ```
 
-Vector generation is deterministic: PLONK is non-deterministic in the
-prover by default (Fiat-Shamir with random transcript blinding), so the
-test vector pins the *verification* side, not the byte-equality of
-proofs. Each vector's expected output is `verify(vk, public_inputs,
-proof) == true` plus `verify(vk, tampered_public_inputs, proof) ==
-false`.
+Vector generation is non-deterministic on the prover side: PLONK uses Fiat-Shamir with random transcript blinding, so the test vector pins the *verification* side, not byte-equality of proofs. Each vector's expected output is `verify(vk, public_inputs, proof) == true` plus `verify(vk, tampered_public_inputs, proof) == false`.
 
-**Tests.** A parameterised `cargo test cross_platform_vector` that
-loads each entry and runs the verify pair.
+**Tests.** A parameterised `cargo test cross_platform_vector` that loads each entry and runs the verify pair.
 
-**Verification.** All 9 fflonk entries verify correctly; tampered
-inputs reject.
+**Verification.** All 9 PLONK entries verify correctly; tampered inputs reject.
 
 **Dependencies.** B.4.
 
@@ -602,7 +722,7 @@ After B.2 lands the build-script skeleton, this task tightens it:
 - `expected-hash.in` is committed and reviewed.
 - `build.rs` panics if the file is missing or malformed.
 - A CI job (`.github/workflows/ci.yml` or equivalent) runs
-  `cargo build --features fflonk` on a clean checkout to verify the
+  `cargo build --features plonk` on a clean checkout to verify the
   SRS bundle is reachable and the hash check fires.
 
 **Tests.** CI workflow green.
@@ -616,9 +736,9 @@ out-of-band fails the build with a clear error (manually verified).
 
 ## Phase C — Soroban verifier rewrite
 
-**Goal.** Each per-type contract gains a fflonk verifier path; per-tier
+**Goal.** Each per-type contract gains a TurboPlonk verifier path; per-tier
 VK storage is dropped; `update_vk` admin entrypoint removed; gas measured;
-`sep-xxxx` dropped from the workspace.
+`sep-xxxx` dropped from the build.
 
 **Effort.** 2 weeks engineering, parallel after C.1.
 
@@ -628,36 +748,50 @@ VK storage is dropped; `update_vk` admin entrypoint removed; gas measured;
 
 **Files.**
 
-- **(new)** `/Users/programyzer/Developer/stellar-mls/contracts/sdk/src/plonk_proof.rs` (or wherever the existing `Groth16Proof` lives at the workspace level)
-- `/Users/programyzer/Developer/stellar-mls/contracts/sep-anarchy/src/lib.rs:213-234`
-  (existing `VerificationKeyData` + `Groth16Proof` — kept until C.2 lands)
+- **(new)** `/Users/programyzer/Developer/stellar-mls/contracts/sdk/src/plonk_proof.rs` (or alongside the existing `Groth16Proof` — there's no shared SDK crate today; option to extract one is open)
+- `/Users/programyzer/Developer/stellar-mls/contracts/sep-anarchy/src/lib.rs:213-234` (existing `VerificationKeyData` + `Groth16Proof` — kept until C.2 lands)
 
 **Changes.**
 
+The wire format mirrors jf-plonk's `Proof<E>` struct shape (per the design-doc spike, `plonk/src/proof_system/structs.rs:54-76`):
+
+```
+Proof<E> {
+    wires_poly_comms:        Vec<Commitment<E>>,           // 5 commitments (GATE_WIDTH+1)
+    prod_perm_poly_comm:     Commitment<E>,                // 1 commitment
+    split_quot_poly_comms:   Vec<Commitment<E>>,           // 5 commitments
+    opening_proof:           Commitment<E>,                // 1 commitment
+    shifted_opening_proof:   Commitment<E>,                // 1 commitment
+    poly_evals:              ProofEvaluations<Fr>,         // ≈10 field elements
+    plookup_proof:           Option<PlookupProof<E>>,      // present if Plookup gates used
+}
+```
+
+13 G1 commitments × 96 B = 1,248 B; ≈10 field evaluations × 32 B = 320 B; total ≈1.6 KB uncompressed if Plookup absent. Compressed encoding (jf-plonk's default `CanonicalSerialize`) brings it down to ≈800 B. The exact count is pinned at C.1 once we know whether Plookup is in use per-circuit.
+
 ```rust
-/// fflonk proof. Wire format ≈900 bytes uncompressed, ≈700 bytes
-/// compressed. Version-prefixed.
+/// PLONK proof produced by jf-plonk's TurboPlonk prover over BLS12-381.
+/// Wire format is a versioned wrapper around jf-plonk's
+/// CanonicalSerialize output.
 ///
-/// Layout (big-endian, uncompressed):
-///   [0]      = 0x01  (version)
-///   [1..N]   = N commitments, each 96-byte uncompressed G1
-///   [N..M]   = M field-element evaluations, each 32 bytes
-///   [M..]    = aggregated opening proof (1× G1, 96 bytes)
-///
-/// Exact layout pinned by jellyfish's serialize, captured here for
-/// contract use.
+/// Layout (big-endian, uncompressed, ≈900 B):
+///   [0]      = 0x01  (version: plonk-v1)
+///   [1..]    = jf_plonk::Proof<Bls12_381>::serialize_uncompressed()
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct PlonkProof {
     pub version: u32,
-    pub commitments: Vec<BytesN<96>>,
-    pub evaluations: Vec<BytesN<32>>,
-    pub opening: BytesN<96>,
+    pub wire_commitments: Vec<BytesN<96>>,         // 5 entries
+    pub prod_perm_commitment: BytesN<96>,
+    pub split_quot_commitments: Vec<BytesN<96>>,   // 5 entries
+    pub opening_proof: BytesN<96>,
+    pub shifted_opening_proof: BytesN<96>,
+    pub evaluations: Vec<BytesN<32>>,              // ≈10 entries
 }
 
 #[cfg(test)]
 mod tests {
-    /// Pinned layout test: a known-good fflonk proof from
+    /// Pinned layout test: a known-good PLONK proof from
     /// docs/cross-platform-test-vectors.json round-trips through
     /// PlonkProof::deserialize without loss.
     #[test]
@@ -665,13 +799,9 @@ mod tests {
 }
 ```
 
-The exact `commitments.len()` and `evaluations.len()` counts depend on
-the fflonk variant chosen in B.4 — pinned at C.1 once jellyfish version is
-locked.
+**Tests.** Layout test against a real PLONK proof produced by `cargo run --bin gen-test-vectors --features plonk`.
 
-**Tests.** Layout test against a real fflonk proof.
-
-**Verification.** Test green.
+**Verification.** Test green; the pinned counts (`wire_commitments.len() == 5`, `split_quot_commitments.len() == 5`, etc.) match what jf-plonk emits.
 
 **Dependencies.** B.4.
 
@@ -723,7 +853,7 @@ fn main() {
 }
 ```
 
-Step 3 — replace `verify_membership_proof()`:
+Step 3 — replace `verify_membership_proof()`. The shape mirrors jf-plonk's verifier (`plonk/src/proof_system/verifier.rs:201-256`), reproduced inside the contract as Soroban host-function calls:
 
 ```rust
 fn verify_membership_proof(
@@ -734,26 +864,38 @@ fn verify_membership_proof(
 ) -> Result<(), Error> {
     use crate::vk::membership::VK_BYTES;
 
-    // 1. Deserialize embedded VK
+    // 0. Version-prefix check
+    if proof.version != 1 { return Err(Error::UnsupportedProofVersion); }
+
+    // 1. Deserialise embedded VK
     let vk = deserialize_vk(VK_BYTES)?;
 
-    // 2. Reconstruct Fiat-Shamir challenges
-    let challenges = compute_challenges(env, proof, public_inputs);
+    // 2. Reconstruct Fiat-Shamir challenges (β, γ, α, ζ, v, u) via
+    //    Soroban SHA256 host fn against the canonical transcript.
+    let (beta, gamma, alpha, zeta, v_chal, u_chal) =
+        compute_challenges(env, &vk, &proof, public_inputs);
 
-    // 3. Build linearization commitment
-    let lin = linearize(env, &vk, proof, &challenges)?;
+    // 3. Build linearisation commitment via G1 add + scalar muls
+    //    (combines wire commitments, perm-product commitment, and
+    //    split-quotient commitments per jf-plonk's
+    //    aggregate_evaluations() and aggregate_poly_commitments()).
+    let total_w = aggregate_witness(env, &proof, u_chal);
+    let total_c = aggregate_commitment(env, &vk, &proof, public_inputs,
+                                       beta, gamma, alpha, zeta, v_chal, u_chal);
 
-    // 4. Final pairing check on 2 pairs (fflonk aggregation)
-    let lhs = env.crypto().bls12_381().g1_msm(/* ~20 scalars */);
+    // 4. Final pairing check on 2 pairs (TurboPlonk's aggregated openings)
+    //    e(total_w, [τ]_2) = e(total_c, [1]_2)
     let ok = env.crypto().bls12_381().pairing_check(&[
-        (lhs, vk.g2_x),
-        (proof.opening.into(), vk.g2_y),
+        (total_w, vk.beta_h),  // [τ]_2
+        (total_c, vk.h),       // [1]_2
     ]);
 
     if !ok { return Err(Error::InvalidProof); }
     Ok(())
 }
 ```
+
+The `aggregate_witness`, `aggregate_commitment`, and `compute_challenges` helpers are ports of jf-plonk's verifier internals. Total Soroban verifier code estimate per contract: ≈400-600 LoC including helpers + transcript implementation.
 
 Step 4 — drop `DataKey::VK(_)`, `DataKey::UpdateVK(_)`, `update_vk`,
 `__constructor` VK args. Update the constructor signature:
@@ -768,7 +910,7 @@ pub fn __constructor(env: Env, admin: Address) -> Result<(), Error> {
 
 **Tests.**
 
-- `tests/membership_proof.rs` — use a real fflonk proof from the test
+- `tests/membership_proof.rs` — use a real PLONK proof from the test
   vectors; assert `verify_membership_proof` returns `Ok(())`.
 - Negative test: tampered public inputs ⇒ `InvalidProof`.
 - Constructor test: instantiate with just admin; no VK args.
@@ -971,17 +1113,18 @@ Drop the per-circuit-setup family entirely:
 - The corresponding JNI wrappers in `src/jni_ffi.rs:342-505`.
 - The C declarations in `sep_ffi.h`.
 
-These existed because Groth16 needed per-circuit setup; fflonk preprocessing
+These existed because Groth16 needed per-circuit setup; PLONK preprocessing
 is a deterministic build-time step using the universal SRS.
 
-**Keep, but rewire internals to fflonk:**
+**Keep, but rewire internals to PLONK:**
 
 - `sep_generate_membership_proof`
 - `sep_generate_update_proof`
 - `sep_generate_democracy_update_proof`
 - `sep_proof_to_contract_format` — change output from 384 B Groth16 to
-  ~900 B fflonk wire format. **Bump the FFI ABI version** so old clients
-  fail loudly rather than silently producing malformed proofs.
+  ~900 B PLONK wire format (versioned, `0x01` prefix). **Bump the FFI ABI
+  version** so old clients fail loudly rather than silently producing
+  malformed proofs.
 
 **Tests.** Both FFI and JNI surfaces compile, link, and pass their existing
 test harness against the new internal implementations.
@@ -1006,7 +1149,7 @@ real proof functions.
 - Update `generateMembershipProof()` etc. to load preprocessed pk from
   bundle: `Bundle.main.url(forResource: "membership-small", withExtension: "pk.bin", subdirectory: "circuits")`.
 - Update doc comments — drop "Convert a compressed Groth16 proof (192 bytes)"
-  language; use "fflonk proof (~900 bytes)" instead.
+  language; use "PLONK proof (~900 bytes)" instead.
 
 **Tests.** Swift unit tests green; XCTest exercising end-to-end proof
 generation passes.
@@ -1046,7 +1189,7 @@ to verify byte-exact agreement between Rust, Swift, and Kotlin
 implementations:
 
 ```bash
-cargo run --bin gen-test-vectors --features fflonk --release \
+cargo run --bin gen-test-vectors --features plonk --release \
   > docs/cross-platform-test-vectors.json
 ```
 
@@ -1057,7 +1200,7 @@ swift run swiftmls-verify-vectors docs/cross-platform-test-vectors.json
 ./gradlew :kotlin-mls:run --args="verify-vectors docs/cross-platform-test-vectors.json"
 ```
 
-Both must report all 9 fflonk entries verifying.
+Both must report all 9 PLONK entries verifying.
 
 **Verification.** Three-platform agreement.
 
@@ -1076,7 +1219,7 @@ Both must report all 9 fflonk entries verifying.
   class) device.
 
 Log results in [`mainnet-deployment.md`](mainnet-deployment.md) under
-a new "Mobile prover envelope (fflonk)" §.
+a new "Mobile prover envelope (PLONK)" §.
 
 **Verification.** All 4 device-classes succeed. Prover memory ≤ 256 MB
 on iOS, ≤ 128 MB on Android low-end (per design §3.4).
@@ -1321,16 +1464,20 @@ contract was decommissioned 2026-MM-DD per
 
 ## Open questions tracker
 
-These mirror `fflonk-migration-design.md` §10 with implementation-time
-resolutions:
+These mirror `fflonk-migration-design.md` v0.2 §10 with implementation-time
+resolutions. Q1, Q2, and Q4 are resolved by the v0.2 spike; remaining
+questions are tactical.
 
-| # | Question | Resolution gate | Owner |
+| # | Question | Resolution | Owner |
 |---|---|---|---|
-| Q1 | jellyfish vs. arkworks-fflonk vs. vanilla PLONK fallback | Phase B.1 spike, before B.3 begins | TBD |
-| Q2 | VK-as-bytecode vs. VK-as-storage | Decided in design doc; revisited if a deploy-without-recompile use-case emerges | TBD |
+| Q1 | Rust PLONK crate selection | **RESOLVED**: `jf-plonk` v0.8.0 from EspressoSystems/jellyfish via git tag. TurboPlonk verifier already aggregates KZG openings to 2 pairings — no fflonk layer to write. | n/a |
+| Q2 | VK-as-bytecode vs. VK-as-storage | **RESOLVED**: bytecode constants per design §4.4. | n/a |
 | Q3 | Phase A outreach window | Two weeks then close (`A.3`) | TBD |
-| Q4 | EF KZG vs. Aztec Ignition primary | EF; revisit only if a circuit needs n>2048 | TBD |
+| Q4 | EF KZG vs. Aztec Ignition primary | **RESOLVED**: EF KZG primary (n=4096); Aztec Ignition documented secondary. | n/a |
 | Q5 | Browser verifier replacement | None — `crates/ceremony-wasm` deleted in E.2 | n/a |
+| Q6 | jf-plonk vendoring | Tag-pinned dep first; vendor into `vendor/jf-plonk/` only if upstream destabilises | TBD (B.1) |
+| Q7 | Plookup-table layout for Poseidon | Shared table across circuits vs. per-circuit | Resolves in B.3 implementation |
+| Q8 | Fiat-Shamir transcript flavour | jf-plonk's `SolidityTranscript` (keccak) vs. `RescueTranscript` (arithmetic) — pick whichever Soroban host SHA-256 reproduces most cheaply | Resolves in B.4 |
 
 Each open question gets resolved (or escalated) by the gate listed. None
 of them block Phase A.
@@ -1339,17 +1486,18 @@ of them block Phase A.
 
 ## Risks tracker
 
-Mirrors `fflonk-migration-design.md` §9; column "trigger phase" indicates
+Mirrors `fflonk-migration-design.md` v0.2 §9; column "trigger phase" indicates
 where the risk surfaces in this plan.
 
 | Risk | Trigger phase | Mitigation |
 |---|---|---|
-| Rust fflonk implementation maturity | B.1 | Spike before B.3; vanilla PLONK fallback |
-| EF KZG SRS coverage edge case | B.3 | Switch SRS source to Aztec Ignition (one-line change) |
-| Soroban verify gas exceeds 2× budget | C.5 | Optimise linearization; precompute more constants in contract |
-| Mobile prover memory regression | D.7 | Plookup table reuse; sub-circuit split |
-| Two proving systems live concurrently | E.1 (delayed) | Wire-format-distinguishable proof types; transition window if needed |
-| Audit gap on PLONK gadgets | B.3 | Use jellyfish audited gadgets; per-circuit review; cross-platform vectors |
+| EF KZG SRS deserialisation glue is wrong | B.2 | Pairing-identity sanity test in `srs.rs` (B.2 test 2). Round-trip our deserialised SRS shape against `gen_srs_for_testing()` output. SHA-256 hash assertion at build time. End-to-end prove-then-verify passes before C lands. |
+| EF KZG SRS coverage edge case (>4096 rows) | B.3 | Switch SRS source to Aztec Ignition (re-run extractor against a different transcript; update hash file). One-blob change. |
+| jf-plonk git dep stability (upstream force-push or branch rename) | B.1 | Pin to release tag, never `branch`. Vendor into `vendor/jf-plonk/` if upstream behaviour becomes a concern. |
+| Soroban verify gas exceeds 2× budget | C.5 | Optimise linearisation; precompute more constants in contract bytecode. The 2-pair `pairing_check` shape itself is structurally what we want — won't get below it but already at the target. |
+| Mobile prover memory regression | D.7 | Plookup table reuse; sub-circuit split if a circuit's PLONK row count exceeds n=2048. |
+| Two proving systems live concurrently | E.1 (delayed) | Wire-format-distinguishable proof types (1-byte version prefix). Transition window if absolutely needed. |
+| Audit gap on TurboPlonk gadget ports | B.3 | Use jf-relation's audited Poseidon and Merkle gadgets where possible. Equivalence test (B.3 hook) confirms PLONK and Groth16 prove the same statement on the same witness. Cross-platform vectors are second line of defence. |
 
 ---
 
@@ -1360,16 +1508,16 @@ By phase, the canonical test that proves "phase done":
 | Phase | Canonical test |
 |---|---|
 | A | Recovered sidecars return 200 from `https://blossom.onym.chat/<sha256>`; postmortem updated |
-| B | `cargo test --features fflonk --workspace` green; SRS hash assertion fires on tamper; cross-platform vectors verify |
-| C | Per-contract Soroban-vm test: real fflonk proof verifies; tampered inputs reject; gas ≤ 2× baseline |
+| B | `cargo test --features plonk` green (root crate); SRS hash assertion fires on tamper; cross-platform vectors verify |
+| C | Per-contract Soroban-vm test: real PLONK proof verifies; tampered inputs reject; gas ≤ 2× baseline |
 | D | iOS + Android on-device round trip: prove → submit to testnet → verify accepts |
 | E | `docker compose up -d` on the live droplet succeeds without `ceremony-coordinator`; chat + push + nostr unaffected |
 | F | `cargo build --workspace` green with no `sep-xxxx`; postmortem header reads "Complete" |
 
 CI gates (proposed addition to `.github/workflows/ci.yml`):
 
-- `cargo build --features fflonk` (after B.1)
-- `cargo test --features fflonk --workspace` (after B.4)
+- `cargo build --features plonk` (after B.1)
+- `cargo test --features plonk` (after B.4)
 - Per-contract gas-budget bench (after C.5) — fail PR on > 2× baseline
 - iOS + Android FFI link checks (after D.3)
 - SRS-hash assertion regression test (after B.6)
@@ -1380,7 +1528,7 @@ CI gates (proposed addition to `.github/workflows/ci.yml`):
 
 Per the project memory ("Substantive changes via PR — behavioral/cross-client changes go through a PR"):
 
-- Each numbered task lands on a topic branch named `fflonk/<phase-letter>-<task-id>` (e.g. `fflonk/b3-circuit-port`, `fflonk/c2a-sep-anarchy-verifier`).
+- Each numbered task lands on a topic branch named `plonk/<phase-letter>-<task-id>` (e.g. `plonk/b3-circuit-port`, `plonk/c2a-sep-anarchy-verifier`).
 - Each PR rolls up one bullet from the "Sub-PR partitioning" table near the top of this document.
 - PR descriptions cross-link the relevant phase header in this plan.
 - Phase E and F can roll up their tasks into single PRs each (operational, scoped to deletions).

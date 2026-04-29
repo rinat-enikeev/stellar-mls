@@ -1,0 +1,272 @@
+{
+  "description": "Canonical test vectors for the SEP Tyranny Soroban contract (`contracts/sep-tyranny`). Single source of truth for the contract's ABI: every error code, IC count, validation rule, wire field is documented and CI-asserted by the inline `test_vectors_consistency` test. Tyranny is single-admin governance: the admin's BLS pubkey is committed at creation (Poseidon-hashed), pinned for the group's lifetime, and only proofs demonstrating knowledge of the admin's secret key advance the membership commitment.",
+  "version": 1,
+  "design_doc": "docs/tyranny-update-testnet-design.md",
+  "design_doc_version": "0.1",
+  "contract_source": "contracts/sep-tyranny/src/lib.rs",
+  "architecture_note": "Fifth per-type contract (Anarchy, OneOnOne, Democracy, Oligarchy, Tyranny). Tyranny is NOT Oligarchy K=1 — it has no admin tree, no threshold; admin is a single pinned pubkey hash. Tyranny is NOT Anarchy with caller.require_auth() — that would leak the admin's Stellar address on every update; the cryptographic binding hides admin identity from chain observers. Same scope as Anarchy on member-count handling (value-agnostic; no occupancy_commitment).",
+
+  "error_codes": {
+    "description": "Numeric values of `Error` variants. Number alignment with sibling per-type contracts is intentional. Gaps in the numbering (3, 6, 16-25, 27-30) are reserved by sibling contracts for variants Tyranny doesn't need (Reserved3, GroupInactive, OneOnOneImmutable, Invalid1v1Tier, MissingAdminRoot, MemberCountMismatch, InvalidThreshold, etc.).",
+    "vectors": [
+      { "name": "NotInitialized", "code": 1 },
+      { "name": "AlreadyInitialized", "code": 2 },
+      { "name": "GroupAlreadyExists", "code": 4 },
+      { "name": "GroupNotFound", "code": 5 },
+      { "name": "InvalidProof", "code": 7 },
+      { "name": "InvalidTier", "code": 8 },
+      { "name": "InvalidVkLength", "code": 9 },
+      { "name": "PublicInputsMismatch", "code": 10 },
+      { "name": "InvalidEpoch", "code": 11 },
+      { "name": "ProofReplay", "code": 12 },
+      { "name": "TierGroupLimitReached", "code": 13 },
+      { "name": "AdminOnly", "code": 14, "note": "create_group in restricted mode rejects non-admin callers" },
+      { "name": "InvalidCommitmentEncoding", "code": 15 },
+      { "name": "InvalidPoint", "code": 26 }
+    ],
+    "not_declared_aligned_with_siblings": [
+      { "name": "Reserved3", "code": 3, "reason": "reserved for sibling-contract numbering alignment; no current use" },
+      { "name": "GroupInactive", "code": 6, "reason": "no active flag, no deactivate path" },
+      { "name": "UnknownVkKind", "code": 16, "reason": "VkKind exhaustively matched in update_vk; the variant is unreachable" },
+      { "name": "OneOnOneImmutable", "code": 17, "reason": "no 1v1 in this contract" },
+      { "name": "UnknownGroupType", "code": 18, "reason": "single-type contract" },
+      { "name": "MissingAdminRoot", "code": 19, "reason": "no admin tree (single pinned pubkey hash, not a Merkle root)" },
+      { "name": "AdminRootMismatch", "code": 20, "reason": "no admin tree" },
+      { "name": "DemocracyInputMissing", "code": 21, "reason": "Democracy artifact" },
+      { "name": "Reserved22", "code": 22, "reason": "Oligarchy NotAdmin reservation" },
+      { "name": "Invalid1v1Tier", "code": 23, "reason": "no 1v1 in this contract" },
+      { "name": "MemberCountMismatch", "code": 24, "reason": "Tyranny is value-agnostic to count" },
+      { "name": "MemberCountOutOfRange", "code": 25, "reason": "Tyranny is value-agnostic to count" },
+      { "name": "GroupStillActive", "code": 27, "reason": "no active flag, no deactivate path" },
+      { "name": "InvalidThreshold", "code": 28, "reason": "no quorum (single admin)" },
+      { "name": "GroupTypeMismatch", "code": 29, "reason": "single-type contract" },
+      { "name": "InvalidInitialMembership", "code": 30, "reason": "no in-circuit floor" }
+    ]
+  },
+
+  "tier": {
+    "description": "Member tier index → tree depth → leaf capacity. The contract MUST reject `tier > 2` with `InvalidTier`. Tier capacity is the total slot space.",
+    "vectors": [
+      { "tier": 0, "name": "Small", "depth": 5, "capacity": 32 },
+      { "tier": 1, "name": "Medium", "depth": 8, "capacity": 256 },
+      { "tier": 2, "name": "Large", "depth": 11, "capacity": 2048 }
+    ],
+    "rejected_tiers": [
+      { "tier": 3, "expected_error": "InvalidTier" },
+      { "tier": 100, "expected_error": "InvalidTier" },
+      { "tier": 4294967295, "expected_error": "InvalidTier" }
+    ]
+  },
+
+  "max_groups_per_tier": {
+    "description": "Cross-group cap enforced by create_group: per-tier active-group count must be < MAX_GROUPS_PER_TIER, else TierGroupLimitReached. Monotonic increment-only since `deactivate_group` is not present (postmortem #153). Operationally fine at testnet scale; mainnet planning needs revisiting if approaching the cap.",
+    "value": 10000,
+    "rule": "GroupCount(tier) MUST be < 10000 at create_group; exceeded → TierGroupLimitReached"
+  },
+
+  "vk_kind_enum": {
+    "description": "Three VK kinds. Membership (3-IC, standard) for verify_membership. Create (5-IC) for create_group — binds the initial commitment + admin_pubkey_commitment + group_id_fr. Update (6-IC) for update_commitment — binds (c_old, epoch_old, c_new, admin_pubkey_commitment, group_id_fr), where the last two are contract-supplied (admin_pubkey_commitment from `DataKey::AdminCommitment(group_id)`, group_id_fr derived deterministically from the group_id bytes). The update circuit's witness includes the admin's BLS secret key; the circuit constrains `Poseidon(admin_pubkey, group_id_fr) == admin_pubkey_commitment` and proves the new member tree differs from the old by ≤1 leaf. **Per-group binding via `group_id_fr` closes cross-group commitment linkability**: same admin in two groups produces uncorrelated on-chain `admin_pubkey_commitment` values to chain observers (privacy-first property — see design doc §3).",
+    "vectors": [
+      {
+        "name": "Membership",
+        "ic_count": 3,
+        "ic_layout": ["base", "commitment", "epoch"],
+        "used_by": ["verify_membership"]
+      },
+      {
+        "name": "Create",
+        "ic_count": 5,
+        "ic_layout": ["base", "commitment", "epoch", "admin_pubkey_commitment", "group_id_fr"],
+        "used_by": ["create_group"],
+        "note": "TyrannyCreateCircuit. epoch is hardcoded to 0 at create. `admin_pubkey_commitment` is supplied as a wire input AND bound into the proof; the contract checks the wire value matches the entrypoint param. `group_id_fr` is derived by the contract via `Fr::from_u256(U256::from_be_bytes(group_id))` — a deterministic function of the 32 group_id bytes — and bound as an additional public input. Circuit constraint: `Poseidon(admin_pubkey, group_id_fr) == admin_pubkey_commitment`."
+      },
+      {
+        "name": "Update",
+        "ic_count": 6,
+        "ic_layout": ["base", "c_old", "epoch_old", "c_new", "admin_pubkey_commitment", "group_id_fr"],
+        "used_by": ["update_commitment"],
+        "note": "TyrannyUpdateCircuit. 3 wire-supplied scalars (c_old, epoch_old, c_new) + 2 contract-supplied (admin_pubkey_commitment from `DataKey::AdminCommitment(group_id)`, group_id_fr derived deterministically from the group_id bytes). Witness: admin BLS secret key + member trees before/after. Circuit constraint: `Poseidon(admin_pubkey, group_id_fr) == admin_pubkey_commitment` AND member-tree-delta-≤-1."
+      }
+    ],
+    "ic_ordering_canonical": "MUST match the Tyranny circuit family's allocation order. Pinned per design §5.1."
+  },
+
+  "create_group_validation": {
+    "description": "Per-call validation in `create_group`. Single-type contract. epoch hardcoded to 0; admin_pubkey_commitment pinned at create.",
+    "rules": [
+      "tier ∈ {0, 1, 2}; out of range → InvalidTier",
+      "group_id MUST NOT already be assigned; collision → GroupAlreadyExists",
+      "commitment MUST be a canonical Fr encoding; non-canonical → InvalidCommitmentEncoding",
+      "admin_pubkey_commitment MUST be a canonical Fr encoding; non-canonical → InvalidCommitmentEncoding",
+      "GroupCount(tier) MUST be < MAX_GROUPS_PER_TIER (10000); exceeded → TierGroupLimitReached",
+      "if RestrictedMode is true: caller MUST equal Admin, else AdminOnly (caller.require_auth() runs first)",
+      "public_inputs.commitment MUST equal `commitment` parameter; mismatch → PublicInputsMismatch",
+      "public_inputs.epoch MUST be 0; non-zero → PublicInputsMismatch",
+      "public_inputs.admin_pubkey_commitment MUST equal `admin_pubkey_commitment` parameter; mismatch → PublicInputsMismatch",
+      "proof MUST verify under the Create VK at `tier` against (commitment, 0, admin_pubkey_commitment); failure → InvalidProof",
+      "proof_hash(proof) MUST NOT be in UsedProof storage; collision → ProofReplay"
+    ]
+  },
+
+  "update_commitment_public_inputs_wire_format": {
+    "description": "Wire encoding of UpdatePublicInputs. 3 wire-supplied scalars; the verifier consumes a 5-public-input vector at proof verification (4th input contract-supplied admin_pubkey_commitment from storage; 5th input contract-derived group_id_fr from the group_id bytes).",
+    "wire_fields": [
+      { "name": "c_old", "type": "BytesN<32>", "fr_canonical": true, "rule": "MUST equal current.commitment, else PublicInputsMismatch" },
+      { "name": "epoch_old", "type": "u64", "rule": "MUST equal current.epoch, else PublicInputsMismatch" },
+      { "name": "c_new", "type": "BytesN<32>", "fr_canonical": true, "rule": "non-canonical → InvalidCommitmentEncoding" }
+    ],
+    "groth16_public_inputs": [
+      "c_old (from wire)",
+      "epoch_old (from wire)",
+      "c_new (from wire)",
+      "admin_pubkey_commitment (from DataKey::AdminCommitment(group_id) in storage — its own per-group slot, not a CommitmentEntry field)",
+      "group_id_fr (derived deterministically from the entrypoint's group_id parameter via `Fr::from_u256(U256::from_be_bytes(group_id))` — same group_id always yields the same Fr; different group_ids yield different Frs with overwhelming probability)"
+    ],
+    "vk_kind": "Update (6 IC points: base + 5 public inputs)",
+    "canonical_encoding_rules": [
+      "Every BytesN<32> commitment field MUST round-trip through Fr::from_bytes ∘ Fr::to_bytes; non-canonical encodings are rejected with InvalidCommitmentEncoding.",
+      "u64 epoch_old uses Soroban's native big-endian XDR encoding.",
+      "group_id is BytesN<32>; the contract reduces it mod r via U256::from_be_bytes + Fr::from_u256 to produce group_id_fr (so any 32-byte group_id is valid input — no canonical-Fr requirement on group_id itself).",
+      "Public-input ordering for Groth16 verification is fixed: positions 1-3 from wire, position 4 from storage, position 5 contract-derived from group_id."
+    ]
+  },
+
+  "storage_layout": {
+    "description": "Storage entries written by the contract. Per-type Tyranny means `group_type` is implicit in the contract address. The admin's BLS pubkey commitment lives in its own per-group slot (`DataKey::AdminCommitment(group_id)`) rather than as a CommitmentEntry field — avoids ~2KB/group of duplication across HISTORY_WINDOW=64 snapshots, and gives the immutable per-group anchor a dedicated invariant.",
+    "commitment_entry": {
+      "fields": [
+        { "name": "commitment", "type": "BytesN<32>", "rule": "Poseidon commitment; canonical Fr encoding" },
+        { "name": "epoch", "type": "u64", "rule": "starts at 0, increments by 1 per successful update_commitment" },
+        { "name": "timestamp", "type": "u64", "rule": "ledger timestamp when this state was recorded" },
+        { "name": "tier", "type": "u32", "rule": "0=Small, 1=Medium, 2=Large; fixed at create_group, never mutated" }
+      ]
+    },
+    "removed_vs_per_type_template": [
+      { "field": "group_type", "rationale": "single-type contract; the contract address IS the discriminator" },
+      { "field": "active", "rationale": "no deactivate path, no code can set it false" },
+      { "field": "member_count", "rationale": "Tyranny is value-agnostic to count (same scope as Anarchy)" },
+      { "field": "occupancy_commitment", "rationale": "no member-count hiding" },
+      { "field": "threshold_numerator", "rationale": "no quorum (single admin)" },
+      { "field": "admin_root", "rationale": "no admin tree (single pinned pubkey hash, not a Merkle root)" }
+    ],
+    "data_keys": [
+      { "name": "Admin", "value_type": "Address", "storage": "instance", "note": "contract admin; required for update_vk and set_restricted_mode" },
+      { "name": "RestrictedMode", "value_type": "bool", "storage": "instance", "note": "when true, only the contract admin may call create_group; toggled by set_restricted_mode (admin-only). Default false." },
+      { "name": "VK(tier)", "value_type": "VerificationKeyData", "storage": "persistent", "note": "Membership-circuit VK for tier 0/1/2; 3 IC points; used at verify_membership" },
+      { "name": "CreateVK(tier)", "value_type": "VerificationKeyData", "storage": "persistent", "note": "Tyranny Create-circuit VK for tier 0/1/2; 4 IC points" },
+      { "name": "UpdateVK(tier)", "value_type": "VerificationKeyData", "storage": "persistent", "note": "Tyranny Update-circuit VK for tier 0/1/2; 5 IC points" },
+      { "name": "Group(group_id)", "value_type": "CommitmentEntry", "storage": "persistent", "note": "current group state" },
+      { "name": "AdminCommitment(group_id)", "value_type": "BytesN<32>", "storage": "persistent", "note": "Poseidon(admin_pubkey, group_id_fr); pinned at create_group, NEVER written by any other entrypoint. Per-group-unique by construction — same admin in two different groups produces TWO DIFFERENT on-chain commitments because group_id_fr differs. Closes cross-group linkability for the same admin: an observer correlating two AdminCommitment values across groups can't conclude they share an admin without knowing admin_pubkey. Read by update_commitment + bound as the 4th public input to the Update VK; group_id_fr (5th input) is derived deterministically from the group_id bytes by the contract." },
+      { "name": "History(group_id)", "value_type": "Vec<CommitmentEntry>", "storage": "persistent", "note": "rolling-window history; capped at HISTORY_WINDOW=64; pruned FIFO" },
+      { "name": "UsedProof(proof_hash)", "value_type": "()", "storage": "persistent (TTL ~30 days via LEDGER_BUMP)", "note": "global-nullifier scope" },
+      { "name": "GroupCount(tier)", "value_type": "u32", "storage": "instance", "note": "active group count per tier; checked against MAX_GROUPS_PER_TIER (10000) in create_group. Monotonic increment-only since `deactivate_group` is not present (postmortem #153) — no decrement path; one-way ratchet. Operationally fine at testnet scale." }
+    ]
+  },
+
+  "admin_entrypoints": {
+    "description": "Admin-gated entrypoints. All require admin.require_auth(); panic on unauth. Admin is fixed at __constructor.",
+    "vectors": [
+      {
+        "name": "update_vk",
+        "args": [
+          { "name": "kind", "type": "VkKind", "values": ["Membership", "Create", "Update"] },
+          { "name": "tier", "type": "u32", "rule": "must be ≤ 2 else InvalidTier" },
+          { "name": "new_vk", "type": "VerificationKeyData", "rule": "IC length matches `kind` (3/4/5); subgroup-valid; else InvalidVkLength / InvalidPoint" }
+        ],
+        "purpose": "rotate Membership / Create / Update VK at a tier — used for ceremony rotation"
+      },
+      {
+        "name": "set_restricted_mode",
+        "args": [{ "name": "restricted", "type": "bool" }],
+        "purpose": "when restricted=true, create_group rejects non-admin callers with AdminOnly. Storage: DataKey::RestrictedMode (instance). Default false."
+      }
+    ]
+  },
+
+  "queries": {
+    "description": "Read-only entrypoints. None require auth. All return Result<_, Error>.",
+    "vectors": [
+      { "name": "get_commitment", "args": [{"name": "group_id", "type": "BytesN<32>"}], "returns": "CommitmentEntry", "errors": ["GroupNotFound"] },
+      { "name": "get_history", "args": [{"name": "group_id", "type": "BytesN<32>"}, {"name": "max_entries", "type": "u32"}], "returns": "Vec<CommitmentEntry>", "errors": ["GroupNotFound"] },
+      { "name": "verify_membership", "args": [{"name": "group_id", "type": "BytesN<32>"}, {"name": "proof", "type": "Groth16Proof"}, {"name": "public_inputs", "type": "MembershipPublicInputs"}], "returns": "bool", "errors": ["GroupNotFound", "PublicInputsMismatch"], "note": "returns Ok(false) on bad proof rather than InvalidProof — read-only verifier semantics" },
+      { "name": "bump_group_ttl", "args": [{"name": "group_id", "type": "BytesN<32>"}], "returns": "()", "errors": ["GroupNotFound", "NotInitialized"], "note": "permissionless TTL bump; bumps Group + History only" }
+    ]
+  },
+
+  "epoch_invariant": {
+    "description": "Tyranny keeps the monotonic-by-1 epoch rule. update_commitment increments stored.epoch by exactly 1 on success.",
+    "vectors": [
+      { "stored_epoch": 0, "wire_epoch_old": 0, "valid": true, "post_epoch": 1 },
+      { "stored_epoch": 5, "wire_epoch_old": 5, "valid": true, "post_epoch": 6 },
+      { "stored_epoch": 5, "wire_epoch_old": 4, "valid": false, "expected_error": "PublicInputsMismatch" },
+      { "stored_epoch": 5, "wire_epoch_old": 6, "valid": false, "expected_error": "PublicInputsMismatch" },
+      { "stored_epoch": 18446744073709551615, "wire_epoch_old": 18446744073709551615, "valid": false, "expected_error": "InvalidEpoch", "note": "u64 overflow on checked_add" }
+    ]
+  },
+
+  "proof_replay_protection": {
+    "description": "Global nullifier scope. The nullifier is sha256(proof.a || proof.b || proof.c) over the 384-byte uncompressed proof bytes. Scope is global per contract.",
+    "rules": [
+      "Once a proof's bytes have been recorded by record_proof, any subsequent state-changing entrypoint call with byte-identical proof bytes is rejected with ProofReplay.",
+      "TTL of UsedProof entries is LEDGER_BUMP (~30 days). Long-lived groups require periodic state advancement to keep the latest nullifiers alive.",
+      "Pre-inclusion mempool replay is NOT closed by the contract-level nullifier — circuit-level operation tag binding would close that (deferred)."
+    ]
+  },
+
+  "tests_to_implement": {
+    "description": "Inline test names that the `#[cfg(test)] mod test` block in `contracts/sep-tyranny/src/test.rs` MUST cover. The `test_vectors_consistency` test loads this very file and asserts the contract's `Error` enum / IC-point constants / MAX_GROUPS_PER_TIER match the values pinned above.",
+    "tests": [
+      "test_initialize",
+      "test_invalid_membership_vk_length_rejected",
+      "test_invalid_create_vk_length_rejected",
+      "test_invalid_update_vk_length_rejected",
+      "test_create_group_happy_path",
+      "test_create_group_rejects_invalid_tier",
+      "test_create_group_rejects_duplicate_group_id",
+      "test_create_group_rejects_non_canonical_commitment",
+      "test_create_group_rejects_non_canonical_admin_pubkey_commitment",
+      "test_create_group_rejects_invalid_proof",
+      "test_create_group_restricted_mode_rejects_non_admin",
+      "test_create_group_restricted_mode_admin_can_create",
+      "test_create_group_enforces_tier_group_limit",
+      "test_create_group_rejects_replayed_proof",
+      "test_create_group_rejects_public_inputs_mismatch",
+      "test_update_commitment_happy_path",
+      "test_update_commitment_rejects_stale_c_old",
+      "test_update_commitment_rejects_wrong_epoch_old",
+      "test_update_commitment_rejects_non_canonical_c_new",
+      "test_update_commitment_rejects_replayed_proof",
+      "test_update_commitment_rejects_unknown_group",
+      "test_update_commitment_does_not_mutate_admin_pubkey_commitment",
+      "test_verify_membership_happy_path",
+      "test_verify_membership_rejects_wrong_commitment",
+      "test_verify_membership_rejects_wrong_epoch",
+      "test_verify_membership_rejects_unknown_group",
+      "test_update_vk_requires_auth",
+      "test_set_restricted_mode_requires_auth",
+      "test_update_vk_rotates_membership_vk",
+      "test_update_vk_rotates_create_vk",
+      "test_update_vk_rotates_update_vk",
+      "test_update_vk_rejects_invalid_tier",
+      "test_get_commitment_returns_current_state",
+      "test_get_commitment_rejects_unknown_group",
+      "test_bump_group_ttl_extends_group_storage",
+      "test_bump_group_ttl_rejects_unknown_group",
+      "test_get_history_returns_most_recent_max_entries",
+      "test_get_history_returns_full_when_max_exceeds_size",
+      "test_get_history_rejects_unknown_group",
+      "test_update_commitment_rejects_epoch_overflow",
+      "test_vectors_consistency"
+    ],
+    "categories": {
+      "initialization": 4,
+      "create_group": 11,
+      "update_commitment": 8,
+      "verify_membership": 4,
+      "admin_entrypoints": 6,
+      "queries": 7,
+      "abi_pin": 1,
+      "total": 41
+    }
+  }
+}

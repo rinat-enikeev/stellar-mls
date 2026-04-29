@@ -1395,15 +1395,20 @@ name = "sep-xxxx-circuits"
 version = "0.1.0"
 dependencies = [
  "ark-bls12-381 0.4.0",
+ "ark-bls12-381 0.5.0",
  "ark-crypto-primitives 0.4.0",
  "ark-ec 0.4.2",
+ "ark-ec 0.5.0",
  "ark-ff 0.4.2",
+ "ark-ff 0.5.0",
  "ark-groth16",
  "ark-r1cs-std 0.4.0",
  "ark-relations 0.4.0",
  "ark-serialize 0.4.2",
+ "ark-serialize 0.5.0",
  "ark-snark 0.4.0",
  "ark-std 0.4.0",
+ "ark-std 0.5.0",
  "jf-pcs 0.2.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-plonk-v0.8.0)",
  "jf-plonk",
  "jf-relation 0.5.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-plonk-v0.8.0)",
@@ -1411,6 +1416,7 @@ dependencies = [
  "k256",
  "rand",
  "rand_chacha",
+ "serde_json",
  "sha2",
 ]
 

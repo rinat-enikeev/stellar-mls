@@ -5,6 +5,9 @@
 //! 2. Proof generation (member creates a 192-byte proof)
 //! 3. Proof verification (contract/anyone verifies with 3 pairings)
 
+#[cfg(feature = "plonk")]
+pub mod srs;
+
 use ark_bls12_381::{Bls12_381, Fr};
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey, VerifyingKey};
 use ark_snark::SNARK;

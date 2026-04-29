@@ -30,8 +30,18 @@ ark-crypto-primitives = { version = "0.4", features = ["crh", "merkle_tree", "sp
 # Re-verify with `git ls-remote --tags https://github.com/EspressoSystems/jellyfish`
 # before bumping.
 jf-plonk    = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.8.0", default-features = false, features = ["std"], optional = true }
-jf-pcs      = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.8.0", default-features = false, features = ["std"], optional = true }
+jf-pcs      = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.8.0", default-features = false, features = ["std", "test-srs"], optional = true }
 jf-relation = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.8.0", default-features = false, features = ["std"], optional = true }
+
+# Arkworks 0.5.x — required by jf-plonk's type system. The existing legacy
+# code uses 0.4.x; both versions coexist (Cargo handles duplicate-version
+# linking) until Phase B.4 migrates the prover module wholesale to 0.5.x
+# and the renamed v05 deps are dropped.
+ark-bls12-381-v05 = { package = "ark-bls12-381", version = "0.5", default-features = false, features = ["curve"], optional = true }
+ark-ec-v05        = { package = "ark-ec",        version = "0.5", default-features = false, features = ["std"],   optional = true }
+ark-ff-v05        = { package = "ark-ff",        version = "0.5", default-features = false, features = ["std"],   optional = true }
+ark-serialize-v05 = { package = "ark-serialize", version = "0.5", default-features = false, features = ["std"],   optional = true }
+ark-std-v05       = { package = "ark-std",       version = "0.5", default-features = false, features = ["std"],   optional = true }
 
 # --- General utility deps (unconditional) ---
 sha2 = "0.10"
@@ -40,8 +50,17 @@ rand_chacha = "0.3"
 k256 = { version = "0.13", features = ["schnorr"] }
 jni = { version = "0.21", optional = true }
 
+# Used only by the one-shot `extract-ef-kzg` binary (gated behind
+# `feature = "extract-tool"`). Keeps the JSON dep out of the library
+# build — every other consumer should never need this.
+serde_json = { version = "1", optional = true }
+
 [dev-dependencies]
 ark-relations = { version = "0.4", features = ["std"] }
+
+[build-dependencies]
+# Used by build.rs to assert SHA-256 of the embedded EF KZG SRS bytes.
+sha2 = "0.10"
 
 [features]
 # Default keeps Groth16 active so existing builds (mobile bundles, FFI surface,
@@ -52,7 +71,19 @@ std = []
 ffi = []
 jni = ["dep:jni"]
 groth16 = ["dep:ark-relations", "dep:ark-r1cs-std", "dep:ark-groth16", "dep:ark-snark", "dep:ark-crypto-primitives"]
-plonk = ["dep:jf-plonk", "dep:jf-pcs", "dep:jf-relation"]
+plonk = [
+    "dep:jf-plonk", "dep:jf-pcs", "dep:jf-relation",
+    "dep:ark-bls12-381-v05", "dep:ark-ec-v05", "dep:ark-ff-v05",
+    "dep:ark-serialize-v05", "dep:ark-std-v05",
+]
+# One-shot operator tool for extracting the EF KZG SRS from the published
+# transcript. Activated only when running `cargo run --bin extract-ef-kzg`.
+extract-tool = ["plonk", "dep:serde_json"]
+
+[[bin]]
+name = "extract-ef-kzg"
+path = "src/bin/extract_ef_kzg.rs"
+required-features = ["extract-tool"]
 
 [profile.release]
 strip = "symbols"

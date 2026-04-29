@@ -8,6 +8,9 @@
 #[cfg(feature = "plonk")]
 pub mod srs;
 
+#[cfg(feature = "plonk")]
+pub mod plonk;
+
 use ark_bls12_381::{Bls12_381, Fr};
 use ark_groth16::{Groth16, PreparedVerifyingKey, Proof, ProvingKey, VerifyingKey};
 use ark_snark::SNARK;

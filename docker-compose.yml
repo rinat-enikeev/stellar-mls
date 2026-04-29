@@ -45,6 +45,7 @@ services:
       - PORT=3000
     volumes:
       - blossom-data:/app/data
+      - ./deploy/blossom/config.yml:/app/config.yml:ro
     restart: unless-stopped
     networks:
       - internal

@@ -1,0 +1,25 @@
+# hzrd149/blossom-server config — overrides the built-in defaults.
+#
+# Without this file the server falls back to a wildcard rule with a 1-week
+# LRU expiration, which prunes cold blobs (notably the small ceremony
+# state.txt / receipt.txt sidecars). The first rule below pins everything
+# uploaded by the ceremony coordinator pubkey indefinitely; remaining rules
+# preserve the prior chat-blob retention.
+
+storage:
+  rules:
+    # Onym ceremony coordinator — never expire ceremony artifacts (state.srs,
+    # state.txt, receipt.txt, future phase-2 zkeys). Matches by uploader
+    # pubkey so this scope is not at the mercy of MIME labels.
+    - type: "*"
+      expiration: "100 years"
+      pubkeys:
+        - "0ce1e21a66d7860ab60af9d1eaf00b1f2f96a47429fd05ad548cdb1f26b66403"
+
+    # Default retention for chat-app uploads (encrypted media blobs).
+    - type: "image/*"
+      expiration: "1 month"
+    - type: "video/*"
+      expiration: "1 week"
+    - type: "*"
+      expiration: "1 week"

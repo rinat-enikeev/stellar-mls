@@ -52,7 +52,9 @@ parallelism profile, and the post-quantum class
 For pairing-based and curve-based SNARKs, the elliptic curve and the
 hash function chosen for in-circuit use jointly determine R1CS or
 custom-gate constraint counts and the on-chain verifier's primitive
-dependencies. We consider BLS12-381~\cite{bowe-2017-bls12381},
+dependencies. We consider BLS12-381~\cite{bowe-2017-bls12381}
+(constructed within the Barreto--Lynn--Scott
+family~\cite{barreto-2003-bls}),
 BN254~\cite{barreto-2005-bn254} (with the security re-evaluation
 of~\cite{kim-barbulescu-2016} as a load-bearing footnote), the
 BLS12-377 / BW6-761 cycle used for SNARK-of-SNARK constructions, the
@@ -136,9 +138,12 @@ runs in the chain's general-purpose bytecode. Three regimes:
     a built-in callable that performs (e.g.) a BLS12-381 pairing or
     a BN254 G1 multi-scalar multiplication at gas costs orders of
     magnitude lower than a bytecode implementation. Examples:
-    Ethereum's BN254 precompile (EIP-197), Stellar Protocol 22's
-    BLS12-381 host functions~\cite{stellar-cap-0058},
-    Mina's built-in Pickles verifier.
+    Ethereum's BN254 precompile (EIP-197); Stellar's BLS12-381 host
+    functions added in Protocol 22~\cite{stellar-cap-0059}, BN254
+    host functions added in Protocol 25~\cite{stellar-cap-0074},
+    and Poseidon / Poseidon2 permutation primitives also added in
+    Protocol 25~\cite{stellar-cap-0075}; Mina's built-in Pickles
+    verifier.
   \item \textbf{Pure bytecode}: the verifier is a contract
     implementation in the chain's VM language with no native
     acceleration for SNARK primitives. Verification cost scales with
@@ -150,12 +155,16 @@ runs in the chain's general-purpose bytecode. Three regimes:
 \end{enumerate}
 
 This axis is the binding constraint that makes the
-``Stellar~+~Plonky3~+~FRI'' configuration in \S\ref{sec:configurations}
-hypothetical. Stellar Protocol 22 added BLS12-381 host functions but
-no FRI host functions; a transparent-setup PQ-secure verifier on
-Stellar would run in pure bytecode and incur orders-of-magnitude
-higher gas. The same constraint forces Ethereum L1 deployments toward
-BN254 over BLS12-381 in the absence of EIP-2537.
+``Stellar~+~Plonky3~+~FRI'' configuration in
+\S\ref{sec:configurations} hypothetical. Stellar's
+host-function set covers pairings on BLS12-381 and BN254 and
+Poseidon-arithmetization permutations~\cite{stellar-cap-0075}, but
+not the FRI stack: CAP-0075's rationale explicitly scopes out NTT,
+Goldilocks-field arithmetic, and FRI primitives. A transparent-setup
+PQ-secure verifier on Stellar would therefore run in pure bytecode
+for its FRI-specific operations and incur orders-of-magnitude higher
+gas. The same constraint forces Ethereum L1 deployments toward BN254
+over BLS12-381 in the absence of EIP-2537.
 
 \subsection{Cross-axis dependencies}
 \label{sec:dimensions-deps}

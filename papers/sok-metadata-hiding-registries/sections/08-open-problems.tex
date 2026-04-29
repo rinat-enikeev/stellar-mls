@@ -34,20 +34,27 @@ work; for an applied SoK reader, the operationally-relevant
 question is when the existing proof-size gap closes by a factor
 sufficient to make pure-FRI L1-anchored deployment economical.
 
-\paragraph{(3) Non-pairing host functions on chains with
-pairing-only precompiles.}
+\paragraph{(3) Non-pairing host functions on chains whose existing
+host-function set is curve-centric.}
 \label{sec:open-host}
-Stellar's CAP-0058~\cite{stellar-cap-0058} added BLS12-381 host
-functions as a single coherent set. The implicit assumption is that
-SNARK verification reduces to pairings; for FRI-based
-configurations, the relevant primitives are Goldilocks-field
-arithmetic, NTT, and a STARK-friendly hash family. No proposed
-chain-protocol upgrade we are aware of targets these primitives in a
-manner consistent with adding host functions for both pairing-based
-and hash-based SNARKs simultaneously. The right ABI is itself an
-open question: a chain's host-function set is a long-tail commitment,
-and surveys of which primitives are most reusable across SNARK
-families are currently missing from the literature.
+Stellar's host-function trajectory is the cleanest illustration of the
+shape of this gap. Protocol 22 added {BLS12-381} host
+functions~\cite{stellar-cap-0059}; Protocol 25 added {BN254}
+host functions~\cite{stellar-cap-0074} and Poseidon / Poseidon2
+permutation primitives over {BLS12-381}~$\mathbb{F}_r$ and
+{BN254}~$\mathbb{F}_r$~\cite{stellar-cap-0075}. The
+trajectory tracks pairing-based and Poseidon-arithmetization
+deployments well; what it does not track is the FRI stack.
+{CAP-0075}'s rationale explicitly scopes \emph{out} {NTT}
+primitives, Goldilocks-field arithmetic, and FRI-related operations,
+on the grounds that exposing permutation primitives over the
+existing scalar fields is more flexible than introducing a new field
+arithmetic. The decision is defensible in isolation but it leaves
+the FRI configurations (C6, C7) with no host-function support on the
+chain. The right ABI for a chain that wants to support both
+pairing-based and FRI-based SNARKs simultaneously is itself an open
+design question, and surveys of which primitives are most reusable
+across SNARK families are currently missing from the literature.
 
 \paragraph{(4) Transparent-setup pairings.} Every pairing-based
 SNARK in current production deployment requires a setup ceremony,

@@ -40,15 +40,18 @@ Three migration paths to a PQ-ready endpoint:
 \begin{description}
   \item[\textsc{C1 $\to$ C7} (in-place SNARK swap):] retain the
     Stellar anchor, swap Groth16 for Plonky3 / FRI. Class
-    \textbf{(b)}: Plonky3 itself is mature enough for production use,
-    but Stellar Protocol 22's host-function set (BLS12-381 pairings
-    only~\cite{stellar-cap-0058}) does not accelerate FRI
-    verification. Pure-WASM FRI verification is one to two orders of
-    magnitude more expensive than C1's pairing-precompile path. A
-    Stellar protocol upgrade adding Goldilocks-arithmetic and
-    Merkle-friendly hash host functions would unblock this path; we
-    discuss the technical shape of such a CAP in
-    \S\ref{sec:open}.
+    \textbf{(b)}: Plonky3 itself is mature enough for production
+    use, but Stellar's host-function set --- BLS12-381 pairings
+    (Protocol 22~\cite{stellar-cap-0059}), BN254 pairings (Protocol
+    25~\cite{stellar-cap-0074}), and Poseidon / Poseidon2
+    permutations over the existing scalar fields (also Protocol
+    25~\cite{stellar-cap-0075}) --- does not include the FRI stack.
+    CAP-0075 explicitly scopes out Goldilocks-field arithmetic, NTT,
+    and FRI primitives; in pure WASM, FRI verification is one to two
+    orders of magnitude more expensive than C1's pairing-precompile
+    path. A successor CAP adding the missing FRI primitives would
+    unblock this path; we discuss its technical shape in
+    \S\ref{sec:open-host}.
   \item[\textsc{C1 $\to$ C6} (anchor change to StarkNet or similar):]
     abandon the Stellar anchor and re-deploy on a chain whose
     verification host is FRI-aware. Class \textbf{(a)}: the
@@ -77,11 +80,18 @@ Three migration paths to a PQ-ready endpoint:
     on a FRI-aware L2. Class \textbf{(a)}. Trade-offs: introduces the
     L2 sequencer trust layer; the L1-anchor-only fallback present in
     rollup architectures partially mitigates this.
-  \item[\textsc{C2 $\to$ C1} (curve and SNARK retained, anchor and
-    host changed):] re-deploy on Stellar. Class \textbf{(a)}; the
-    transformation is purely operational. Does not improve PQ
-    posture; included for completeness as a non-PQ migration that
-    nonetheless changes the trust posture.
+  \item[\textsc{C2 $\to$ Stellar} (anchor change with curve
+    preservation):] re-deploy a Tornado-style construction on
+    Stellar without curve change. Class \textbf{(a)} as of Stellar
+    Protocol 25, which added native BN254 host
+    functions~\cite{stellar-cap-0074} (point addition, scalar
+    multiplication, pairing check). A C2 deployer can keep the
+    BN254 curve, the BN254-instantiated Groth16 verifying key, the
+    Poseidon arithmetization (CAP-0075~\cite{stellar-cap-0075}),
+    and the per-circuit MPC ceremony output, and only swap the
+    anchor chain and the contract host. Does not improve PQ
+    posture; included as a non-PQ migration that changes only the
+    trust posture and the fee market.
 \end{description}
 
 \subsection{From C3 (Aztec + UltraPlonk)}
@@ -165,14 +175,21 @@ sole migration is the host-function unblock.
 
 \begin{description}
   \item[\textsc{Stellar protocol upgrade adding FRI host functions}:]
-    Class \textbf{(b)}. The technical shape of such an upgrade is a
-    Goldilocks-arithmetic precompile, a Poseidon2-or-Rescue host
-    function, and ideally an NTT primitive; CAP-style proposals
-    along these lines do not exist at the time of writing. We
-    estimate the engineering scale at one to two
-    chain-protocol-upgrade cycles, plus the validator-side activation
-    process; we do not estimate the political feasibility, which is
-    the load-bearing variable in practice.
+    Class \textbf{(b)}. Protocol 25 has already moved part of the
+    way: CAP-0075~\cite{stellar-cap-0075} added Poseidon and
+    Poseidon2 permutation primitives over the existing scalar fields
+    (BLS12-381~$\mathbb{F}_r$, BN254~$\mathbb{F}_r$). What remains
+    missing for a deployable FRI verifier is the orthogonal subset
+    that CAP-0075 explicitly declined to introduce: Goldilocks-field
+    arithmetic, NTT, and FRI-specific operations over a small field.
+    The CAP's rationale documents this scope decision; it is
+    deliberate rather than oversight. A successor CAP would need to
+    introduce a new field arithmetic to the host-function ABI, which
+    is a larger commitment than CAP-0075 was willing to make. We
+    estimate the engineering scale of the unblock at one to two
+    chain-protocol-upgrade cycles plus validator activation; we do
+    not estimate the political feasibility, which is the
+    load-bearing variable in practice.
 \end{description}
 
 \subsection{Migration matrix}

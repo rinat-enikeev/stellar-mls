@@ -376,17 +376,21 @@ DEST=src/prover/srs/ef-kzg-2023-transcript.json
 #   { "transcripts": [ { "numG1Powers", "numG2Powers", "powersOfTau",
 #                        "G1Powers", "G2Powers", "witness", ... } ] } ).
 # The endpoint name is misleading — by 2026 the ceremony is closed and
-# the response is the finalised transcript, not "live state". Spot-check
-# the first 4 KB of the response after download to confirm it begins
-# with `{"transcripts":` rather than a status object.
+# the response is the finalised transcript, not "live state". The JSON
+# shape is the `BatchTranscript` defined in
+# `ethereum/kzg-ceremony-specs`; cross-check there if the response
+# ever looks unfamiliar. Spot-check the first 4 KB of the response
+# after download to confirm it begins with `{"transcripts":` rather
+# than a status object.
 curl -fsSL "https://seq.ceremony.ethereum.org/info/current_state" -o "$DEST"
 head -c 64 "$DEST" | grep -q '"transcripts"' || { echo "endpoint format changed — investigate"; exit 1; }
 shasum -a 256 "$DEST"
 # Record the upstream transcript SHA-256 in src/prover/srs/README.md.
 # If `seq.ceremony.ethereum.org` ever goes away, the canonical archive
-# lives in IPFS via the kzg-ceremony-specs repo; a static mirror URL
-# can be substituted into this script without changing anything else
-# in the pipeline.
+# lives in IPFS via `ethereum/kzg-ceremony-specs` (the same repo that
+# specifies the `BatchTranscript` schema); a static mirror URL can be
+# substituted into this script without changing anything else in the
+# pipeline.
 ```
 
 ```python

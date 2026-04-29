@@ -283,23 +283,38 @@ incrementally without breaking existing testnet flows.
 
 - `/Users/programyzer/Developer/stellar-mls/Cargo.toml` (root crate manifest — this repo is a single crate, not a Cargo workspace; root `Cargo.toml` IS the package, with `lib`/`staticlib`/`cdylib` outputs in `[lib]`)
 
+**Tag verification (must be done before drafting the diff).** Run
+`git ls-remote --tags https://github.com/EspressoSystems/jellyfish` and
+confirm the chosen tag exists. The workspace's top-level numeric tags
+max out at `0.4.5`; the per-crate tags use the form
+`jf-plonk-v0.8.0` / `jf-relation-v0.5.0` / `jf-pcs-v0.3.0`. As of
+2026-04-30, `jf-plonk-v0.8.0` and `jf-relation-v0.5.0` both point at
+revision `b33995b6` — the most recent revision tagged across both.
+Cargo `git+tag` selects a single revision for the whole repo, so all
+three deps reference the same tag string; pin to `jf-plonk-v0.8.0`.
+**Re-verify before B.1 lands** — upstream may have re-tagged in the
+interim.
+
 **Changes.**
 
 ```toml
 [dependencies]
-# --- existing arkworks core (kept) ---
+# --- existing arkworks core (kept; jf-plonk reuses these types) ---
 ark-bls12-381  = "0.4"
 ark-ff         = "0.4"
 ark-ec         = "0.4"
 ark-std        = "0.4"
 ark-serialize  = "0.4"
 
-# --- new: jf-plonk + jf-pcs from EspressoSystems/jellyfish ---
-# (Not on crates.io; pulled by git tag. Pin to a specific tag, never
-# `branch = "main"`. Vendor into `vendor/` if upstream destabilises.)
-jf-plonk = { git = "https://github.com/EspressoSystems/jellyfish", tag = "0.8.0", default-features = false, features = ["std"] }
-jf-pcs   = { git = "https://github.com/EspressoSystems/jellyfish", tag = "0.8.0", default-features = false, features = ["std"] }
-jf-relation = { git = "https://github.com/EspressoSystems/jellyfish", tag = "0.8.0", default-features = false, features = ["std"] }
+# --- new: jf-plonk + jf-pcs + jf-relation from EspressoSystems/jellyfish ---
+# Not on crates.io; pulled by git tag. All three pinned to the same
+# tag so Cargo resolves them to the one workspace revision
+# (`b33995b6` as of 2026-04-30 — verify with `git ls-remote --tags`).
+# All three are `optional = true` so a `groth16`-only build doesn't
+# pull the Espresso workspace at all.
+jf-plonk    = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.8.0", default-features = false, features = ["std"], optional = true }
+jf-pcs      = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.8.0", default-features = false, features = ["std"], optional = true }
+jf-relation = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.8.0", default-features = false, features = ["std"], optional = true }
 
 # --- Groth16 made optional behind feature gate (NOT removed yet) ---
 ark-groth16   = { version = "0.4", optional = true }
@@ -313,22 +328,24 @@ default = ["std", "jni", "ffi", "groth16"]
 std     = []
 ffi     = []
 jni     = ["dep:jni"]
-groth16 = ["ark-groth16", "ark-snark", "ark-relations", "ark-r1cs-std", "ark-crypto-primitives"]
-plonk   = []  # jf-plonk and jf-pcs are not gated — they're always pulled, but
-              # `plonk`-feature-only modules only compile when this feature is on.
+groth16 = ["dep:ark-groth16", "dep:ark-snark", "dep:ark-relations", "dep:ark-r1cs-std", "dep:ark-crypto-primitives"]
+plonk   = ["dep:jf-plonk", "dep:jf-pcs", "dep:jf-relation"]
 ```
 
-- Both `groth16` and `plonk` features exist simultaneously through the end of Phase C. `groth16` stays in `default` until C.2 ships for all five contracts.
-- `ark-bls12-381`, `ark-ff`, `ark-ec`, `ark-serialize`, `ark-std` stay (jf-plonk reuses these types).
+- Both `groth16` and `plonk` are independently activatable. `groth16` stays in `default` until C.2 ships for all five contracts.
+- A `--no-default-features --features groth16` checkout pulls **zero** Espresso git deps — important for keeping CI checkout time and dep-tree audit surface unchanged for legacy flows.
+- A `--features groth16,plonk` checkout (used by B.3's equivalence test) pulls both proving systems and lets a single test prove the same statement under each.
+- `ark-bls12-381`, `ark-ff`, `ark-ec`, `ark-serialize`, `ark-std` stay unconditional (used by both proving systems).
 - `ark-relations`, `ark-r1cs-std`, `ark-crypto-primitives` move under the `groth16` feature gate; they are removed in Phase E with the rest of the Groth16 surface.
-- `jf-plonk` is pulled unconditionally because both prover modules eventually need it (the build under `feature = "groth16"` only compiles the legacy code paths but still resolves the dep tree). If pull-time is a concern, gate it under `[target.'cfg(feature = "plonk")'.dependencies]` instead.
+- The previous v2 draft of this section suggested `[target.'cfg(feature = "plonk")'.dependencies]` as a fallback. **That is invalid Cargo syntax** — target predicates accept `cfg(target_os/arch/...)` but not `cfg(feature = ...)`. Optional deps + `dep:` references in `[features]` is the correct gating mechanism.
 
 **Tests.**
-- `cargo build --no-default-features --features groth16,std,ffi,jni` succeeds.
+- `cargo build --no-default-features --features groth16,std,ffi,jni` succeeds and pulls **no** Espresso git deps (verified via `cargo tree | grep jellyfish` returning empty).
 - `cargo build --no-default-features --features plonk,std,ffi,jni` succeeds.
-- `cargo build` (default, includes `groth16`) succeeds and is byte-identical to pre-PR-2 behaviour.
+- `cargo build --no-default-features --features groth16,plonk,std,ffi,jni` succeeds — gates the dual-feature build that B.3's equivalence test requires.
+- `cargo build` (default = `groth16`) succeeds and is byte-identical to pre-PR-2 behaviour.
 
-**Verification.** CI green for all three feature combinations. `cargo tree` shows `jf-plonk` resolved to the pinned git tag.
+**Verification.** CI green for all four feature combinations. `cargo tree --features plonk` shows `jf-plonk`/`jf-pcs`/`jf-relation` all resolved to the pinned tag's commit. `cargo tree --features groth16` shows none of them.
 
 **Dependencies.** None.
 
@@ -354,9 +371,22 @@ Step 1 — extract the n=4096 PoT subset from the 253 MB EF transcript:
 #!/usr/bin/env bash
 set -euo pipefail
 DEST=src/prover/srs/ef-kzg-2023-transcript.json
+# /info/current_state returns the canonical BatchTranscript JSON
+# (verified 2026-04-30: 253,714,449 bytes, contains
+#   { "transcripts": [ { "numG1Powers", "numG2Powers", "powersOfTau",
+#                        "G1Powers", "G2Powers", "witness", ... } ] } ).
+# The endpoint name is misleading — by 2026 the ceremony is closed and
+# the response is the finalised transcript, not "live state". Spot-check
+# the first 4 KB of the response after download to confirm it begins
+# with `{"transcripts":` rather than a status object.
 curl -fsSL "https://seq.ceremony.ethereum.org/info/current_state" -o "$DEST"
+head -c 64 "$DEST" | grep -q '"transcripts"' || { echo "endpoint format changed — investigate"; exit 1; }
 shasum -a 256 "$DEST"
 # Record the upstream transcript SHA-256 in src/prover/srs/README.md.
+# If `seq.ceremony.ethereum.org` ever goes away, the canonical archive
+# lives in IPFS via the kzg-ceremony-specs repo; a static mirror URL
+# can be substituted into this script without changing anything else
+# in the pipeline.
 ```
 
 ```python
@@ -380,7 +410,19 @@ import json, sys, hashlib, struct
 # ... transcript parsing, signature validation, point extraction ...
 ```
 
-Step 2 — `src/prover/srs.rs` (≈200-300 LoC):
+Step 2 — `src/prover/srs.rs` (≈200-300 LoC).
+
+**Caveat on the sketch below.** The struct literal at the bottom
+(`UnivariateUniversalParams { powers_of_g, h, beta_h, powers_of_h }`)
+assumes a specific public field shape. jf-pcs v0.3.0's actual
+`UnivariateUniversalParams` field names and constructor visibility
+must be reconciled at implementation time — read
+`pcs/src/univariate_kzg/srs.rs` at revision `b33995b6` and adjust.
+If the fields aren't `pub`, fall back to constructing via
+`CanonicalDeserialize` on a synthesised `(g_count, g_powers, h_powers)`
+byte stream that matches arkworks's serialisation format. arkworks's
+`ark-poly-commit::kzg10::UniversalParams` uses different field names
+again — don't confuse the two.
 
 ```rust
 //! Universal SRS for the PLONK prover.
@@ -495,11 +537,12 @@ fn main() {
 
 **Tests.**
 
-- `cargo test --features plonk embedded_srs_matches_pinned_hash` — passes.
-- `cargo test --features plonk srs_loads_into_jf_pcs` — passes; pairing identity sanity check confirms the deserialiser produced a valid SRS.
+- `cargo test --features plonk embedded_srs_matches_pinned_hash` — passes (build-time and test-time hash assertion agree).
+- `cargo test --features plonk srs_loads_into_jf_pcs` — passes; pairing identity `e([1]_1, [τ]_2) == e([τ]_1, [1]_2)` confirms the deserialiser produced an SRS satisfying the powers-of-tau invariant.
+- `cargo test --features plonk srs_round_trips_against_test_srs` — first-class test (not just a footnote): generate a tiny SRS via `UnivariateKzgPCS::gen_srs_for_testing(&mut rng, 16)`, serialise it through our extractor's encoding, deserialise it back with `load_ef_kzg_srs`-style code, confirm bit-identical struct shape. This is the primary safety net against jf-pcs API drift between revisions and against bugs in the deserialiser. **The deserialiser is the highest-leverage code in Phase B** — a silent bug here corrupts every proof without flagging — so this round-trip lands in the **Tests** list, not in prose.
 - Tampering test: flip a byte in `ef-kzg-2023.bin`; `cargo build --features plonk` fails with "SRS hash mismatch — refusing to build."
 
-**Verification.** All three tests green on a clean checkout. The deserialiser glue is the highest-leverage code in Phase B — bug here corrupts every proof silently. Round-trip test against jf-pcs's own `gen_srs_for_testing()` output (B.4 dependency) is the second line of defence.
+**Verification.** All four tests green on a clean checkout.
 
 **Dependencies.** B.1.
 
@@ -657,7 +700,7 @@ pub fn verify(
 }
 ```
 
-(API names approximate; reconciled against jf-plonk 0.8.0 during implementation. Transcript choice — `SolidityTranscript` keccak-based vs. `RescueTranscript` arithmetic — pinned in B.4 once we know which one Soroban's host SHA-256 reproduces most cheaply.)
+(API names approximate; reconciled against jf-plonk 0.8.0 during implementation. Transcript choice — `SolidityTranscript` (keccak256-based, Ethereum-EVM-friendly) vs. `RescueTranscript` (arithmetic, Rescue sponge over the scalar field) — pinned in B.4. Soroban exposes both `keccak256` and `sha256` host functions natively, so `SolidityTranscript` reproduces cheaply on-chain via `env.crypto().keccak256()`. `RescueTranscript` would need user-space Rescue in WASM on the verifier side and is correspondingly more expensive on Soroban; revisit if a future protocol upgrade adds a Rescue or Poseidon host function.)
 
 Step 3 — wire the public-API functions (`generate_membership_proof()` etc.) to call the PLONK path under the feature flag. The function *signatures* don't change — only internals. This keeps `src/ffi.rs` untouched until Phase D.3.
 
@@ -1477,7 +1520,7 @@ questions are tactical.
 | Q5 | Browser verifier replacement | None — `crates/ceremony-wasm` deleted in E.2 | n/a |
 | Q6 | jf-plonk vendoring | Tag-pinned dep first; vendor into `vendor/jf-plonk/` only if upstream destabilises | TBD (B.1) |
 | Q7 | Plookup-table layout for Poseidon | Shared table across circuits vs. per-circuit | Resolves in B.3 implementation |
-| Q8 | Fiat-Shamir transcript flavour | jf-plonk's `SolidityTranscript` (keccak) vs. `RescueTranscript` (arithmetic) — pick whichever Soroban host SHA-256 reproduces most cheaply | Resolves in B.4 |
+| Q8 | Fiat-Shamir transcript flavour | jf-plonk's `SolidityTranscript` (keccak256-based; Soroban-cheap via `env.crypto().keccak256()`) vs. `RescueTranscript` (arithmetic Rescue sponge; Soroban-expensive without a host function). Default plan: `SolidityTranscript`. Revisit if CAP-0075's `poseidon_permutation` host function (protocol 24+, available now) is adopted for transcript hashing in a follow-up. | Resolves in B.4 |
 
 Each open question gets resolved (or escalated) by the gate listed. None
 of them block Phase A.

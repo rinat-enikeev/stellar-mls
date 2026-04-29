@@ -18,8 +18,8 @@ android {
         applicationId = "chat.onym.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 89
-        versionName = "1.10.45"
+        versionCode = 90
+        versionName = "1.10.46"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
 

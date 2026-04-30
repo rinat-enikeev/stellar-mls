@@ -628,34 +628,80 @@ mod tests {
         );
     }
 
-    /// The `multi_scalar_multiply` helper is deterministic for fixed
-    /// inputs. Sanity check that two calls produce the same G1 point.
+    /// Smoke-test for the `multi_scalar_multiply` helper: two
+    /// back-to-back calls in the same process on the canonical
+    /// depth-5 fixture (real on-curve G1 points, challenges derived
+    /// from the real transcript, `vanish_eval` / `L_0(ζ)` computed
+    /// the same way `verify` does) produce byte-equal `[D]_1`.
     ///
-    /// We don't assert non-zero here because the synthetic VK / proof
-    /// has zero-padded G1 bytes that arkworks would reject, but
-    /// Soroban's `from_bytes` is non-validating and `g1_msm` will
-    /// either return zero or panic depending on the host runtime —
-    /// either way we'd catch the issue. The end-to-end accept test
-    /// in the future top-level `verify` PR uses real G1 points.
+    /// **Scope is narrow.** Two calls in the same process can only
+    /// catch *blatant* nondeterminism — uninitialized memory, an
+    /// internal RNG, scratch state leaking across calls. Genuine
+    /// cross-execution determinism is established by the
+    /// consensus-deterministic Soroban host primitives (`g1_msm`,
+    /// `fr_*`), not by this test. The end-to-end
+    /// `verifier::tests::accepts_canonical_proof_d{5,8,11}` covers
+    /// *correctness* of `[D]_1`; this one is a `≠` floor on
+    /// *stability* in the same process — useful as a regression net,
+    /// not as a determinism proof.
     #[test]
-    #[ignore = "g1_msm rejects synthetic zero-padded G1 points; non-zero MSM tests need real proof bytes"]
     fn msm_is_deterministic() {
+        use crate::proof_format::{parse_proof_bytes, FR_LEN, PROOF_LEN};
+        use crate::verifier_challenges::compute_challenges;
+        use crate::verifier_polys::{
+            evaluate_vanishing_poly, first_and_last_lagrange_coeffs, DomainParams,
+        };
+        use crate::vk_format::{parse_vk_bytes, G2_COMPRESSED_LEN, VK_LEN};
+        use soroban_sdk::BytesN;
+
+        const FIXTURE_VK: &[u8; VK_LEN] =
+            include_bytes!("../tests/fixtures/vk-d5.bin");
+        const FIXTURE_PROOF: &[u8; PROOF_LEN] =
+            include_bytes!("../tests/fixtures/proof-d5.bin");
+        const FIXTURE_SRS_G2: &[u8; G2_COMPRESSED_LEN] =
+            include_bytes!("../tests/fixtures/srs-g2-compressed.bin");
+        const FIXTURE_PI: &[u8; 2 * FR_LEN] =
+            include_bytes!("../tests/fixtures/pi-d5.bin");
+
         let env = Env::default();
-        let (vk, proof) = synthetic_fixture(&env);
-        let challenges = synthetic_challenges(&env);
+        let vk = parse_vk_bytes(FIXTURE_VK).expect("parse vk");
+        let proof = parse_proof_bytes(FIXTURE_PROOF).expect("parse proof");
+
+        let mut public_inputs = [[0u8; FR_LEN]; 2];
+        public_inputs[0].copy_from_slice(&FIXTURE_PI[..FR_LEN]);
+        public_inputs[1].copy_from_slice(&FIXTURE_PI[FR_LEN..]);
+
+        let raw = compute_challenges(&env, &vk, FIXTURE_SRS_G2, &public_inputs, &proof);
+        let challenges = ChallengesFr {
+            beta: Fr::from_bytes(BytesN::from_array(&env, &raw.beta)),
+            gamma: Fr::from_bytes(BytesN::from_array(&env, &raw.gamma)),
+            alpha: Fr::from_bytes(BytesN::from_array(&env, &raw.alpha)),
+            zeta: Fr::from_bytes(BytesN::from_array(&env, &raw.zeta)),
+            v: Fr::from_bytes(BytesN::from_array(&env, &raw.v)),
+            u: Fr::from_bytes(BytesN::from_array(&env, &raw.u)),
+        };
+
+        // Compute vanish_eval and L_0(ζ) the same way `verify` does
+        // so the determinism check exercises real verify-path inputs,
+        // not arbitrary placeholders.
+        let params = DomainParams::for_size(&env, vk.domain_size);
+        let vanish_eval = evaluate_vanishing_poly(&challenges.zeta, &params);
+        let (lagrange_1_eval, _) =
+            first_and_last_lagrange_coeffs(&challenges.zeta, &vanish_eval, &params);
+
         let agg_a = aggregate_poly_commitments(
             &env,
             &challenges,
-            fr(&env, 7),
-            fr(&env, 11),
+            vanish_eval.clone(),
+            lagrange_1_eval.clone(),
             &vk,
             &proof,
         );
         let agg_b = aggregate_poly_commitments(
             &env,
             &challenges,
-            fr(&env, 7),
-            fr(&env, 11),
+            vanish_eval,
+            lagrange_1_eval,
             &vk,
             &proof,
         );

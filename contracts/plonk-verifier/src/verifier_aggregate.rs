@@ -284,7 +284,7 @@ fn decode_g1_array<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proof_format::{parse_proof_bytes, FR_LEN, G1_LEN};
+    use crate::proof_format::parse_proof_bytes;
     use crate::test_fixtures::{build_synthetic_proof_bytes, build_synthetic_vk_bytes};
     use crate::vk_format::parse_vk_bytes;
     use soroban_sdk::Env;
@@ -384,6 +384,130 @@ mod tests {
                 "selector q_scalars[{i}] mismatch",
             );
         }
+    }
+
+    /// `scalars[0]` is `perm_coeff = α²·L_0(ζ) + α·Π(β·k_i·ζ + γ + w_i)`.
+    /// The production code computes the product via a `for` fold;
+    /// this test computes the same value by **unrolling the 5
+    /// per-i terms explicitly**, multiplying them in a different
+    /// expression structure, and asserts equality. Catches the
+    /// failure modes the reviewer flagged:
+    /// - Wrong zip pairing (wires vs k_constants).
+    /// - Off-by-one in the slice bound.
+    /// - Wrong fold seed (not α).
+    /// - Wrong outer addition (the α²·L_0 term).
+    ///
+    /// Doesn't catch a typo *inside* `β·k·ζ + γ + w` itself (e.g.
+    /// `*` instead of `+` between the gamma and w terms) — that
+    /// requires hand-computed numerical values, deferred to real
+    /// fixture work.
+    #[test]
+    fn perm_coeff_matches_unrolled_reference() {
+        let env = Env::default();
+        let (vk, proof) = synthetic_fixture(&env);
+        let challenges = synthetic_challenges(&env);
+        let vanish_eval = fr(&env, 7);
+        let lagrange_1_eval = fr(&env, 11);
+
+        let agg = aggregate_poly_commitments(
+            &env,
+            &challenges,
+            vanish_eval,
+            lagrange_1_eval.clone(),
+            &vk,
+            &proof,
+        );
+
+        // Decode wire & k_constants Fr values from the synthetic VK / proof.
+        let w: [Fr; 5] = core::array::from_fn(|i| {
+            fr_from_le_bytes(&env, &proof.wires_evals[i])
+        });
+        let k: [Fr; 5] = core::array::from_fn(|i| {
+            fr_from_le_bytes(&env, &vk.k_constants[i])
+        });
+
+        // Unrolled reference: build the five terms separately and
+        // multiply them in a different expression structure than the
+        // production for/fold loop.
+        let alpha = challenges.alpha.clone();
+        let beta = challenges.beta.clone();
+        let gamma = challenges.gamma.clone();
+        let zeta = challenges.zeta.clone();
+
+        let term = |i: usize| {
+            beta.clone() * k[i].clone() * zeta.clone() + gamma.clone() + w[i].clone()
+        };
+        let prod = alpha.clone()
+            * term(0)
+            * term(1)
+            * term(2)
+            * term(3)
+            * term(4);
+        let alpha_squared = alpha.clone() * alpha;
+        let expected = alpha_squared * lagrange_1_eval + prod;
+
+        let got = agg.scalars.get(0).unwrap();
+        assert_eq!(
+            got.to_bytes().to_array(),
+            expected.to_bytes().to_array(),
+            "scalars[0] (perm_coeff) diverges from unrolled reference",
+        );
+    }
+
+    /// `scalars[1]` is `last_sigma_coeff = −α·β·z(ζ·g)·Π(β·σ_i + γ + w_i)`.
+    /// Same shape as the perm_coeff test: unroll the 4 per-i terms,
+    /// multiply explicitly, negate, compare. Catches:
+    /// - Wrong slice (wires_evals takes 4, sigma_evals takes 4).
+    /// - Wrong fold seed (must be α·β·z(ζ·g), not just α).
+    /// - Missing negation.
+    /// - Off-by-one in `take(NUM_WIRE_SIGMA_EVALS)`.
+    #[test]
+    fn last_sigma_coeff_matches_unrolled_reference() {
+        let env = Env::default();
+        let (vk, proof) = synthetic_fixture(&env);
+        let challenges = synthetic_challenges(&env);
+        let vanish_eval = fr(&env, 7);
+        let lagrange_1_eval = fr(&env, 11);
+
+        let agg = aggregate_poly_commitments(
+            &env,
+            &challenges,
+            vanish_eval,
+            lagrange_1_eval,
+            &vk,
+            &proof,
+        );
+
+        let w: [Fr; 5] = core::array::from_fn(|i| {
+            fr_from_le_bytes(&env, &proof.wires_evals[i])
+        });
+        let sigma: [Fr; 4] = core::array::from_fn(|i| {
+            fr_from_le_bytes(&env, &proof.wire_sigma_evals[i])
+        });
+        let perm_next = fr_from_le_bytes(&env, &proof.perm_next_eval);
+
+        let alpha = challenges.alpha.clone();
+        let beta = challenges.beta.clone();
+        let gamma = challenges.gamma.clone();
+
+        // Unrolled reference: 4 terms (sigma takes only 4), seeded
+        // with α·β·z(ζ·g).
+        let term = |i: usize| {
+            beta.clone() * sigma[i].clone() + gamma.clone() + w[i].clone()
+        };
+        let prod = alpha.clone() * beta.clone() * perm_next
+            * term(0)
+            * term(1)
+            * term(2)
+            * term(3);
+        let expected = fr_zero(&env) - prod;
+
+        let got = agg.scalars.get(1).unwrap();
+        assert_eq!(
+            got.to_bytes().to_array(),
+            expected.to_bytes().to_array(),
+            "scalars[1] (last_sigma_coeff) diverges from unrolled reference",
+        );
     }
 
     /// The 5 split-quot scalars form a geometric progression with
@@ -597,11 +721,4 @@ mod tests {
         assert_eq!(zero_bytes, [0u8; 32]);
     }
 
-    /// Avoid unused-warning on FR_LEN / G1_LEN imports that are
-    /// here for clarity in the helper docs.
-    #[allow(dead_code)]
-    fn _silence_unused_imports() {
-        let _ = FR_LEN;
-        let _ = G1_LEN;
-    }
 }

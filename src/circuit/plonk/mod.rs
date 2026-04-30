@@ -30,6 +30,7 @@ pub mod transcript;
 pub mod verifier_challenges;
 pub mod verifier_polys;
 pub mod verifier_lin_poly;
+pub mod verifier_aggregate;
 
 #[cfg(test)]
 mod test_vectors;

@@ -92,6 +92,19 @@ pub fn compute_challenges(
     public_inputs_be: &[[u8; FR_LEN]],
     proof: &ParsedProof,
 ) -> Challenges {
+    // Cross-check public-input count against the VK header so a
+    // caller mismatch surfaces immediately in dev/test rather than
+    // as an opaque "verification failed" later (the transcript would
+    // diverge silently and the verifier would reject without
+    // explaining why). Release builds keep the function pure-byte;
+    // contract entry points that want a runtime check must guard
+    // upstream.
+    debug_assert_eq!(
+        public_inputs_be.len() as u64,
+        vk.num_inputs,
+        "public_inputs_be.len() != vk.num_inputs — caller bug; transcript would diverge"
+    );
+
     let mut t = SolidityTranscript::new(env);
 
     // 1. VK + public inputs.
@@ -456,6 +469,25 @@ mod tests {
         assert_ne!(a, b);
         assert_eq!(a.zeta, b.zeta, "ζ should not be affected");
         assert_ne!(a.v, b.v, "v must reflect wire_sigma_evals");
+    }
+
+    /// `debug_assert_eq!` on `public_inputs_be.len() == vk.num_inputs`
+    /// fires on mismatch so caller bugs surface in dev/test rather
+    /// than as an opaque "verification failed" later. Pinned with
+    /// `#[should_panic]` against a future relaxation of the guard.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "public_inputs_be.len() != vk.num_inputs")]
+    fn rejects_wrong_public_input_count_in_debug() {
+        let env = Env::default();
+        let vk_bytes = build_synthetic_vk_bytes(8192, 2);
+        let proof_bytes = build_synthetic_proof_bytes();
+        let parsed_vk = parse_vk_bytes(&vk_bytes).expect("parse vk");
+        let parsed_proof = parse_proof_bytes(&proof_bytes).expect("parse proof");
+        let srs_g2 = synthetic_srs_g2_compressed();
+        // Synthetic VK declares num_inputs=2; pass only 1 public input.
+        let too_few: [[u8; FR_LEN]; 1] = [[0x70; FR_LEN]];
+        let _ = compute_challenges(&env, &parsed_vk, &srs_g2, &too_few, &parsed_proof);
     }
 
     /// Tamper test: flipping a byte in `opening_proof` changes the

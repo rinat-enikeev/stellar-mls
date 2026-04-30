@@ -1,7 +1,6 @@
 {
   "description": "Canonical test vectors for cross-platform (Rust/iOS/Android) interoperability. All platforms MUST produce identical outputs for the given inputs. Generated from the Rust reference implementation.",
-  "version": 3,
-
+  "version": 4,
   "topic_derivation": {
     "description": "SHA-256('sep-topic-v1' || groupSecret)[0..8] as hex string",
     "vectors": [
@@ -19,7 +18,6 @@
       }
     ]
   },
-
   "inbox_derivation": {
     "description": "SHA-256('sep-inbox-v1' || recipientPubkey)[0..8] as hex string",
     "vectors": [
@@ -33,7 +31,6 @@
       }
     ]
   },
-
   "hkdf_message_key": {
     "description": "HKDF-SHA256(IKM=groupSecret||epoch_BE||salt, salt='sep-msg-key-v1', info='traffic', len=32)",
     "vectors": [
@@ -51,7 +48,6 @@
       }
     ]
   },
-
   "bls_key_derivation": {
     "description": "BLS12-381 compressed G1 public key (48 bytes) and Poseidon leaf hash (32 bytes) from 32-byte secret key. Secret key is interpreted as big-endian and reduced mod r (Fr::from_be_bytes_mod_order).",
     "vectors": [
@@ -67,7 +63,6 @@
       }
     ]
   },
-
   "merkle_root": {
     "description": "Poseidon Merkle tree root from sorted members. Members are sorted by compressed G1 public key (ascending lexicographic). Tree depth = 5 (Small tier).",
     "vectors": [
@@ -96,7 +91,6 @@
       }
     ]
   },
-
   "poseidon_commitment": {
     "description": "Poseidon(Poseidon(root, epoch_as_Fr), salt_as_Fr). epoch_as_Fr = Fr::from(epoch_u64). salt_as_Fr = Fr::from_le_bytes_mod_order(salt_32bytes).",
     "vectors": [
@@ -114,7 +108,6 @@
       }
     ]
   },
-
   "sha256_commitment": {
     "description": "SHA-256(root_32bytes_BE || epoch_8bytes_BE || salt_32bytes). Total preimage: 72 bytes.",
     "vectors": [
@@ -132,7 +125,6 @@
       }
     ]
   },
-
   "update_public_inputs_wire_format": {
     "description": "UpdatePublicInputs is serialised as exactly 73 bytes: 1 version byte (0x02) || 32B c_old (big-endian Fr) || 8B epoch_old (big-endian u64) || 32B c_new (big-endian Fr). Parsers MUST reject wrong length, wrong version byte, and non-canonical c_old / c_new (any value >= BLS12-381 Fr modulus r). c_old and c_new must already be canonical field elements, such as the Poseidon commitments in poseidon_commitment above.",
     "version_byte_hex": "02",
@@ -166,7 +158,7 @@
         "wire_hex": "01255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e00000000000000000ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56aa5"
       },
       {
-        "reason": "wrong length (72 bytes instead of 73 — last c_new byte truncated)",
+        "reason": "wrong length (72 bytes instead of 73 \u2014 last c_new byte truncated)",
         "wire_hex": "02255f5a330e7fb48a50a5b1a5fbce17b717aaad9861590025b53b3a1cf527010e00000000000000000ff7547913428aaea8c7242dbcbf1e7921b58878307b89fc430a9a32ccb56a"
       },
       {
@@ -179,7 +171,6 @@
       }
     ]
   },
-
   "sealed_envelope_format": {
     "description": "Sealed envelope JSON field names and base64 encoding for AES-256-GCM group messages",
     "required_fields": {
@@ -195,15 +186,74 @@
       "sender_ed25519_public_key": "base64 NO_WRAP, 32 bytes (invitations only)"
     }
   },
-
   "invite_code_format": {
     "description": "InviteCode is base64(JSON). Binary fields use base64 NO_WRAP encoding.",
-    "required_fields": ["groupID", "groupSecret", "name", "relayHints", "members", "epoch", "salt"],
-    "optional_fields": ["commitment"],
+    "required_fields": [
+      "groupID",
+      "groupSecret",
+      "name",
+      "relayHints",
+      "members",
+      "epoch",
+      "salt"
+    ],
+    "optional_fields": [
+      "commitment"
+    ],
     "binary_encoding": "base64 NO_WRAP on both platforms",
     "members_format": {
       "publicKeyCompressed": "base64 NO_WRAP, 48 bytes",
       "leafHash": "base64 NO_WRAP, 32 bytes"
+    }
+  },
+  "plonk_membership_vk_fingerprints": {
+    "description": "SHA-256 of `VerifyingKey<Bls12_381>::serialize_uncompressed` for the canonical MembershipCircuit at each tier, after deterministic `PlonkKzgSnark::preprocess` against the embedded EF KZG SRS (transcript index 3, n=32768). All platforms (Rust, iOS, Android) MUST produce byte-identical VKs given the same circuit shape + SRS; if a port drifts, the fingerprint diverges and the cross-platform consistency check fails. Pinned in `src/circuit/plonk/test_vectors.rs::PINNED_VK_SHA256_*`.",
+    "canonical_witness": {
+      "description": "Canonical secret keys 1..=8 (as Fr), prover_index = 3, epoch = 1234, salt = [0xEE; 32]. Public inputs are `(commitment, epoch)` where commitment = Poseidon(Poseidon(merkle_root, epoch), Fr::from_le_bytes_mod_order(salt)).",
+      "secret_keys_decimal": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "prover_index": 3,
+      "epoch": 1234,
+      "salt_hex": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "tiers": [
+      {
+        "name": "small",
+        "depth": 5,
+        "raw_gates": 5013,
+        "padded_eval_domain": 8192,
+        "vk_sha256": "a552b41c2e40167b74ccbec36d83cc931279d278e364cacb99a3a5ce9c26e5ab",
+        "public_input_commitment_decimal": "46515411139457246075630984868734250912683366470489499346400769936928562641086"
+      },
+      {
+        "name": "medium",
+        "depth": 8,
+        "raw_gates": 6894,
+        "padded_eval_domain": 8192,
+        "vk_sha256": "b4f98a146dad1de3447dde3b686ac2ddf8b4cdb153ad69f407684558e749b3d6",
+        "public_input_commitment_decimal": "25962857527094033053389587882041453263126680903863784984459870987363719907560"
+      },
+      {
+        "name": "large",
+        "depth": 11,
+        "raw_gates": 8775,
+        "padded_eval_domain": 16384,
+        "vk_sha256": "36e96f9bf3b834f81c73a2d402b33ef8c32bc01fe47cf6ee66978e29ab0d5849",
+        "public_input_commitment_decimal": "33888949629905279841465629616641871616062962113753433762318761128027361268743"
+      }
+    ],
+    "srs": {
+      "source": "Ethereum Foundation 2023 KZG ceremony, BatchTranscript index 3 (n=32768).",
+      "extracted_blob_sha256": "84f3fcee13ffd40437b3628daf6ef40d8fd4a5dfeb0895bb55e6cc5512532295",
+      "embedded_at": "src/prover/srs/ef-kzg-2023.bin"
     }
   }
 }

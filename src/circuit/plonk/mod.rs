@@ -23,3 +23,6 @@
 pub mod poseidon;
 pub mod merkle;
 pub mod membership;
+
+#[cfg(test)]
+mod test_vectors;

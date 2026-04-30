@@ -12,12 +12,12 @@ Layout (little-endian header + arkworks-uncompressed BLS12-381 affine points):
 ```
 [ 0..  4]  magic "EFKZ"
 [ 4..  8]  u32 version = 1
-[ 8.. 12]  u32 g1_count = 16384
+[ 8.. 12]  u32 g1_count = 32768
 [12.. 16]  u32 g2_count = 65
 [16..]     g1_count × 96 B G1Affine, then g2_count × 192 B G2Affine
 ```
 
-Total: 16 + 16384·96 + 65·192 = 1,585,360 bytes ≈ 1.5 MB.
+Total: 16 + 32768·96 + 65·192 = 3,158,224 bytes ≈ 3.0 MB.
 
 ## Provenance
 
@@ -27,17 +27,18 @@ response is the canonical, finalised `BatchTranscript` JSON (≈253 MB)
 containing four PoT sets — n=4096, 8192, 16384, 32768 — plus participant
 signatures and identity attestations.
 
-We extract the **n=16384** set (transcript index 2). It covers our largest
-membership-circuit tier (depth=11, ≈9,400 gates) with ≈1.7× headroom
-against the n=16384 ceiling, and the same applies to the future per-type
-circuits expected to come in well below that envelope. Each of the four
-PoT sets has its own independently-contributed τ from the same ~141k
-ceremony participants — switching from index 0 (n=4096) to index 2
-(n=16384) does **not** change the trust model: identical contributors,
-identical ceremony chain, just a different τ.
+We extract the **n=32768** set (transcript index 3). The n=16384 set
+turned out to be just below the threshold jf-plonk's `preprocess`
+requires for our depth=11 tier: padded `eval_domain_size = 16384` plus
+the hiding-degree-2 blinding overhead means `srs_size = 16384 + ε`,
+which fails against an n=16384 SRS with `IndexTooLarge`. n=32768 covers
+all three tiers (small/medium/large) with comfortable headroom; future
+per-type circuits are expected to come in well below this envelope.
 
-If a future circuit ever exceeds n=16384 we'd switch to index 3
-(n=32768, ≈3 MB), still within the same ceremony.
+Each of the four PoT sets has its own independently-contributed τ from
+the same ~141k ceremony participants — picking transcript index 3
+(n=32768) does **not** change the trust model: identical contributors,
+identical ceremony chain, just a different τ.
 
 ## Reproduction
 
@@ -67,8 +68,8 @@ Every layer below is independently verifiable.
 - **Extracted binary SHA-256** — pinned in `expected-hash.in` next to
   this README. `build.rs` enforces it on every compile under
   `feature = "plonk"`.
-  Current value (n=16384 extraction):
-  `e1d6915fd80707af8749e8c58f55738952f196d10eceee3b7fffe935c2657078`.
+  Current value (n=32768 extraction):
+  `84f3fcee13ffd40437b3628daf6ef40d8fd4a5dfeb0895bb55e6cc5512532295`.
 - **Powers-of-tau pairing identity** — checked at test time via
   `e([τ]_1, [1]_2) == e([1]_1, [τ]_2)` (`prover::srs::tests::srs_satisfies_pairing_identity`).
 

@@ -54,7 +54,7 @@ const VERSION: u32 = 1;
 // contributors). We pick the n=16384 set: covers our largest circuit
 // (~9,400 gates for membership at depth=11) with ≈1.7× headroom; ≈1.5 MB
 // embedded blob. See src/prover/srs/README.md for the provenance chain.
-const TARGET_G1: usize = 16384;
+const TARGET_G1: usize = 32768;
 const TARGET_G2: usize = 65;
 
 const G1_COMPRESSED_BYTES: usize = 48;

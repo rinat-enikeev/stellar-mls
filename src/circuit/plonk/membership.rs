@@ -29,6 +29,19 @@
 //! strictly more powers than gates (for the quotient polynomial +
 //! blinding factors) — at the large tier's padded count of 16,384
 //! exactly, n=16384 is one short.
+//!
+//! ## Public-input range
+//!
+//! `epoch` is allocated as a `Variable` with no in-circuit range
+//! check. A malicious prover can submit an Fr larger than `2^64` and
+//! produce a valid proof at the verifier; off-chain code that
+//! interprets the public input as a `u64` could be tricked. This
+//! matches the legacy R1CS circuit's behaviour and is intentional at
+//! this layer. Callers — specifically the Soroban contract
+//! `verify_membership` / `create_group` entrypoints — MUST enforce
+//! the `u64` range out-of-circuit (the natural way: take `epoch: u64`
+//! as the entrypoint argument and BE-encode it as a 32-byte scalar
+//! before handing it to the verifier).
 
 #![cfg(feature = "plonk")]
 
@@ -90,12 +103,27 @@ pub fn synthesize_membership(
             witness.depth
         )));
     }
+    // Reject `depth >= usize::BITS` *first* — otherwise the index-bit
+    // decomposition loop below would do `witness.leaf_index >> i` for
+    // `i >= 64`, which is UB in Rust. The previous
+    // `depth < usize::BITS && leaf_index >= 1 << depth` gate skipped
+    // the bounds check exactly when the UB shift would fire. In
+    // practice we only support depth ≤ 11, so this is a defensive
+    // guard.
+    if witness.depth >= usize::BITS as usize {
+        return Err(CircuitError::ParameterError(format!(
+            "depth {} >= usize::BITS ({}); membership circuit supports depth ≤ {}",
+            witness.depth,
+            usize::BITS,
+            usize::BITS - 1,
+        )));
+    }
     // Bound `leaf_index` against `2^depth`. Without this, high bits of
     // `leaf_index` are silently truncated by the per-bit shift below
     // and the circuit would assert membership at a different (smaller)
     // position — confusing rather than unsound, since path-direction
     // bits are still constrained to booleans.
-    if witness.depth < usize::BITS as usize && witness.leaf_index >= (1usize << witness.depth) {
+    if witness.leaf_index >= (1usize << witness.depth) {
         return Err(CircuitError::ParameterError(format!(
             "leaf_index {} out of range for depth {} (max {})",
             witness.leaf_index,

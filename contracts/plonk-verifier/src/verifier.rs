@@ -469,6 +469,47 @@ mod tests {
         );
     }
 
+    /// Drive the reject path on update fixtures: tamper one PI byte and
+    /// expect `Err(PairingMismatch)`. Catches verifier-side regressions
+    /// in 3-PI public-input encoding that the 2-PI tamper tests
+    /// (`rejects_tampered_commitment` / `_epoch`) don't cover.
+    fn assert_rejects_tampered_update(pi_index: usize, label: &str) {
+        let env = Env::default();
+        let parsed_vk = parse_vk_bytes(FIXTURE_UPDATE_VK_D5).expect("parse update vk");
+        let parsed_proof =
+            parse_proof_bytes(FIXTURE_UPDATE_PROOF_D5).expect("parse update proof");
+        let mut public_inputs = split_update_pi(FIXTURE_UPDATE_PI_D5);
+        // Flip the LSB (BE) — a different valid Fr.
+        public_inputs[pi_index][FR_LEN - 1] ^= 0x01;
+        let result = verify(&env, &parsed_vk, FIXTURE_SRS_G2, &parsed_proof, &public_inputs);
+        assert_eq!(
+            result,
+            Err(VerifyError::PairingMismatch),
+            "tampered {label} should reject with PairingMismatch",
+        );
+    }
+
+    /// Tampering `c_old` (PI[0]) rejects. Mirrors the off-chain
+    /// `synthesize_rejects_tampered_c_old`.
+    #[test]
+    fn rejects_tampered_update_c_old() {
+        assert_rejects_tampered_update(0, "c_old");
+    }
+
+    /// Tampering `epoch_old` (PI[1]) rejects. Catches PI ordering bugs
+    /// specific to the 3-PI update layout.
+    #[test]
+    fn rejects_tampered_update_epoch_old() {
+        assert_rejects_tampered_update(1, "epoch_old");
+    }
+
+    /// Tampering `c_new` (PI[2]) rejects. Mirrors the off-chain
+    /// `synthesize_rejects_tampered_c_new`.
+    #[test]
+    fn rejects_tampered_update_c_new() {
+        assert_rejects_tampered_update(2, "c_new");
+    }
+
     /// Tampering with the public commitment (input[0]) rejects with
     /// `PairingMismatch`. Catches a bug where public inputs aren't
     /// fed into the transcript correctly. Mirrors the off-chain

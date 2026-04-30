@@ -26,6 +26,37 @@
 //! Poseidons + one shared Merkle path). All three tiers (depth 5/8/11)
 //! finalise comfortably below the n=32768 EF KZG SRS ceiling — verified
 //! by `gate_count_per_tier` below.
+//!
+//! ## Security model — new-tree binding is *commitment-only*
+//!
+//! The circuit binds `c_new` to `(poseidon_root_new, epoch_old + 1,
+//! salt_new)` via Constraint 3, but it does **not** constrain the
+//! prover's knowledge of any leaf in `poseidon_root_new` or the shape
+//! of the new tree. A prover can pick any `poseidon_root_new` and any
+//! `salt_new`, derive the resulting `c_new`, and submit a valid update.
+//!
+//! That is the legacy Groth16 reference's design too (see
+//! `src/circuit/update.rs`'s "constraints" docstring) and the contract
+//! relies on it: the **on-chain** path explicitly does not check
+//! membership in the new tree — only that the transition is bound to
+//! a `c_new` the prover authorised. Downstream consumers (clients
+//! reading commitments off-chain) must therefore not interpret
+//! `poseidon_root_new` as an authenticated roster — only `c_new` itself
+//! is authenticated, and only as "the current commitment after this
+//! update."
+//!
+//! ## Public-input range
+//!
+//! `epoch_old` is allocated as a `Variable` with no in-circuit range
+//! check. A malicious prover can submit an Fr larger than `2^64` and
+//! produce a valid proof at the verifier; off-chain code that
+//! interprets the public input as a `u64` could be tricked. This
+//! matches the legacy Groth16 circuit's behaviour and is intentional
+//! at this layer. Callers — specifically the Soroban contract
+//! `update_commitment` entrypoint — MUST enforce the `u64` range
+//! out-of-circuit (the natural way: take `epoch: u64` as the
+//! entrypoint argument and BE-encode it as a 32-byte scalar before
+//! handing it to the verifier).
 
 #![cfg(feature = "plonk")]
 
@@ -87,9 +118,22 @@ pub fn synthesize_update(
             witness.depth
         )));
     }
-    if witness.depth < usize::BITS as usize
-        && witness.leaf_index_old >= (1usize << witness.depth)
-    {
+    // Reject `depth >= usize::BITS` *first* — otherwise the
+    // index-bit decomposition loop below would do
+    // `witness.leaf_index_old >> i` for `i >= 64`, which is UB in Rust.
+    // The previous `depth < usize::BITS && leaf_index >= 1 << depth`
+    // gate skipped the bounds check exactly when the UB shift would
+    // fire. In practice we only support depth ≤ 11, so this is a
+    // defensive guard.
+    if witness.depth >= usize::BITS as usize {
+        return Err(CircuitError::ParameterError(format!(
+            "depth {} >= usize::BITS ({}); update circuit supports depth ≤ {}",
+            witness.depth,
+            usize::BITS,
+            usize::BITS - 1,
+        )));
+    }
+    if witness.leaf_index_old >= (1usize << witness.depth) {
         return Err(CircuitError::ParameterError(format!(
             "leaf_index_old {} out of range for depth {} (max {})",
             witness.leaf_index_old,
@@ -256,6 +300,40 @@ mod tests {
         circuit
             .check_circuit_satisfiability(&public_inputs)
             .expect("valid witness should satisfy the circuit");
+    }
+
+    /// Tampered `c_old` makes `check_circuit_satisfiability` fail.
+    /// Confirms Constraint 2 (old-commitment binding) actually binds
+    /// the public input — symmetric to `synthesize_rejects_tampered_c_new`.
+    #[test]
+    fn synthesize_rejects_tampered_c_old() {
+        let depth = 3;
+        let old_keys: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+        let new_keys: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+        let witness = build_update_witness(
+            &old_keys,
+            0,
+            &new_keys,
+            42,
+            [0xCC; 32],
+            [0xDD; 32],
+            depth,
+        );
+
+        let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_update(&mut circuit, &witness).unwrap();
+
+        let wrong_c_old = witness.c_old + Fr::from(1u64);
+        let public_inputs = vec![
+            wrong_c_old,
+            Fr::from(witness.epoch_old),
+            witness.c_new,
+        ];
+        let result = circuit.check_circuit_satisfiability(&public_inputs);
+        assert!(
+            result.is_err(),
+            "circuit accepted a wrong public c_old — old-commitment binding broken"
+        );
     }
 
     /// Tampered `c_new` makes `check_circuit_satisfiability` fail.

@@ -157,6 +157,15 @@ pub fn build_canonical_membership_witness(depth: usize) -> MembershipWitness {
 /// circuit doesn't constrain new-tree membership, so this is a valid
 /// canonical witness.
 ///
+/// **Reusing `root` for both old and new is a property of the canonical
+/// fixture, not a property of the circuit.** The update circuit binds
+/// `c_new` to `(poseidon_root_new, epoch_new, salt_new)` but never
+/// proves the prover knows a leaf in `poseidon_root_new` — see the
+/// "Security model" section in `circuit::plonk::update` for full
+/// detail. Production callers can supply any `poseidon_root_new`;
+/// downstream consumers must not interpret it as an authenticated
+/// roster.
+///
 /// Hash inputs depend only on `depth`, so the resulting VK depends
 /// only on `depth`.
 pub fn build_canonical_update_witness(depth: usize) -> UpdateWitness {

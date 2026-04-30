@@ -395,6 +395,15 @@ struct ChatView: View {
                 .padding(.vertical, 8)
             }
 
+            // Sync-lock banner: shown above the input when chain confirmation
+            // or salt-resync is in flight. Locks input until cleared.
+            if let group = viewModel.group, let syncState = appState.syncStatus[group.id],
+               syncState.isLocked {
+                SyncStatusBanner(state: syncState) {
+                    appState.retrySync(groupID: group.id)
+                }
+            }
+
             if let group = viewModel.group, !appState.canSend(in: group) {
                 VStack(spacing: 8) {
                     Text("You were removed from this group")
@@ -413,13 +422,18 @@ struct ChatView: View {
                 .frame(maxWidth: .infinity)
                 .padding()
             } else {
+                let syncLocked: Bool = {
+                    guard let group = viewModel.group,
+                          let syncState = appState.syncStatus[group.id] else { return false }
+                    return syncState.isLocked
+                }()
                 HStack(spacing: 12) {
                     PhotosPicker(selection: $selectedPhotoItem, matching: .any(of: [.images, .videos])) {
                         Image(systemName: "photo")
                             .font(.title3)
-                            .foregroundStyle(viewModel.hasBlossomServers ? .primary : .secondary)
+                            .foregroundStyle(viewModel.hasBlossomServers && !syncLocked ? .primary : .secondary)
                     }
-                    .disabled(!viewModel.hasBlossomServers)
+                    .disabled(!viewModel.hasBlossomServers || syncLocked)
                     .onChange(of: selectedPhotoItem) { _, newItem in
                         guard let newItem else { return }
                         Task {
@@ -440,19 +454,20 @@ struct ChatView: View {
                         }
                     }
 
-                    TextField("Message", text: $viewModel.inputText, axis: .vertical)
+                    TextField(syncLocked ? "Syncing…" : "Message", text: $viewModel.inputText, axis: .vertical)
                         .textFieldStyle(.plain)
                         .lineLimit(1...5)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                         .background(.quaternary, in: RoundedRectangle(cornerRadius: 20))
+                        .disabled(syncLocked)
                         .onSubmit {
                             UIImpactFeedbackGenerator(style: .light).impactOccurred()
                             Task { await viewModel.sendMessage() }
                         }
 
                     if viewModel.inputText.trimmingCharacters(in: .whitespaces).isEmpty {
-                        VoiceRecordButton(hasBlossomServers: viewModel.hasBlossomServers) { audioURL in
+                        VoiceRecordButton(hasBlossomServers: viewModel.hasBlossomServers && !syncLocked) { audioURL in
                             Task { await viewModel.sendVoice(audioURL: audioURL) }
                         }
                     } else {
@@ -463,6 +478,7 @@ struct ChatView: View {
                             Image(systemName: "arrow.up.circle.fill")
                                 .font(.title2)
                         }
+                        .disabled(syncLocked)
                     }
                 }
                 .padding()
@@ -1653,6 +1669,82 @@ struct MissingReplyView: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
+    }
+}
+
+// MARK: - Sync Status Banner
+
+/// Banner shown above the chat input when the group is sync-locked. Renders the
+/// reason in plain English and runs a live elapsed-time counter via
+/// `TimelineView` so the user can see progress. On `.failed`, exposes a Retry
+/// button that calls back into AppState's `retrySync(groupID:)`.
+struct SyncStatusBanner: View {
+    let state: SyncState
+    let onRetry: () -> Void
+
+    var body: some View {
+        switch state {
+        case .idle:
+            EmptyView()
+        case .pending(let reason, let since, _):
+            TimelineView(.periodic(from: since, by: 1.0)) { context in
+                let elapsed = max(0, Int(context.date.timeIntervalSince(since)))
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("\(message(for: reason)) (\(elapsed)s)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(Color.accentColor.opacity(0.1))
+            }
+        case .failed(let reason, let lastError):
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(failureMessage(for: reason))
+                        .font(.caption)
+                        .fontWeight(.medium)
+                    Text(lastError)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Button("Retry") { onRetry() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(Color.red.opacity(0.1))
+        }
+    }
+
+    private func message(for reason: SyncReason) -> String {
+        switch reason {
+        case .awaitingChainConfirmation:
+            return "Waiting for blockchain confirmation"
+        case .awaitingSaltResponse:
+            return "Catching up on missed messages"
+        case .localChainSubmitInFlight:
+            return "Confirming on-chain"
+        }
+    }
+
+    private func failureMessage(for reason: SyncReason) -> String {
+        switch reason {
+        case .awaitingChainConfirmation:
+            return "Couldn't confirm with the blockchain"
+        case .awaitingSaltResponse:
+            return "No peer responded with the missing key"
+        case .localChainSubmitInFlight:
+            return "On-chain submission failed"
+        }
     }
 }
 

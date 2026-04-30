@@ -88,11 +88,20 @@ plonk = [
 # One-shot operator tool for extracting the EF KZG SRS from the published
 # transcript. Activated only when running `cargo run --bin extract-ef-kzg`.
 extract-tool = ["plonk", "dep:serde_json"]
+# Per-tier VK baker. Produces deterministic verifying-key bytes the
+# Soroban contracts embed via `include_bytes!`. Activated only when
+# running `cargo run --bin bake-vk`.
+bake-vk-tool = ["plonk"]
 
 [[bin]]
 name = "extract-ef-kzg"
 path = "src/bin/extract_ef_kzg.rs"
 required-features = ["extract-tool"]
+
+[[bin]]
+name = "bake-vk"
+path = "src/bin/bake_vk.rs"
+required-features = ["bake-vk-tool"]
 
 [profile.release]
 strip = "symbols"

@@ -227,7 +227,7 @@ mod tests {
     use ark_ff_v05::PrimeField;
     use ark_serialize_v05::{CanonicalDeserialize, CanonicalSerialize};
     use jf_plonk::proof_system::structs::Proof;
-    use jf_relation::{Circuit, PlonkCircuit};
+    use jf_relation::PlonkCircuit;
     use rand_chacha::rand_core::SeedableRng;
 
     use crate::circuit::plonk::membership::{synthesize_membership, MembershipWitness};

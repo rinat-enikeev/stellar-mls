@@ -9,7 +9,7 @@
 //! ```text
 //!   r_0 = PI(ζ)
 //!       − α²·L_0(ζ)
-//!       − α·z(ζ·g)·(γ + w_{n-1})·Π_{i=0..n-1}(γ + w_i + β·σ_i)
+//!       − α·z(ζ·g)·(γ + w_{n-1})·Π_{i=0}^{n-2}(γ + w_i + β·σ_i)
 //! ```
 //!
 //! where:
@@ -17,7 +17,8 @@
 //! - `w_i = wires_evals[i]` (5 entries from the proof),
 //! - `σ_i = wire_sigma_evals[i]` (4 entries — the last sigma is
 //!   omitted as a verifier optimisation in jf-plonk; the product
-//!   only runs over the first `n − 1 = 4` indices),
+//!   runs over `i = 0, 1, …, n − 2` — exactly 4 iterations for
+//!   our `n = 5`),
 //! - `z(ζ·g) = perm_next_eval`,
 //! - `α, β, γ` are challenges, `L_0(ζ)` and `PI(ζ)` come from
 //!   [`super::verifier_polys`].
@@ -26,7 +27,7 @@
 //!
 //! ```text
 //!   acc = α · perm_next · (γ + w_{n-1});
-//!   for i in 0..n-1:
+//!   for i in 0..(n-1):    // Rust half-open range, 4 iterations for n=5
 //!       acc *= (γ + w_i + β · σ_i);
 //! ```
 //!
@@ -199,11 +200,13 @@ mod tests {
         }
     }
 
-    /// Symbolic spot-check: with α = β = γ = 0, the permutation term
-    /// collapses to `α·perm_next·(γ + w_4)·Π(γ + w_i + β·σ_i)
-    /// = 0`. So `r_0 = pi_eval`. Catches a bug where the alpha²
-    /// term wasn't actually multiplied by α² (e.g. multiplied by α³
-    /// or α^0 instead).
+    /// Symbolic spot-check: with α = β = γ = 0 the entire L_0 and
+    /// permutation terms vanish (α = 0 kills both: 0² = 0 = 0³ = 0
+    /// and the permutation-term seed is α·perm_next·(γ + w_4) = 0).
+    /// So `r_0 = pi_eval`. This only catches a bug where the L_0
+    /// term was multiplied by `α^0` (= 1) by mistake — α=0 cannot
+    /// distinguish α² from α³. The positive-α regression below
+    /// catches the wrong-power case.
     #[test]
     fn collapses_to_pi_eval_when_alpha_beta_gamma_are_zero() {
         let pi_eval = fr(42);
@@ -226,6 +229,77 @@ mod tests {
         // permutation_term = 0·perm_next·(0 + w_4)·Π(...) = 0
         // r_0 = pi_eval - 0²·l_0 - 0 = pi_eval
         assert_eq!(result, pi_eval);
+    }
+
+    /// Positive-α regression: pin the exact α-power on the L_0
+    /// term. With α = 2, β = γ = 0, perm_next = 0, the formula
+    /// reduces to `r_0 = pi_eval − α²·l_0`. If the implementation
+    /// ever drifted to α¹ or α³ on the L_0 term, the hand-computed
+    /// value would not match.
+    #[test]
+    fn pins_alpha_squared_on_l_0_term() {
+        let alpha = fr(2);
+        let beta = Fr::zero();
+        let gamma = Fr::zero();
+        let pi_eval = fr(100);
+        let l_0 = fr(7);
+        let w_evals = [fr(1); 5];
+        let sigma_evals = [fr(1); 4];
+        let perm_next = Fr::zero();
+
+        let result = compute_lin_poly_constant_term(
+            alpha, beta, gamma, pi_eval, l_0, &w_evals, &sigma_evals, perm_next,
+        );
+
+        // permutation_term = 2·0·(0 + w_4)·… = 0  (perm_next = 0 zeroes the seed)
+        // r_0 = pi_eval - α²·l_0 = 100 - 4·7 = 72
+        let expected = pi_eval - alpha.square() * l_0;
+        assert_eq!(result, expected);
+
+        // Sanity: using α¹ instead would give pi_eval - α·l_0 = 100 - 14 = 86.
+        // Using α³ instead would give pi_eval - α³·l_0 = 100 - 56 = 44.
+        // Both are distinguishable from 72 — the test would catch either drift.
+        assert_ne!(result, pi_eval - alpha * l_0, "α¹ would mis-match");
+        assert_ne!(result, pi_eval - alpha.pow([3u64]) * l_0, "α³ would mis-match");
+    }
+
+    /// The wires_evals length guard panics on the wrong shape so a
+    /// mis-sized proof eval set fails loudly. Pinned with
+    /// `#[should_panic]` so a future relaxation (e.g. swap to `>=`)
+    /// is caught.
+    #[test]
+    #[should_panic(expected = "wires_evals length must match NUM_WIRE_TYPES")]
+    fn rejects_wrong_wires_evals_length() {
+        let wires_too_short = [Fr::zero(); 4];
+        let sigmas_ok = [Fr::zero(); 4];
+        let _ = compute_lin_poly_constant_term(
+            Fr::zero(),
+            Fr::zero(),
+            Fr::zero(),
+            Fr::zero(),
+            Fr::zero(),
+            &wires_too_short,
+            &sigmas_ok,
+            Fr::zero(),
+        );
+    }
+
+    /// The wire_sigma_evals length guard panics on the wrong shape.
+    #[test]
+    #[should_panic(expected = "wire_sigma_evals length must match NUM_WIRE_SIGMA_EVALS")]
+    fn rejects_wrong_wire_sigma_evals_length() {
+        let wires_ok = [Fr::zero(); 5];
+        let sigmas_too_long = [Fr::zero(); 5];
+        let _ = compute_lin_poly_constant_term(
+            Fr::zero(),
+            Fr::zero(),
+            Fr::zero(),
+            Fr::zero(),
+            Fr::zero(),
+            &wires_ok,
+            &sigmas_too_long,
+            Fr::zero(),
+        );
     }
 
     /// Symbolic spot-check: with α = 1, β = 0, γ = 0, the

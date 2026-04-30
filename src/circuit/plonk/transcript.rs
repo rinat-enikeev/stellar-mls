@@ -54,7 +54,7 @@
 use sha3::{Digest, Keccak256};
 
 use crate::circuit::plonk::vk_format::{
-    ParsedVerifyingKey, FR_LEN, G1_LEN, G2_LEN, NUM_K_CONSTANTS, NUM_SELECTOR_COMMS,
+    ParsedVerifyingKey, FR_LEN, G1_LEN, G2_COMPRESSED_LEN, NUM_K_CONSTANTS, NUM_SELECTOR_COMMS,
     NUM_SIGMA_COMMS,
 };
 
@@ -132,8 +132,9 @@ impl SolidityTranscript {
     /// Mirror of jf-plonk's `append_vk_and_pub_input`. Drives the
     /// initial state of the transcript before the verifier consumes
     /// the proof. `srs_g2_compressed` is `to_bytes!(&vk.open_key.powers_of_h[1])`
-    /// (arkworks-compressed, 96 LE bytes). Public inputs must already
-    /// be in BE form.
+    /// (arkworks-compressed, 96 BE bytes — Fp is BE for BLS12-381 in
+    /// arkworks 0.5, with sign + infinity flags packed in the top
+    /// bits of `bytes[0]`). Public inputs must already be in BE form.
     ///
     /// The 12-byte zero pad after the three header fields is the
     /// EVM-word-alignment quirk from `SolidityTranscript`: 4 (field
@@ -142,9 +143,30 @@ impl SolidityTranscript {
     pub fn append_vk_and_public_inputs(
         &mut self,
         vk: &ParsedVerifyingKey,
-        srs_g2_compressed: &[u8; G2_LEN / 2],
+        srs_g2_compressed: &[u8; G2_COMPRESSED_LEN],
         public_inputs_be: &[[u8; FR_LEN]],
     ) {
+        // Validate VK shape *before* writing anything, so a malformed
+        // `ParsedVerifyingKey` fails fast rather than poisoning the
+        // transcript buffer with partial state. The parser itself
+        // already enforces these counts, but this is the function-
+        // boundary contract — runs in release builds too.
+        assert_eq!(
+            vk.k_constants.len(),
+            NUM_K_CONSTANTS,
+            "ParsedVerifyingKey::k_constants has wrong length"
+        );
+        assert_eq!(
+            vk.selector_commitments.len(),
+            NUM_SELECTOR_COMMS,
+            "ParsedVerifyingKey::selector_commitments has wrong length"
+        );
+        assert_eq!(
+            vk.sigma_commitments.len(),
+            NUM_SIGMA_COMMS,
+            "ParsedVerifyingKey::sigma_commitments has wrong length"
+        );
+
         // 1. field size in bits — 4 bytes BE u32
         self.append_message(&FR_MODULUS_BITS.to_be_bytes());
         // 2. domain size — 8 bytes BE u64
@@ -153,7 +175,7 @@ impl SolidityTranscript {
         self.append_message(&vk.num_inputs.to_be_bytes());
         // 4. EVM-word-alignment pad
         self.append_message(&[0u8; 12]);
-        // 5. SRS G2 element — 96 bytes compressed LE
+        // 5. SRS G2 element — 96 bytes compressed BE
         self.append_message(srs_g2_compressed);
         // 6. wire-subset separators (k constants) — 5 × Fr BE
         for k_le in &vk.k_constants {
@@ -174,10 +196,6 @@ impl SolidityTranscript {
         for pi in public_inputs_be {
             self.append_field_elem_be(pi);
         }
-        // Sanity bounds — prevents silently feeding mis-sized inputs.
-        debug_assert_eq!(vk.k_constants.len(), NUM_K_CONSTANTS);
-        debug_assert_eq!(vk.selector_commitments.len(), NUM_SELECTOR_COMMS);
-        debug_assert_eq!(vk.sigma_commitments.len(), NUM_SIGMA_COMMS);
     }
 }
 
@@ -193,8 +211,8 @@ impl SolidityTranscript {
 /// byte is unmasked.
 pub fn arkworks_fr_le_to_be(le: &[u8; FR_LEN]) -> [u8; FR_LEN] {
     let mut out = [0u8; FR_LEN];
-    for i in 0..FR_LEN {
-        out[i] = le[FR_LEN - 1 - i];
+    for (o, &b) in out.iter_mut().zip(le.iter().rev()) {
+        *o = b;
     }
     out
 }
@@ -212,7 +230,10 @@ pub fn arkworks_fr_le_to_be(le: &[u8; FR_LEN]) -> [u8; FR_LEN] {
 ///   bit 5: lexographically-largest sort flag (compressed-only)
 ///
 /// We mask those bits off so callers get the canonical x regardless
-/// of the point's encoding flags. y has no flag bits in this format
+/// of the point's encoding flags. For an infinity point arkworks
+/// writes `(0, 0)` bytes plus the infinity flag in `bytes[0] = 0x40`;
+/// after masking we recover `(0, 0)` — matching jf-plonk's
+/// `append_commitment` substitution. y has no flag bits in this format
 /// but we mask its high byte too for defence-in-depth (BLS12-381
 /// base-field values fit in the bottom 5 bits of byte 0 since `p` is
 /// 381 bits, so the mask is a no-op on valid y values).
@@ -220,6 +241,12 @@ pub fn arkworks_fr_le_to_be(le: &[u8; FR_LEN]) -> [u8; FR_LEN] {
 /// Note the asymmetry vs [`arkworks_fr_le_to_be`]: the **scalar**
 /// field Fr serialises LE (`[lsb, …, msb]`) while the **base** field
 /// Fp serialises BE. That's an arkworks-bls12-381 quirk, not a typo.
+///
+/// **This function is not validation.** It silently strips flag bits
+/// rather than rejecting malformed encodings. Caller is responsible
+/// for confirming the parent VK / proof bytes were validated upstream
+/// (e.g. by `vk_format::parse_vk_bytes` / `proof_format::parse_proof_bytes`,
+/// and ultimately by Soroban's on-curve check at pairing time).
 pub fn arkworks_g1_uncompressed_to_be_xy(
     bytes: &[u8; G1_LEN],
 ) -> ([u8; G1_HALF], [u8; G1_HALF]) {
@@ -261,6 +288,30 @@ mod tests {
         let expected_y_be = y.into_bigint().to_bytes_be();
         assert_eq!(x_be.as_slice(), expected_x_be.as_slice(), "x_be mismatch");
         assert_eq!(y_be.as_slice(), expected_y_be.as_slice(), "y_be mismatch");
+    }
+
+    /// Infinity (= identity) point round-trips through the helper to
+    /// `([0; 48], [0; 48])`. arkworks-bls12-381 writes the infinity
+    /// flag bit (`0x40`) in `bytes[0]`; after the helper's `& 0x1F`
+    /// mask, both halves come out as 48 zero bytes — matching
+    /// jf-plonk's `append_commitment` `(0, 0)` substitution for
+    /// `comm.0.is_zero()` points (which our membership VK has, e.g.
+    /// for unused selector polynomials).
+    #[test]
+    fn g1_le_to_be_returns_zero_for_infinity_point() {
+        let infinity = G1Affine::zero();
+        let mut le_bytes = [0u8; G1_LEN];
+        infinity.serialize_uncompressed(&mut le_bytes[..]).unwrap();
+
+        // Sanity: arkworks set the infinity flag bit somewhere in bytes[0].
+        assert_ne!(
+            le_bytes[0], 0,
+            "infinity flag should be encoded in bytes[0]; got all-zero high byte"
+        );
+
+        let (x_be, y_be) = arkworks_g1_uncompressed_to_be_xy(&le_bytes);
+        assert_eq!(x_be, [0u8; G1_HALF], "x_be should be all zeros for infinity");
+        assert_eq!(y_be, [0u8; G1_HALF], "y_be should be all zeros for infinity");
     }
 
     /// Fr conversion matches arkworks `into_bigint().to_bytes_be()`.
@@ -309,7 +360,7 @@ mod tests {
             })
             .collect();
 
-        let mut srs_g2_compressed = [0u8; G2_LEN / 2];
+        let mut srs_g2_compressed = [0u8; G2_COMPRESSED_LEN];
         oracle_vk.open_key.powers_of_h[1]
             .serialize_compressed(&mut srs_g2_compressed[..])
             .unwrap();
@@ -430,7 +481,7 @@ mod tests {
         .unwrap();
 
         // ---- Our port ----
-        let mut srs_g2_compressed = [0u8; G2_LEN / 2];
+        let mut srs_g2_compressed = [0u8; G2_COMPRESSED_LEN];
         oracle_vk
             .open_key
             .powers_of_h[1]

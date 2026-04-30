@@ -16,13 +16,22 @@
 //! Wire format and downstream contracts therefore don't change with
 //! the proving-system swap.
 //!
-//! Gate cost (logged via the `gate_count` test):
+//! Gate cost (logged via `gate_count_per_tier`):
 //!
-//!   small  (depth=5):  ≈5,300 gates
-//!   medium (depth=8):  ≈7,300 gates
-//!   large  (depth=11): ≈9,400 gates
+//!   small  (depth=5):  ~5,000 raw, padded to next pow2 = 8,192
+//!   medium (depth=8):  ~6,900 raw, padded to next pow2 = 8,192
+//!   large  (depth=11): ~8,800 raw, padded to next pow2 = 16,384
 //!
-//! All three fit the n=16384 EF KZG SRS with comfortable headroom.
+//! Small + medium fit the n=16384 EF KZG SRS with comfortable headroom
+//! and are exercised by `membership_round_trip_prove_verify_*_tier`
+//! end-to-end.
+//!
+//! Large (depth=11) lands at the n=16384 SRS ceiling exactly, but
+//! jf-plonk's KZG preprocess needs strictly more powers than gates
+//! (for the quotient polynomial + blinding factors), so depth=11
+//! does **not** prove/verify under n=16384. PR #172 escalates the
+//! SRS to n=32768 (transcript index 3) and adds the depth=11
+//! round-trip there.
 
 #![cfg(feature = "plonk")]
 
@@ -57,24 +66,44 @@ pub struct MembershipWitness {
 }
 
 /// Allocate the membership circuit and return the public-input
-/// `Variable` for `commitment` (already constrained to the witness
-/// commitment via `enforce_equal`). Caller can keep the returned
-/// variable to wire commitment into a larger composite circuit, or
-/// ignore it.
+/// `Variable` for `commitment` (already constrained via `enforce_equal`
+/// to the value computed in-circuit from the witness). Composite
+/// circuits can use the returned variable to wire commitment into
+/// further constraints; standalone callers can discard it.
 ///
 /// Public-input ordering, established once: **`(commitment, epoch)`**.
 /// Anything depending on this wire format (the Soroban verifier in
 /// Phase C; cross-platform test vectors in B.5) must use this exact
 /// order.
+///
+/// Bit-decomposition note: `leaf_index` is allocated only as `depth`
+/// boolean variables (used to drive Merkle path direction). The bits
+/// are *not* re-composed back into a field-element variable, since no
+/// other constraint here references position-as-scalar. A future
+/// composite circuit that wants to bind position to another wire will
+/// need to add the recomposition itself.
 pub fn synthesize_membership(
     circuit: &mut PlonkCircuit<Fr>,
     witness: &MembershipWitness,
-) -> Result<(), CircuitError> {
+) -> Result<Variable, CircuitError> {
     if witness.merkle_path.len() != witness.depth {
         return Err(CircuitError::ParameterError(format!(
             "merkle_path length {} != depth {}",
             witness.merkle_path.len(),
             witness.depth
+        )));
+    }
+    // Bound `leaf_index` against `2^depth`. Without this, high bits of
+    // `leaf_index` are silently truncated by the per-bit shift below
+    // and the circuit would assert membership at a different (smaller)
+    // position — confusing rather than unsound, since path-direction
+    // bits are still constrained to booleans.
+    if witness.depth < usize::BITS as usize && witness.leaf_index >= (1usize << witness.depth) {
+        return Err(CircuitError::ParameterError(format!(
+            "leaf_index {} out of range for depth {} (max {})",
+            witness.leaf_index,
+            witness.depth,
+            (1usize << witness.depth) - 1
         )));
     }
 
@@ -117,7 +146,7 @@ pub fn synthesize_membership(
     let computed_commitment = poseidon_hash_two_gadget(circuit, inner, salt_var)?;
     circuit.enforce_equal(computed_commitment, commitment_var)?;
 
-    Ok(())
+    Ok(commitment_var)
 }
 
 #[cfg(test)]
@@ -245,6 +274,12 @@ mod tests {
     }
 
     /// Gate-count snapshot per tier, surfaced for budget tracking.
+    ///
+    /// The SRS-degree budget is set by the *finalised* (padded-to-next-pow2)
+    /// gate count, so this test finalises the circuit before reading
+    /// `num_gates()` and asserts the finalised count fits the n=16384
+    /// EF KZG SRS ceiling. At depth=11 the finalised count is expected
+    /// to equal 16384 exactly — that's the budget worth tracking.
     #[test]
     fn gate_count_per_tier() {
         for &depth in &[5usize, 8, 11] {
@@ -254,12 +289,16 @@ mod tests {
 
             let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
             synthesize_membership(&mut circuit, &witness).unwrap();
-            let n = circuit.num_gates();
-            eprintln!("[gate-count] MembershipCircuit depth={depth}: {n} gates");
+            let raw = circuit.num_gates();
+            circuit.finalize_for_arithmetization().unwrap();
+            let finalised = circuit.num_gates();
+            eprintln!(
+                "[gate-count] MembershipCircuit depth={depth}: {raw} raw, {finalised} finalised"
+            );
             assert!(
-                n < 16384,
-                "MembershipCircuit at depth={depth} has {n} gates, exceeds n=16384 \
-                 EF KZG SRS ceiling. Need n=32768 (transcript index 3)."
+                finalised <= 16384,
+                "MembershipCircuit at depth={depth} finalises to {finalised} gates, \
+                 exceeds n=16384 EF KZG SRS ceiling. Need n=32768 (transcript index 3)."
             );
         }
     }
@@ -273,9 +312,25 @@ mod tests {
     /// produces an invalid PLONK proof).
     #[test]
     fn membership_round_trip_prove_verify_small_tier() {
+        run_round_trip_at_depth(5);
+    }
+
+    /// Same round-trip on the medium tier (depth=8). Catches off-by-one
+    /// in the SRS-vs-domain sizing introduced by the n=4096 → n=16384
+    /// bump, on a circuit larger than the small tier (~6,900 raw gates
+    /// vs ~5,000) but still within comfortable n=16384 headroom.
+    ///
+    /// The large tier (depth=11) lands at the n=16384 ceiling exactly
+    /// and doesn't fit jf-plonk's preprocess (needs n=32768) — its
+    /// round-trip is added in PR #172 alongside the SRS bump.
+    #[test]
+    fn membership_round_trip_prove_verify_medium_tier() {
+        run_round_trip_at_depth(8);
+    }
+
+    fn run_round_trip_at_depth(depth: usize) {
         use rand_chacha::rand_core::SeedableRng;
 
-        let depth = 5;
         let secret_keys: Vec<Fr> = (1u64..=8).map(Fr::from).collect();
         let salt = [0xEE; 32];
         let witness = build_test_witness(&secret_keys, 3, 1234, salt, depth);
@@ -285,7 +340,7 @@ mod tests {
         circuit.finalize_for_arithmetization().unwrap();
 
         eprintln!(
-            "[gate-count] MembershipCircuit (depth=5) finalised: {} gates",
+            "[gate-count] MembershipCircuit (depth={depth}) finalised: {} gates",
             circuit.num_gates()
         );
 
@@ -295,13 +350,64 @@ mod tests {
 
         let public_inputs = vec![witness.commitment, Fr::from(witness.epoch)];
         crate::prover::plonk::verify(&keys.vk, &public_inputs, &proof)
-            .expect("verifier rejected a valid membership proof at depth=5");
+            .unwrap_or_else(|e| panic!("verifier rejected valid membership proof at depth={depth}: {e:?}"));
 
         // Tampered public commitment must fail verification.
         let wrong = vec![witness.commitment + Fr::from(1u64), Fr::from(witness.epoch)];
         assert!(
             crate::prover::plonk::verify(&keys.vk, &wrong, &proof).is_err(),
-            "verifier accepted membership proof against wrong public commitment"
+            "verifier accepted membership proof against wrong public commitment at depth={depth}"
+        );
+    }
+
+    /// Mirrors the legacy R1CS `test_circuit_rejects_wrong_epoch`
+    /// (`src/circuit/mod.rs`). Public-input epoch differs from the
+    /// epoch the commitment was bound to: Constraint 3 (commitment
+    /// binding) catches it because the in-circuit `Poseidon(root,
+    /// public_epoch)` won't equal the witness's `Poseidon(root,
+    /// correct_epoch)`.
+    #[test]
+    fn synthesize_rejects_wrong_epoch() {
+        let depth = 3;
+        let secret_keys: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+        let salt = [0xFF; 32];
+        let correct_epoch = 5u64;
+        let wrong_epoch = 6u64;
+
+        // Build a witness against `correct_epoch` (commitment binds to it),
+        // then point the public input at `wrong_epoch`.
+        let witness = build_test_witness(&secret_keys, 0, correct_epoch, salt, depth);
+
+        let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_membership(&mut circuit, &witness).unwrap();
+
+        let public_inputs = vec![witness.commitment, Fr::from(wrong_epoch)];
+        let result = circuit.check_circuit_satisfiability(&public_inputs);
+        assert!(
+            result.is_err(),
+            "circuit accepted a wrong public epoch — commitment-binding constraint is broken"
+        );
+    }
+
+    /// Negative test for the `merkle_path.len() != depth` early-return
+    /// in `synthesize_membership`. Ensures a malformed witness errors
+    /// out before allocation rather than silently producing a circuit
+    /// at the wrong depth.
+    #[test]
+    fn synthesize_rejects_path_length_mismatch() {
+        let depth = 4;
+        let secret_keys: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+        let salt = [0x11; 32];
+        let mut witness = build_test_witness(&secret_keys, 1, 99, salt, depth);
+
+        // Truncate the path so it no longer matches `depth`.
+        witness.merkle_path.truncate(depth - 1);
+
+        let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+        let result = synthesize_membership(&mut circuit, &witness);
+        assert!(
+            matches!(result, Err(CircuitError::ParameterError(_))),
+            "synthesize accepted merkle_path.len() != depth (got {result:?})"
         );
     }
 }

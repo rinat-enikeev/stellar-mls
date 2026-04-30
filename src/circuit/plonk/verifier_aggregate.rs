@@ -17,11 +17,19 @@
 //! | split_quot_comms (5)                  |     5 | `−Z_H(ζ), −Z_H(ζ)·ζ^{n+2}, …` (geometric) |
 //! | wire commitments (5, v-combined)      |     5 | `v, v², v³, v⁴, v⁵` |
 //! | sigma_comms[0..4] (v-combined)        |     4 | `v⁶ … v⁹` |
-//! | prod_perm_poly_comm (uv-combined)     |     1 | `u·v` |
+//! | prod_perm_poly_comm (uv-combined)     |     1 | `u` (not `u·v` — see below) |
 //!
-//! and a `v_uv_buffer: Vec<Fr>` of length 10 holding the v-power and
-//! u·v-power scalars in the order they were emitted (consumed later
-//! by `aggregate_evaluations`).
+//! and a `v_uv_buffer: Vec<Fr>` of length 10 holding the same 10
+//! scalars in the order they were emitted (consumed later by
+//! `aggregate_evaluations`).
+//!
+//! **Why `u` and not `u·v` for the prod_perm uv-combined entry.**
+//! jf-plonk's `add_poly_comm` pushes `*random_combiner` *before*
+//! multiplying it by `r`, so the first uv-branch entry sees
+//! `uv_base = u`. The `*= r` update only takes effect for subsequent
+//! entries — and in our no-Plookup case there are none, so the
+//! emitted scalar is exactly `u`. The
+//! `v_uv_buffer_powers_match_v_and_uv` test pins this.
 //!
 //! For BLS12-381 single-instance, no-Plookup membership circuits:
 //! - `n = NUM_WIRE_TYPES = GATE_WIDTH + 1 = 5` (so 4 = `n − 1` for
@@ -109,11 +117,26 @@ impl AggregatedCommitments {
 }
 
 /// Parse an arkworks-uncompressed G1 byte slice into `G1Affine`.
-/// Assumes upstream parser already validated structural form;
-/// arkworks deserialiser performs on-curve / subgroup checks.
+///
+/// **May panic on adversarial input.** Upstream `parse_proof_bytes`
+/// and `parse_vk_bytes` only validate structural shape (length
+/// prefixes, layout) — they do **not** verify on-curve / subgroup
+/// membership or Fr canonicity (see the docs on each parser). The
+/// arkworks deserialiser called here is the gatekeeper: it rejects
+/// off-curve, non-subgroup, or non-canonical encodings by returning
+/// `Err(_)`, which we `.expect()` away.
+///
+/// For our prover-side reference impl this is fine — every byte
+/// stream we feed in came from `bake_membership_vk` /
+/// `jf_plonk::Proof::serialize_uncompressed`, both of which produce
+/// canonical bytes by construction. A future caller that plumbs
+/// untrusted bytes here would get a panic, not a `Result`. The
+/// Soroban contract port avoids this entirely by delegating curve
+/// validation to `env.crypto().bls12_381().g1_*` host primitives,
+/// which return errors rather than panicking.
 fn parse_g1_uncompressed(bytes: &[u8; 96]) -> G1Affine {
     G1Affine::deserialize_uncompressed(&bytes[..])
-        .expect("ParsedVerifyingKey / ParsedProof bytes already structurally validated; arkworks deserialise produces canonical G1Affine")
+        .expect("arkworks G1 deserialisation panicked: bytes are structurally valid (per upstream parser) but failed on-curve / subgroup / canonicity check — this can only happen on adversarial input")
 }
 
 /// Aggregate the verifier's polynomial commitments into the
@@ -639,9 +662,165 @@ mod tests {
         );
     }
 
-    // Suppress unused-field warnings from the fixture.
-    #[allow(dead_code)]
-    fn _silence(f: &VerifierFixture) {
-        let _ = (&f.oracle_vk, &f.oracle_proof);
+    // ---------------------------------------------------------------
+    // Alternate-implementation oracle.
+    //
+    // jf-plonk's `linearization_scalars_and_bases` and
+    // `aggregate_poly_commitments` are `pub(crate)`, so we can't call
+    // them directly. We can, however, reach the same MSM output by
+    // walking jf-plonk's published struct fields (`VerifyingKey<E>` /
+    // `Proof<E>`, both `pub`) with the same arithmetic. The resulting
+    // helper is a hand-transcription of jf-plonk's source — but a
+    // *different* one from the byte-form port: it uses typed
+    // struct fields directly, no byte→Fr / byte→G1 conversion. So
+    // bugs in our parser indexing or LE/BE conversion would surface
+    // as a divergence between this oracle and the byte-form output.
+    //
+    // The two transcriptions can still share a formula-level typo
+    // (e.g. wrong q_scalars[i] index), but the existing component
+    // tests (`selector_scalars_match_jf_plonk_formula`,
+    // `split_quot_scalars_form_geometric_progression`,
+    // `v_uv_buffer_powers_match_v_and_uv`) already cover those at
+    // higher resolution. The TRUE oracle is the eventual end-to-end
+    // verifier-accepts test once `aggregate_evaluations` and the
+    // pairing check land.
+    // ---------------------------------------------------------------
+
+    use ark_bls12_381_v05::G1Projective;
+    use ark_ec_v05::{AffineRepr, CurveGroup};
+
+    /// Compute `(scalars, bases)` from jf-plonk's typed `VerifyingKey<E>`
+    /// + `Proof<E>` (no byte parsing) using the same arithmetic as
+    /// `aggregate_poly_commitments`. Returns the MSM-folded G1 point
+    /// — the test asserts equality with my port's MSM.
+    fn typed_oracle_msm(
+        oracle_vk: &VerifyingKey<Bls12_381>,
+        oracle_proof: &jf_plonk::proof_system::structs::Proof<Bls12_381>,
+        challenges: ChallengesFr,
+        vanish_eval: Fr,
+        lagrange_1_eval: Fr,
+    ) -> G1Projective {
+        let alpha = challenges.alpha;
+        let beta = challenges.beta;
+        let gamma = challenges.gamma;
+        let zeta = challenges.zeta;
+        let v = challenges.v;
+        let u = challenges.u;
+
+        let w_evals = &oracle_proof.poly_evals.wires_evals;
+        let sigma_evals = &oracle_proof.poly_evals.wire_sigma_evals;
+        let perm_next = oracle_proof.poly_evals.perm_next_eval;
+        let k = &oracle_vk.k;
+
+        // (scalar, base) pairs accumulated as MSM contributions.
+        let mut acc = G1Projective::zero();
+        let mut push = |s: Fr, b: G1Affine| {
+            acc += b.into_group() * s;
+        };
+
+        // 1. perm_perm
+        let perm_coeff = {
+            let mut c = alpha.square() * lagrange_1_eval;
+            c += w_evals
+                .iter()
+                .zip(k.iter())
+                .fold(alpha, |acc, (w, k)| acc * (beta * k * zeta + gamma + w));
+            c
+        };
+        push(perm_coeff, oracle_proof.prod_perm_poly_comm.0);
+
+        // 2. last sigma
+        let last_sigma_coeff = {
+            let init = alpha * beta * perm_next;
+            let prod = w_evals
+                .iter()
+                .take(NUM_WIRE_SIGMA_EVALS)
+                .zip(sigma_evals.iter())
+                .fold(init, |acc, (w, s)| acc * (beta * s + gamma + w));
+            -prod
+        };
+        push(
+            last_sigma_coeff,
+            oracle_vk.sigma_comms[NUM_SIGMA_COMMS - 1].0,
+        );
+
+        // 3. selectors (13)
+        let q_scalars = [
+            w_evals[0],
+            w_evals[1],
+            w_evals[2],
+            w_evals[3],
+            w_evals[0] * w_evals[1],
+            w_evals[2] * w_evals[3],
+            w_evals[0].pow([5u64]),
+            w_evals[1].pow([5u64]),
+            w_evals[2].pow([5u64]),
+            w_evals[3].pow([5u64]),
+            -w_evals[4],
+            Fr::one(),
+            w_evals[0] * w_evals[1] * w_evals[2] * w_evals[3] * w_evals[4],
+        ];
+        for (s, comm) in q_scalars.iter().zip(oracle_vk.selector_comms.iter()) {
+            push(*s, comm.0);
+        }
+
+        // 4. split-quot (5)
+        let zeta_to_n_plus_2 = (Fr::one() + vanish_eval) * zeta * zeta;
+        let mut split_coeff = -vanish_eval;
+        push(split_coeff, oracle_proof.split_quot_poly_comms[0].0);
+        for comm in oracle_proof.split_quot_poly_comms.iter().skip(1) {
+            split_coeff *= zeta_to_n_plus_2;
+            push(split_coeff, comm.0);
+        }
+
+        // 5. wires (5, v-combined)
+        let mut v_base = v;
+        for comm in oracle_proof.wires_poly_comms.iter() {
+            push(v_base, comm.0);
+            v_base *= v;
+        }
+
+        // 6. first 4 sigmas (v-combined)
+        for comm in oracle_vk.sigma_comms.iter().take(NUM_WIRE_SIGMA_EVALS) {
+            push(v_base, comm.0);
+            v_base *= v;
+        }
+
+        // 7. prod_perm (uv-combined; scalar = u, see module docs)
+        push(u, oracle_proof.prod_perm_poly_comm.0);
+
+        acc
+    }
+
+    /// Cross-check: my byte-form port produces the same MSM point as
+    /// the typed-oracle helper above, on real proofs at all three
+    /// tiers. Catches byte-parser indexing / LE-BE conversion bugs.
+    #[test]
+    fn msm_matches_typed_oracle_for_all_tiers() {
+        for &depth in &[5usize, 8, 11] {
+            let f = fixture(depth);
+            let ours = aggregate_poly_commitments(
+                f.challenges,
+                f.vanish_eval,
+                f.lagrange_1_eval,
+                &f.parsed_vk,
+                &f.parsed_proof,
+            )
+            .multi_scalar_multiply();
+
+            let oracle = typed_oracle_msm(
+                &f.oracle_vk,
+                &f.oracle_proof,
+                f.challenges,
+                f.vanish_eval,
+                f.lagrange_1_eval,
+            );
+
+            assert_eq!(
+                ours.into_affine(),
+                oracle.into_affine(),
+                "depth={depth} byte-form MSM diverges from typed-oracle MSM",
+            );
+        }
     }
 }

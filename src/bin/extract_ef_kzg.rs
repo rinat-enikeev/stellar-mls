@@ -51,10 +51,11 @@ const MAGIC: &[u8; 4] = b"EFKZ";
 const VERSION: u32 = 1;
 // EF KZG publishes four parallel PoT sets at sizes 4096, 8192, 16384, 32768
 // (each with its own independently-contributed τ from the same ~141k
-// contributors). We pick the n=16384 set: covers our largest circuit
-// (~9,400 gates for membership at depth=11) with ≈1.7× headroom; ≈1.5 MB
-// embedded blob. See src/prover/srs/README.md for the provenance chain.
-const TARGET_G1: usize = 16384;
+// contributors). We pick the n=32768 set: covers our largest circuit
+// (membership at depth=11 finalises to 16,384 gates, and jf-plonk's
+// preprocess needs strictly more powers than gates). ~3.0 MB embedded
+// blob. See src/prover/srs/README.md for the provenance chain.
+const TARGET_G1: usize = 32768;
 const TARGET_G2: usize = 65;
 
 const G1_COMPRESSED_BYTES: usize = 48;

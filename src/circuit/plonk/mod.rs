@@ -32,6 +32,7 @@ pub mod verifier_polys;
 pub mod verifier_lin_poly;
 pub mod verifier_aggregate;
 pub mod verifier_aggregate_evals;
+pub mod verifier;
 
 #[cfg(test)]
 mod test_vectors;

@@ -21,6 +21,11 @@ soroban-sdk = "=26.0.0-rc.1"
 
 [dev-dependencies]
 soroban-sdk = { version = "=26.0.0-rc.1", features = ["testutils"] }
+# Dev-only: oracle Keccak-256 implementation for transcript tests.
+# Compares our `env.crypto().keccak256()`-driven transcript output
+# against a parallel computation by `sha3::Keccak256`. The contract
+# build does not pull `sha3` in.
+sha3 = "0.10"
 
 [profile.release]
 opt-level = "z"

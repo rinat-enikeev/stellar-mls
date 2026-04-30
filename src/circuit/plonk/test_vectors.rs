@@ -162,6 +162,90 @@ fn verify_plonk_membership_vk_fingerprints() {
     }
 }
 
+/// Pinned proof-bytes invariant.
+///
+/// `Proof<Bls12_381>` from jf-plonk serialises to a **fixed byte
+/// length regardless of tier** because the proof shape (number of
+/// commitments, evaluations, opening proofs) is determined by the
+/// TurboPlonk circuit *structure* — same number of wire types and
+/// selectors across all three membership tiers. The actual circuit
+/// size (depth=5, 8, 11) only affects the SRS-degree and prover
+/// time, not the proof byte count.
+///
+/// Empirically (Plookup disabled, no zk_blinding overrides):
+///
+///     uncompressed = 1601 bytes
+///     compressed   = 977  bytes
+///
+/// Both values are pinned by the
+/// `canonical_proof_serialised_byte_length_per_tier` test below and
+/// are the wire-format invariant Phase C's Soroban verifier consumes.
+/// If either drifts, the verifier's PlonkProof struct shape and
+/// every cross-platform fixture must be revisited.
+const PROOF_UNCOMPRESSED_LEN: usize = 1601;
+const PROOF_COMPRESSED_LEN: usize = 977;
+
+#[test]
+fn canonical_proof_serialised_byte_length_per_tier() {
+    use ark_serialize_v05::CanonicalSerialize;
+    use rand_chacha::rand_core::SeedableRng;
+
+    for &depth in &[5usize, 8, 11] {
+        let witness = build_canonical_witness(depth);
+        let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_membership(&mut circuit, &witness).expect("synthesize");
+        circuit.finalize_for_arithmetization().expect("finalize");
+
+        let keys = plonk::preprocess(&circuit).expect("preprocess");
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
+        let proof = plonk::prove(&mut rng, &keys.pk, &circuit).expect("prove");
+
+        let mut uncompressed = Vec::new();
+        proof
+            .serialize_uncompressed(&mut uncompressed)
+            .expect("serialize uncompressed");
+        let mut compressed = Vec::new();
+        proof
+            .serialize_compressed(&mut compressed)
+            .expect("serialize compressed");
+
+        let tier = match depth {
+            5 => "small",
+            8 => "medium",
+            11 => "large",
+            _ => "?",
+        };
+        eprintln!(
+            "[plonk-proof-bytes] depth={depth:>2} ({tier:>6}): \
+             uncompressed={} bytes, compressed={} bytes",
+            uncompressed.len(),
+            compressed.len()
+        );
+        assert_eq!(
+            uncompressed.len(),
+            PROOF_UNCOMPRESSED_LEN,
+            "uncompressed proof length drifted at depth={depth}"
+        );
+        assert_eq!(
+            compressed.len(),
+            PROOF_COMPRESSED_LEN,
+            "compressed proof length drifted at depth={depth}"
+        );
+
+        // Sanity check that the serialised bytes parse back without
+        // error. This is **not** a semantic round-trip — `Proof` does
+        // not derive `PartialEq`, and we don't re-verify the parsed
+        // proof here. Phase C.1 (PR #174) adds the byte-level parser
+        // and a stronger oracle test against jf-plonk's deserialiser.
+        use ark_bls12_381_v05::Bls12_381;
+        use ark_serialize_v05::CanonicalDeserialize;
+        use jf_plonk::proof_system::structs::Proof;
+        let _parsed: Proof<Bls12_381> =
+            Proof::deserialize_uncompressed(&uncompressed[..])
+                .expect("uncompressed proof bytes parse via CanonicalDeserialize");
+    }
+}
+
 /// End-to-end consistency: the canonical witness produces a circuit
 /// that proves and verifies under PlonkKzgSnark. This is the
 /// per-platform self-check (Rust here, mirrored on iOS/Android once

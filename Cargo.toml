@@ -100,6 +100,12 @@ extract-tool = ["plonk", "dep:serde_json"]
 # Soroban contracts embed via `include_bytes!`. Activated only when
 # running `cargo run --bin bake-vk`.
 bake-vk-tool = ["plonk"]
+# Off-chain proof-generation CLIs: `gen-membership-proof` /
+# `gen-update-proof`. Take operator-supplied witness inputs and emit
+# `proof.bin` + `public_inputs.json` ready for `stellar contract
+# invoke`. Bypasses the FFI / mobile-bundle path used by the iOS /
+# Android SDKs.
+gen-proof-tool = ["plonk"]
 
 [[bin]]
 name = "extract-ef-kzg"
@@ -110,6 +116,16 @@ required-features = ["extract-tool"]
 name = "bake-vk"
 path = "src/bin/bake_vk.rs"
 required-features = ["bake-vk-tool"]
+
+[[bin]]
+name = "gen-membership-proof"
+path = "src/bin/gen_membership_proof.rs"
+required-features = ["gen-proof-tool"]
+
+[[bin]]
+name = "gen-update-proof"
+path = "src/bin/gen_update_proof.rs"
+required-features = ["gen-proof-tool"]
 
 [profile.release]
 strip = "symbols"

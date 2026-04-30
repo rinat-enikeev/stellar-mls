@@ -24,6 +24,7 @@ pub mod poseidon;
 pub mod merkle;
 pub mod membership;
 pub mod proof_format;
+pub mod baker;
 
 #[cfg(test)]
 mod test_vectors;

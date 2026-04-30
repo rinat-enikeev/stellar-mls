@@ -41,6 +41,9 @@ build/*
 # directory and the dev-env re-include below stays effective.
 **/build/*
 !build/dev-env/
+# Operator scripts under scripts/build/ are source, not build artefacts.
+!scripts/build/
+!scripts/build/**
 
 # Xcode
 DerivedData/

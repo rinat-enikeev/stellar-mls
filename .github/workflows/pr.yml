@@ -9,6 +9,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rust-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: pr-rust-tests-${{ hashFiles('Cargo.lock') }}
+
+      # Default-features build + tests — the legacy Groth16 path the
+      # mobile clients and existing contracts already depend on.
+      - name: Default-features tests
+        run: cargo test --lib --release commitment::tests
+
+      # PLONK feature build + the SRS round-trip tests. Catches any
+      # drift in the embedded EF KZG SRS bytes, the v0.5 deserialiser,
+      # the pairing identity, and the test-SRS round trip — all of
+      # which are gated behind `feature = "plonk"` and would otherwise
+      # never run in CI.
+      - name: PLONK feature SRS tests
+        run: cargo test --no-default-features --features groth16,plonk,std,jni,ffi --lib --release prover::srs::tests
+
   android-build:
     runs-on: ubuntu-latest
     steps:

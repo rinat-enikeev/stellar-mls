@@ -9,41 +9,88 @@ license = "MIT"
 crate-type = ["rlib", "staticlib", "cdylib"]
 
 [dependencies]
-# Arkworks core: constraint system and relations
-ark-relations = "0.4"
-ark-r1cs-std = "0.4"
-
-# BLS12-381 curve and field implementations
+# --- BLS12-381 curve, fields, serialisation (used by both proving systems) ---
 ark-bls12-381 = "0.4"
-
-# Groth16 prover/verifier
-ark-groth16 = "0.4"
-
-# Algebra traits and serialization
 ark-ff = "0.4"
 ark-ec = "0.4"
 ark-std = "0.4"
 ark-serialize = "0.4"
-ark-crypto-primitives = { version = "0.4", features = ["crh", "merkle_tree", "sponge", "r1cs"] }
-ark-snark = "0.4"
 
-# SHA-256 for the outer commitment binding
+# --- Groth16 stack (legacy; gated behind `feature = "groth16"`, kept in default) ---
+ark-relations = { version = "0.4", optional = true }
+ark-r1cs-std = { version = "0.4", optional = true }
+ark-groth16 = { version = "0.4", optional = true }
+ark-snark = { version = "0.4", optional = true }
+ark-crypto-primitives = { version = "0.4", features = ["crh", "merkle_tree", "sponge", "r1cs"], optional = true }
+
+# --- TurboPlonk stack (jf-plonk + jf-pcs + jf-relation; gated behind `feature = "plonk"`) ---
+# Espresso's jellyfish workspace is git-only; each constituent crate has its
+# own per-crate release tag. We pin to the SAME tags jf-plonk's own
+# Cargo.toml uses for its transitive deps so Cargo resolves to a single
+# compilation per crate (different tag strings → separate sources, even when
+# they point at the same commit, even though `b33995b6` happens to carry both
+# `jf-plonk-v0.8.0` and `jf-relation-v0.5.0` in our case).
+#
+# Verified 2026-04-30 via `git ls-remote --tags`:
+#   jf-plonk-v0.8.0    (commit b33995b6)
+#   jf-pcs-v0.3.0      (commit f1538793) — what jf-plonk@0.8.0 transitively requires
+#   jf-relation-v0.5.0 (commit b33995b6)
+# Re-verify before bumping.
+jf-plonk    = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.8.0",    default-features = false, features = ["std"], optional = true }
+jf-pcs      = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-pcs-v0.3.0",      default-features = false, features = ["std", "test-srs"], optional = true }
+jf-relation = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-relation-v0.5.0", default-features = false, features = ["std"], optional = true }
+
+# Arkworks 0.5.x — required by jf-plonk's type system. The existing legacy
+# code uses 0.4.x; both versions coexist (Cargo handles duplicate-version
+# linking) until Phase B.4 migrates the prover module wholesale to 0.5.x
+# and the renamed v05 deps are dropped.
+ark-bls12-381-v05 = { package = "ark-bls12-381", version = "0.5", default-features = false, features = ["curve"], optional = true }
+ark-ec-v05        = { package = "ark-ec",        version = "0.5", default-features = false, features = ["std"],   optional = true }
+ark-ff-v05        = { package = "ark-ff",        version = "0.5", default-features = false, features = ["std"],   optional = true }
+ark-serialize-v05 = { package = "ark-serialize", version = "0.5", default-features = false, features = ["std"],   optional = true }
+ark-std-v05       = { package = "ark-std",       version = "0.5", default-features = false, features = ["std"],   optional = true }
+
+# --- General utility deps (unconditional) ---
 sha2 = "0.10"
-
-# Randomness
 rand = "0.8"
 rand_chacha = "0.3"
 k256 = { version = "0.13", features = ["schnorr"] }
 jni = { version = "0.21", optional = true }
 
+# Used only by the one-shot `extract-ef-kzg` binary (gated behind
+# `feature = "extract-tool"`). Keeps the JSON dep out of the library
+# build — every other consumer should never need this.
+serde_json = { version = "1", optional = true }
+
 [dev-dependencies]
 ark-relations = { version = "0.4", features = ["std"] }
 
+[build-dependencies]
+# Used by build.rs to assert SHA-256 of the embedded EF KZG SRS bytes.
+sha2 = "0.10"
+
 [features]
-default = ["std", "jni", "ffi"]
+# Default keeps Groth16 active so existing builds (mobile bundles, FFI surface,
+# every test that exists today) work unchanged. Phase B.4 will split prover
+# modules behind these feature gates; Phases C.2 / E will cut groth16 from default.
+default = ["std", "jni", "ffi", "groth16"]
 std = []
 ffi = []
 jni = ["dep:jni"]
+groth16 = ["dep:ark-relations", "dep:ark-r1cs-std", "dep:ark-groth16", "dep:ark-snark", "dep:ark-crypto-primitives"]
+plonk = [
+    "dep:jf-plonk", "dep:jf-pcs", "dep:jf-relation",
+    "dep:ark-bls12-381-v05", "dep:ark-ec-v05", "dep:ark-ff-v05",
+    "dep:ark-serialize-v05", "dep:ark-std-v05",
+]
+# One-shot operator tool for extracting the EF KZG SRS from the published
+# transcript. Activated only when running `cargo run --bin extract-ef-kzg`.
+extract-tool = ["plonk", "dep:serde_json"]
+
+[[bin]]
+name = "extract-ef-kzg"
+path = "src/bin/extract_ef_kzg.rs"
+required-features = ["extract-tool"]
 
 [profile.release]
 strip = "symbols"

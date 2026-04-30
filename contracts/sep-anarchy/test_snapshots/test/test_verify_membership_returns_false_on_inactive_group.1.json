@@ -25,8 +25,6 @@
       ]
     ],
     [],
-    [],
-    [],
     []
   ],
   "ledger": {
@@ -72,7 +70,7 @@
                     "symbol": "Group"
                   },
                   {
-                    "bytes": "1414141414141414141414141414141414141414141414141414141414141414"
+                    "bytes": "2121212121212121212121212121212121212121212121212121212121212121"
                   }
                 ]
               },
@@ -84,7 +82,7 @@
                       "symbol": "active"
                     },
                     "val": {
-                      "bool": true
+                      "bool": false
                     }
                   },
                   {
@@ -92,7 +90,7 @@
                       "symbol": "commitment"
                     },
                     "val": {
-                      "bytes": "1d22572c6046ab7ad9641d1457648961b88666e62190c81d484b9b25fd6a320d"
+                      "bytes": "0000000000000000000000000000000000000000000000000000000000000000"
                     }
                   },
                   {
@@ -100,7 +98,7 @@
                       "symbol": "epoch"
                     },
                     "val": {
-                      "u64": "1235"
+                      "u64": "0"
                     }
                   },
                   {
@@ -108,7 +106,7 @@
                       "symbol": "member_count"
                     },
                     "val": {
-                      "u32": 42
+                      "u32": 0
                     }
                   },
                   {
@@ -133,114 +131,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 518400
-      },
-      {
-        "entry": {
-          "last_modified_ledger_seq": 0,
-          "data": {
-            "contract_data": {
-              "ext": "v0",
-              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
-              "key": {
-                "vec": [
-                  {
-                    "symbol": "History"
-                  },
-                  {
-                    "bytes": "1414141414141414141414141414141414141414141414141414141414141414"
-                  }
-                ]
-              },
-              "durability": "persistent",
-              "val": {
-                "vec": [
-                  {
-                    "map": [
-                      {
-                        "key": {
-                          "symbol": "active"
-                        },
-                        "val": {
-                          "bool": true
-                        }
-                      },
-                      {
-                        "key": {
-                          "symbol": "commitment"
-                        },
-                        "val": {
-                          "bytes": "66d6ca2b0096160993f6ffc7d93ef2d0ef617a0b5c2b6501ac55ff4891ee78be"
-                        }
-                      },
-                      {
-                        "key": {
-                          "symbol": "epoch"
-                        },
-                        "val": {
-                          "u64": "1234"
-                        }
-                      },
-                      {
-                        "key": {
-                          "symbol": "member_count"
-                        },
-                        "val": {
-                          "u32": 42
-                        }
-                      },
-                      {
-                        "key": {
-                          "symbol": "tier"
-                        },
-                        "val": {
-                          "u32": 0
-                        }
-                      },
-                      {
-                        "key": {
-                          "symbol": "timestamp"
-                        },
-                        "val": {
-                          "u64": "0"
-                        }
-                      }
-                    ]
-                  }
-                ]
-              }
-            }
-          },
-          "ext": "v0"
-        },
-        "live_until": 518400
-      },
-      {
-        "entry": {
-          "last_modified_ledger_seq": 0,
-          "data": {
-            "contract_data": {
-              "ext": "v0",
-              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
-              "key": {
-                "vec": [
-                  {
-                    "symbol": "UsedProof"
-                  },
-                  {
-                    "bytes": "29a6926002d9f8c4adecdfe8cbf355b46d075e1e02b6ee26a4d114562f56c9d7"
-                  }
-                ]
-              },
-              "durability": "persistent",
-              "val": {
-                "bool": true
-              }
-            }
-          },
-          "ext": "v0"
-        },
-        "live_until": 518400
+        "live_until": 4095
       },
       {
         "entry": {
@@ -267,21 +158,6 @@
                       },
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                      }
-                    },
-                    {
-                      "key": {
-                        "vec": [
-                          {
-                            "symbol": "GroupCount"
-                          },
-                          {
-                            "u32": 0
-                          }
-                        ]
-                      },
-                      "val": {
-                        "u32": 1
                       }
                     }
                   ]

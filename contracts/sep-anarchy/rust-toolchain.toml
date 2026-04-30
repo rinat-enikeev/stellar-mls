@@ -1,0 +1,7 @@
+[toolchain]
+# Soroban SDK 26 raises rustc floor to 1.91.0. Pinned per-crate (not at
+# the repo root) because the prover side still uses 1.88.0 — the
+# Phase C.2 per-contract bumps to 1.91.0 happen as each contract
+# migrates off Groth16. plonk-verifier already pins 1.91.0; this file
+# keeps sep-anarchy in lockstep.
+channel = "1.91.0"

@@ -21,3 +21,4 @@
 #![cfg(feature = "plonk")]
 
 pub mod poseidon;
+pub mod merkle;

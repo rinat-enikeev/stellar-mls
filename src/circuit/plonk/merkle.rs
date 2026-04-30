@@ -188,15 +188,13 @@ mod tests {
         let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
         let keys = crate::prover::plonk::preprocess(&circuit).expect("preprocess");
         let proof = crate::prover::plonk::prove(&mut rng, &keys.pk, &circuit).expect("prove");
-        assert!(
-            crate::prover::plonk::verify(&keys.vk, &[root], &proof),
-            "verifier rejected a valid Merkle-membership proof"
-        );
+        crate::prover::plonk::verify(&keys.vk, &[root], &proof)
+            .expect("verifier rejected a valid Merkle-membership proof");
 
         // Tampered root must fail.
         let wrong_root = root + Fr::from(1u64);
         assert!(
-            !crate::prover::plonk::verify(&keys.vk, &[wrong_root], &proof),
+            crate::prover::plonk::verify(&keys.vk, &[wrong_root], &proof).is_err(),
             "verifier accepted a Merkle proof against the wrong root"
         );
     }

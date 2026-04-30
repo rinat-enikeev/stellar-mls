@@ -44,11 +44,12 @@ jf-relation = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-
 # code uses 0.4.x; both versions coexist (Cargo handles duplicate-version
 # linking) until Phase B.4 migrates the prover module wholesale to 0.5.x
 # and the renamed v05 deps are dropped.
-ark-bls12-381-v05 = { package = "ark-bls12-381", version = "0.5", default-features = false, features = ["curve"], optional = true }
-ark-ec-v05        = { package = "ark-ec",        version = "0.5", default-features = false, features = ["std"],   optional = true }
-ark-ff-v05        = { package = "ark-ff",        version = "0.5", default-features = false, features = ["std"],   optional = true }
-ark-serialize-v05 = { package = "ark-serialize", version = "0.5", default-features = false, features = ["std"],   optional = true }
-ark-std-v05       = { package = "ark-std",       version = "0.5", default-features = false, features = ["std"],   optional = true }
+ark-bls12-381-v05         = { package = "ark-bls12-381",         version = "0.5", default-features = false, features = ["curve"],                                  optional = true }
+ark-ec-v05                = { package = "ark-ec",                version = "0.5", default-features = false, features = ["std"],                                    optional = true }
+ark-ff-v05                = { package = "ark-ff",                version = "0.5", default-features = false, features = ["std"],                                    optional = true }
+ark-serialize-v05         = { package = "ark-serialize",         version = "0.5", default-features = false, features = ["std"],                                    optional = true }
+ark-std-v05               = { package = "ark-std",               version = "0.5", default-features = false, features = ["std"],                                    optional = true }
+ark-crypto-primitives-v05 = { package = "ark-crypto-primitives", version = "0.5", default-features = false, features = ["sponge"],                                  optional = true }
 
 # --- General utility deps (unconditional) ---
 sha2 = "0.10"
@@ -82,6 +83,7 @@ plonk = [
     "dep:jf-plonk", "dep:jf-pcs", "dep:jf-relation",
     "dep:ark-bls12-381-v05", "dep:ark-ec-v05", "dep:ark-ff-v05",
     "dep:ark-serialize-v05", "dep:ark-std-v05",
+    "dep:ark-crypto-primitives-v05",
 ]
 # One-shot operator tool for extracting the EF KZG SRS from the published
 # transcript. Activated only when running `cargo run --bin extract-ef-kzg`.

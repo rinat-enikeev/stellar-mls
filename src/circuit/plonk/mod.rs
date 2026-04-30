@@ -27,6 +27,7 @@ pub mod proof_format;
 pub mod vk_format;
 pub mod baker;
 pub mod transcript;
+pub mod verifier_challenges;
 
 #[cfg(test)]
 mod test_vectors;

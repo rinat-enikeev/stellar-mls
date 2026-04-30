@@ -33,7 +33,7 @@ use std::sync::OnceLock;
 
 use ark_bls12_381_v05::Fr;
 use ark_crypto_primitives_v05::sponge::poseidon::{PoseidonConfig, PoseidonSponge};
-use ark_crypto_primitives_v05::sponge::{Absorb, CryptographicSponge};
+use ark_crypto_primitives_v05::sponge::CryptographicSponge;
 use ark_ff_v05::{Field, PrimeField};
 
 // Re-exported from the legacy module so we have a single source of truth
@@ -74,17 +74,9 @@ fn build_poseidon_config_v05() -> PoseidonConfig<Fr> {
 pub fn poseidon_hash_two_v05(left: &Fr, right: &Fr) -> Fr {
     let cfg = poseidon_config_v05();
     let mut sponge = PoseidonSponge::<Fr>::new(cfg);
-    Absorb::to_sponge_field_elements(left, &mut sponge_inputs(&mut sponge));
     sponge.absorb(left);
     sponge.absorb(right);
     sponge.squeeze_field_elements::<Fr>(1)[0]
-}
-
-// Helper to keep absorb signature happy when the type already implements
-// Absorb directly. (No-op pass-through; kept so the signature mirrors v0.4.)
-fn sponge_inputs<F: PrimeField>(sponge: &mut PoseidonSponge<F>) -> Vec<F> {
-    let _ = sponge;
-    Vec::new()
 }
 
 /// Hash a single field element via Poseidon (used for leaf hashing).

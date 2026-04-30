@@ -22,3 +22,4 @@
 
 pub mod poseidon;
 pub mod merkle;
+pub mod membership;

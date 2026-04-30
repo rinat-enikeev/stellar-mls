@@ -125,6 +125,16 @@ impl core::fmt::Display for ParseError {
 
 /// Parse a 1601-byte proof stream. No allocations; copies into fixed-
 /// size arrays.
+///
+/// **Structural parsing only.** This function validates the proof's
+/// byte layout (total length, length prefixes, plookup-absence), but
+/// it does **not** check that the G1 points lie on the curve or in
+/// the correct subgroup, and it does not check that the Fr evaluations
+/// are canonical (`< r`). Trusting `ParsedProof` fields is therefore
+/// only safe after a downstream validating step. In the Soroban
+/// verifier (Phase C.2) that step is the host primitive
+/// `env.crypto().bls12_381().g1_*`, which rejects off-curve points.
+/// Callers in any other context must add an equivalent check.
 pub fn parse_proof_bytes(bytes: &[u8]) -> Result<ParsedProof, ParseError> {
     if bytes.len() != PROOF_LEN {
         return Err(ParseError::BadLength {
@@ -218,10 +228,6 @@ mod tests {
     use ark_serialize_v05::{CanonicalDeserialize, CanonicalSerialize};
     use jf_plonk::proof_system::structs::Proof;
     use jf_relation::{Circuit, PlonkCircuit};
-    // `Circuit` is used implicitly via `circuit.finalize_for_arithmetization()`;
-    // suppress the unused-import warning.
-    #[allow(unused_imports)]
-    use Circuit as _UseCircuit;
     use rand_chacha::rand_core::SeedableRng;
 
     use crate::circuit::plonk::membership::{synthesize_membership, MembershipWitness};
@@ -377,15 +383,34 @@ mod tests {
         }
     }
 
-    /// Tampered length prefixes are rejected.
+    /// Every reject path on the parser's structural-checks side is
+    /// exercised: each of the four length-prefix variants and the
+    /// plookup-discriminant variant. Important because the parser is
+    /// the security boundary between Soroban host bytes and the
+    /// verifier — any reachable-but-untested error path is a hole
+    /// the host can drive.
     #[test]
     fn parse_rejects_bad_length_prefix() {
-        let mut bytes = canonical_proof_bytes(5);
-        // Flip the wire-len prefix to 6 (invalid).
-        bytes[OFF_WIRE_LEN] = 6;
-        match parse_proof_bytes(&bytes) {
-            Err(ParseError::BadWireLenPrefix(6)) => {}
-            other => panic!("expected BadWireLenPrefix(6), got {other:?}"),
+        let canonical = canonical_proof_bytes(5);
+
+        // The first byte of each length-prefix offset is overwritten
+        // with the (invalid) value; arkworks' u64 LE means this maps
+        // to the low byte. Plookup byte is overwritten to 0x01 (Some).
+        let cases: &[(usize, u8, fn(&ParseError) -> bool, &'static str)] = &[
+            (OFF_WIRE_LEN, 6, |e| matches!(e, ParseError::BadWireLenPrefix(6)), "BadWireLenPrefix"),
+            (OFF_QUOT_LEN, 6, |e| matches!(e, ParseError::BadQuotLenPrefix(6)), "BadQuotLenPrefix"),
+            (OFF_WIRES_EVAL_LEN, 6, |e| matches!(e, ParseError::BadWiresEvalLenPrefix(6)), "BadWiresEvalLenPrefix"),
+            (OFF_SIGMA_EVAL_LEN, 5, |e| matches!(e, ParseError::BadSigmaEvalLenPrefix(5)), "BadSigmaEvalLenPrefix"),
+            (OFF_PLOOKUP_OPT, 0x01, |e| matches!(e, ParseError::UnexpectedPlookupProof), "UnexpectedPlookupProof"),
+        ];
+
+        for &(offset, byte, ref matcher, name) in cases {
+            let mut bytes = canonical.clone();
+            bytes[offset] = byte;
+            match parse_proof_bytes(&bytes) {
+                Err(ref e) if matcher(e) => {}
+                other => panic!("at offset={offset}, expected {name}, got {other:?}"),
+            }
         }
     }
 

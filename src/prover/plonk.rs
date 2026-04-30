@@ -14,9 +14,13 @@
 //!   with the same SolidityTranscript (keccak256-based) the Soroban
 //!   verifier will reproduce in Phase C.
 //!
-//! Generic over any `Circuit + Arithmetization` instance; when
-//! `src/circuit/plonk/membership.rs` lands (B.3 follow-up) it plugs in
-//! here without changes to this module.
+//! `preprocess` and `prove` take a concrete `&PlonkCircuit<Fr>` rather
+//! than a generic `C: Circuit + Arithmetization<Fr>`. The renamed-
+//! package alias for ark-bls12-381 v0.5 confuses rustc's trait-bound
+//! resolution when the call site is generic; making the argument
+//! type concrete sidesteps that. All circuits in this codebase build
+//! on `PlonkCircuit<Fr>` directly so no expressiveness is lost — see
+//! the longer rationale at the `preprocess` doc-comment below.
 
 #![cfg(feature = "plonk")]
 
@@ -96,6 +100,13 @@ pub fn prove<R>(
 where
     R: ark_std_v05::rand::CryptoRng + ark_std_v05::rand::RngCore,
 {
+    // CONTRACT (locked): `extra_transcript_init_msg = None`. The Soroban
+    // verifier in Phase C MUST initialise its transcript with the same
+    // empty seed — anything else (e.g. a domain-separator derived from a
+    // circuit identifier) and the off-chain prover and on-chain verifier
+    // diverge silently. If a future change here passes anything but
+    // `None`, the same change has to land in every Soroban contract that
+    // verifies these proofs in lockstep.
     PlonkKzgSnark::<Bls12_381>::prove::<_, _, SolidityTranscript>(rng, circuit, pk, None)
 }
 
@@ -110,6 +121,8 @@ pub fn verify(
     public_inputs: &[Fr],
     proof: &Proof<Bls12_381>,
 ) -> bool {
+    // Same contract as `prove`: `extra_transcript_init_msg = None`. The
+    // Soroban verifier MUST mirror this. See the comment on `prove`.
     PlonkKzgSnark::<Bls12_381>::verify::<SolidityTranscript>(vk, public_inputs, proof, None).is_ok()
 }
 
@@ -157,6 +170,26 @@ mod tests {
         circuit
     }
 
+    /// Distinct-shape circuit for the cross-VK test: proves
+    /// `witness^3 == public_input`. Different gate count → different
+    /// VK from `build_square_circuit`.
+    fn build_cube_circuit(secret: u64) -> PlonkCircuit<Fr> {
+        let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+        let y = Fr::from(secret) * Fr::from(secret) * Fr::from(secret);
+        let pub_var = circuit.create_public_variable(y).expect("public variable");
+        let witness_var = circuit
+            .create_variable(Fr::from(secret))
+            .expect("witness variable");
+        // tmp = witness * witness
+        let tmp = circuit.mul(witness_var, witness_var).expect("mul");
+        // pub_var = tmp * witness
+        circuit
+            .mul_gate(tmp, witness_var, pub_var)
+            .expect("mul_gate");
+        circuit.finalize_for_arithmetization().expect("finalize");
+        circuit
+    }
+
     #[test]
     fn prove_then_verify_round_trip_on_trivial_circuit() {
         let circuit = build_square_circuit(7);
@@ -194,9 +227,11 @@ mod tests {
     #[test]
     fn preprocess_is_deterministic() {
         // Two builds of the same circuit produce byte-identical
-        // verifying keys. This is the property that lets us bake the VK
-        // into Soroban contract bytecode in Phase C — same source, same VK
-        // bytes, every clean build.
+        // verifying keys AND byte-identical proving keys. The VK
+        // determinism is what lets us bake the VK into Soroban
+        // contract bytecode in Phase C; PK determinism is what lets a
+        // mobile client cache its preprocessed proving key once and
+        // re-use it across reboots without re-running preprocess.
         let c1 = build_square_circuit(7);
         let c2 = build_square_circuit(7);
 
@@ -206,10 +241,93 @@ mod tests {
         // Compare via canonical-serialise — the only API jf-plonk's keys
         // expose for byte-level equality.
         use ark_serialize_v05::CanonicalSerialize;
-        let mut b1 = Vec::new();
-        let mut b2 = Vec::new();
-        k1.vk.serialize_uncompressed(&mut b1).unwrap();
-        k2.vk.serialize_uncompressed(&mut b2).unwrap();
-        assert_eq!(b1, b2, "preprocess is non-deterministic — VK bytes diverge");
+        let mut vk1 = Vec::new();
+        let mut vk2 = Vec::new();
+        k1.vk.serialize_uncompressed(&mut vk1).unwrap();
+        k2.vk.serialize_uncompressed(&mut vk2).unwrap();
+        assert_eq!(vk1, vk2, "preprocess is non-deterministic — VK bytes diverge");
+
+        let mut pk1 = Vec::new();
+        let mut pk2 = Vec::new();
+        k1.pk.serialize_uncompressed(&mut pk1).unwrap();
+        k2.pk.serialize_uncompressed(&mut pk2).unwrap();
+        assert_eq!(pk1, pk2, "preprocess is non-deterministic — PK bytes diverge");
+    }
+
+    /// A flipped byte inside the proof must fail verification. Catches
+    /// the class of bugs where the verifier accepts any well-formed
+    /// proof regardless of pairing-equation satisfaction.
+    #[test]
+    fn verifier_rejects_tampered_proof_bytes() {
+        use ark_bls12_381_v05::Bls12_381;
+        use ark_serialize_v05::{CanonicalDeserialize, CanonicalSerialize};
+
+        let circuit = build_square_circuit(7);
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
+        let keys = preprocess(&circuit).expect("preprocess");
+        let proof = prove(&mut rng, &keys.pk, &circuit).expect("prove");
+
+        // Roundtrip the proof through bytes, flip one byte in the middle,
+        // re-deserialise. The resulting Proof struct may parse as a
+        // syntactically-valid but semantically-invalid proof; we expect
+        // verify to reject it.
+        let mut bytes = Vec::new();
+        proof.serialize_uncompressed(&mut bytes).unwrap();
+        let flip_at = bytes.len() / 2;
+        bytes[flip_at] ^= 0x55;
+        let tampered = match Proof::<Bls12_381>::deserialize_uncompressed(&bytes[..]) {
+            Ok(p) => p,
+            // Some byte flips produce malformed group elements that fail
+            // deserialise; that's also a perfectly fine rejection mode —
+            // a tampered proof never reaches the pairing check.
+            Err(_) => return,
+        };
+        let y = Fr::from(49u64);
+        assert!(
+            !verify(&keys.vk, &[y], &tampered),
+            "verifier accepted a proof with a flipped byte at offset {flip_at} \
+             — verifier is broken"
+        );
+    }
+
+    /// A proof produced for circuit A must NOT verify under the VK of
+    /// circuit B. Catches a verifier that ignores the public-input /
+    /// constraint structure encoded in the VK and accepts any proof
+    /// for any circuit.
+    ///
+    /// `build_square_circuit` and `build_cube_circuit` have different
+    /// gate counts and different public-input values, so their VKs
+    /// are byte-different — the assertion at the start of the test
+    /// fails noisily if anyone changes the helpers in a way that
+    /// re-unifies the two shapes.
+    #[test]
+    fn verifier_rejects_proof_under_wrong_vk() {
+        let circuit_a = build_square_circuit(7); // shape: x*x = y; y_a = 49
+        let circuit_b = build_cube_circuit(7);   // shape: x*x*x = y; y_b = 343
+
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
+        let keys_a = preprocess(&circuit_a).expect("preprocess A");
+        let keys_b = preprocess(&circuit_b).expect("preprocess B");
+
+        // Sanity: VKs really do differ (otherwise the test is vacuous).
+        use ark_serialize_v05::CanonicalSerialize;
+        let mut vk_a_bytes = Vec::new();
+        let mut vk_b_bytes = Vec::new();
+        keys_a.vk.serialize_uncompressed(&mut vk_a_bytes).unwrap();
+        keys_b.vk.serialize_uncompressed(&mut vk_b_bytes).unwrap();
+        assert_ne!(
+            vk_a_bytes, vk_b_bytes,
+            "test setup invalid: VKs are identical, cross-VK rejection vacuous"
+        );
+
+        let proof_a = prove(&mut rng, &keys_a.pk, &circuit_a).expect("prove A");
+
+        // proof_a's public input is 49; verifying it under VK_B should fail.
+        let y_a = Fr::from(49u64);
+        assert!(
+            !verify(&keys_b.vk, &[y_a], &proof_a),
+            "verifier accepted a proof from circuit A under VK from circuit B \
+             — verifier is broken"
+        );
     }
 }

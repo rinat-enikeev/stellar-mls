@@ -33,7 +33,7 @@ const SRS_BYTES: &[u8] = include_bytes!("srs/ef-kzg-2023.bin");
 
 const MAGIC: &[u8; 4] = b"EFKZ";
 const VERSION: u32 = 1;
-// See src/bin/extract_ef_kzg.rs for the rationale on choosing n=16384.
+// See src/bin/extract_ef_kzg.rs for the rationale on choosing n=32768.
 const TARGET_G1: usize = 32768;
 const TARGET_G2: usize = 65;
 

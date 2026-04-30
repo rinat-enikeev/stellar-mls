@@ -126,36 +126,17 @@ const PINNED_VK_SHA256_MEDIUM: &str =
 const PINNED_VK_SHA256_LARGE:  &str =
     "36e96f9bf3b834f81c73a2d402b33ef8c32bc01fe47cf6ee66978e29ab0d5849";
 
-/// Generate the VK fingerprints. Runs the canonical witness through
-/// preprocess and prints the values. First-run output goes both into
-/// `PINNED_VK_SHA256_*` constants above and into
-/// `docs/cross-platform-test-vectors.json`.
-///
-/// Re-runs of this test are no-ops on success once the constants are
-/// pinned — see `verify_plonk_membership_vk_fingerprints` for the
-/// assertion test.
-#[test]
-fn print_plonk_membership_vk_fingerprints() {
-    for &depth in &[5usize, 8, 11] {
-        let (vk_hex, n_gates, pub_inputs) = fingerprint(depth);
-        let tier_name = match depth {
-            5 => "small",
-            8 => "medium",
-            11 => "large",
-            _ => "?",
-        };
-        eprintln!(
-            "[plonk-vk-fingerprint] depth={depth:>2} ({tier_name:>6}): \
-             gates={n_gates}, vk_sha256={vk_hex}"
-        );
-        eprintln!("  public_inputs[0] (commitment) = {}", pub_inputs[0]);
-        eprintln!("  public_inputs[1] (epoch)      = {}", pub_inputs[1]);
-    }
-}
-
 /// Cross-platform-anchor test: VK fingerprints must match the pinned
-/// values. Skipped (with a `eprintln` note) when the constants are
-/// still placeholders.
+/// values. Diagnostic info (gate count, public inputs) is logged via
+/// `eprintln!` for visibility under `--nocapture`; the assertion is
+/// the load-bearing part.
+///
+/// To bootstrap a fresh fingerprint set (after a deliberate circuit
+/// change): set the pinned constants to the dummy literal `""`,
+/// run `cargo test … verify_plonk_membership_vk_fingerprints
+/// -- --nocapture`, and copy the printed `vk_sha256=…` values into
+/// both `PINNED_VK_SHA256_*` above and
+/// `docs/cross-platform-test-vectors.json`.
 #[test]
 fn verify_plonk_membership_vk_fingerprints() {
     let cases = [
@@ -164,15 +145,13 @@ fn verify_plonk_membership_vk_fingerprints() {
         (11, "large", PINNED_VK_SHA256_LARGE),
     ];
     for (depth, tier, pinned) in cases {
-        if pinned.starts_with('<') {
-            eprintln!(
-                "[plonk-vk-fingerprint] depth={depth} ({tier}): pinned constant is \
-                 placeholder; run `print_plonk_membership_vk_fingerprints` and copy \
-                 the output."
-            );
-            continue;
-        }
-        let (computed, _, _) = fingerprint(depth);
+        let (computed, n_gates, pub_inputs) = fingerprint(depth);
+        eprintln!(
+            "[plonk-vk-fingerprint] depth={depth:>2} ({tier:>6}): \
+             gates={n_gates}, vk_sha256={computed}"
+        );
+        eprintln!("  public_inputs[0] (commitment) = {}", pub_inputs[0]);
+        eprintln!("  public_inputs[1] (epoch)      = {}", pub_inputs[1]);
         assert_eq!(
             computed, pinned,
             "VK SHA-256 for depth={depth} ({tier}) drifted from the pinned canonical \
@@ -206,10 +185,23 @@ fn canonical_witness_proves_and_verifies_for_all_tiers() {
         plonk::verify(&keys.vk, &public_inputs, &proof)
             .unwrap_or_else(|e| panic!("verifier rejected canonical depth={depth} membership proof: {e:?}"));
 
-        let wrong = vec![witness.commitment + Fr::from(1u64), Fr::from(witness.epoch)];
+        // Negative path 1: tampered commitment — catches binding-constraint
+        // weakening at the verifier.
+        let wrong_commitment = vec![witness.commitment + Fr::from(1u64), Fr::from(witness.epoch)];
         assert!(
-            plonk::verify(&keys.vk, &wrong, &proof).is_err(),
+            plonk::verify(&keys.vk, &wrong_commitment, &proof).is_err(),
             "verifier accepted depth={depth} membership proof against wrong commitment"
+        );
+
+        // Negative path 2: tampered epoch — catches a public-input ordering
+        // swap that the commitment-only tamper wouldn't detect (a swap could
+        // accidentally pass if both inputs ended up at the same value, but
+        // changing only the epoch position to a value that's never the
+        // commitment forces the order-sensitive check).
+        let wrong_epoch = vec![witness.commitment, Fr::from(witness.epoch + 1)];
+        assert!(
+            plonk::verify(&keys.vk, &wrong_epoch, &proof).is_err(),
+            "verifier accepted depth={depth} membership proof against wrong epoch"
         );
     }
 }

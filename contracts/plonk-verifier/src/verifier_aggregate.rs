@@ -29,8 +29,11 @@
 //! `env.crypto().bls12_381().g1_msm(...)`.
 
 use soroban_sdk::crypto::bls12_381::{Fr, G1Affine};
-use soroban_sdk::{BytesN, Env, Vec};
+use soroban_sdk::{Env, Vec};
 
+use crate::byte_helpers::{
+    decode_fr_array, decode_g1_array, fr_from_le_bytes, fr_one, fr_zero, g1_from_bytes,
+};
 use crate::proof_format::{ParsedProof, NUM_WIRE_SIGMA_EVALS, NUM_WIRE_TYPES};
 use crate::vk_format::{ParsedVerifyingKey, NUM_SELECTOR_COMMS, NUM_SIGMA_COMMS};
 
@@ -236,50 +239,8 @@ pub fn aggregate_poly_commitments(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-fn fr_one(env: &Env) -> Fr {
-    let mut bytes = [0u8; 32];
-    bytes[31] = 0x01;
-    Fr::from_bytes(BytesN::from_array(env, &bytes))
-}
-
-fn fr_zero(env: &Env) -> Fr {
-    Fr::from_bytes(BytesN::from_array(env, &[0u8; 32]))
-}
-
-/// Convert arkworks-LE Fr bytes into a Soroban `Fr`. The transcript
-/// module already does this for its own purposes; this helper
-/// duplicates the small inline logic so `verifier_aggregate` doesn't
-/// drag a `transcript` dependency.
-fn fr_from_le_bytes(env: &Env, le: &[u8; 32]) -> Fr {
-    let mut be = [0u8; 32];
-    for (o, &b) in be.iter_mut().zip(le.iter().rev()) {
-        *o = b;
-    }
-    Fr::from_bytes(BytesN::from_array(env, &be))
-}
-
-/// Parse a 96-byte arkworks-uncompressed G1 into a Soroban `G1Affine`.
-/// Soroban's `from_bytes` doesn't validate; on-curve / subgroup
-/// checks happen later when the bases are fed into `g1_msm` /
-/// `pairing_check`.
-fn g1_from_bytes(env: &Env, bytes: &[u8; 96]) -> G1Affine {
-    G1Affine::from_bytes(BytesN::from_array(env, bytes))
-}
-
-fn decode_fr_array<const N: usize>(env: &Env, arrays: &[[u8; 32]; N]) -> [Fr; N] {
-    core::array::from_fn(|i| fr_from_le_bytes(env, &arrays[i]))
-}
-
-fn decode_g1_array<const N: usize>(
-    env: &Env,
-    arrays: &[[u8; 96]; N],
-) -> [G1Affine; N] {
-    core::array::from_fn(|i| g1_from_bytes(env, &arrays[i]))
-}
+// Internal Fr/G1 byte conversion helpers live in `crate::byte_helpers`
+// to avoid the duplication this module previously carried.
 
 #[cfg(test)]
 mod tests {
@@ -287,7 +248,7 @@ mod tests {
     use crate::proof_format::parse_proof_bytes;
     use crate::test_fixtures::{build_synthetic_proof_bytes, build_synthetic_vk_bytes};
     use crate::vk_format::parse_vk_bytes;
-    use soroban_sdk::Env;
+    use soroban_sdk::{BytesN, Env};
 
     /// Helper: build a deterministic Fr from a u64 (BE-encoded).
     fn fr(env: &Env, value: u64) -> Fr {
@@ -307,7 +268,7 @@ mod tests {
         }
     }
 
-    fn synthetic_fixture(env: &Env) -> (ParsedVerifyingKey, ParsedProof) {
+    fn synthetic_fixture(_env: &Env) -> (ParsedVerifyingKey, ParsedProof) {
         let vk_bytes = build_synthetic_vk_bytes(8192, 2);
         let proof_bytes = build_synthetic_proof_bytes();
         let parsed_vk = parse_vk_bytes(&vk_bytes).expect("parse vk");

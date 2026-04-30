@@ -41,7 +41,8 @@
 use soroban_sdk::crypto::bls12_381::{Fr, G1Affine, G2Affine};
 use soroban_sdk::{BytesN, Env, Vec};
 
-use crate::proof_format::{ParsedProof, FR_LEN, G1_LEN, NUM_WIRE_SIGMA_EVALS, NUM_WIRE_TYPES};
+use crate::byte_helpers::{decode_fr_array, fr_from_le_bytes, g1_from_bytes, g2_from_bytes};
+use crate::proof_format::{ParsedProof, FR_LEN, NUM_WIRE_SIGMA_EVALS, NUM_WIRE_TYPES};
 use crate::verifier_aggregate::{aggregate_poly_commitments, ChallengesFr};
 use crate::verifier_aggregate_evals::aggregate_evaluations;
 use crate::verifier_challenges::compute_challenges;
@@ -49,12 +50,24 @@ use crate::verifier_lin_poly::compute_lin_poly_constant_term;
 use crate::verifier_polys::{
     evaluate_pi_poly, evaluate_vanishing_poly, first_and_last_lagrange_coeffs, DomainParams,
 };
-use crate::vk_format::{ParsedVerifyingKey, G2_COMPRESSED_LEN, G2_LEN};
+use crate::vk_format::{ParsedVerifyingKey, G2_COMPRESSED_LEN};
 
 /// Errors `verify` can raise. `PairingMismatch` is the verifier's
 /// "rejected the proof" outcome; the others reflect malformed-input
 /// conditions that should not happen if the contract entry point
 /// has run the upstream byte parsers.
+///
+/// **Note on adversarial inputs**: this enum does *not* cover off-
+/// curve / non-canonical G1 / G2 / Fr bytes. The byte parsers
+/// (`parse_proof_bytes`, `parse_vk_bytes`) only validate structural
+/// shape; cryptographic validation happens deep inside Soroban's
+/// `g1_msm` / `pairing_check` host primitives, which **trap** on
+/// invalid inputs rather than returning errors. A trap inside a
+/// contract entry point is consensus-safe — it rejects the proof
+/// the same way `Err(PairingMismatch)` does — but the caller sees
+/// a contract failure, not a `Result::Err`. The contract surface
+/// should treat both as "verification rejected" and not depend on
+/// distinguishing them.
 #[derive(Debug, PartialEq, Eq)]
 pub enum VerifyError {
     /// Public-input count doesn't match what the VK expects.
@@ -171,6 +184,12 @@ fn final_pairing_check(
     let shifted_opening = g1_from_bytes(env, &proof.shifted_opening_proof);
     let g_1 = g1_from_bytes(env, &vk.open_key_g);
     let h = g2_from_bytes(env, &vk.open_key_h);
+    // `beta_h` here is the KZG SRS element `[τ]_2` — the second G2
+    // generator, classically denoted `[β]_2` in KZG papers (jf-plonk's
+    // VerifyingKey.open_key.beta_h follows that convention). It is
+    // **not** related to `challenges.beta`, the PLONK Fiat-Shamir β
+    // squeezed earlier in the transcript. Two distinct β's; only the
+    // KZG one shows up in the pairing.
     let beta_h = g2_from_bytes(env, &vk.open_key_beta_h);
 
     let zeta = challenges.zeta.clone();
@@ -202,37 +221,9 @@ fn final_pairing_check(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers (private duplicates of `verifier_aggregate`'s helpers
-// to avoid a public-API surface widening just for cross-module access).
-// ---------------------------------------------------------------------------
-
-fn fr_from_le_bytes(env: &Env, le: &[u8; FR_LEN]) -> Fr {
-    let mut be = [0u8; FR_LEN];
-    for (o, &b) in be.iter_mut().zip(le.iter().rev()) {
-        *o = b;
-    }
-    Fr::from_bytes(BytesN::from_array(env, &be))
-}
-
-fn g1_from_bytes(env: &Env, bytes: &[u8; G1_LEN]) -> G1Affine {
-    G1Affine::from_bytes(BytesN::from_array(env, bytes))
-}
-
-fn g2_from_bytes(env: &Env, bytes: &[u8; G2_LEN]) -> G2Affine {
-    G2Affine::from_bytes(BytesN::from_array(env, bytes))
-}
-
-fn decode_fr_array<const N: usize>(env: &Env, arrays: &[[u8; FR_LEN]; N]) -> [Fr; N] {
-    core::array::from_fn(|i| fr_from_le_bytes(env, &arrays[i]))
-}
-
-// `verify` builds an interim `alloc::vec::Vec<Fr>` to hand to
-// `evaluate_pi_poly` (which takes `&[Fr]`). `alloc` is enabled
-// transitively by soroban-sdk for unit tests; production contract
-// builds also have `alloc` available since the SDK pulls in
-// `alloc` for its own `Vec` infrastructure.
-extern crate alloc;
+// Internal Fr/G1/G2 byte conversion helpers live in
+// `crate::byte_helpers`. `extern crate alloc;` is at the crate root
+// (`lib.rs`).
 
 #[cfg(test)]
 mod tests {

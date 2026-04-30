@@ -20,13 +20,17 @@
 //! `verifier::verify(env, vk_bytes, proof_bytes, public_inputs)` from
 //! its `verify_membership` / `verify_update` entrypoints.
 //!
-//! ## No `std`, no `alloc`
+//! ## No `std`
 //!
-//! Soroban contracts run in WASM with no allocator beyond what the
-//! SDK provides via `Env`. This crate is `#![no_std]` and avoids
-//! `alloc::vec::Vec` / `alloc::string::String` — the parsers operate
-//! on byte slices and write to fixed-size arrays, exactly like the
-//! Rust reference.
+//! Soroban contracts run in WASM. This crate is `#![no_std]`. The
+//! parsers and arithmetic helpers operate on byte slices + fixed-size
+//! arrays, matching the off-chain Rust reference shape-for-shape.
+//!
+//! `alloc` is enabled via `extern crate alloc` so a small interim
+//! `alloc::vec::Vec<Fr>` can shuttle public inputs into
+//! `verifier_polys::evaluate_pi_poly` (which takes `&[Fr]`).
+//! soroban-sdk pulls `alloc` in transitively for its own
+//! infrastructure, so the contract build size is unaffected.
 //!
 //! ## Byte layouts
 //!
@@ -35,23 +39,22 @@
 //! crate. If a layout constant ever drifts here, the test in
 //! `vk_format::tests::pinned_offsets_match_layout_table` (or its
 //! proof-side analogue) will fail before any verifier code is exercised.
-//!
-//! For now this crate ships only the byte-format parsers (Phase C
-//! foundation). Subsequent PRs add the transcript module, challenge
-//! derivation, polynomial helpers, and ultimately the top-level
-//! `verifier::verify` entrypoint that contracts call.
 
 #![no_std]
 
+extern crate alloc;
+
 pub mod proof_format;
 pub mod transcript;
-pub mod verifier_challenges;
 pub mod verifier;
 pub mod verifier_aggregate;
 pub mod verifier_aggregate_evals;
+pub mod verifier_challenges;
 pub mod verifier_lin_poly;
 pub mod verifier_polys;
 pub mod vk_format;
+
+pub(crate) mod byte_helpers;
 
 #[cfg(test)]
 mod test_fixtures;

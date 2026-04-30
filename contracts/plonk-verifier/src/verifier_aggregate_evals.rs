@@ -19,8 +19,9 @@
 //! [`super::verifier_lin_poly::compute_lin_poly_constant_term`].
 
 use soroban_sdk::crypto::bls12_381::Fr;
-use soroban_sdk::{BytesN, Env, Vec};
+use soroban_sdk::{Env, Vec};
 
+use crate::byte_helpers::{fr_from_le_bytes, fr_zero};
 use crate::proof_format::{ParsedProof, NUM_WIRE_SIGMA_EVALS, NUM_WIRE_TYPES};
 
 /// Total v_uv_buffer length: 5 wires + 4 sigmas + 1 perm_next.
@@ -82,25 +83,12 @@ pub fn aggregate_evaluations(
     result + last_coeff * perm_next_eval
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-fn fr_zero(env: &Env) -> Fr {
-    Fr::from_bytes(BytesN::from_array(env, &[0u8; 32]))
-}
-
-fn fr_from_le_bytes(env: &Env, le: &[u8; 32]) -> Fr {
-    let mut be = [0u8; 32];
-    for (o, &b) in be.iter_mut().zip(le.iter().rev()) {
-        *o = b;
-    }
-    Fr::from_bytes(BytesN::from_array(env, &be))
-}
+// Fr byte conversion helpers live in `crate::byte_helpers`.
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soroban_sdk::BytesN;
 
     /// Helper: build an Fr from a u64 (BE-encoded into a 32-byte
     /// slot's tail).

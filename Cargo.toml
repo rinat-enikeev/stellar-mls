@@ -58,6 +58,12 @@ rand_chacha = "0.3"
 k256 = { version = "0.13", features = ["schnorr"] }
 jni = { version = "0.21", optional = true }
 
+# Keccak-256 for the SolidityTranscript port (Phase C.2 verifier). Optional —
+# only the plonk feature activates it. The Soroban contract port replaces
+# this with `env.crypto().keccak256()` host calls; this crate-side dep keeps
+# the prover-side reference + byte-exactness tests self-contained.
+sha3 = { version = "0.10", default-features = false, optional = true }
+
 # Used only by the one-shot `extract-ef-kzg` binary (gated behind
 # `feature = "extract-tool"`). Keeps the JSON dep out of the library
 # build — every other consumer should never need this.
@@ -84,6 +90,7 @@ plonk = [
     "dep:ark-bls12-381-v05", "dep:ark-ec-v05", "dep:ark-ff-v05",
     "dep:ark-serialize-v05", "dep:ark-std-v05",
     "dep:ark-crypto-primitives-v05",
+    "dep:sha3",
 ]
 # One-shot operator tool for extracting the EF KZG SRS from the published
 # transcript. Activated only when running `cargo run --bin extract-ef-kzg`.

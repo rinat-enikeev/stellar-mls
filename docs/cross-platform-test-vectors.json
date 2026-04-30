@@ -254,6 +254,26 @@
       "source": "Ethereum Foundation 2023 KZG ceremony, BatchTranscript index 3 (n=32768).",
       "extracted_blob_sha256": "84f3fcee13ffd40437b3628daf6ef40d8fd4a5dfeb0895bb55e6cc5512532295",
       "embedded_at": "src/prover/srs/ef-kzg-2023.bin"
+    },
+    "proof_wire_format": {
+      "description": "jf-plonk's `Proof<Bls12_381>::serialize_{compressed,uncompressed}` produces a fixed byte count that depends on the TurboPlonk circuit *structure* (number of wire types, selectors, etc.), not the circuit size. All three membership tiers (small/medium/large) produce byte-identical-length proofs. The Soroban verifier consumes the uncompressed encoding directly via the Soroban host's BLS12-381 primitives. Pinned in src/circuit/plonk/test_vectors.rs::{PROOF_UNCOMPRESSED_LEN, PROOF_COMPRESSED_LEN}.",
+      "uncompressed_bytes": 1601,
+      "compressed_bytes": 977,
+      "first_8_bytes_meaning": "u64 little-endian = 5 (number of `wires_poly_comms` G1 commitments \u2014 TurboPlonk's GATE_WIDTH+1 wire types). Followed by 5 \u00d7 96 B G1Affine uncompressed.",
+      "high_level_layout": [
+        "  8B   u64 LE: wires_poly_comms.len() = 5",
+        "480B   5 \u00d7 G1Affine uncompressed (wire commitments)",
+        " 96B   prod_perm_poly_comm: G1Affine",
+        "  8B   u64 LE: split_quot_poly_comms.len() = 5",
+        "480B   5 \u00d7 G1Affine uncompressed (split quotient commitments)",
+        " 96B   opening_proof: G1Affine",
+        " 96B   shifted_opening_proof: G1Affine",
+        "320B   poly_evals: ~10 \u00d7 32 B field-element evaluations",
+        "  1B   plookup_proof: Option discriminant (None = 0x00 since Plookup disabled)",
+        " 16B   leftover length prefixes / padding",
+        "----- ",
+        "1601B  total"
+      ]
     }
   }
 }

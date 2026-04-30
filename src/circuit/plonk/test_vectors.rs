@@ -203,14 +203,12 @@ fn canonical_witness_proves_and_verifies_for_all_tiers() {
         let proof = plonk::prove(&mut rng, &keys.pk, &circuit).expect("prove");
 
         let public_inputs = vec![witness.commitment, Fr::from(witness.epoch)];
-        assert!(
-            plonk::verify(&keys.vk, &public_inputs, &proof),
-            "verifier rejected canonical depth={depth} membership proof"
-        );
+        plonk::verify(&keys.vk, &public_inputs, &proof)
+            .unwrap_or_else(|e| panic!("verifier rejected canonical depth={depth} membership proof: {e:?}"));
 
         let wrong = vec![witness.commitment + Fr::from(1u64), Fr::from(witness.epoch)];
         assert!(
-            !plonk::verify(&keys.vk, &wrong, &proof),
+            plonk::verify(&keys.vk, &wrong, &proof).is_err(),
             "verifier accepted depth={depth} membership proof against wrong commitment"
         );
     }

@@ -85,6 +85,14 @@ pub const G1_LEN: usize = 96;
 /// Length of an arkworks-uncompressed BLS12-381 G2Affine point.
 pub const G2_LEN: usize = 192;
 
+/// Length of an arkworks-compressed BLS12-381 G2Affine point — used by
+/// the transcript when appending the SRS G2 element. Half the
+/// uncompressed size (only x, with sign + infinity flags packed in
+/// the high bits), but spelled out as its own constant so readers
+/// don't have to know that `G2_LEN / 2` happens to equal the
+/// compressed size.
+pub const G2_COMPRESSED_LEN: usize = G2_LEN / 2;
+
 /// Length of an arkworks-canonical-serialised Fr element.
 pub const FR_LEN: usize = 32;
 

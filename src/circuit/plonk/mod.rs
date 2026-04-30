@@ -26,6 +26,7 @@ pub mod membership;
 pub mod proof_format;
 pub mod vk_format;
 pub mod baker;
+pub mod transcript;
 
 #[cfg(test)]
 mod test_vectors;

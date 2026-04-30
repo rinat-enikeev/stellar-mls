@@ -10,9 +10,11 @@
 //! - `preprocess(circuit) -> CircuitKeys` — deterministic per-circuit
 //!   preprocessing into prover key + verifying key.
 //! - `prove(rng, pk, circuit) -> Proof` — TurboPlonk prove.
-//! - `verify(vk, public_inputs, proof) -> bool` — TurboPlonk verify
-//!   with the same SolidityTranscript (keccak256-based) the Soroban
-//!   verifier will reproduce in Phase C.
+//! - `verify(vk, public_inputs, proof) -> Result<(), PlonkError>` —
+//!   TurboPlonk verify with the same SolidityTranscript (keccak256-
+//!   based) the Soroban verifier will reproduce in Phase C. Returns a
+//!   structured error so callers can distinguish failure modes
+//!   (forged proof vs. malformed VK vs. transcript divergence).
 //!
 //! `preprocess` and `prove` take a concrete `&PlonkCircuit<Fr>` rather
 //! than a generic `C: Circuit + Arithmetization<Fr>`. The renamed-
@@ -21,6 +23,23 @@
 //! type concrete sidesteps that. All circuits in this codebase build
 //! on `PlonkCircuit<Fr>` directly so no expressiveness is lost — see
 //! the longer rationale at the `preprocess` doc-comment below.
+//!
+//! ## Two `Fr`s reachable from `crate::prover`
+//!
+//! The legacy Groth16 path in `crate::prover` (the parent module)
+//! uses **arkworks v0.4** `ark_bls12_381::Fr`. This module uses
+//! **arkworks v0.5** `ark_bls12_381_v05::Fr` (renamed in
+//! `Cargo.toml`) because that is what jf-plonk requires.
+//!
+//! When wiring a circuit through this module, always use the
+//! `Fr` / `ScalarField` re-exported here. Mixing the two `Fr`s
+//! produces "two types coming from two different versions of the
+//! same crate" errors at the trait-bound level — the same class of
+//! issue PR #167 already documented for the jf-* deps.
+//!
+//! Phase B.4 splits the prover module wholesale onto v0.5 and the
+//! legacy v0.4 path is dropped in Phase E; until then both `Fr`s
+//! coexist.
 
 #![cfg(feature = "plonk")]
 
@@ -112,18 +131,21 @@ where
 
 /// Verify a TurboPlonk proof.
 ///
-/// Returns `true` on success, `false` on any verification failure
-/// (mismatched public inputs, malformed proof, transcript divergence, etc.).
-/// The error type from jf-plonk is collapsed — callers that need the
-/// specific failure should call into `PlonkKzgSnark::verify` directly.
+/// Returns `Ok(())` on a successful verification, `Err(PlonkError)`
+/// otherwise. The structured error lets the upstream Soroban-bound
+/// verifier (and its callers) distinguish failure modes — a malformed
+/// VK is genuinely a different bug from a forged proof, and dropping
+/// that information was a real cost of the previous `bool` API.
+///
+/// Callers that just want a boolean can use `verify(...).is_ok()`.
 pub fn verify(
     vk: &VerifyingKey<Bls12_381>,
     public_inputs: &[Fr],
     proof: &Proof<Bls12_381>,
-) -> bool {
+) -> Result<(), jf_plonk::errors::PlonkError> {
     // Same contract as `prove`: `extra_transcript_init_msg = None`. The
     // Soroban verifier MUST mirror this. See the comment on `prove`.
-    PlonkKzgSnark::<Bls12_381>::verify::<SolidityTranscript>(vk, public_inputs, proof, None).is_ok()
+    PlonkKzgSnark::<Bls12_381>::verify::<SolidityTranscript>(vk, public_inputs, proof, None)
 }
 
 #[cfg(test)]
@@ -202,10 +224,7 @@ mod tests {
 
         // y = 49 — the public input the verifier checks against.
         let y = Fr::from(49u64);
-        assert!(
-            verify(&keys.vk, &[y], &proof),
-            "verifier rejected a valid proof"
-        );
+        verify(&keys.vk, &[y], &proof).expect("verifier rejected a valid proof");
     }
 
     #[test]
@@ -219,7 +238,7 @@ mod tests {
         // Change the public input to a different value; verification must fail.
         let wrong_y = Fr::from(50u64);
         assert!(
-            !verify(&keys.vk, &[wrong_y], &proof),
+            verify(&keys.vk, &[wrong_y], &proof).is_err(),
             "verifier accepted a proof against the wrong public input"
         );
     }
@@ -267,26 +286,60 @@ mod tests {
         let keys = preprocess(&circuit).expect("preprocess");
         let proof = prove(&mut rng, &keys.pk, &circuit).expect("prove");
 
-        // Roundtrip the proof through bytes, flip one byte in the middle,
-        // re-deserialise. The resulting Proof struct may parse as a
-        // syntactically-valid but semantically-invalid proof; we expect
-        // verify to reject it.
         let mut bytes = Vec::new();
         proof.serialize_uncompressed(&mut bytes).unwrap();
-        let flip_at = bytes.len() / 2;
-        bytes[flip_at] ^= 0x55;
-        let tampered = match Proof::<Bls12_381>::deserialize_uncompressed(&bytes[..]) {
-            Ok(p) => p,
-            // Some byte flips produce malformed group elements that fail
-            // deserialise; that's also a perfectly fine rejection mode —
-            // a tampered proof never reaches the pairing check.
-            Err(_) => return,
-        };
+        let original = bytes.clone();
         let y = Fr::from(49u64);
+
+        // Flip a byte at several spread-out positions. For each flip:
+        //   - If `Proof::deserialize_uncompressed` fails, the tampering
+        //     produced a malformed group-element header; that's a valid
+        //     rejection mode and we count it but keep going.
+        //   - If deserialise succeeds, run `verify` and assert it
+        //     rejects (the test's main concern).
+        // We require at least ONE flip to reach `verify` and produce a
+        // rejection — otherwise the test is vacuous (every flip
+        // shortcircuited at deserialise) and we surface that.
+        let mut deserialise_fails = 0usize;
+        let mut verify_rejections = 0usize;
+        let flip_positions: &[usize] = &[
+            // First wires_poly_comms.len() prefix (u64 LE = 5)
+            0,
+            // Mid-G1Affine for first wire commitment (x bytes)
+            64,
+            // Last G2-related byte run inside the proof body (likely
+            // hits an opening_proof byte)
+            bytes.len() / 2,
+            // Inside the wires_evals or wire_sigma_evals region —
+            // these are 32 B Fr elements that round-trip cleanly
+            // through deserialise (any bit pattern reduces mod r),
+            // so the verifier IS the gate that has to reject.
+            bytes.len() - 200,
+            bytes.len() - 100,
+            bytes.len() - 33,  // last full Fr eval
+        ];
+        for &flip_at in flip_positions {
+            let mut tampered_bytes = original.clone();
+            tampered_bytes[flip_at] ^= 0x55;
+            match Proof::<Bls12_381>::deserialize_uncompressed(&tampered_bytes[..]) {
+                Ok(p) => {
+                    assert!(
+                        verify(&keys.vk, &[y], &p).is_err(),
+                        "verifier accepted a proof with a flipped byte at offset {flip_at} \
+                         — verifier is broken"
+                    );
+                    verify_rejections += 1;
+                }
+                Err(_) => {
+                    deserialise_fails += 1;
+                }
+            }
+        }
         assert!(
-            !verify(&keys.vk, &[y], &tampered),
-            "verifier accepted a proof with a flipped byte at offset {flip_at} \
-             — verifier is broken"
+            verify_rejections > 0,
+            "every byte flip short-circuited at deserialise (deserialise_fails={deserialise_fails}); \
+             test is vacuous — no flip ever reached `verify`. Adjust flip_positions to land inside \
+             the Fr-evaluation region (last ~340 bytes, where any bit pattern reduces mod r)."
         );
     }
 
@@ -325,9 +378,87 @@ mod tests {
         // proof_a's public input is 49; verifying it under VK_B should fail.
         let y_a = Fr::from(49u64);
         assert!(
-            !verify(&keys_b.vk, &[y_a], &proof_a),
+            verify(&keys_b.vk, &[y_a], &proof_a).is_err(),
             "verifier accepted a proof from circuit A under VK from circuit B \
              — verifier is broken"
+        );
+    }
+
+    /// Helper: build a circuit proving `witness = a + b` where (a, b)
+    /// are public inputs allocated in fixed order. Used by the
+    /// public-input-ordering test to exercise the surface that bites
+    /// Soroban verifier integration in Phase C.
+    fn build_sum_circuit(a: u64, b: u64, witness: u64) -> PlonkCircuit<Fr> {
+        let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+        // Allocation ORDER matters for the verifier — the public-input
+        // vector passed to `verify` must be `[a, b]`, not `[b, a]`.
+        let a_var = circuit.create_public_variable(Fr::from(a)).expect("a");
+        let b_var = circuit.create_public_variable(Fr::from(b)).expect("b");
+        let w_var = circuit.create_variable(Fr::from(witness)).expect("witness");
+        // Enforce w == a + b.
+        let sum = circuit.add(a_var, b_var).expect("add");
+        circuit.enforce_equal(w_var, sum).expect("enforce_equal");
+        circuit.finalize_for_arithmetization().expect("finalize");
+        circuit
+    }
+
+    /// Public inputs are positional, not by name. Verifying with
+    /// `[a, b]` (the allocation order) succeeds; verifying with
+    /// `[b, a]` (swapped) fails. Catches a Phase-C verifier that
+    /// silently treats the public-input vector as a bag rather than
+    /// an ordered list.
+    #[test]
+    fn verifier_respects_public_input_ordering() {
+        let (a, b) = (3u64, 7u64);
+        let circuit = build_sum_circuit(a, b, a + b);
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
+        let keys = preprocess(&circuit).expect("preprocess");
+        let proof = prove(&mut rng, &keys.pk, &circuit).expect("prove");
+
+        // Correct order: [a, b]
+        verify(&keys.vk, &[Fr::from(a), Fr::from(b)], &proof)
+            .expect("verifier rejected a valid proof under correct public-input order");
+
+        // Swapped order: [b, a] — the constraint `witness = a + b`
+        // is symmetric in a and b numerically, so swapping doesn't
+        // change the *value* of `a + b`. But the **VK** binds
+        // public-input slot 0 to `a` and slot 1 to `b` separately
+        // (each slot has its own IC commitment). So a swap with
+        // distinct values `a ≠ b` produces a different challenge
+        // transcript and the verifier rejects.
+        //
+        // (If a == b, the swap is a no-op and verification passes —
+        // that's the same proof. We pick `a = 3, b = 7` to ensure
+        // a != b.)
+        assert_ne!(a, b, "test setup invalid: a == b makes the swap trivial");
+        assert!(
+            verify(&keys.vk, &[Fr::from(b), Fr::from(a)], &proof).is_err(),
+            "verifier accepted a proof with swapped public inputs — \
+             public-input ordering is not enforced"
+        );
+    }
+
+    /// `preprocess` on a circuit that hasn't been finalized must fail
+    /// — the gate count and permutation polynomials aren't yet
+    /// arithmetized into the form jf-plonk consumes. Catches the bug
+    /// where a caller forgets `finalize_for_arithmetization()` and
+    /// preprocess produces a malformed proving key that proves
+    /// vacuous proofs.
+    #[test]
+    fn preprocess_rejects_unfinalized_circuit() {
+        let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+        let y = Fr::from(49u64);
+        let pub_var = circuit.create_public_variable(y).expect("public");
+        let w_var = circuit.create_variable(Fr::from(7u64)).expect("witness");
+        circuit.mul_gate(w_var, w_var, pub_var).expect("mul_gate");
+        // Intentionally NOT calling finalize_for_arithmetization() —
+        // preprocess must surface the unfinalized state, not silently
+        // produce a broken pk/vk.
+
+        let result = preprocess(&circuit);
+        assert!(
+            result.is_err(),
+            "preprocess accepted an unfinalized circuit — must require finalize_for_arithmetization() first"
         );
     }
 }

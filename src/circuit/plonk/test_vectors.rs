@@ -224,25 +224,25 @@ fn canonical_proof_serialised_byte_length_per_tier() {
         assert_eq!(
             uncompressed.len(),
             PROOF_UNCOMPRESSED_LEN,
-            "proof uncompressed length drifted at depth={depth} \
-             (was {PROOF_UNCOMPRESSED_LEN}, now {} — review every \
-             downstream consumer)",
-            uncompressed.len()
+            "uncompressed proof length drifted at depth={depth}"
         );
         assert_eq!(
             compressed.len(),
             PROOF_COMPRESSED_LEN,
-            "proof compressed length drifted at depth={depth}"
+            "compressed proof length drifted at depth={depth}"
         );
 
-        // Round-trip via deserialize_uncompressed — sanity check that
-        // the serialised bytes can be parsed back.
+        // Sanity check that the serialised bytes parse back without
+        // error. This is **not** a semantic round-trip — `Proof` does
+        // not derive `PartialEq`, and we don't re-verify the parsed
+        // proof here. Phase C.1 (PR #174) adds the byte-level parser
+        // and a stronger oracle test against jf-plonk's deserialiser.
         use ark_bls12_381_v05::Bls12_381;
         use ark_serialize_v05::CanonicalDeserialize;
         use jf_plonk::proof_system::structs::Proof;
-        let _round_trip: Proof<Bls12_381> =
+        let _parsed: Proof<Bls12_381> =
             Proof::deserialize_uncompressed(&uncompressed[..])
-                .expect("proof bytes round-trip via CanonicalDeserialize");
+                .expect("uncompressed proof bytes parse via CanonicalDeserialize");
     }
 }
 

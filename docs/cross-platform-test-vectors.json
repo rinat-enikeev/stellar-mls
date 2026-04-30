@@ -268,9 +268,12 @@
         "480B   5 \u00d7 G1Affine uncompressed (split quotient commitments)",
         " 96B   opening_proof: G1Affine",
         " 96B   shifted_opening_proof: G1Affine",
-        "320B   poly_evals: ~10 \u00d7 32 B field-element evaluations",
+        "  8B   u64 LE: wires_evals.len() = 5",
+        "160B   5 \u00d7 32 B Fr (wires_evals)",
+        "  8B   u64 LE: wire_sigma_evals.len() = 4",
+        "128B   4 \u00d7 32 B Fr (wire_sigma_evals)",
+        " 32B   perm_next_eval: Fr",
         "  1B   plookup_proof: Option discriminant (None = 0x00 since Plookup disabled)",
-        " 16B   leftover length prefixes / padding",
         "----- ",
         "1601B  total"
       ]

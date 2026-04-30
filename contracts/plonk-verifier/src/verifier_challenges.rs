@@ -154,9 +154,21 @@ mod tests {
     use sha3::{Digest, Keccak256};
     use soroban_sdk::Env;
 
-    use crate::proof_format::parse_proof_bytes;
+    use crate::proof_format::{parse_proof_bytes, G1_LEN, NUM_WIRE_SIGMA_EVALS, NUM_WIRE_TYPES};
     use crate::test_fixtures::{build_synthetic_proof_bytes, build_synthetic_vk_bytes};
     use crate::vk_format::{parse_vk_bytes, NUM_K_CONSTANTS, NUM_SELECTOR_COMMS, NUM_SIGMA_COMMS};
+
+    // Tamper-test byte offsets derived from `proof_format`'s layout
+    // table. If the layout shifts, these compute to the new values
+    // automatically rather than breaking with confusing offset
+    // diagnostics.
+    const TAMPER_OFF_WIRE_FIRST: usize = 8; // u64 length prefix
+    const TAMPER_OFF_OPENING: usize =
+        TAMPER_OFF_WIRE_FIRST + NUM_WIRE_TYPES * G1_LEN + G1_LEN + 8 + NUM_WIRE_TYPES * G1_LEN; // 1072
+    const TAMPER_OFF_SIGMA_EVAL_FIRST: usize =
+        TAMPER_OFF_OPENING + G1_LEN + G1_LEN + 8 + NUM_WIRE_TYPES * FR_LEN + 8; // 1440
+    const TAMPER_OFF_PERM_NEXT_EVAL: usize =
+        TAMPER_OFF_SIGMA_EVAL_FIRST + NUM_WIRE_SIGMA_EVALS * FR_LEN; // 1568
 
     /// Synthetic SRS G2 element + public inputs used by the tests.
     fn synthetic_srs_g2_compressed() -> [u8; G2_COMPRESSED_LEN] {
@@ -201,11 +213,10 @@ mod tests {
         let vk_bytes = build_synthetic_vk_bytes(8192, 2);
         let proof_bytes_a = build_synthetic_proof_bytes();
         let mut proof_bytes_b = proof_bytes_a;
-        // Flip a byte inside wire_commitments[0]'s body. Skip the
-        // 8-byte length prefix; commitment[0] starts at byte 8.
-        // The flag-strip mask only touches bytes[0]; flip a body byte
-        // (offset 47) so structural fields stay valid.
-        proof_bytes_b[8 + 47] ^= 0x01;
+        // Flip a byte inside wire_commitments[0]'s body. The flag-
+        // strip mask only touches bytes[0] of the slot; flip a body
+        // byte (offset 47) so structural fields stay valid.
+        proof_bytes_b[TAMPER_OFF_WIRE_FIRST + 47] ^= 0x01;
 
         let parsed_vk = parse_vk_bytes(&vk_bytes).expect("parse vk");
         let parsed_proof_a = parse_proof_bytes(&proof_bytes_a).expect("parse a");
@@ -396,12 +407,11 @@ mod tests {
         let vk_bytes = build_synthetic_vk_bytes(8192, 2);
         let proof_bytes_a = build_synthetic_proof_bytes();
         let mut proof_bytes_b = proof_bytes_a;
-        // perm_next_eval starts at byte 1568 (per proof_format layout).
-        // Flip a low byte (Fr is LE, so byte 0 of the slot = LSB of
-        // value).  After the LE→BE reversal in the transcript path,
-        // this becomes the BE high byte of the eval — directly affects
-        // the v-step hash.
-        proof_bytes_b[1568] ^= 0x01;
+        // Flip the LSB of `perm_next_eval` (Fr is LE, so byte 0 of
+        // the slot = LSB of value). After the LE→BE reversal in the
+        // transcript path, this becomes the BE high byte of the
+        // eval — directly affects the v-step hash.
+        proof_bytes_b[TAMPER_OFF_PERM_NEXT_EVAL] ^= 0x01;
 
         let parsed_vk = parse_vk_bytes(&vk_bytes).expect("parse vk");
         let parsed_proof_a = parse_proof_bytes(&proof_bytes_a).expect("parse a");
@@ -431,9 +441,9 @@ mod tests {
         let vk_bytes = build_synthetic_vk_bytes(8192, 2);
         let proof_bytes_a = build_synthetic_proof_bytes();
         let mut proof_bytes_b = proof_bytes_a;
-        // wire_sigma_evals[0] starts at byte 1440 (per proof_format).
-        // Flip a body byte; LE → so byte 0 is the LSB of the value.
-        proof_bytes_b[1440] ^= 0x01;
+        // Flip a body byte of `wire_sigma_evals[0]`; LE → byte 0 is
+        // the LSB of the value.
+        proof_bytes_b[TAMPER_OFF_SIGMA_EVAL_FIRST] ^= 0x01;
 
         let parsed_vk = parse_vk_bytes(&vk_bytes).expect("parse vk");
         let parsed_proof_a = parse_proof_bytes(&proof_bytes_a).expect("parse a");
@@ -458,9 +468,8 @@ mod tests {
         let vk_bytes = build_synthetic_vk_bytes(8192, 2);
         let proof_bytes_a = build_synthetic_proof_bytes();
         let mut proof_bytes_b = proof_bytes_a;
-        // opening_proof starts at byte 1072. Flip a body byte past the
-        // flag-mask byte.
-        proof_bytes_b[1072 + 47] ^= 0x01;
+        // Flip a body byte of `opening_proof` past the flag-mask byte.
+        proof_bytes_b[TAMPER_OFF_OPENING + 47] ^= 0x01;
 
         let parsed_vk = parse_vk_bytes(&vk_bytes).expect("parse vk");
         let parsed_proof_a = parse_proof_bytes(&proof_bytes_a).expect("parse a");

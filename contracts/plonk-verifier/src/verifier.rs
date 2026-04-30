@@ -329,12 +329,45 @@ mod tests {
     const FIXTURE_SRS_G2: &[u8; G2_COMPRESSED_LEN] =
         include_bytes!("../tests/fixtures/srs-g2-compressed.bin");
 
+    // Update-circuit fixtures — produced by the same prover-side regen
+    // test. Public-input layout: `(c_old, epoch_old, c_new)` BE-encoded.
+    const FIXTURE_UPDATE_VK_D5: &[u8; crate::vk_format::VK_LEN] =
+        include_bytes!("../tests/fixtures/update-vk-d5.bin");
+    const FIXTURE_UPDATE_PROOF_D5: &[u8; crate::proof_format::PROOF_LEN] =
+        include_bytes!("../tests/fixtures/update-proof-d5.bin");
+    const FIXTURE_UPDATE_PI_D5: &[u8; 3 * FR_LEN] =
+        include_bytes!("../tests/fixtures/update-pi-d5.bin");
+
+    const FIXTURE_UPDATE_VK_D8: &[u8; crate::vk_format::VK_LEN] =
+        include_bytes!("../tests/fixtures/update-vk-d8.bin");
+    const FIXTURE_UPDATE_PROOF_D8: &[u8; crate::proof_format::PROOF_LEN] =
+        include_bytes!("../tests/fixtures/update-proof-d8.bin");
+    const FIXTURE_UPDATE_PI_D8: &[u8; 3 * FR_LEN] =
+        include_bytes!("../tests/fixtures/update-pi-d8.bin");
+
+    const FIXTURE_UPDATE_VK_D11: &[u8; crate::vk_format::VK_LEN] =
+        include_bytes!("../tests/fixtures/update-vk-d11.bin");
+    const FIXTURE_UPDATE_PROOF_D11: &[u8; crate::proof_format::PROOF_LEN] =
+        include_bytes!("../tests/fixtures/update-proof-d11.bin");
+    const FIXTURE_UPDATE_PI_D11: &[u8; 3 * FR_LEN] =
+        include_bytes!("../tests/fixtures/update-pi-d11.bin");
+
     /// Split a flat 64-byte PI fixture into the `[[u8; 32]; 2]` shape
-    /// `verify` expects.
+    /// `verify` expects (membership: 2 PIs).
     fn split_pi(pi: &[u8; 2 * FR_LEN]) -> [[u8; FR_LEN]; 2] {
         let mut out = [[0u8; FR_LEN]; 2];
         out[0].copy_from_slice(&pi[..FR_LEN]);
         out[1].copy_from_slice(&pi[FR_LEN..]);
+        out
+    }
+
+    /// Split a flat 96-byte PI fixture into the `[[u8; 32]; 3]` shape
+    /// `verify` expects (update: 3 PIs).
+    fn split_update_pi(pi: &[u8; 3 * FR_LEN]) -> [[u8; FR_LEN]; 3] {
+        let mut out = [[0u8; FR_LEN]; 3];
+        out[0].copy_from_slice(&pi[..FR_LEN]);
+        out[1].copy_from_slice(&pi[FR_LEN..2 * FR_LEN]);
+        out[2].copy_from_slice(&pi[2 * FR_LEN..]);
         out
     }
 
@@ -379,6 +412,61 @@ mod tests {
     #[test]
     fn accepts_canonical_proof_d11() {
         assert_accepts(FIXTURE_VK_D11, FIXTURE_PROOF_D11, FIXTURE_PI_D11, 11);
+    }
+
+    /// Drive the accept path on a given tier's **update** fixtures.
+    fn assert_accepts_update(
+        vk_bytes: &[u8; crate::vk_format::VK_LEN],
+        proof_bytes: &[u8; crate::proof_format::PROOF_LEN],
+        pi: &[u8; 3 * FR_LEN],
+        depth: usize,
+    ) {
+        let env = Env::default();
+        let parsed_vk = parse_vk_bytes(vk_bytes).expect("parse update vk");
+        let parsed_proof = parse_proof_bytes(proof_bytes).expect("parse update proof");
+        let public_inputs = split_update_pi(pi);
+        let result = verify(&env, &parsed_vk, FIXTURE_SRS_G2, &parsed_proof, &public_inputs);
+        assert_eq!(
+            result,
+            Ok(()),
+            "canonical depth-{depth} update proof was rejected: {result:?}",
+        );
+    }
+
+    /// **Load-bearing.** Canonical update proof at depth=5 verifies.
+    /// Closes the contract-side prereq for `update_commitment` —
+    /// without this, sep-anarchy's update entrypoint would have no
+    /// PLONK VK to call into.
+    #[test]
+    fn accepts_canonical_update_proof_d5() {
+        assert_accepts_update(
+            FIXTURE_UPDATE_VK_D5,
+            FIXTURE_UPDATE_PROOF_D5,
+            FIXTURE_UPDATE_PI_D5,
+            5,
+        );
+    }
+
+    /// **Load-bearing.** Canonical update proof at depth=8 verifies.
+    #[test]
+    fn accepts_canonical_update_proof_d8() {
+        assert_accepts_update(
+            FIXTURE_UPDATE_VK_D8,
+            FIXTURE_UPDATE_PROOF_D8,
+            FIXTURE_UPDATE_PI_D8,
+            8,
+        );
+    }
+
+    /// **Load-bearing.** Canonical update proof at depth=11 verifies.
+    #[test]
+    fn accepts_canonical_update_proof_d11() {
+        assert_accepts_update(
+            FIXTURE_UPDATE_VK_D11,
+            FIXTURE_UPDATE_PROOF_D11,
+            FIXTURE_UPDATE_PI_D11,
+            11,
+        );
     }
 
     /// Tampering with the public commitment (input[0]) rejects with

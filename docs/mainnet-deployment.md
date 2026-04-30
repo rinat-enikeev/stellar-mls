@@ -19,7 +19,7 @@ Five contracts, one per governance type. Each contract:
 - Calls `bls12_381::pairing_check` over **2 pairs** per proof verification (fflonk-aggregated openings) plus one G1-MSM (~20 scalars) and SHA-256-based Fiat-Shamir transcript.
 - Has no `update_vk` admin entrypoint and no `DataKey::VK(_)` storage. VK rotation is by deploying a new contract version, not by amending an existing one.
 
-Constructors take only `admin` and (instance-stored) `restricted_mode`. There is no per-tier VK initialization step.
+Constructors take only `admin`. `restricted_mode` is instance-stored and toggled post-deployment via `set_restricted_mode(bool)` (defaults to `false`). There is no per-tier VK initialization step.
 
 | Contract | Created via | Mutates state? | Tiers | Notes |
 |---|---|---|---|---|
@@ -40,10 +40,11 @@ You do not need to deploy all five contracts. Each is self-contained; deploy onl
 | Each `update_commitment` | ~0.007 XLM |
 | `verify_membership` (read-only) | Free |
 | `get_commitment` / `get_history` (read-only) | Free |
-| **Deployer minimum, full suite (5 contracts)** | **~80 XLM** |
-| **Deployer minimum, single contract** | **~20 XLM** |
+| **Deployer recommended, full suite (5 contracts)** | **~80 XLM** (5 × ~12 XLM deployment + ~20 XLM buffer for retries / initial smoke tests) |
+| **Deployer recommended, single contract** | **~20 XLM** (~12 XLM deployment + buffer) |
 | **Relayer recommended** | **~100 XLM** |
 
+<!-- TODO: verify post-Phase-C — fflonk-vs-Groth16 ratio is provisional until gas benchmarks land -->
 The fflonk verifier costs roughly 1.3–1.7× the legacy Groth16 verifier on Soroban (2-pair `pairing_check` + extra MSM scalars vs. Groth16's 4-pair `pairing_check`). Update-circuit costs scale similarly. Pre-deployment gas measurements are captured per contract under each crate's `tests/gas_benchmark.rs`.
 
 ---
@@ -88,12 +89,11 @@ IDENTITY=my-deployer ./scripts/deploy-mainnet.sh --all
 
 The script will, for each type:
 
-1. Build the Soroban contract WASM (deterministic; verifier-key bytes embedded via `build.rs`).
-2. Verify the embedded SRS hash matches the EF KZG ceremony's published transcript hash. **The build fails on mismatch** — see Appendix.
-3. Deploy the contract.
-4. Invoke `__constructor(admin)` with the configured admin address.
-5. Verify the contract is live by calling a read-only entrypoint.
-6. Print the contract ID and append it to `deploy/contracts.json` for the relayer + mobile-app config steps.
+1. Build the Soroban contract WASM (deterministic; verifier-key bytes embedded via `build.rs`). The build itself fails if the embedded SRS hash doesn't match the EF KZG ceremony's pinned hash — see Appendix. The deploy script does not re-verify the SRS at deploy time; build-time integrity is the load-bearing check.
+2. Deploy the contract.
+3. Invoke `__constructor(admin)` with the configured admin address.
+4. Verify the contract is live by calling a read-only entrypoint.
+5. Print the contract ID and append it to `deploy/contracts.json` for the relayer + mobile-app config steps.
 
 ### 1.3 Save the contract IDs
 
@@ -114,6 +114,8 @@ The script outputs one block per deployed contract:
 Save the **Contract ID** for each type — you'll need them for the relayer and app configuration. The `VK fingerprint` is logged so you can prove on-chain VK provenance against `docs/cross-platform-test-vectors.json`.
 
 ### 1.4 Script options
+
+<!-- TODO: verify post-Phase-C — script flag set is provisional until deploy-mainnet.sh is rewritten in implementation PR -->
 
 | Option | Description |
 |---|---|
@@ -192,7 +194,7 @@ cargo build --release
 ./target/release/onym-relayer
 ```
 
-Expected startup log:
+Expected startup log (only the contracts in `RELAYER_CONTRACT_IDS` appear; partial deployments show fewer entries):
 
 ```
 Relayer address: GXXXXXXX...
@@ -255,7 +257,7 @@ The relayer validates every request:
 | Check | Description |
 |---|---|
 | Contract ID whitelist | The `contractID` must appear in `RELAYER_CONTRACT_IDS` |
-| Function whitelist (per contract type) | sep-anarchy / sep-democracy / sep-tyranny: `create_group`, `update_commitment`, `verify_membership`, `get_commitment`, `get_history`. sep-oligarchy: `create_oligarchy_group` instead of `create_group`. sep-oneonone: no `update_commitment`. |
+| Function whitelist (per contract type) | <!-- TODO: verify post-Phase-C — exact per-type function set is provisional until contracts land --> sep-anarchy / sep-democracy / sep-tyranny: `create_group`, `update_commitment`, `verify_membership`, `get_commitment`, `get_history`. sep-oligarchy: `create_oligarchy_group` instead of `create_group`. sep-oneonone: no `update_commitment`. |
 | Proof size | fflonk wire format: `0x01` version prefix + ≈900 bytes uncompressed. The relayer rejects any payload whose `proof` field doesn't decode to a valid `PlonkProof` of the expected size for that contract+function. |
 | Payload size | Rejected if > 16 KB |
 | Rate limiting | Per IP address (configurable) |
@@ -355,7 +357,7 @@ stellar contract invoke \
 
 ### 4.4 Cross-platform test vectors
 
-`docs/cross-platform-test-vectors.json` pins (witness, public-inputs, VK fingerprint) for each circuit. To assert a fresh build agrees with the canonical reference:
+`docs/cross-platform-test-vectors.json` pins (public-inputs, proof, VK fingerprint) tuples for each circuit. The proofs are generated from fixed synthetic test witnesses checked into the test harness — they are not real user secrets. To assert a fresh build agrees with the canonical reference:
 
 ```bash
 cargo run --bin verify-test-vectors --release
@@ -411,14 +413,14 @@ All three platforms must report all entries verifying. A platform reporting a ve
 
 ## Appendix: Universal SRS provenance
 
-The fflonk verifier consumes a universal SRS — a sequence of powers of τ on BLS12-381, of size 4096 G1 + 65 G2 elements (≈206 KB in arkworks-uncompressed encoding). This SRS is the public output of **Ethereum Foundation's 2023 KZG ceremony** for EIP-4844, finalised 2023-11-14 with ≈141k contributors.
+The fflonk verifier consumes a universal SRS — a sequence of powers of τ on BLS12-381, of size 4096 G1 + 65 G2 elements (≈206 KB in arkworks-compressed encoding; uncompressed is ≈396 KB). This SRS is the public output of **Ethereum Foundation's 2023 KZG ceremony** for EIP-4844, finalised 2023-11-14 with ≈141k contributors.
 
 | Property | Value |
 |---|---|
 | Curve | BLS12-381 |
 | G1 elements | 4,096 (covers PLONK row counts up to 2,048 with comfortable headroom) |
 | G2 elements | 65 (sufficient for the fflonk verifier's 2-pair check) |
-| On-disk size | ≈206 KB |
+| On-disk size | ≈206 KB (compressed encoding) |
 | Source | `https://ceremony.ethereum.org/api/v1/transcript` |
 | Embedded path | `src/prover/srs/ef-kzg-2023.bin` |
 | Hash file | `src/prover/srs/expected-hash.in` |
@@ -434,4 +436,4 @@ shasum -a 256 src/prover/srs/ef-kzg-2023.bin
 
 The same bytes are embedded into the mobile prover bundles (iOS `Resources/srs.bin`, Android `assets/srs/srs.bin`) and into each per-type contract's `build.rs`-driven VK preprocessing pipeline. If you ever see three different SHA-256 hashes for these three locations, treat it as a build-system integrity incident.
 
-If a future circuit needs more than 4,096 G1 elements, the secondary source is **Aztec Ignition** (BLS12-381, 2^21 G1 elements). Switching SRS sources is a one-line change in `src/prover/srs.rs` plus a new hash pin; the rest of the prover/verifier stack is SRS-source-agnostic.
+If a future circuit needs more than 4,096 G1 elements, an alternative BLS12-381 SRS must be identified and pinned (e.g., a future expansion of the EF KZG transcript). Note that **Aztec Ignition is on BN254**, not BLS12-381, so it is *not* a drop-in fallback for this stack — switching to a BN254 source would require swapping the curve everywhere in the prover/verifier pipeline, not just the SRS bytes. Switching SRS sources within BLS12-381 is a one-line change in `src/prover/srs.rs` plus a new hash pin; the rest of the prover/verifier stack is SRS-source-agnostic so long as the curve is fixed.

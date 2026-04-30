@@ -18,21 +18,34 @@
 //!
 //! # Verification
 //!
-//! Membership proofs use a 3-IC-point Groth16 verifying key with
-//! public inputs `(commitment, epoch)`. Update proofs use a 4-IC-point
-//! Groth16 verifying key with public inputs `(c_old, epoch_old,
-//! c_new)` per the existing v2 keyset Anarchy circuit. Smaller than
-//! Democracy's / Oligarchy's 7-IC update VK (no contract-supplied
-//! threshold input).
+//! Membership and update proofs are TurboPlonk over BLS12-381 + the
+//! EF KZG SRS, verified through the shared `plonk-verifier` crate
+//! (`plonk_verifier::verifier::verify`). Per-tier baked VKs and the
+//! 96-byte compressed `[τ]_2` are embedded via `include_bytes!` from
+//! the `plonk-verifier` test fixtures (which act as the canonical
+//! pin for the prover/verifier pipeline; see PR #194 for the
+//! drift-detector). Public-input layout:
 //!
-//! All curve operations use Soroban's BLS12-381 host functions.
+//! - **Membership** (`create_group`, `verify_membership`):
+//!   `(commitment, epoch)` — 2 BE-encoded scalars.
+//! - **Update** (`update_commitment`):
+//!   `(c_old, epoch_old, c_new)` — 3 BE-encoded scalars.
+//!
+//! The Groth16 path was dropped wholesale in this PR; there is no
+//! `update_vk` admin entrypoint, no `DataKey::VK` / `DataKey::UpdateVK`
+//! storage, and no per-tier VK constructor args. Rotating a VK now
+//! means redeploying the contract.
 
 #![no_std]
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype,
-    crypto::bls12_381::{Fr, G1Affine, G2Affine},
-    vec, Address, Bytes, BytesN, Env, Vec, U256,
+    crypto::bls12_381::Fr,
+    Address, Bytes, BytesN, Env, Vec,
 };
+
+use plonk_verifier::proof_format::{parse_proof_bytes, FR_LEN, PROOF_LEN};
+use plonk_verifier::verifier::verify as plonk_verify;
+use plonk_verifier::vk_format::{parse_vk_bytes, G2_COMPRESSED_LEN};
 
 // ================================================================
 // Constants
@@ -50,11 +63,11 @@ const LEDGER_BUMP: u32 = 518_400;
 /// Maximum number of active groups allowed per tier.
 const MAX_GROUPS_PER_TIER: u32 = 10_000;
 
-/// IC point counts for the two VK families this contract verifies.
-///
-/// MUST match `test-vectors.json` `vk_kind_enum.*.ic_count`.
-const MEMBERSHIP_IC_POINTS: u32 = 3;
-const UPDATE_IC_POINTS: u32 = 4;
+/// Number of public inputs the membership circuit consumes.
+const MEMBERSHIP_PI_COUNT: u32 = 2;
+
+/// Number of public inputs the update circuit consumes.
+const UPDATE_PI_COUNT: u32 = 3;
 
 /// Number of slot positions a Merkle tree of the given tier can hold.
 /// * tier 0 (Small)  — depth 5  → 32
@@ -76,12 +89,65 @@ fn tier_capacity(tier: u32) -> u32 {
 }
 
 // ================================================================
+// Embedded baked VKs + SRS-G2
+// ================================================================
+//
+// All bytes come from `contracts/plonk-verifier/tests/fixtures/`,
+// produced by the off-chain prover-side
+// `circuit::plonk::verifier::tests::plonk_verifier_fixtures_match_or_regenerate`
+// test (which double-acts as a drift detector when run without
+// `STELLAR_REGEN_FIXTURES=1`). Rotating any of these requires a
+// contract redeploy; there is no admin-rotation entrypoint.
+
+const VK_D5: &[u8] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/vk-d5.bin");
+const VK_D8: &[u8] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/vk-d8.bin");
+const VK_D11: &[u8] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/vk-d11.bin");
+
+const UPDATE_VK_D5: &[u8] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/update-vk-d5.bin");
+const UPDATE_VK_D8: &[u8] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/update-vk-d8.bin");
+const UPDATE_VK_D11: &[u8] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/update-vk-d11.bin");
+
+/// Compressed `[τ]_2` shared across all baked VKs (single EF KZG SRS).
+/// The off-chain regen test asserts byte-equality across both circuits
+/// at all three tiers — if they ever diverge, that test fails first.
+const SRS_G2: &[u8; G2_COMPRESSED_LEN] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/srs-g2-compressed.bin");
+
+/// Look up the membership VK for `tier` ∈ {0,1,2}.
+fn membership_vk_for_tier(tier: u32) -> Option<&'static [u8]> {
+    match tier {
+        0 => Some(VK_D5),
+        1 => Some(VK_D8),
+        2 => Some(VK_D11),
+        _ => None,
+    }
+}
+
+/// Look up the update VK for `tier` ∈ {0,1,2}.
+fn update_vk_for_tier(tier: u32) -> Option<&'static [u8]> {
+    match tier {
+        0 => Some(UPDATE_VK_D5),
+        1 => Some(UPDATE_VK_D8),
+        2 => Some(UPDATE_VK_D11),
+        _ => None,
+    }
+}
+
+// ================================================================
 // Errors
 // ================================================================
 
 /// Numeric values pinned in `test-vectors.json` `error_codes.vectors`.
-/// Future contracts in this family (OneOnOne) MUST keep this numbering
-/// disjoint where overlap would confuse cross-contract clients.
+/// Codes 9 (`InvalidVkLength`) and 26 (`InvalidPoint`) are no longer
+/// reachable post-PLONK migration but the numeric slots are reserved
+/// (test-vectors.json `dropped_from_anarchy_plonk` documents the
+/// rationale).
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -96,15 +162,12 @@ pub enum Error {
     GroupInactive = 6,
     InvalidProof = 7,
     InvalidTier = 8,
-    InvalidVkLength = 9,
     PublicInputsMismatch = 10,
     InvalidEpoch = 11,
     ProofReplay = 12,
     TierGroupLimitReached = 13,
     AdminOnly = 14,
     InvalidCommitmentEncoding = 15,
-    // 16 (UnknownVkKind) elided — VkKind exhaustively matched.
-    InvalidPoint = 26,
     GroupStillActive = 27,
 }
 
@@ -134,9 +197,7 @@ pub struct CommitmentUpdated {
     pub timestamp: u64,
 }
 
-/// Emitted when admin toggles restricted mode. Lets chain observers
-/// detect mode flips without inspecting instance storage. Same shape
-/// as sep-oligarchy's `RestrictedModeChanged`.
+/// Emitted when admin toggles restricted mode.
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RestrictedModeChanged {
@@ -179,60 +240,6 @@ pub struct CommitmentEntry {
     pub member_count: u32,
 }
 
-/// Public inputs supplied to `create_group` and `verify_membership`.
-/// Two scalars wired to `Membership` IC points 1 and 2.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PublicInputs {
-    pub commitment: BytesN<32>,
-    pub epoch: u64,
-}
-
-/// Wire payload for `update_commitment`. Three wire-supplied scalars
-/// — Anarchy's natural shape, smaller than Democracy/Oligarchy's 5.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct UpdateCommitmentPublicInputs {
-    pub c_old: BytesN<32>,
-    pub epoch_old: u64,
-    pub c_new: BytesN<32>,
-}
-
-/// Selector for which VK family is being installed or rotated by
-/// `update_vk`. No `UpdateByType(u32)` because the contract is
-/// Anarchy-only — group_type is implicit in the contract address.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum VkKind {
-    /// Membership-circuit VK (3 IC points).
-    Membership,
-    /// Anarchy update-circuit VK (4 IC points).
-    Update,
-}
-
-/// Groth16 verification key stored as raw bytes (uncompressed BLS12-381).
-///
-///   G1 = 96 bytes uncompressed
-///   G2 = 192 bytes uncompressed
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct VerificationKeyData {
-    pub alpha_g1: BytesN<96>,
-    pub beta_g2: BytesN<192>,
-    pub gamma_g2: BytesN<192>,
-    pub delta_g2: BytesN<192>,
-    pub ic: Vec<BytesN<96>>,
-}
-
-/// Groth16 proof in uncompressed BLS12-381 form. Total 384 bytes.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct Groth16Proof {
-    pub a: BytesN<96>,
-    pub b: BytesN<192>,
-    pub c: BytesN<96>,
-}
-
 // ================================================================
 // Storage Keys
 // ================================================================
@@ -244,11 +251,6 @@ pub enum DataKey {
     Admin,
     /// Whether only admin can `create_group` (instance storage).
     RestrictedMode,
-    /// Membership-circuit VK per tier (persistent).
-    VK(u32),
-    /// Anarchy update-circuit VK per tier (persistent). No
-    /// `(tier, group_type)` second key — single-type contract.
-    UpdateVK(u32),
     /// Current group state (persistent).
     Group(BytesN<32>),
     /// Group history — rolling window (persistent).
@@ -270,133 +272,26 @@ pub struct SepAnarchyContract;
 impl SepAnarchyContract {
     // ---- Initialization ----
 
-    /// Atomic constructor: takes admin and the per-tier VKs for both
-    /// the membership and update circuits. Runs at deploy time.
-    pub fn __constructor(
-        env: Env,
-        admin: Address,
-        vk_small: VerificationKeyData,
-        vk_medium: VerificationKeyData,
-        vk_large: VerificationKeyData,
-        update_vk_small: VerificationKeyData,
-        update_vk_medium: VerificationKeyData,
-        update_vk_large: VerificationKeyData,
-    ) -> Result<(), Error> {
-        Self::do_initialize(
-            &env,
-            admin,
-            vk_small,
-            vk_medium,
-            vk_large,
-            update_vk_small,
-            update_vk_medium,
-            update_vk_large,
-        )
+    /// Atomic constructor: takes only the admin address. The per-tier
+    /// VKs (membership + update) are baked into the contract via
+    /// `include_bytes!` and need no constructor input.
+    pub fn __constructor(env: Env, admin: Address) -> Result<(), Error> {
+        Self::do_initialize(&env, admin)
     }
 
-    fn do_initialize(
-        env: &Env,
-        admin: Address,
-        vk_small: VerificationKeyData,
-        vk_medium: VerificationKeyData,
-        vk_large: VerificationKeyData,
-        update_vk_small: VerificationKeyData,
-        update_vk_medium: VerificationKeyData,
-        update_vk_large: VerificationKeyData,
-    ) -> Result<(), Error> {
+    fn do_initialize(env: &Env, admin: Address) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
         }
         admin.require_auth();
-
-        let m = MEMBERSHIP_IC_POINTS;
-        if vk_small.ic.len() != m
-            || vk_medium.ic.len() != m
-            || vk_large.ic.len() != m
-        {
-            return Err(Error::InvalidVkLength);
-        }
-        let u = UPDATE_IC_POINTS;
-        if update_vk_small.ic.len() != u
-            || update_vk_medium.ic.len() != u
-            || update_vk_large.ic.len() != u
-        {
-            return Err(Error::InvalidVkLength);
-        }
-
-        validate_vk_points(&vk_small)?;
-        validate_vk_points(&vk_medium)?;
-        validate_vk_points(&vk_large)?;
-        validate_vk_points(&update_vk_small)?;
-        validate_vk_points(&update_vk_medium)?;
-        validate_vk_points(&update_vk_large)?;
-
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().persistent().set(&DataKey::VK(0), &vk_small);
-        env.storage().persistent().set(&DataKey::VK(1), &vk_medium);
-        env.storage().persistent().set(&DataKey::VK(2), &vk_large);
-        env.storage()
-            .persistent()
-            .set(&DataKey::UpdateVK(0), &update_vk_small);
-        env.storage()
-            .persistent()
-            .set(&DataKey::UpdateVK(1), &update_vk_medium);
-        env.storage()
-            .persistent()
-            .set(&DataKey::UpdateVK(2), &update_vk_large);
-
-        for tier in 0..3u32 {
-            env.storage()
-                .persistent()
-                .extend_ttl(&DataKey::VK(tier), LEDGER_THRESHOLD, LEDGER_BUMP);
-            env.storage().persistent().extend_ttl(
-                &DataKey::UpdateVK(tier),
-                LEDGER_THRESHOLD,
-                LEDGER_BUMP,
-            );
-        }
         Ok(())
     }
 
     // ---- Admin ----
 
-    /// Admin-only VK rotation. Membership VK at `tier` ∈ {0,1,2} OR
-    /// Update VK at `tier` ∈ {0,1,2}.
-    pub fn update_vk(
-        env: Env,
-        kind: VkKind,
-        tier: u32,
-        new_vk: VerificationKeyData,
-    ) -> Result<(), Error> {
-        Self::require_initialized(&env)?;
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)?;
-        admin.require_auth();
-
-        if tier > 2 {
-            return Err(Error::InvalidTier);
-        }
-        let (key, expected_ic_len) = match kind {
-            VkKind::Membership => (DataKey::VK(tier), MEMBERSHIP_IC_POINTS),
-            VkKind::Update => (DataKey::UpdateVK(tier), UPDATE_IC_POINTS),
-        };
-        if new_vk.ic.len() != expected_ic_len {
-            return Err(Error::InvalidVkLength);
-        }
-        validate_vk_points(&new_vk)?;
-        env.storage().persistent().set(&key, &new_vk);
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP);
-        Ok(())
-    }
-
-    /// Admin toggles restricted mode. When `restricted == true`,
-    /// only the admin may call `create_group`. Emits
-    /// `RestrictedModeChanged` for audit transparency.
+    /// Admin toggles restricted mode. When `restricted == true`, only
+    /// the admin may call `create_group`.
     pub fn set_restricted_mode(env: Env, restricted: bool) -> Result<(), Error> {
         Self::require_initialized(&env)?;
         let admin: Address = env
@@ -421,9 +316,9 @@ impl SepAnarchyContract {
 
     /// Permissionless TTL bump for a group's persistent storage.
     ///
-    /// Bumps `Group(group_id)` and `History(group_id)` only — does NOT
-    /// touch `UsedProof(...)` entries (global-nullifier scope, only
-    /// refreshed by `record_proof` at successful state-changing
+    /// Bumps `Group(group_id)` and `History(group_id)` only — does
+    /// NOT touch `UsedProof(...)` entries (global-nullifier scope,
+    /// only refreshed by `record_proof` at successful state-changing
     /// entrypoints).
     pub fn bump_group_ttl(env: Env, group_id: BytesN<32>) -> Result<(), Error> {
         Self::require_initialized(&env)?;
@@ -438,11 +333,13 @@ impl SepAnarchyContract {
 
     /// Create a new Anarchy group at epoch 0.
     ///
-    /// Validates: tier ≤ 2, group_id unused, `commitment` is canonical
-    /// Fr, public inputs match the proof, proof verifies under the
-    /// membership VK at `tier`, proof not replayed, tier capacity not
-    /// exceeded. `member_count` is informational and accepted without
-    /// validation (any u32; sentinel `0` means "not tracked").
+    /// Validates: tier ≤ 2, group_id unused, `commitment` is
+    /// canonical Fr, `public_inputs` matches the
+    /// `(commitment, epoch=0)` pair the prover signed, proof verifies
+    /// under the membership VK at `tier`, proof not replayed, tier
+    /// capacity not exceeded. `member_count` is informational and
+    /// accepted without validation (any u32; sentinel `0` means
+    /// "not tracked").
     pub fn create_group(
         env: Env,
         caller: Address,
@@ -450,8 +347,8 @@ impl SepAnarchyContract {
         commitment: BytesN<32>,
         tier: u32,
         member_count: u32,
-        proof: Groth16Proof,
-        public_inputs: PublicInputs,
+        proof: BytesN<1601>,
+        public_inputs: Vec<BytesN<32>>,
     ) -> Result<(), Error> {
         Self::require_initialized(&env)?;
         caller.require_auth();
@@ -475,14 +372,21 @@ impl SepAnarchyContract {
         if tier > 2 {
             return Err(Error::InvalidTier);
         }
-        if public_inputs.commitment != commitment || public_inputs.epoch != 0 {
+        if !is_canonical_fr(&commitment) {
+            return Err(Error::InvalidCommitmentEncoding);
+        }
+        // Public inputs (commitment, epoch=0) must match the wire args.
+        if public_inputs.len() != MEMBERSHIP_PI_COUNT {
+            return Err(Error::PublicInputsMismatch);
+        }
+        if public_inputs.get(0).unwrap() != commitment {
+            return Err(Error::PublicInputsMismatch);
+        }
+        if public_inputs.get(1).unwrap() != be32_from_u64(&env, 0) {
             return Err(Error::PublicInputsMismatch);
         }
         if Self::group_exists(&env, &group_id) {
             return Err(Error::GroupAlreadyExists);
-        }
-        if !is_canonical_fr(&commitment) {
-            return Err(Error::InvalidCommitmentEncoding);
         }
 
         let count: u32 = env
@@ -496,10 +400,8 @@ impl SepAnarchyContract {
 
         Self::check_proof_replay(&env, &proof)?;
 
-        let vk = Self::load_vk(&env, tier)?;
-        if !verify_membership_proof(&env, &vk, &proof, &commitment, 0) {
-            return Err(Error::InvalidProof);
-        }
+        let vk_bytes = membership_vk_for_tier(tier).ok_or(Error::InvalidTier)?;
+        verify_plonk_proof(&env, vk_bytes, &proof, &public_inputs)?;
 
         Self::record_proof(&env, &proof);
 
@@ -539,24 +441,26 @@ impl SepAnarchyContract {
 
     /// Advance an Anarchy group to the next epoch.
     ///
-    /// The verifier consumes 3 Groth16 public inputs in canonical
-    /// order from the wire payload. No contract-supplied input
-    /// (Anarchy has no quorum threshold).
+    /// `public_inputs` MUST be `(c_old, epoch_old, c_new)` — the
+    /// contract validates `c_old == state.commitment` and
+    /// `epoch_old == state.epoch` against storage, and uses
+    /// `public_inputs[2]` (`c_new`) as the next commitment. No
+    /// separate `c_new` wire arg.
     ///
-    /// No `caller.require_auth()` — the membership Groth16 proof IS
+    /// No `caller.require_auth()` — the membership PLONK proof IS
     /// the authorization (the prover demonstrated knowledge of a
     /// secret key behind a member leaf at `c_old`). Any address can
     /// submit on behalf of the group; the proof carries the auth.
     /// Same convention as `sep-democracy` / `sep-oligarchy`.
     ///
     /// `member_count` is NOT updated by this entrypoint. The contract
-    /// has no way to recompute it (no Poseidon host) and clients track
-    /// it off-chain anyway.
+    /// has no way to recompute it (no Poseidon host) and clients
+    /// track it off-chain anyway.
     pub fn update_commitment(
         env: Env,
         group_id: BytesN<32>,
-        proof: Groth16Proof,
-        public_inputs: UpdateCommitmentPublicInputs,
+        proof: BytesN<1601>,
+        public_inputs: Vec<BytesN<32>>,
     ) -> Result<(), Error> {
         Self::require_initialized(&env)?;
 
@@ -567,29 +471,27 @@ impl SepAnarchyContract {
 
         let new_epoch = current.epoch.checked_add(1).ok_or(Error::InvalidEpoch)?;
 
-        if public_inputs.c_old != current.commitment
-            || public_inputs.epoch_old != current.epoch
-        {
+        if public_inputs.len() != UPDATE_PI_COUNT {
             return Err(Error::PublicInputsMismatch);
         }
+        let c_old = public_inputs.get(0).unwrap();
+        let epoch_old_be = public_inputs.get(1).unwrap();
+        let c_new = public_inputs.get(2).unwrap();
 
-        if !is_canonical_fr(&public_inputs.c_new) {
+        if c_old != current.commitment {
+            return Err(Error::PublicInputsMismatch);
+        }
+        if epoch_old_be != be32_from_u64(&env, current.epoch) {
+            return Err(Error::PublicInputsMismatch);
+        }
+        if !is_canonical_fr(&c_new) {
             return Err(Error::InvalidCommitmentEncoding);
         }
 
         Self::check_proof_replay(&env, &proof)?;
 
-        let vk = Self::load_update_vk(&env, current.tier)?;
-        if !verify_update_proof(
-            &env,
-            &vk,
-            &proof,
-            &public_inputs.c_old,
-            public_inputs.epoch_old,
-            &public_inputs.c_new,
-        ) {
-            return Err(Error::InvalidProof);
-        }
+        let vk_bytes = update_vk_for_tier(current.tier).ok_or(Error::InvalidTier)?;
+        verify_plonk_proof(&env, vk_bytes, &proof, &public_inputs)?;
 
         Self::record_proof(&env, &proof);
 
@@ -597,7 +499,7 @@ impl SepAnarchyContract {
         Self::archive_entry(&env, &group_id, &current);
 
         let new_entry = CommitmentEntry {
-            commitment: public_inputs.c_new.clone(),
+            commitment: c_new.clone(),
             epoch: new_epoch,
             timestamp,
             tier: current.tier,
@@ -614,7 +516,7 @@ impl SepAnarchyContract {
 
         CommitmentUpdated {
             group_id,
-            commitment: public_inputs.c_new,
+            commitment: c_new,
             epoch: new_epoch,
             timestamp,
         }
@@ -623,6 +525,9 @@ impl SepAnarchyContract {
     }
 
     /// Read-only membership verification.
+    ///
+    /// `public_inputs` MUST be `(commitment, epoch)` — both validated
+    /// against the group's stored state.
     ///
     /// No `check_proof_replay` — verify is read-only and does not
     /// consume the global nullifier; the same proof bytes can be
@@ -636,25 +541,28 @@ impl SepAnarchyContract {
     pub fn verify_membership(
         env: Env,
         group_id: BytesN<32>,
-        proof: Groth16Proof,
-        public_inputs: PublicInputs,
+        proof: BytesN<1601>,
+        public_inputs: Vec<BytesN<32>>,
     ) -> Result<bool, Error> {
         Self::require_initialized(&env)?;
         let state = Self::load_group(&env, &group_id)?;
 
-        if public_inputs.commitment != state.commitment
-            || public_inputs.epoch != state.epoch
-        {
+        if public_inputs.len() != MEMBERSHIP_PI_COUNT {
             return Err(Error::PublicInputsMismatch);
         }
-        let vk = Self::load_vk(&env, state.tier)?;
-        Ok(verify_membership_proof(
-            &env,
-            &vk,
-            &proof,
-            &state.commitment,
-            state.epoch,
-        ))
+        if public_inputs.get(0).unwrap() != state.commitment {
+            return Err(Error::PublicInputsMismatch);
+        }
+        if public_inputs.get(1).unwrap() != be32_from_u64(&env, state.epoch) {
+            return Err(Error::PublicInputsMismatch);
+        }
+
+        let vk_bytes = membership_vk_for_tier(state.tier).ok_or(Error::InvalidTier)?;
+        match verify_plonk_proof(&env, vk_bytes, &proof, &public_inputs) {
+            Ok(()) => Ok(true),
+            Err(Error::InvalidProof) => Ok(false),
+            Err(other) => Err(other),
+        }
     }
 
     // ---- Queries ----
@@ -717,26 +625,6 @@ impl SepAnarchyContract {
             .has(&DataKey::Group(group_id.clone()))
     }
 
-    fn load_vk(env: &Env, tier: u32) -> Result<VerificationKeyData, Error> {
-        if tier > 2 {
-            return Err(Error::InvalidTier);
-        }
-        env.storage()
-            .persistent()
-            .get(&DataKey::VK(tier))
-            .ok_or(Error::NotInitialized)
-    }
-
-    fn load_update_vk(env: &Env, tier: u32) -> Result<VerificationKeyData, Error> {
-        if tier > 2 {
-            return Err(Error::InvalidTier);
-        }
-        env.storage()
-            .persistent()
-            .get(&DataKey::UpdateVK(tier))
-            .ok_or(Error::NotInitialized)
-    }
-
     fn bump_group(env: &Env, group_id: &BytesN<32>) {
         if env
             .storage()
@@ -762,15 +650,13 @@ impl SepAnarchyContract {
         }
     }
 
-    fn proof_hash(env: &Env, proof: &Groth16Proof) -> BytesN<32> {
-        let mut preimage = Bytes::new(env);
-        preimage.append(&Bytes::from_slice(env, proof.a.to_array().as_slice()));
-        preimage.append(&Bytes::from_slice(env, proof.b.to_array().as_slice()));
-        preimage.append(&Bytes::from_slice(env, proof.c.to_array().as_slice()));
+    /// SHA-256 of the proof bytes — global-nullifier identifier.
+    fn proof_hash(env: &Env, proof: &BytesN<1601>) -> BytesN<32> {
+        let preimage = Bytes::from_slice(env, proof.to_array().as_slice());
         env.crypto().sha256(&preimage).into()
     }
 
-    fn check_proof_replay(env: &Env, proof: &Groth16Proof) -> Result<(), Error> {
+    fn check_proof_replay(env: &Env, proof: &BytesN<1601>) -> Result<(), Error> {
         let hash = Self::proof_hash(env, proof);
         if env
             .storage()
@@ -782,7 +668,7 @@ impl SepAnarchyContract {
         Ok(())
     }
 
-    fn record_proof(env: &Env, proof: &Groth16Proof) {
+    fn record_proof(env: &Env, proof: &BytesN<1601>) {
         let hash = Self::proof_hash(env, proof);
         env.storage()
             .persistent()
@@ -815,160 +701,90 @@ impl SepAnarchyContract {
 }
 
 // ================================================================
-// Groth16 verification helpers
+// PLONK verification glue
 // ================================================================
 
-fn validate_vk_points(vk: &VerificationKeyData) -> Result<(), Error> {
-    if !G1Affine::from_bytes(vk.alpha_g1.clone()).is_in_subgroup() {
-        return Err(Error::InvalidPoint);
+/// Cross-check at compile time that the verifier-crate constants
+/// haven't drifted out from under the contract.
+const _: () = {
+    assert!(PROOF_LEN == 1601, "plonk_verifier::PROOF_LEN drifted");
+    assert!(FR_LEN == 32, "plonk_verifier::FR_LEN drifted");
+    assert!(G2_COMPRESSED_LEN == 96, "plonk_verifier::G2_COMPRESSED_LEN drifted");
+    // Pin MAX_PI_COUNT against the per-circuit PI counts so a future
+    // increase to either circuit can't silently exceed the buffer.
+    assert!(
+        MAX_PI_COUNT >= MEMBERSHIP_PI_COUNT as usize,
+        "MAX_PI_COUNT < MEMBERSHIP_PI_COUNT"
+    );
+    assert!(
+        MAX_PI_COUNT >= UPDATE_PI_COUNT as usize,
+        "MAX_PI_COUNT < UPDATE_PI_COUNT"
+    );
+};
+
+/// Parse the embedded VK bytes + the wire proof, copy public inputs
+/// into the `[[u8; 32]]` shape `verify` expects, run the verifier.
+///
+/// Maps every failure mode to `Error::InvalidProof`:
+/// - VK bytes fail to parse (should never happen for embedded bytes,
+///   but defended for completeness).
+/// - Proof bytes fail to parse (caller submitted a malformed blob).
+/// - `verifier::verify` returns `Err(_)` (any kind: pairing mismatch,
+///   PI count mismatch, off-curve trap surfaces as a contract panic
+///   from the host's `g1_msm` / `pairing_check` and never reaches
+///   here as a `Result::Err`).
+fn verify_plonk_proof(
+    env: &Env,
+    vk_bytes: &[u8],
+    proof: &BytesN<1601>,
+    public_inputs: &Vec<BytesN<32>>,
+) -> Result<(), Error> {
+    let parsed_vk = parse_vk_bytes(vk_bytes).map_err(|_| Error::InvalidProof)?;
+
+    let proof_array: [u8; PROOF_LEN] = proof.to_array();
+    let parsed_proof = parse_proof_bytes(&proof_array).map_err(|_| Error::InvalidProof)?;
+
+    // verify takes &[[u8; 32]]; build that into a fixed buffer sized
+    // for this contract's circuits (membership=2, update=3 — see
+    // MAX_PI_COUNT). The const-assert above pins this against the
+    // per-circuit PI counts.
+    let n = public_inputs.len() as usize;
+    if n > MAX_PI_COUNT {
+        return Err(Error::PublicInputsMismatch);
     }
-    if !G2Affine::from_bytes(vk.beta_g2.clone()).is_in_subgroup() {
-        return Err(Error::InvalidPoint);
+    let mut pi_buf: [[u8; FR_LEN]; MAX_PI_COUNT] = [[0u8; FR_LEN]; MAX_PI_COUNT];
+    for i in 0..n {
+        pi_buf[i] = public_inputs.get(i as u32).unwrap().to_array();
     }
-    if !G2Affine::from_bytes(vk.gamma_g2.clone()).is_in_subgroup() {
-        return Err(Error::InvalidPoint);
-    }
-    if !G2Affine::from_bytes(vk.delta_g2.clone()).is_in_subgroup() {
-        return Err(Error::InvalidPoint);
-    }
-    for i in 0..vk.ic.len() {
-        if !G1Affine::from_bytes(vk.ic.get(i).unwrap()).is_in_subgroup() {
-            return Err(Error::InvalidPoint);
-        }
-    }
-    Ok(())
+
+    plonk_verify(env, &parsed_vk, SRS_G2, &parsed_proof, &pi_buf[..n])
+        .map_err(|_| Error::InvalidProof)
 }
 
-fn validate_proof_points(proof: &Groth16Proof) -> bool {
-    G1Affine::from_bytes(proof.a.clone()).is_in_subgroup()
-        && G2Affine::from_bytes(proof.b.clone()).is_in_subgroup()
-        && G1Affine::from_bytes(proof.c.clone()).is_in_subgroup()
+/// Upper bound on public-input count for this contract's circuits.
+/// Keep this in sync with `MEMBERSHIP_PI_COUNT` / `UPDATE_PI_COUNT`.
+const MAX_PI_COUNT: usize = 3;
+
+// ================================================================
+// Encoding helpers
+// ================================================================
+
+/// `u64` → 32-byte big-endian Fr scalar (high 24 bytes zero, low 8
+/// bytes carrying the value). Matches the in-circuit `Fr::from(u64)`
+/// encoding used by both `MembershipCircuit` and `UpdateCircuit`.
+fn be32_from_u64(env: &Env, value: u64) -> BytesN<32> {
+    let mut bytes = [0u8; 32];
+    bytes[24..32].copy_from_slice(&value.to_be_bytes());
+    BytesN::from_array(env, &bytes)
 }
 
+/// Round-trip canonicality check: reduce `value` mod r and compare.
+/// Catches non-canonical bit patterns that `Fr::from_bytes` would
+/// silently mod-reduce on the verifier side.
 fn is_canonical_fr(value: &BytesN<32>) -> bool {
     let fr = Fr::from_bytes(value.clone());
     let canonical: BytesN<32> = fr.to_bytes();
     canonical == *value
-}
-
-fn u64_to_u256_be(val: u64) -> [u8; 32] {
-    let mut bytes = [0u8; 32];
-    bytes[24..32].copy_from_slice(&val.to_be_bytes());
-    bytes
-}
-
-/// Verify a 3-IC-point Membership proof. Public inputs:
-///   IC[1] · commitment + IC[2] · epoch (plus IC[0] base).
-///
-/// Pairing check: `e(-π_A, π_B) · e(α, β) · e(vk_x, γ) · e(π_C, δ) = 1_GT`.
-fn verify_membership_proof(
-    env: &Env,
-    vk: &VerificationKeyData,
-    proof: &Groth16Proof,
-    commitment: &BytesN<32>,
-    epoch: u64,
-) -> bool {
-    if vk.ic.len() != MEMBERSHIP_IC_POINTS {
-        return false;
-    }
-    if !validate_proof_points(proof) {
-        return false;
-    }
-    if !is_canonical_fr(commitment) {
-        return false;
-    }
-    let bls = env.crypto().bls12_381();
-
-    let proof_a = G1Affine::from_bytes(proof.a.clone());
-    let proof_b = G2Affine::from_bytes(proof.b.clone());
-    let proof_c = G1Affine::from_bytes(proof.c.clone());
-
-    let alpha = G1Affine::from_bytes(vk.alpha_g1.clone());
-    let beta = G2Affine::from_bytes(vk.beta_g2.clone());
-    let gamma = G2Affine::from_bytes(vk.gamma_g2.clone());
-    let delta = G2Affine::from_bytes(vk.delta_g2.clone());
-
-    let ic0 = G1Affine::from_bytes(vk.ic.get(0).unwrap());
-    let ic1 = G1Affine::from_bytes(vk.ic.get(1).unwrap());
-    let ic2 = G1Affine::from_bytes(vk.ic.get(2).unwrap());
-
-    let commitment_fr = Fr::from_bytes(commitment.clone());
-    let epoch_bytes = Bytes::from_array(env, &u64_to_u256_be(epoch));
-    let epoch_fr = Fr::from_u256(U256::from_be_bytes(env, &epoch_bytes));
-
-    let msm_points: Vec<G1Affine> = vec![env, ic1, ic2];
-    let msm_scalars: Vec<Fr> = vec![env, commitment_fr, epoch_fr];
-    let msm_result = bls.g1_msm(msm_points, msm_scalars);
-    let vk_x = bls.g1_add(&ic0, &msm_result);
-
-    let neg_a = -proof_a;
-    let g1s: Vec<G1Affine> = vec![env, neg_a, alpha, vk_x, proof_c];
-    let g2s: Vec<G2Affine> = vec![env, proof_b, beta, gamma, delta];
-
-    bls.pairing_check(g1s, g2s)
-}
-
-/// Verify a 4-IC-point Anarchy update proof. Public inputs in
-/// canonical order:
-///
-/// ```
-/// IC[1] · c_old + IC[2] · epoch_old + IC[3] · c_new   (plus IC[0] base)
-/// ```
-///
-/// All three inputs come from the wire. No contract-supplied scalar
-/// (unlike Democracy/Oligarchy which supply admin_threshold from
-/// storage).
-fn verify_update_proof(
-    env: &Env,
-    vk: &VerificationKeyData,
-    proof: &Groth16Proof,
-    c_old: &BytesN<32>,
-    epoch_old: u64,
-    c_new: &BytesN<32>,
-) -> bool {
-    if vk.ic.len() != UPDATE_IC_POINTS {
-        return false;
-    }
-    if !validate_proof_points(proof) {
-        return false;
-    }
-    if !is_canonical_fr(c_old) {
-        return false;
-    }
-    if !is_canonical_fr(c_new) {
-        return false;
-    }
-    let bls = env.crypto().bls12_381();
-
-    let proof_a = G1Affine::from_bytes(proof.a.clone());
-    let proof_b = G2Affine::from_bytes(proof.b.clone());
-    let proof_c = G1Affine::from_bytes(proof.c.clone());
-
-    let alpha = G1Affine::from_bytes(vk.alpha_g1.clone());
-    let beta = G2Affine::from_bytes(vk.beta_g2.clone());
-    let gamma = G2Affine::from_bytes(vk.gamma_g2.clone());
-    let delta = G2Affine::from_bytes(vk.delta_g2.clone());
-
-    let ic0 = G1Affine::from_bytes(vk.ic.get(0).unwrap());
-    let ic1 = G1Affine::from_bytes(vk.ic.get(1).unwrap());
-    let ic2 = G1Affine::from_bytes(vk.ic.get(2).unwrap());
-    let ic3 = G1Affine::from_bytes(vk.ic.get(3).unwrap());
-
-    let c_old_fr = Fr::from_bytes(c_old.clone());
-    let c_new_fr = Fr::from_bytes(c_new.clone());
-    let epoch_bytes = Bytes::from_array(env, &u64_to_u256_be(epoch_old));
-    let epoch_fr = Fr::from_u256(U256::from_be_bytes(env, &epoch_bytes));
-
-    let msm_points: Vec<G1Affine> = vec![env, ic1, ic2, ic3];
-    let msm_scalars: Vec<Fr> = vec![env, c_old_fr, epoch_fr, c_new_fr];
-    let msm_result = bls.g1_msm(msm_points, msm_scalars);
-    let vk_x = bls.g1_add(&ic0, &msm_result);
-
-    let neg_a = -proof_a;
-    let g1s: Vec<G1Affine> = vec![env, neg_a, alpha, vk_x, proof_c];
-    let g2s: Vec<G2Affine> = vec![env, proof_b, beta, gamma, delta];
-
-    bls.pairing_check(g1s, g2s)
 }
 
 #[cfg(test)]

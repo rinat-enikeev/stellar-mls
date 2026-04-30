@@ -96,6 +96,149 @@ pub fn poseidon_hash_one_v05(input: &Fr) -> Fr {
 }
 
 // ---------------------------------------------------------------------------
+// In-circuit gadget — TurboPlonk gates over jf-relation's PlonkCircuit<Fr>.
+//
+// Translates the v0.5 native sponge above into gate operations. Algorithm
+// mirrors arkworks v0.5 PoseidonSponge::permute (verified by reading
+// crypto-primitives/v0.5.0/.../sponge/poseidon/mod.rs):
+//
+//   state = [0, 0, 0]                    // capacity slot 0 first; rate at 1, 2
+//   state[1] += left, state[2] += right  // absorb (hash_two) or just state[1] += x
+//   permute(state) {
+//       for i in 0..R_F/2: ark + full_sbox + mds  // 4 initial full rounds
+//       for i in R_F/2..R_F/2+R_P: ark + partial_sbox + mds  // 56 partial
+//       for i in R_F/2+R_P..R_F+R_P: ark + full_sbox + mds  // 4 trailing full
+//   }
+//   output = state[1]                   // squeeze rate position 0
+//
+// Per-hash gate count (rough):
+//   ARK:  3 add_constant per round × 64 rounds = 192
+//   S-box: full 3·3 mul + partial 1·3 mul = 24 + 168 = 192
+//   MDS:  3 lc per round × 64 rounds = 192
+//   Total: ≈ 576 gates per Poseidon hash.
+// ---------------------------------------------------------------------------
+
+use jf_relation::{Circuit, CircuitError, PlonkCircuit, Variable};
+
+/// Hash two field elements as gates. Returns the output `Variable`.
+///
+/// Mirrors `poseidon_hash_two_v05` exactly — equivalence-tested via the
+/// `gadget_matches_v05_native_hash_two` test.
+pub fn poseidon_hash_two_gadget(
+    circuit: &mut PlonkCircuit<Fr>,
+    left: Variable,
+    right: Variable,
+) -> Result<Variable, CircuitError> {
+    let zero = circuit.zero();
+    // arkworks layout: [capacity_0, rate_0, rate_1] = [zero, left, right]
+    let mut state = [zero, left, right];
+    permute_gadget(circuit, &mut state)?;
+    // Squeeze position 0 = state[capacity + 0] = state[1].
+    Ok(state[1])
+}
+
+/// Hash a single field element as gates. Returns the output `Variable`.
+pub fn poseidon_hash_one_gadget(
+    circuit: &mut PlonkCircuit<Fr>,
+    input: Variable,
+) -> Result<Variable, CircuitError> {
+    let zero = circuit.zero();
+    // arkworks absorb: state[capacity + 0] += input → state = [0, input, 0]
+    let mut state = [zero, input, zero];
+    permute_gadget(circuit, &mut state)?;
+    Ok(state[1])
+}
+
+/// Apply 64 rounds of Poseidon to `state` in place. Mirrors arkworks v0.5
+/// `permute`: 4 initial full + 56 partial + 4 trailing full rounds.
+fn permute_gadget(
+    circuit: &mut PlonkCircuit<Fr>,
+    state: &mut [Variable; WIDTH],
+) -> Result<(), CircuitError> {
+    let cfg = poseidon_config_v05();
+    let half_full = cfg.full_rounds / 2;
+
+    for i in 0..half_full {
+        apply_ark(circuit, state, &cfg.ark[i])?;
+        apply_full_sbox(circuit, state)?;
+        apply_mds(circuit, state, &cfg.mds)?;
+    }
+    for i in half_full..(half_full + cfg.partial_rounds) {
+        apply_ark(circuit, state, &cfg.ark[i])?;
+        apply_partial_sbox(circuit, state)?;
+        apply_mds(circuit, state, &cfg.mds)?;
+    }
+    for i in (half_full + cfg.partial_rounds)..(cfg.full_rounds + cfg.partial_rounds) {
+        apply_ark(circuit, state, &cfg.ark[i])?;
+        apply_full_sbox(circuit, state)?;
+        apply_mds(circuit, state, &cfg.mds)?;
+    }
+    Ok(())
+}
+
+/// `state[i] += round_constants[i]` for all i.
+fn apply_ark(
+    circuit: &mut PlonkCircuit<Fr>,
+    state: &mut [Variable; WIDTH],
+    round_constants: &[Fr],
+) -> Result<(), CircuitError> {
+    debug_assert_eq!(round_constants.len(), WIDTH);
+    for i in 0..WIDTH {
+        state[i] = circuit.add_constant(state[i], &round_constants[i])?;
+    }
+    Ok(())
+}
+
+/// Full S-box: `state[i] = state[i]^5` for all i.
+fn apply_full_sbox(
+    circuit: &mut PlonkCircuit<Fr>,
+    state: &mut [Variable; WIDTH],
+) -> Result<(), CircuitError> {
+    for i in 0..WIDTH {
+        state[i] = pow5(circuit, state[i])?;
+    }
+    Ok(())
+}
+
+/// Partial S-box: `state[0] = state[0]^5`. (Only first element.)
+fn apply_partial_sbox(
+    circuit: &mut PlonkCircuit<Fr>,
+    state: &mut [Variable; WIDTH],
+) -> Result<(), CircuitError> {
+    state[0] = pow5(circuit, state[0])?;
+    Ok(())
+}
+
+/// `x^5 = ((x^2)^2) * x` — three multiplications, three gates.
+fn pow5(circuit: &mut PlonkCircuit<Fr>, x: Variable) -> Result<Variable, CircuitError> {
+    let x2 = circuit.mul(x, x)?;
+    let x4 = circuit.mul(x2, x2)?;
+    circuit.mul(x4, x)
+}
+
+/// MDS matrix multiply: `state' = M · state`. Width=3, so each output is
+/// `m[i][0]*s[0] + m[i][1]*s[1] + m[i][2]*s[2]`. Encoded as a single linear-
+/// combination gate per row.
+fn apply_mds(
+    circuit: &mut PlonkCircuit<Fr>,
+    state: &mut [Variable; WIDTH],
+    mds: &[Vec<Fr>],
+) -> Result<(), CircuitError> {
+    debug_assert_eq!(mds.len(), WIDTH);
+    let zero = circuit.zero();
+    let s = *state;
+    for i in 0..WIDTH {
+        debug_assert_eq!(mds[i].len(), WIDTH);
+        // jf-relation's `lc` is GATE_WIDTH = 4 wide; pad with a zero
+        // wire+coefficient since our state width is 3.
+        let wires_in = [s[0], s[1], s[2], zero];
+        let coeffs = [mds[i][0], mds[i][1], mds[i][2], Fr::from(0u64)];
+        state[i] = circuit.lc(&wires_in, &coeffs)?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Parameter derivation — bit-for-bit identical to crate::poseidon (v0.4),
 // but expressed in terms of v0.5 PrimeField + `from_le_bytes_mod_order`.
 // ---------------------------------------------------------------------------
@@ -280,5 +423,123 @@ mod tests {
                 "hash_one({x}) diverges between v0.5 and v0.4"
             );
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Gadget tests — exercise the in-circuit Poseidon against the native
+    // v0.5 sponge, witnessed at the gate-graph level (cheap) and at the
+    // full prove → verify level (slow but airtight).
+    // -------------------------------------------------------------------
+
+    use jf_relation::{Circuit, PlonkCircuit};
+
+    /// Sanity-check the gate count for one Poseidon hash. Logged so the
+    /// gate-count budget is visible if a future jf-relation upgrade
+    /// changes how the basic gates compose.
+    #[test]
+    fn gadget_hash_two_gate_count() {
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        let l = c.create_variable(Fr::from(1u64)).unwrap();
+        let r = c.create_variable(Fr::from(2u64)).unwrap();
+        let _ = poseidon_hash_two_gadget(&mut c, l, r).unwrap();
+        let n = c.num_gates();
+        let v = c.num_vars();
+        eprintln!("[gate-count] one Poseidon hash_two: {n} gates, {v} variables");
+        // Roughly: 64 rounds × (3 ARK + S-box + 3 MDS) = pinned-by-test
+        // bound, not a strict equality. Surface to track regressions.
+        assert!(
+            n < 1500,
+            "Poseidon hash_two gadget exceeds 1500 gates ({n}); expected ≈ 600-700 \
+             with current encoding. Regression?"
+        );
+        // Lower-bound rules out an accidental no-op gadget.
+        assert!(n > 300, "Poseidon hash_two gadget under 300 gates ({n}); suspicious");
+    }
+
+    /// `poseidon_hash_two_gadget(a, b)` produces the same field element as
+    /// `poseidon_hash_two_v05(a, b)` at the witness/satisfiability level.
+    /// Doesn't need a prover; just runs the circuit's witness assignment
+    /// and reads the gadget's output variable.
+    #[test]
+    fn gadget_hash_two_matches_v05_native_at_witness_level() {
+        let pairs: &[(u64, u64)] = &[(0, 0), (1, 0), (0, 1), (1, 2), (42, 1337)];
+        for &(l, r) in pairs {
+            let l_v05 = Fr::from(l);
+            let r_v05 = Fr::from(r);
+            let expected = poseidon_hash_two_v05(&l_v05, &r_v05);
+
+            let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+            let l_var = circuit.create_variable(l_v05).unwrap();
+            let r_var = circuit.create_variable(r_v05).unwrap();
+            let out_var = poseidon_hash_two_gadget(&mut circuit, l_var, r_var).unwrap();
+
+            // The witness value of the output Variable should equal the
+            // native hash. This is the cheapest equivalence check — runs
+            // the gate graph as an interpreter, no prover involved.
+            let got = circuit.witness(out_var).unwrap();
+            assert_eq!(
+                got, expected,
+                "gadget hash_two({l}, {r}) diverges from v0.5 native"
+            );
+        }
+    }
+
+    /// Same property for hash_one.
+    #[test]
+    fn gadget_hash_one_matches_v05_native_at_witness_level() {
+        for &x in &[0u64, 1, 42, 1u64 << 50] {
+            let x_v05 = Fr::from(x);
+            let expected = poseidon_hash_one_v05(&x_v05);
+
+            let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+            let x_var = circuit.create_variable(x_v05).unwrap();
+            let out_var = poseidon_hash_one_gadget(&mut circuit, x_var).unwrap();
+
+            let got = circuit.witness(out_var).unwrap();
+            assert_eq!(
+                got, expected,
+                "gadget hash_one({x}) diverges from v0.5 native"
+            );
+        }
+    }
+
+    /// Full end-to-end: build a circuit asserting
+    /// `gadget(a, b) == public_input`, set witness, prove, verify against
+    /// the native `poseidon_hash_two_v05(a, b)` as the public input.
+    /// Validates the gadget against the prover *and* verifier paths
+    /// (catches bugs that satisfiability checks alone miss — e.g. wrong
+    /// coefficient on a `lc` gate that still happens to satisfy the
+    /// constraint at one specific witness assignment).
+    #[test]
+    fn gadget_hash_two_round_trip_prove_verify() {
+        use rand_chacha::rand_core::SeedableRng;
+
+        let l = Fr::from(42u64);
+        let r = Fr::from(1337u64);
+        let expected = poseidon_hash_two_v05(&l, &r);
+
+        let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+        // Public input: the expected hash output.
+        let expected_var = circuit.create_public_variable(expected).unwrap();
+        let l_var = circuit.create_variable(l).unwrap();
+        let r_var = circuit.create_variable(r).unwrap();
+        let computed = poseidon_hash_two_gadget(&mut circuit, l_var, r_var).unwrap();
+        circuit.enforce_equal(computed, expected_var).unwrap();
+        circuit.finalize_for_arithmetization().unwrap();
+
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
+        let keys = crate::prover::plonk::preprocess(&circuit).expect("preprocess");
+        let proof = crate::prover::plonk::prove(&mut rng, &keys.pk, &circuit).expect("prove");
+        assert!(
+            crate::prover::plonk::verify(&keys.vk, &[expected], &proof),
+            "verifier rejected a valid Poseidon-gadget proof"
+        );
+
+        // And confirm the verifier rejects a tampered public input.
+        let wrong = expected + Fr::from(1u64);
+        assert!(
+            !crate::prover::plonk::verify(&keys.vk, &[wrong], &proof),
+            "verifier accepted Poseidon-gadget proof against wrong public input"
+        );
     }
 }

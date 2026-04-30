@@ -45,6 +45,7 @@
 
 pub mod proof_format;
 pub mod transcript;
+pub mod verifier_challenges;
 pub mod vk_format;
 
 #[cfg(test)]

@@ -50,6 +50,7 @@ ark-ff-v05                = { package = "ark-ff",                version = "0.5"
 ark-serialize-v05         = { package = "ark-serialize",         version = "0.5", default-features = false, features = ["std"],                                    optional = true }
 ark-std-v05               = { package = "ark-std",               version = "0.5", default-features = false, features = ["std"],                                    optional = true }
 ark-crypto-primitives-v05 = { package = "ark-crypto-primitives", version = "0.5", default-features = false, features = ["sponge"],                                  optional = true }
+ark-poly-v05              = { package = "ark-poly",              version = "0.5", default-features = false, features = ["std"],                                       optional = true }
 
 # --- General utility deps (unconditional) ---
 sha2 = "0.10"
@@ -89,7 +90,7 @@ plonk = [
     "dep:jf-plonk", "dep:jf-pcs", "dep:jf-relation",
     "dep:ark-bls12-381-v05", "dep:ark-ec-v05", "dep:ark-ff-v05",
     "dep:ark-serialize-v05", "dep:ark-std-v05",
-    "dep:ark-crypto-primitives-v05",
+    "dep:ark-crypto-primitives-v05", "dep:ark-poly-v05",
     "dep:sha3",
 ]
 # One-shot operator tool for extracting the EF KZG SRS from the published

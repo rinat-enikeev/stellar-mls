@@ -43,11 +43,15 @@
 //! # Public-input encoding
 //!
 //! Membership proofs have two public inputs `(commitment, epoch)`,
-//! both `Fr` (32 BE bytes). The transcript appends them as a single
-//! sequence of length-prefixed BE field elements, matching jf-plonk's
-//! `append_field_elems`. Callers that hold their public inputs as
-//! arkworks-LE bytes should use [`arkworks_fr_le_to_be`] before
-//! feeding them to [`SolidityTranscript::append_vk_and_public_inputs`].
+//! both `Fr` (32 BE bytes). The transcript appends them back-to-back
+//! with no explicit length prefix — the count is implicit, carried
+//! by the `num_inputs: u64` field appended earlier in
+//! [`SolidityTranscript::append_vk_and_public_inputs`] (step 3 of
+//! the VK header). This matches jf-plonk's `append_field_elems`,
+//! which also omits a per-call length and relies on the VK header
+//! prefix. Callers that hold their public inputs as arkworks-LE
+//! bytes should use [`arkworks_fr_le_to_be`] before feeding them to
+//! [`SolidityTranscript::append_vk_and_public_inputs`].
 
 #![cfg(feature = "plonk")]
 
@@ -254,6 +258,16 @@ pub fn arkworks_g1_uncompressed_to_be_xy(
     let mut y_be = [0u8; G1_HALF];
     x_be.copy_from_slice(&bytes[0..G1_HALF]);
     y_be.copy_from_slice(&bytes[G1_HALF..G1_LEN]);
+    // y has no flag bits in this format; bits 5-7 of `y_be[0]` must
+    // be zero for any valid y < p (since BLS12-381's `p` is 381 bits).
+    // Catch upstream bugs that feed non-canonical y bytes through the
+    // helper — release builds keep the defensive mask below.
+    debug_assert_eq!(
+        y_be[0] & 0xE0,
+        0,
+        "y high byte has bits 5-7 set (0x{:02x}); upstream parser corrupted or fed non-canonical bytes",
+        y_be[0]
+    );
     x_be[0] &= 0x1F;
     y_be[0] &= 0x1F;
     (x_be, y_be)

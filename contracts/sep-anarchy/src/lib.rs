@@ -710,6 +710,16 @@ const _: () = {
     assert!(PROOF_LEN == 1601, "plonk_verifier::PROOF_LEN drifted");
     assert!(FR_LEN == 32, "plonk_verifier::FR_LEN drifted");
     assert!(G2_COMPRESSED_LEN == 96, "plonk_verifier::G2_COMPRESSED_LEN drifted");
+    // Pin MAX_PI_COUNT against the per-circuit PI counts so a future
+    // increase to either circuit can't silently exceed the buffer.
+    assert!(
+        MAX_PI_COUNT >= MEMBERSHIP_PI_COUNT as usize,
+        "MAX_PI_COUNT < MEMBERSHIP_PI_COUNT"
+    );
+    assert!(
+        MAX_PI_COUNT >= UPDATE_PI_COUNT as usize,
+        "MAX_PI_COUNT < UPDATE_PI_COUNT"
+    );
 };
 
 /// Parse the embedded VK bytes + the wire proof, copy public inputs
@@ -734,9 +744,10 @@ fn verify_plonk_proof(
     let proof_array: [u8; PROOF_LEN] = proof.to_array();
     let parsed_proof = parse_proof_bytes(&proof_array).map_err(|_| Error::InvalidProof)?;
 
-    // verify takes &[[u8; 32]]; build that into a fixed buffer up to 4
-    // PIs (membership=2, update=3 — 4 is a safe ceiling for this
-    // contract's circuits).
+    // verify takes &[[u8; 32]]; build that into a fixed buffer sized
+    // for this contract's circuits (membership=2, update=3 — see
+    // MAX_PI_COUNT). The const-assert above pins this against the
+    // per-circuit PI counts.
     let n = public_inputs.len() as usize;
     if n > MAX_PI_COUNT {
         return Err(Error::PublicInputsMismatch);

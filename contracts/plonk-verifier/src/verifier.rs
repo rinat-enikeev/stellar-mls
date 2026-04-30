@@ -1,0 +1,335 @@
+//! Top-level Soroban PLONK verifier — closes the Phase C.2 prereq loop.
+//!
+//! Wires together every module in this crate built across PRs
+//! #185–#191 and runs the final pairing equation via
+//! `env.crypto().bls12_381().pairing_check`. Mirrors the off-chain
+//! reference at `sep-xxxx-circuits::circuit::plonk::verifier`
+//! (PR #184).
+//!
+//! For our no-Plookup, single-instance case the verification
+//! equation reduces to:
+//!
+//! ```text
+//!   A = opening_proof + u · shifted_opening_proof
+//!   B = [D]_1
+//!     + ζ · opening_proof
+//!     + u · ζ·g · shifted_opening_proof
+//!     − [E]_1 · g_1                       (g_1 = vk.open_key.g)
+//!
+//!   accept iff e(A, [τ]_2) = e(B, [1]_2)
+//! ```
+//!
+//! Implemented as the multi-pairing check
+//! `e(A, [τ]_2) · e(−B, [1]_2) = 1`, fed through
+//! `env.crypto().bls12_381().pairing_check(&[(A, βh), (−B, h)])` —
+//! one host call.
+//!
+//! `[D]_1` comes from PR #190's `aggregate_poly_commitments`
+//! (MSM-folded here); `[E]_1` from PR #191's `aggregate_evaluations`.
+//!
+//! ## `srs_g2_compressed` contract
+//!
+//! Soroban's BLS12-381 host primitives don't expose a "compress this
+//! G2 point" operation, so we can't derive the transcript's
+//! `srs_g2_compressed` (96 B BE) on-chain from the parsed VK's
+//! `open_key_powers_of_h[1]` (192 B uncompressed). The contract
+//! embeds **both** forms — the uncompressed VK via
+//! `include_bytes!("…vk.bin")` and the pre-computed compressed G2
+//! via `include_bytes!("…srs-g2.bin")` — both produced together by
+//! the bake-vk pipeline.
+
+use soroban_sdk::crypto::bls12_381::{Fr, G1Affine, G2Affine};
+use soroban_sdk::{BytesN, Env, Vec};
+
+use crate::proof_format::{ParsedProof, FR_LEN, G1_LEN, NUM_WIRE_SIGMA_EVALS, NUM_WIRE_TYPES};
+use crate::verifier_aggregate::{aggregate_poly_commitments, ChallengesFr};
+use crate::verifier_aggregate_evals::aggregate_evaluations;
+use crate::verifier_challenges::compute_challenges;
+use crate::verifier_lin_poly::compute_lin_poly_constant_term;
+use crate::verifier_polys::{
+    evaluate_pi_poly, evaluate_vanishing_poly, first_and_last_lagrange_coeffs, DomainParams,
+};
+use crate::vk_format::{ParsedVerifyingKey, G2_COMPRESSED_LEN, G2_LEN};
+
+/// Errors `verify` can raise. `PairingMismatch` is the verifier's
+/// "rejected the proof" outcome; the others reflect malformed-input
+/// conditions that should not happen if the contract entry point
+/// has run the upstream byte parsers.
+#[derive(Debug, PartialEq, Eq)]
+pub enum VerifyError {
+    /// Public-input count doesn't match what the VK expects.
+    BadPublicInputCount { expected: u64, actual: u32 },
+    /// Pairing equation failed — proof rejected.
+    PairingMismatch,
+}
+
+/// Verify a TurboPlonk proof for a circuit using the no-Plookup,
+/// single-instance flow. Returns `Ok(())` to accept,
+/// `Err(_)` to reject.
+///
+/// Inputs are byte-form via the parsed-VK / parsed-proof structures
+/// and a pre-compressed SRS G2 element. The contract entry point
+/// embeds the VK + compressed G2 via `include_bytes!` and parses on
+/// the proof bytes the user submitted.
+pub fn verify(
+    env: &Env,
+    vk: &ParsedVerifyingKey,
+    srs_g2_compressed: &[u8; G2_COMPRESSED_LEN],
+    proof: &ParsedProof,
+    public_inputs_be: &[[u8; FR_LEN]],
+) -> Result<(), VerifyError> {
+    // --- 0. Public-input count must match the VK header. ----------
+    if public_inputs_be.len() as u64 != vk.num_inputs {
+        return Err(VerifyError::BadPublicInputCount {
+            expected: vk.num_inputs,
+            actual: public_inputs_be.len() as u32,
+        });
+    }
+
+    // --- 1. Drive the transcript and reduce the 6 challenges. -----
+    let raw = compute_challenges(env, vk, srs_g2_compressed, public_inputs_be, proof);
+    let challenges = ChallengesFr {
+        beta: Fr::from_bytes(BytesN::from_array(env, &raw.beta)),
+        gamma: Fr::from_bytes(BytesN::from_array(env, &raw.gamma)),
+        alpha: Fr::from_bytes(BytesN::from_array(env, &raw.alpha)),
+        zeta: Fr::from_bytes(BytesN::from_array(env, &raw.zeta)),
+        v: Fr::from_bytes(BytesN::from_array(env, &raw.v)),
+        u: Fr::from_bytes(BytesN::from_array(env, &raw.u)),
+    };
+
+    // --- 2. Domain-derived polynomial evaluations at ζ. -----------
+    let params = DomainParams::for_size(env, vk.domain_size);
+    let vanish_eval = evaluate_vanishing_poly(&challenges.zeta, &params);
+    let (lagrange_1_eval, _lagrange_n_eval) =
+        first_and_last_lagrange_coeffs(&challenges.zeta, &vanish_eval, &params);
+
+    // --- 3. Public-input polynomial evaluation. -------------------
+    // Reduce public inputs BE→Fr.
+    let mut public_inputs_fr: alloc::vec::Vec<Fr> =
+        alloc::vec::Vec::with_capacity(public_inputs_be.len());
+    for be in public_inputs_be.iter() {
+        public_inputs_fr.push(Fr::from_bytes(BytesN::from_array(env, be)));
+    }
+    let pi_eval = evaluate_pi_poly(
+        &public_inputs_fr,
+        &challenges.zeta,
+        &vanish_eval,
+        &params,
+    );
+
+    // --- 4. Linearisation-polynomial constant term r_0. -----------
+    let w_evals: [Fr; NUM_WIRE_TYPES] =
+        decode_fr_array(env, &proof.wires_evals);
+    let sigma_evals: [Fr; NUM_WIRE_SIGMA_EVALS] =
+        decode_fr_array(env, &proof.wire_sigma_evals);
+    let perm_next_eval = fr_from_le_bytes(env, &proof.perm_next_eval);
+    let lin_poly_constant = compute_lin_poly_constant_term(
+        challenges.alpha.clone(),
+        challenges.beta.clone(),
+        challenges.gamma.clone(),
+        pi_eval,
+        lagrange_1_eval.clone(),
+        &w_evals,
+        &sigma_evals,
+        perm_next_eval,
+    );
+
+    // --- 5. Aggregate poly commitments → MSM-able [D]_1. ----------
+    let agg = aggregate_poly_commitments(
+        env,
+        &challenges,
+        vanish_eval,
+        lagrange_1_eval,
+        vk,
+        proof,
+    );
+    let d_1 = agg.multi_scalar_multiply(env);
+
+    // --- 6. Aggregate evaluations → scalar [E]_1. -----------------
+    let aggregate_eval = aggregate_evaluations(env, lin_poly_constant, proof, &agg.v_uv_buffer);
+
+    // --- 7. Final pairing check. ----------------------------------
+    final_pairing_check(env, vk, proof, &challenges, &params, d_1, aggregate_eval)
+}
+
+/// Run the final pairing equation
+/// `e(A, [τ]_2) ?= e(B, [1]_2)` in the form
+/// `e(A, [τ]_2) · e(−B, [1]_2) = 1`.
+///
+/// `A = opening_proof + u·shifted_opening_proof`
+/// `B = [D]_1 + ζ·opening_proof + u·ζ·g·shifted_opening_proof − [E]_1·g_1`
+fn final_pairing_check(
+    env: &Env,
+    vk: &ParsedVerifyingKey,
+    proof: &ParsedProof,
+    challenges: &ChallengesFr,
+    params: &DomainParams,
+    d_1: G1Affine,
+    aggregate_eval: Fr,
+) -> Result<(), VerifyError> {
+    let opening = g1_from_bytes(env, &proof.opening_proof);
+    let shifted_opening = g1_from_bytes(env, &proof.shifted_opening_proof);
+    let g_1 = g1_from_bytes(env, &vk.open_key_g);
+    let h = g2_from_bytes(env, &vk.open_key_h);
+    let beta_h = g2_from_bytes(env, &vk.open_key_beta_h);
+
+    let zeta = challenges.zeta.clone();
+    let u = challenges.u.clone();
+    let zeta_g = zeta.clone() * params.group_gen.clone();
+
+    // A = opening + u · shifted_opening
+    let a = opening.clone() + (shifted_opening.clone() * u.clone());
+    // B = [D]_1 + ζ·opening + u·ζ·g·shifted_opening − [E]_1·g_1
+    let zeta_opening = opening * zeta;
+    let uzg_shifted = shifted_opening * (u * zeta_g);
+    let e_g_1 = g_1 * aggregate_eval;
+    // Subtract via add-with-negate (Soroban G1 has Neg but no Sub).
+    let b = d_1 + zeta_opening + uzg_shifted + (-e_g_1);
+
+    // pairing_check([(A, βh), (−B, h)]) returns true iff product is 1.
+    let mut g1_vec: Vec<G1Affine> = Vec::new(env);
+    g1_vec.push_back(a);
+    g1_vec.push_back(-b);
+    let mut g2_vec: Vec<G2Affine> = Vec::new(env);
+    g2_vec.push_back(beta_h);
+    g2_vec.push_back(h);
+
+    let ok = env.crypto().bls12_381().pairing_check(g1_vec, g2_vec);
+    if ok {
+        Ok(())
+    } else {
+        Err(VerifyError::PairingMismatch)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers (private duplicates of `verifier_aggregate`'s helpers
+// to avoid a public-API surface widening just for cross-module access).
+// ---------------------------------------------------------------------------
+
+fn fr_from_le_bytes(env: &Env, le: &[u8; FR_LEN]) -> Fr {
+    let mut be = [0u8; FR_LEN];
+    for (o, &b) in be.iter_mut().zip(le.iter().rev()) {
+        *o = b;
+    }
+    Fr::from_bytes(BytesN::from_array(env, &be))
+}
+
+fn g1_from_bytes(env: &Env, bytes: &[u8; G1_LEN]) -> G1Affine {
+    G1Affine::from_bytes(BytesN::from_array(env, bytes))
+}
+
+fn g2_from_bytes(env: &Env, bytes: &[u8; G2_LEN]) -> G2Affine {
+    G2Affine::from_bytes(BytesN::from_array(env, bytes))
+}
+
+fn decode_fr_array<const N: usize>(env: &Env, arrays: &[[u8; FR_LEN]; N]) -> [Fr; N] {
+    core::array::from_fn(|i| fr_from_le_bytes(env, &arrays[i]))
+}
+
+// `verify` builds an interim `alloc::vec::Vec<Fr>` to hand to
+// `evaluate_pi_poly` (which takes `&[Fr]`). `alloc` is enabled
+// transitively by soroban-sdk for unit tests; production contract
+// builds also have `alloc` available since the SDK pulls in
+// `alloc` for its own `Vec` infrastructure.
+extern crate alloc;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proof_format::parse_proof_bytes;
+    use crate::test_fixtures::{build_synthetic_proof_bytes, build_synthetic_vk_bytes};
+    use crate::vk_format::parse_vk_bytes;
+
+    fn synthetic_srs_g2_compressed() -> [u8; G2_COMPRESSED_LEN] {
+        let mut a = [0u8; G2_COMPRESSED_LEN];
+        a[0] = 0xDE;
+        a[1] = 0xAD;
+        a
+    }
+
+    fn synthetic_public_inputs() -> [[u8; FR_LEN]; 2] {
+        let mut p = [[0u8; FR_LEN]; 2];
+        p[0][0] = 0x70;
+        p[1][0] = 0x71;
+        p
+    }
+
+    /// Wrong public-input count short-circuits with
+    /// `BadPublicInputCount` before any crypto work. Pure
+    /// shape-validation; doesn't need on-curve G1 bytes.
+    #[test]
+    fn rejects_wrong_public_input_count() {
+        let env = Env::default();
+        let vk_bytes = build_synthetic_vk_bytes(8192, 2);
+        let proof_bytes = build_synthetic_proof_bytes();
+        let parsed_vk = parse_vk_bytes(&vk_bytes).expect("parse vk");
+        let parsed_proof = parse_proof_bytes(&proof_bytes).expect("parse proof");
+        let srs_g2 = synthetic_srs_g2_compressed();
+
+        // VK declares num_inputs=2; pass only 1.
+        let too_few: [[u8; FR_LEN]; 1] = [[0x70; FR_LEN]];
+        let result = verify(&env, &parsed_vk, &srs_g2, &parsed_proof, &too_few);
+        assert_eq!(
+            result,
+            Err(VerifyError::BadPublicInputCount {
+                expected: 2,
+                actual: 1,
+            }),
+        );
+
+        // Three is also wrong.
+        let too_many: [[u8; FR_LEN]; 3] = [[0u8; FR_LEN]; 3];
+        let result =
+            verify(&env, &parsed_vk, &srs_g2, &parsed_proof, &too_many);
+        assert_eq!(
+            result,
+            Err(VerifyError::BadPublicInputCount {
+                expected: 2,
+                actual: 3,
+            }),
+        );
+
+        // The correct count (2) doesn't short-circuit here — it
+        // proceeds into the crypto path which fails on synthetic
+        // (off-curve) G1 bytes. We don't assert success; the
+        // `accepts_canonical_proof_for_all_tiers` test in the
+        // fixture-bundling follow-up exercises the accept path.
+    }
+
+    /// **Load-bearing — but `#[ignore]`'d in this PR.** Builds a real
+    /// proof + VK off-chain, parses them, calls `verify(...)`, and
+    /// asserts `Ok(())`. This is the test the entire C.2 prereq
+    /// stack has been building toward — it ties every module
+    /// together end-to-end on real cryptographic inputs.
+    ///
+    /// Currently `#[ignore]`'d because the `plonk-verifier` crate
+    /// is `no_std` + `soroban-sdk` only; pulling in the prover-side
+    /// `sep-xxxx-circuits` (which has arkworks) as a test dep blows
+    /// up the build. The test will land in the fixture-bundling
+    /// follow-up that introduces a `tests/fixtures/*.bin` directory
+    /// generated by the prover and consumed via `include_bytes!`.
+    ///
+    /// Until then, the off-chain reference's
+    /// `accepts_canonical_proof_for_all_tiers` (PR #184) exercises
+    /// the same algorithm end-to-end against real proofs; this
+    /// crate's modules are byte-equivalent ports of those, and
+    /// every component-level test pins the byte layout.
+    #[test]
+    #[ignore = "needs real on-curve G1 / G2 bytes from a baked VK + canonical proof; \
+                fixture-bundling follow-up"]
+    fn accepts_canonical_proof() {
+        // Placeholder. The real test will look like:
+        //
+        //   let env = Env::default();
+        //   let vk_bytes: &[u8; 3002] = include_bytes!("fixtures/vk-d11.vk.bin");
+        //   let srs_g2: &[u8; 96] = include_bytes!("fixtures/srs-g2.bin");
+        //   let proof_bytes: &[u8; 1601] = include_bytes!("fixtures/proof-d11.proof.bin");
+        //   let public_inputs: [[u8; 32]; 2] = include!("fixtures/pi-d11.in");
+        //
+        //   let parsed_vk = parse_vk_bytes(vk_bytes).unwrap();
+        //   let parsed_proof = parse_proof_bytes(proof_bytes).unwrap();
+        //   let result = verify(&env, &parsed_vk, srs_g2, &parsed_proof, &public_inputs);
+        //   assert_eq!(result, Ok(()));
+    }
+}

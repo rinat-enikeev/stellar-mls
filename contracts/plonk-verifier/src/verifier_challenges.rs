@@ -59,6 +59,32 @@ pub struct Challenges {
 /// Drive the transcript through the canonical proof byte stream and
 /// derive the six challenges. See module docs for the exact append
 /// sequence.
+///
+/// ## `srs_g2_compressed` contract
+///
+/// `srs_g2_compressed` is the **compressed** (96 B BE) form of
+/// `vk.open_key.powers_of_h[1]`, computed off-chain via
+/// `to_bytes!(...)` (arkworks `serialize_compressed`). The VK
+/// already carries the **uncompressed** form in
+/// `vk.open_key_powers_of_h[1]` (192 B); the two are different
+/// representations of the same G2 point.
+///
+/// We require the compressed form as a separate argument, rather
+/// than deriving it on-chain, because Soroban's `bls12_381` host
+/// primitives don't currently expose a "compress this G2 point"
+/// operation — and computing the compressed sign bit requires
+/// comparing `y` against `-y`, which would mean lifting the
+/// uncompressed bytes through field-element arithmetic. The
+/// contract bake-vk pipeline therefore ships **both** the VK
+/// (uncompressed) and the compressed G2 element pre-computed.
+///
+/// **Caller invariant**: `srs_g2_compressed` must be the compressed
+/// representation of `vk.open_key_powers_of_h[1]`. There's no
+/// runtime check; passing inconsistent forms produces a transcript
+/// that diverges from what the prover used, so verification rejects
+/// silently. The contract entry point should source both fields
+/// from the same baked VK fixture and either include them as a
+/// single bundle or derive the compressed form once at deploy time.
 pub fn compute_challenges(
     env: &Env,
     vk: &ParsedVerifyingKey,
@@ -217,14 +243,22 @@ mod tests {
         assert_eq!(a, a2);
     }
 
-    /// β is the first challenge — its value equals
-    /// `Keccak256(0^32 || vk_bytes || 5×wire_commits)` per jf-plonk's
-    /// flow. We compute the expected hash via `sha3` and compare.
-    /// This pins both the byte-stream layout and the host keccak256
-    /// against the reference Keccak implementation, end-to-end
-    /// through the verifier-challenges path.
+    /// **Load-bearing.** Re-derives **all six** challenges via an
+    /// independent `sha3::Keccak256` walk through the same byte
+    /// sequence `compute_challenges` produces, and asserts each
+    /// matches. Pins the entire append sequence end-to-end, not just
+    /// β.
+    ///
+    /// Why all six and not just β: `squeeze` rolls state, so a tamper
+    /// test that flips a byte in (say) `wire_commitments[0]` would
+    /// surface a β change and propagate through every downstream
+    /// challenge regardless of whether the rest of the byte stream
+    /// is correct. Without per-challenge oracles, silent drops /
+    /// reorderings of `prod_perm_commitment`,
+    /// `split_quot_commitments`, evaluations, or opening proofs
+    /// could pass tamper tests but break verification.
     #[test]
-    fn beta_matches_sha3_oracle_on_synthetic_input() {
+    fn all_six_challenges_match_sha3_oracle() {
         let env = Env::default();
 
         let domain_size = 8192u64;
@@ -239,36 +273,27 @@ mod tests {
         let challenges =
             compute_challenges(&env, &parsed_vk, &srs_g2, &pis, &parsed_proof);
 
-        // Reconstruct the byte stream β should hash:
-        //   FR_MODULUS_BITS BE u32 (4)
-        //   domain_size BE u64 (8)
-        //   num_inputs BE u64 (8)
-        //   12 zeros pad
-        //   srs_g2_compressed (96)
-        //   k constants (5 × 32 BE)
-        //   selector commitments (13 × 96 BE x||y)
-        //   sigma commitments (5 × 96 BE x||y)
-        //   public inputs (2 × 32 BE)
-        //   wire commitments (5 × 96 BE x||y)
+        // ----- Re-derive each challenge step-by-step via sha3. -----
+        let mut state = [0u8; 32];
+
+        // β-step: state || (vk header + 5×wire_commits)
         let mut hasher = Keccak256::new();
-        hasher.update([0u8; 32]); // initial state
+        hasher.update(state);
         hasher.update(crate::transcript::FR_MODULUS_BITS.to_be_bytes());
         hasher.update(domain_size.to_be_bytes());
         hasher.update(num_inputs.to_be_bytes());
         hasher.update([0u8; 12]);
         hasher.update(srs_g2);
         for i in 0..NUM_K_CONSTANTS {
-            // Synthetic k_constants[i][0] = 0x30 + i (LE), reversed → BE last byte
             let mut k_be = [0u8; FR_LEN];
             k_be[FR_LEN - 1] = 0x30 + i as u8;
             hasher.update(k_be);
         }
         for i in 0..NUM_SELECTOR_COMMS {
-            // Synthetic selector_commitments[i][0] = 0x20 + i (LE), masked & 0x1F.
             let mut x_be = [0u8; 48];
             x_be[0] = (0x20u8 + i as u8) & 0x1F;
             hasher.update(x_be);
-            hasher.update([0u8; 48]); // y all zero
+            hasher.update([0u8; 48]);
         }
         for i in 0..NUM_SIGMA_COMMS {
             let mut x_be = [0u8; 48];
@@ -276,24 +301,181 @@ mod tests {
             hasher.update(x_be);
             hasher.update([0u8; 48]);
         }
-        // Public inputs (already in BE form via synthetic helper).
         for pi in &pis {
             hasher.update(pi);
         }
-        // Wire commitments: synthetic wire_commitments[i][0] = 0x10 + i,
-        // & 0x1F is no-op since 0x10..0x14 < 0x20.
         for i in 0..crate::proof_format::NUM_WIRE_TYPES {
             let mut x_be = [0u8; 48];
             x_be[0] = (0x10u8 + i as u8) & 0x1F;
             hasher.update(x_be);
             hasher.update([0u8; 48]);
         }
-        let expected_beta: [u8; 32] = hasher.finalize().into();
+        state = hasher.finalize().into();
+        assert_eq!(challenges.beta, state, "β oracle mismatch");
 
-        assert_eq!(
-            challenges.beta, expected_beta,
-            "β diverges from sha3 oracle on synthetic input — \
-             check append sequence in compute_challenges or transcript"
-        );
+        // γ-step: state || (nothing — squeeze hashes state alone)
+        let mut hasher = Keccak256::new();
+        hasher.update(state);
+        state = hasher.finalize().into();
+        assert_eq!(challenges.gamma, state, "γ oracle mismatch");
+
+        // α-step: state || prod_perm_commitment
+        // Synthetic prod_perm_commitment[0] = 0x20 (LE), & 0x1F = 0x00.
+        let mut hasher = Keccak256::new();
+        hasher.update(state);
+        let mut prod_perm_x = [0u8; 48];
+        prod_perm_x[0] = 0x20 & 0x1F;
+        hasher.update(prod_perm_x);
+        hasher.update([0u8; 48]);
+        state = hasher.finalize().into();
+        assert_eq!(challenges.alpha, state, "α oracle mismatch");
+
+        // ζ-step: state || 5×split_quot_commitments
+        // Synthetic split_quot_commitments[i][0] = 0x30 + i (LE),
+        // & 0x1F: 0x30..0x34 → 0x10..0x14.
+        let mut hasher = Keccak256::new();
+        hasher.update(state);
+        for i in 0..crate::proof_format::NUM_WIRE_TYPES {
+            let mut x_be = [0u8; 48];
+            x_be[0] = (0x30u8 + i as u8) & 0x1F;
+            hasher.update(x_be);
+            hasher.update([0u8; 48]);
+        }
+        state = hasher.finalize().into();
+        assert_eq!(challenges.zeta, state, "ζ oracle mismatch");
+
+        // v-step: state || 5×wires_evals + 4×wire_sigma_evals + perm_next_eval
+        // Synthetic wires_evals[i][0] = 0x50 + i (LE), reversed → BE last byte
+        // Synthetic wire_sigma_evals[i][0] = 0x60 + i (LE), reversed → BE last byte
+        // Synthetic perm_next_eval[0] = 0x70 (LE), reversed → BE last byte
+        let mut hasher = Keccak256::new();
+        hasher.update(state);
+        for i in 0..crate::proof_format::NUM_WIRE_TYPES {
+            let mut ev_be = [0u8; FR_LEN];
+            ev_be[FR_LEN - 1] = 0x50 + i as u8;
+            hasher.update(ev_be);
+        }
+        for i in 0..crate::proof_format::NUM_WIRE_SIGMA_EVALS {
+            let mut ev_be = [0u8; FR_LEN];
+            ev_be[FR_LEN - 1] = 0x60 + i as u8;
+            hasher.update(ev_be);
+        }
+        let mut perm_next_be = [0u8; FR_LEN];
+        perm_next_be[FR_LEN - 1] = 0x70;
+        hasher.update(perm_next_be);
+        state = hasher.finalize().into();
+        assert_eq!(challenges.v, state, "v oracle mismatch");
+
+        // u-step: state || opening_proof || shifted_opening_proof
+        // Synthetic opening_proof[0] = 0x40, shifted = 0x41 (both LE),
+        // & 0x1F = 0x00, 0x01 (top 3 bits of 0x40, 0x41 are 010, but
+        // bits 5-7 are 010_00000 = 0x40 → 0x40 & 0x1F = 0x00; 0x41 & 0x1F = 0x01).
+        let mut hasher = Keccak256::new();
+        hasher.update(state);
+        let mut opening_x = [0u8; 48];
+        opening_x[0] = 0x40 & 0x1F;
+        hasher.update(opening_x);
+        hasher.update([0u8; 48]);
+        let mut shifted_x = [0u8; 48];
+        shifted_x[0] = 0x41 & 0x1F;
+        hasher.update(shifted_x);
+        hasher.update([0u8; 48]);
+        state = hasher.finalize().into();
+        assert_eq!(challenges.u, state, "u oracle mismatch");
+    }
+
+    /// Tamper test: flipping a byte in `perm_next_eval` changes the
+    /// challenges. Without this test, a bug that drops
+    /// `perm_next_eval` from the v-step transcript would pass
+    /// `compute_challenges_changes_when_proof_is_tampered` (which
+    /// only flips a wire commitment).
+    #[test]
+    fn compute_challenges_changes_when_perm_next_eval_is_tampered() {
+        let env = Env::default();
+
+        let vk_bytes = build_synthetic_vk_bytes(8192, 2);
+        let proof_bytes_a = build_synthetic_proof_bytes();
+        let mut proof_bytes_b = proof_bytes_a;
+        // perm_next_eval starts at byte 1568 (per proof_format layout).
+        // Flip a low byte (Fr is LE, so byte 0 of the slot = LSB of
+        // value).  After the LE→BE reversal in the transcript path,
+        // this becomes the BE high byte of the eval — directly affects
+        // the v-step hash.
+        proof_bytes_b[1568] ^= 0x01;
+
+        let parsed_vk = parse_vk_bytes(&vk_bytes).expect("parse vk");
+        let parsed_proof_a = parse_proof_bytes(&proof_bytes_a).expect("parse a");
+        let parsed_proof_b = parse_proof_bytes(&proof_bytes_b).expect("parse b");
+        let srs_g2 = synthetic_srs_g2_compressed();
+        let pis = synthetic_public_inputs();
+
+        let a = compute_challenges(&env, &parsed_vk, &srs_g2, &pis, &parsed_proof_a);
+        let b = compute_challenges(&env, &parsed_vk, &srs_g2, &pis, &parsed_proof_b);
+        assert_ne!(a, b);
+        // Sanity: β and γ are unchanged (perm_next_eval feeds the
+        // v-step, after both β and γ have been squeezed).
+        assert_eq!(a.beta, b.beta, "β should not be affected");
+        assert_eq!(a.gamma, b.gamma, "γ should not be affected");
+        assert_eq!(a.alpha, b.alpha, "α should not be affected");
+        assert_eq!(a.zeta, b.zeta, "ζ should not be affected");
+        assert_ne!(a.v, b.v, "v must reflect perm_next_eval");
+        assert_ne!(a.u, b.u, "u must propagate from v via state rolling");
+    }
+
+    /// Tamper test: flipping a byte in `wire_sigma_evals[0]` changes
+    /// the challenges. Pins that those evals feed the v-step transcript.
+    #[test]
+    fn compute_challenges_changes_when_wire_sigma_eval_is_tampered() {
+        let env = Env::default();
+
+        let vk_bytes = build_synthetic_vk_bytes(8192, 2);
+        let proof_bytes_a = build_synthetic_proof_bytes();
+        let mut proof_bytes_b = proof_bytes_a;
+        // wire_sigma_evals[0] starts at byte 1440 (per proof_format).
+        // Flip a body byte; LE → so byte 0 is the LSB of the value.
+        proof_bytes_b[1440] ^= 0x01;
+
+        let parsed_vk = parse_vk_bytes(&vk_bytes).expect("parse vk");
+        let parsed_proof_a = parse_proof_bytes(&proof_bytes_a).expect("parse a");
+        let parsed_proof_b = parse_proof_bytes(&proof_bytes_b).expect("parse b");
+        let srs_g2 = synthetic_srs_g2_compressed();
+        let pis = synthetic_public_inputs();
+
+        let a = compute_challenges(&env, &parsed_vk, &srs_g2, &pis, &parsed_proof_a);
+        let b = compute_challenges(&env, &parsed_vk, &srs_g2, &pis, &parsed_proof_b);
+        assert_ne!(a, b);
+        assert_eq!(a.zeta, b.zeta, "ζ should not be affected");
+        assert_ne!(a.v, b.v, "v must reflect wire_sigma_evals");
+    }
+
+    /// Tamper test: flipping a byte in `opening_proof` changes the
+    /// challenges. Pins that opening_proof feeds the u-step
+    /// transcript.
+    #[test]
+    fn compute_challenges_changes_when_opening_proof_is_tampered() {
+        let env = Env::default();
+
+        let vk_bytes = build_synthetic_vk_bytes(8192, 2);
+        let proof_bytes_a = build_synthetic_proof_bytes();
+        let mut proof_bytes_b = proof_bytes_a;
+        // opening_proof starts at byte 1072. Flip a body byte past the
+        // flag-mask byte.
+        proof_bytes_b[1072 + 47] ^= 0x01;
+
+        let parsed_vk = parse_vk_bytes(&vk_bytes).expect("parse vk");
+        let parsed_proof_a = parse_proof_bytes(&proof_bytes_a).expect("parse a");
+        let parsed_proof_b = parse_proof_bytes(&proof_bytes_b).expect("parse b");
+        let srs_g2 = synthetic_srs_g2_compressed();
+        let pis = synthetic_public_inputs();
+
+        let a = compute_challenges(&env, &parsed_vk, &srs_g2, &pis, &parsed_proof_a);
+        let b = compute_challenges(&env, &parsed_vk, &srs_g2, &pis, &parsed_proof_b);
+        // Only u changes (opening_proof appended after v is squeezed).
+        assert_eq!(a.beta, b.beta);
+        assert_eq!(a.gamma, b.gamma);
+        assert_eq!(a.alpha, b.alpha);
+        assert_eq!(a.zeta, b.zeta);
+        assert_eq!(a.v, b.v);
+        assert_ne!(a.u, b.u, "u must reflect opening_proof");
     }
 }

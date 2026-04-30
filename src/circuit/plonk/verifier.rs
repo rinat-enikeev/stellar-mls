@@ -297,10 +297,12 @@ mod tests {
     use rand_chacha::rand_core::SeedableRng;
 
     use crate::circuit::plonk::baker::{
-        bake_membership_vk, build_canonical_membership_witness,
+        bake_membership_vk, bake_update_vk, build_canonical_membership_witness,
+        build_canonical_update_witness,
     };
     use crate::circuit::plonk::membership::synthesize_membership;
     use crate::circuit::plonk::proof_format::parse_proof_bytes;
+    use crate::circuit::plonk::update::synthesize_update;
     use crate::circuit::plonk::vk_format::parse_vk_bytes;
     use crate::prover::plonk;
 
@@ -475,6 +477,48 @@ mod tests {
         (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat)
     }
 
+    /// Update-circuit equivalent of `build_canonical_artifact_bytes`.
+    /// Returns (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat
+    /// for `(c_old, epoch_old, c_new)` BE-encoded). The
+    /// `srs_g2_compressed` is identical to the membership one (same
+    /// EF KZG SRS); both sides assert this in
+    /// `plonk_verifier_fixtures_match_or_regenerate`.
+    fn build_canonical_update_artifact_bytes(
+        depth: usize,
+    ) -> (Vec<u8>, Vec<u8>, [u8; G2_COMPRESSED_LEN], Vec<u8>) {
+        let vk_bytes = bake_update_vk(depth).expect("bake update vk");
+        let witness = build_canonical_update_witness(depth);
+        let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_update(&mut circuit, &witness).unwrap();
+        circuit.finalize_for_arithmetization().unwrap();
+        let keys = plonk::preprocess(&circuit).unwrap();
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
+        let oracle_proof = plonk::prove(&mut rng, &keys.pk, &circuit).unwrap();
+        let mut proof_bytes = Vec::new();
+        oracle_proof
+            .serialize_uncompressed(&mut proof_bytes)
+            .unwrap();
+
+        let parsed_vk = parse_vk_bytes(&vk_bytes).expect("parse update vk");
+        let srs_g2_compressed =
+            super::compress_g2_for_transcript(&parsed_vk.open_key_powers_of_h[1])
+                .expect("compress [τ]_2");
+
+        // PI order: (c_old, epoch_old, c_new) — matches Groth16
+        // reference's allocation order in src/circuit/update.rs.
+        let mut pi_concat = Vec::with_capacity(3 * FR_LEN);
+        for fr in [
+            witness.c_old,
+            Fr::from(witness.epoch_old),
+            witness.c_new,
+        ] {
+            let bytes = fr.into_bigint().to_bytes_be();
+            pi_concat.extend_from_slice(&bytes);
+        }
+
+        (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat)
+    }
+
     /// Doubles as a fixture **emitter** and a **drift detector** for
     /// the byte streams the Soroban `plonk-verifier` crate consumes
     /// via `include_bytes!`.
@@ -544,27 +588,38 @@ mod tests {
                          to refresh bytes the Soroban plonk-verifier crate ships";
 
         // [τ]_2 comes from the EF KZG ceremony and is shared across
-        // tiers — pin it once. Tracked here so any divergence between
-        // tiers' baked VKs (which would indicate a baker bug) trips
-        // this test before reaching the verifier crate.
+        // tiers AND across the membership / update circuits. Tracked
+        // here so any divergence (which would indicate a baker bug)
+        // trips this test before reaching the verifier crate.
         let mut srs_g2_first: Option<[u8; G2_COMPRESSED_LEN]> = None;
 
-        for &depth in &[5usize, 8, 11] {
-            let (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat) =
-                build_canonical_artifact_bytes(depth);
-
+        let mut process_tier = |kind: &str,
+                                depth: usize,
+                                vk_bytes: Vec<u8>,
+                                proof_bytes: Vec<u8>,
+                                srs_g2_compressed: [u8; G2_COMPRESSED_LEN],
+                                pi_concat: Vec<u8>| {
             if let Some(first) = srs_g2_first {
                 assert_eq!(
                     first, srs_g2_compressed,
-                    "srs-g2 differs between tiers (baker bug?)"
+                    "srs-g2 differs between tiers / circuits (baker bug?)"
                 );
             } else {
                 srs_g2_first = Some(srs_g2_compressed);
             }
 
-            let vk_name = format!("vk-d{depth}.bin");
-            let proof_name = format!("proof-d{depth}.bin");
-            let pi_name = format!("pi-d{depth}.bin");
+            // Membership fixtures keep their bare names (`vk-d5.bin`)
+            // for compatibility with PR #193's verifier-crate
+            // include_bytes! sites; update fixtures get an
+            // `update-` prefix.
+            let prefix = match kind {
+                "membership" => "",
+                "update" => "update-",
+                _ => unreachable!(),
+            };
+            let vk_name = format!("{prefix}vk-d{depth}.bin");
+            let proof_name = format!("{prefix}proof-d{depth}.bin");
+            let pi_name = format!("{prefix}pi-d{depth}.bin");
 
             if regenerate {
                 fs::write(fixtures_dir.join(&vk_name), &vk_bytes).unwrap();
@@ -575,13 +630,38 @@ mod tests {
                 assert_eq!(on_disk(&proof_name), proof_bytes, "{proof_name}: {drift_msg}");
                 assert_eq!(on_disk(&pi_name), pi_concat, "{pi_name}: {drift_msg}");
             }
+        };
+
+        for &depth in &[5usize, 8, 11] {
+            let (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat) =
+                build_canonical_artifact_bytes(depth);
+            process_tier(
+                "membership",
+                depth,
+                vk_bytes,
+                proof_bytes,
+                srs_g2_compressed,
+                pi_concat,
+            );
+
+            let (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat) =
+                build_canonical_update_artifact_bytes(depth);
+            process_tier(
+                "update",
+                depth,
+                vk_bytes,
+                proof_bytes,
+                srs_g2_compressed,
+                pi_concat,
+            );
         }
 
         let srs_g2 = srs_g2_first.expect("at least one tier processed");
         if regenerate {
             fs::write(fixtures_dir.join("srs-g2-compressed.bin"), srs_g2).unwrap();
             eprintln!(
-                "regenerated plonk-verifier fixtures (d5, d8, d11) at {}",
+                "regenerated plonk-verifier fixtures \
+                 (membership + update at d5/d8/d11) at {}",
                 fixtures_dir.display()
             );
         } else {

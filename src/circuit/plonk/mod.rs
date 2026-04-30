@@ -23,6 +23,7 @@
 pub mod poseidon;
 pub mod merkle;
 pub mod membership;
+pub mod update;
 pub mod proof_format;
 pub mod vk_format;
 pub mod baker;

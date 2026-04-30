@@ -629,20 +629,53 @@ mod tests {
     }
 
     /// The `multi_scalar_multiply` helper is deterministic for fixed
-    /// inputs. Sanity check that two calls produce the same G1 point.
+    /// inputs. Calls `aggregate_poly_commitments` + the MSM twice on
+    /// the canonical depth-5 fixture (real on-curve G1 points,
+    /// challenges derived from the real transcript) and asserts the
+    /// resulting `[D]_1` is byte-equal across runs.
     ///
-    /// We don't assert non-zero here because the synthetic VK / proof
-    /// has zero-padded G1 bytes that arkworks would reject, but
-    /// Soroban's `from_bytes` is non-validating and `g1_msm` will
-    /// either return zero or panic depending on the host runtime —
-    /// either way we'd catch the issue. The end-to-end accept test
-    /// in the future top-level `verify` PR uses real G1 points.
+    /// Catches host-MSM nondeterminism — e.g., scalar reduction order,
+    /// affine vs. projective normalisation differences. The
+    /// end-to-end `verifier::tests::accepts_canonical_proof` covers
+    /// the *correctness* of `[D]_1`; this one covers *stability*.
     #[test]
-    #[ignore = "g1_msm rejects synthetic zero-padded G1 points; non-zero MSM tests need real proof bytes"]
     fn msm_is_deterministic() {
+        use crate::proof_format::{parse_proof_bytes, FR_LEN, PROOF_LEN};
+        use crate::verifier_challenges::compute_challenges;
+        use crate::vk_format::{parse_vk_bytes, G2_COMPRESSED_LEN, VK_LEN};
+        use soroban_sdk::BytesN;
+
+        const FIXTURE_VK: &[u8; VK_LEN] =
+            include_bytes!("../tests/fixtures/vk-d5.bin");
+        const FIXTURE_PROOF: &[u8; PROOF_LEN] =
+            include_bytes!("../tests/fixtures/proof-d5.bin");
+        const FIXTURE_SRS_G2: &[u8; G2_COMPRESSED_LEN] =
+            include_bytes!("../tests/fixtures/srs-g2-compressed.bin");
+        const FIXTURE_PI: &[u8; 2 * FR_LEN] =
+            include_bytes!("../tests/fixtures/pi-d5.bin");
+
         let env = Env::default();
-        let (vk, proof) = synthetic_fixture(&env);
-        let challenges = synthetic_challenges(&env);
+        let vk = parse_vk_bytes(FIXTURE_VK).expect("parse vk");
+        let proof = parse_proof_bytes(FIXTURE_PROOF).expect("parse proof");
+
+        let mut public_inputs = [[0u8; FR_LEN]; 2];
+        public_inputs[0].copy_from_slice(&FIXTURE_PI[..FR_LEN]);
+        public_inputs[1].copy_from_slice(&FIXTURE_PI[FR_LEN..]);
+
+        let raw = compute_challenges(&env, &vk, FIXTURE_SRS_G2, &public_inputs, &proof);
+        let challenges = ChallengesFr {
+            beta: Fr::from_bytes(BytesN::from_array(&env, &raw.beta)),
+            gamma: Fr::from_bytes(BytesN::from_array(&env, &raw.gamma)),
+            alpha: Fr::from_bytes(BytesN::from_array(&env, &raw.alpha)),
+            zeta: Fr::from_bytes(BytesN::from_array(&env, &raw.zeta)),
+            v: Fr::from_bytes(BytesN::from_array(&env, &raw.v)),
+            u: Fr::from_bytes(BytesN::from_array(&env, &raw.u)),
+        };
+
+        // Use simple non-zero placeholders for vanish_eval / L_0(ζ);
+        // determinism doesn't depend on these matching the verify-path
+        // values, only on `aggregate_poly_commitments` + the MSM being
+        // a deterministic function of its inputs.
         let agg_a = aggregate_poly_commitments(
             &env,
             &challenges,

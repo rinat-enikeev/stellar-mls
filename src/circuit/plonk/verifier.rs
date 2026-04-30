@@ -436,4 +436,109 @@ mod tests {
             "depth-5 proof verified against depth-11 VK: {result:?}",
         );
     }
+
+    /// Build the *raw* (pre-parse) bytes the Soroban verifier crate
+    /// consumes via `include_bytes!`: the baked VK, the
+    /// arkworks-uncompressed proof, the 96-byte compressed `[τ]_2`
+    /// the transcript expects, and the BE public-input scalars
+    /// concatenated. Reuses the same canonical witness path as
+    /// `build_canonical_artifacts`, so any byte the on-chain verifier
+    /// sees is byte-identical to what this test asserts on.
+    fn build_canonical_artifact_bytes(depth: usize) -> (Vec<u8>, Vec<u8>, [u8; G2_COMPRESSED_LEN], Vec<u8>) {
+        let vk_bytes = bake_membership_vk(depth).expect("bake vk");
+        let witness = build_canonical_membership_witness(depth);
+        let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_membership(&mut circuit, &witness).unwrap();
+        circuit.finalize_for_arithmetization().unwrap();
+        let keys = plonk::preprocess(&circuit).unwrap();
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
+        let oracle_proof = plonk::prove(&mut rng, &keys.pk, &circuit).unwrap();
+        let mut proof_bytes = Vec::new();
+        oracle_proof
+            .serialize_uncompressed(&mut proof_bytes)
+            .unwrap();
+
+        // Re-derive the 96-byte compressed [τ]_2 the same way the
+        // off-chain verifier does at runtime (line 149).
+        let parsed_vk = parse_vk_bytes(&vk_bytes).expect("parse vk");
+        let srs_g2_compressed =
+            super::compress_g2_for_transcript(&parsed_vk.open_key_powers_of_h[1])
+                .expect("compress [τ]_2");
+
+        // Public inputs in BE form, concatenated.
+        let mut pi_concat = Vec::with_capacity(2 * FR_LEN);
+        for fr in [witness.commitment, Fr::from(witness.epoch)] {
+            let bytes = fr.into_bigint().to_bytes_be();
+            pi_concat.extend_from_slice(&bytes);
+        }
+
+        (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat)
+    }
+
+    /// Doubles as a fixture **emitter** and a **drift detector** for
+    /// the byte streams the Soroban `plonk-verifier` crate consumes
+    /// via `include_bytes!`.
+    ///
+    /// - Default mode: re-runs the canonical-artifacts pipeline at
+    ///   `depth=5` (smallest tier — fastest test) and asserts the
+    ///   resulting bytes equal what's currently checked into
+    ///   `contracts/plonk-verifier/tests/fixtures/`. If the prover
+    ///   side ever changes shape (e.g. layout-pin tweak, RNG seed
+    ///   change), this test fails first — surfacing the drift before
+    ///   any verifier code is exercised.
+    /// - `STELLAR_REGEN_FIXTURES=1`: writes fresh bytes to those
+    ///   four files instead of asserting. Run when the prover output
+    ///   has legitimately changed and the on-chain verifier should
+    ///   pick up the new bytes.
+    ///
+    /// Smallest tier is sufficient because the verifier crate's
+    /// modules are size-agnostic (every `domain_size` ≤ 32768 routes
+    /// through the same `DomainParams` path); the per-tier
+    /// `accepts_canonical_proof_for_all_tiers` test above already
+    /// covers the cross-tier matrix off-chain.
+    #[test]
+    fn plonk_verifier_fixtures_match_or_regenerate() {
+        use std::fs;
+        use std::path::PathBuf;
+
+        let (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat) =
+            build_canonical_artifact_bytes(5);
+
+        let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("contracts/plonk-verifier/tests/fixtures");
+
+        let regenerate = std::env::var("STELLAR_REGEN_FIXTURES").is_ok();
+
+        if regenerate {
+            fs::create_dir_all(&fixtures_dir).expect("create fixtures dir");
+            fs::write(fixtures_dir.join("vk-d5.bin"), &vk_bytes).unwrap();
+            fs::write(fixtures_dir.join("proof-d5.bin"), &proof_bytes).unwrap();
+            fs::write(fixtures_dir.join("srs-g2-compressed.bin"), srs_g2_compressed).unwrap();
+            fs::write(fixtures_dir.join("pi-d5.bin"), &pi_concat).unwrap();
+            eprintln!(
+                "regenerated plonk-verifier fixtures at {}",
+                fixtures_dir.display()
+            );
+            return;
+        }
+
+        let on_disk = |name: &str| -> Vec<u8> {
+            fs::read(fixtures_dir.join(name)).unwrap_or_else(|_| {
+                panic!(
+                    "fixture {name} missing — run with STELLAR_REGEN_FIXTURES=1 to create it"
+                )
+            })
+        };
+        let drift_msg = "fixture has drifted from prover-side canonical \
+                         artifacts; rerun this test with STELLAR_REGEN_FIXTURES=1 \
+                         to refresh bytes the Soroban plonk-verifier crate ships";
+        assert_eq!(on_disk("vk-d5.bin"), vk_bytes, "vk-d5.bin: {drift_msg}");
+        assert_eq!(on_disk("proof-d5.bin"), proof_bytes, "proof-d5.bin: {drift_msg}");
+        assert_eq!(
+            on_disk("srs-g2-compressed.bin"),
+            srs_g2_compressed,
+            "srs-g2-compressed.bin: {drift_msg}",
+        );
+        assert_eq!(on_disk("pi-d5.bin"), pi_concat, "pi-d5.bin: {drift_msg}");
+    }
 }

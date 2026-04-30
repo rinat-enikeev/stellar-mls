@@ -14,11 +14,15 @@
 //! `VerifyingKey::deserialize_uncompressed`. The parsing logic is
 //! copy-pasted from that reference, so byte-equivalence transfers.
 //!
-//! Real-fixture tests (parse a baked VK and a canonical proof,
-//! cross-check against the Rust reference's parsed output) come in a
-//! follow-up PR — they require either a fixture-generation binary or
-//! a dev-dep on the prover crate, neither of which fits the scope
-//! of this initial parser-port PR.
+//! Real-fixture tests — `verifier::tests::accepts_canonical_proof`,
+//! the rejection-mutation siblings, and
+//! `verifier_aggregate::tests::msm_is_deterministic` — load the
+//! depth-5 canonical artifacts under `tests/fixtures/` directly via
+//! `include_bytes!`. Those bytes are produced (and checksummed) by
+//! the prover-side
+//! `circuit::plonk::verifier::tests::plonk_verifier_fixtures_match_or_regenerate`
+//! test, which doubles as a drift detector when run without
+//! `STELLAR_REGEN_FIXTURES=1`.
 
 use crate::proof_format::{
     FR_LEN, G1_LEN, NUM_WIRE_SIGMA_EVALS, NUM_WIRE_TYPES, PROOF_LEN,

@@ -73,9 +73,13 @@ The SRS source is a single ~400 KB binary plus its hash. To switch to
 e.g. Aztec Ignition (n=2^21, BLS12-381):
 
 1. Replace the input transcript with Aztec's published bytes.
-2. Update `scripts/build/extract-ef-kzg.sh` accordingly.
-3. Re-run the extractor with the new `g1_count` / `g2_count` constants
-   in `src/prover/srs.rs` and `src/bin/extract_ef_kzg.rs`.
-4. Re-pin the hash.
+2. Update the URL in `scripts/build/fetch-ef-kzg.sh` to point at
+   Aztec's transcript endpoint.
+3. Adjust the JSON-key path in `src/bin/extract_ef_kzg.rs` if Aztec's
+   transcript schema differs from EF's `BatchTranscript` shape.
+4. Re-run the extractor with the new `g1_count` / `g2_count`
+   constants in `src/prover/srs.rs` and `src/bin/extract_ef_kzg.rs`.
+5. The extractor writes both `ef-kzg-2023.bin` and
+   `expected-hash.in`; commit both.
 
 No other code changes required.

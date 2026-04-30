@@ -24,14 +24,21 @@ ark-snark = { version = "0.4", optional = true }
 ark-crypto-primitives = { version = "0.4", features = ["crh", "merkle_tree", "sponge", "r1cs"], optional = true }
 
 # --- TurboPlonk stack (jf-plonk + jf-pcs + jf-relation; gated behind `feature = "plonk"`) ---
-# Espresso's jellyfish workspace is git-only; pinned to per-crate tag `jf-plonk-v0.8.0`
-# (workspace revision b33995b6 as of 2026-04-30, also tagged `jf-relation-v0.5.0`).
-# All three deps reference the same tag so Cargo resolves them to the same revision.
-# Re-verify with `git ls-remote --tags https://github.com/EspressoSystems/jellyfish`
-# before bumping.
-jf-plonk    = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.8.0", default-features = false, features = ["std"], optional = true }
-jf-pcs      = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.8.0", default-features = false, features = ["std", "test-srs"], optional = true }
-jf-relation = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.8.0", default-features = false, features = ["std"], optional = true }
+# Espresso's jellyfish workspace is git-only; each constituent crate has its
+# own per-crate release tag. We pin to the SAME tags jf-plonk's own
+# Cargo.toml uses for its transitive deps so Cargo resolves to a single
+# compilation per crate (different tag strings → separate sources, even when
+# they point at the same commit, even though `b33995b6` happens to carry both
+# `jf-plonk-v0.8.0` and `jf-relation-v0.5.0` in our case).
+#
+# Verified 2026-04-30 via `git ls-remote --tags`:
+#   jf-plonk-v0.8.0    (commit b33995b6)
+#   jf-pcs-v0.3.0      (commit f1538793) — what jf-plonk@0.8.0 transitively requires
+#   jf-relation-v0.5.0 (commit b33995b6)
+# Re-verify before bumping.
+jf-plonk    = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-plonk-v0.8.0",    default-features = false, features = ["std"], optional = true }
+jf-pcs      = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-pcs-v0.3.0",      default-features = false, features = ["std", "test-srs"], optional = true }
+jf-relation = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-relation-v0.5.0", default-features = false, features = ["std"], optional = true }
 
 # Arkworks 0.5.x — required by jf-plonk's type system. The existing legacy
 # code uses 0.4.x; both versions coexist (Cargo handles duplicate-version

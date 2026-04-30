@@ -3,9 +3,17 @@
 //!
 //! Pipeline:
 //!     scripts/build/fetch-ef-kzg.sh  ──>  /tmp/ef-kzg-2023-transcript.json (253 MB)
-//!     cargo run --bin extract-ef-kzg --features plonk --release -- \
+//!     cargo run --bin extract-ef-kzg --features extract-tool --release -- \
 //!         /tmp/ef-kzg-2023-transcript.json src/prover/srs/ef-kzg-2023.bin
-//!     shasum -a 256 src/prover/srs/ef-kzg-2023.bin > src/prover/srs/expected-hash.txt
+//!
+//! The bin's `required-features = ["extract-tool"]` (Cargo.toml). With
+//! plain `--features plonk` Cargo silently skips the binary because
+//! `serde_json` isn't activated; pass `--features extract-tool` (which
+//! transitively activates `plonk` + `serde_json`).
+//!
+//! The extractor writes the hash literal to `expected-hash.in`
+//! automatically; the operator no longer needs to compute SHA-256 by
+//! hand.
 //!
 //! The transcript JSON shape (per kzg-ceremony-specs):
 //!     { "transcripts": [

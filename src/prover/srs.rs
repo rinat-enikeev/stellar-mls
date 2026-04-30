@@ -181,25 +181,40 @@ mod tests {
         );
     }
 
-    /// The deserialiser produces a struct with the right counts and a
-    /// non-trivial G1 generator.
+    /// The deserialiser produces a struct whose `[τ^0]_1` and `[τ^0]_2`
+    /// slots equal the canonical BLS12-381 generators.
+    ///
+    /// Exact-equality (rather than just `!is_zero()`) catches an off-by-
+    /// one in the extractor — e.g. starting at τ¹ instead of τ⁰ would
+    /// still produce non-zero points but break the Lagrange-basis
+    /// indexing every PLONK consumer relies on.
     #[test]
     fn srs_loads_into_jf_pcs() {
         let srs = load_ef_kzg_srs().expect("SRS loads");
         assert_eq!(srs.powers_of_g.len(), TARGET_G1);
         assert_eq!(srs.powers_of_h.len(), TARGET_G2);
 
-        // First G1 power is the generator (ZCash convention); should not be
-        // the point at infinity.
         use ark_ec_v05::AffineRepr;
-        assert!(
-            !srs.powers_of_g[0].is_zero(),
-            "powers_of_g[0] is the point at infinity — SRS is corrupt"
+        let g1_gen = G1Affine::generator();
+        let g2_gen = G2Affine::generator();
+        assert_eq!(
+            srs.powers_of_g[0], g1_gen,
+            "powers_of_g[0] != BLS12-381 G1 generator — SRS extraction is off by one or wrong subgroup"
         );
-        assert!(
-            !srs.h.is_zero(),
-            "h is the point at infinity — SRS is corrupt"
+        assert_eq!(
+            srs.h, g2_gen,
+            "h != BLS12-381 G2 generator — SRS extraction is off by one or wrong subgroup"
         );
+        assert_eq!(
+            srs.powers_of_h[0], g2_gen,
+            "powers_of_h[0] != BLS12-381 G2 generator — should equal h"
+        );
+        // beta_h = [τ]_2 must NOT be the generator (would mean τ = 1, breaking soundness).
+        assert_ne!(
+            srs.beta_h, g2_gen,
+            "beta_h == G2 generator implies τ = 1 — ceremony output is broken"
+        );
+        assert!(!srs.beta_h.is_zero(), "beta_h is the point at infinity");
     }
 
     /// Powers-of-tau invariant: e([τ^i]_1, [τ^j]_2) == e([τ^k]_1, [τ^l]_2)

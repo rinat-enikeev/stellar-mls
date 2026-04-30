@@ -955,23 +955,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jf-pcs"
-version = "0.2.0"
-source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-plonk-v0.8.0#b33995b68641a2742e4ad2c05ee4e15621ff43b0"
-dependencies = [
- "ark-ec 0.5.0",
- "ark-ff 0.5.0",
- "ark-poly 0.5.0",
- "ark-serialize 0.5.0",
- "ark-std 0.5.0",
- "derive-where",
- "displaydoc",
- "itertools 0.12.1",
- "jf-utils",
- "merlin",
-]
-
-[[package]]
 name = "jf-plonk"
 version = "0.8.0"
 source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-plonk-v0.8.0#b33995b68641a2742e4ad2c05ee4e15621ff43b0"
@@ -989,8 +972,8 @@ dependencies = [
  "hashbrown 0.14.5",
  "itertools 0.12.1",
  "jf-crhf",
- "jf-pcs 0.2.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-pcs-v0.3.0)",
- "jf-relation 0.5.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-relation-v0.5.0)",
+ "jf-pcs",
+ "jf-relation",
  "jf-rescue",
  "jf-utils",
  "merlin",
@@ -1008,31 +991,6 @@ source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-prf-v0.2.0#f15
 dependencies = [
  "ark-serialize 0.5.0",
  "ark-std 0.5.0",
-]
-
-[[package]]
-name = "jf-relation"
-version = "0.5.0"
-source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-plonk-v0.8.0#b33995b68641a2742e4ad2c05ee4e15621ff43b0"
-dependencies = [
- "ark-bls12-377",
- "ark-bls12-381 0.5.0",
- "ark-bn254",
- "ark-bw6-761",
- "ark-ec 0.5.0",
- "ark-ff 0.5.0",
- "ark-poly 0.5.0",
- "ark-serialize 0.5.0",
- "ark-std 0.5.0",
- "derive-where",
- "displaydoc",
- "downcast-rs",
- "dyn-clone",
- "hashbrown 0.14.5",
- "itertools 0.12.1",
- "jf-utils",
- "num-bigint",
- "rand_chacha",
 ]
 
 [[package]]
@@ -1080,7 +1038,7 @@ dependencies = [
  "jf-commitment",
  "jf-crhf",
  "jf-prf",
- "jf-relation 0.5.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-relation-v0.5.0)",
+ "jf-relation",
  "jf-utils",
  "spongefish",
  "zeroize",
@@ -1409,9 +1367,9 @@ dependencies = [
  "ark-snark 0.4.0",
  "ark-std 0.4.0",
  "ark-std 0.5.0",
- "jf-pcs 0.2.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-plonk-v0.8.0)",
+ "jf-pcs",
  "jf-plonk",
- "jf-relation 0.5.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-plonk-v0.8.0)",
+ "jf-relation",
  "jni",
  "k256",
  "rand",

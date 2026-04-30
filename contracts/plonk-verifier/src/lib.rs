@@ -44,6 +44,7 @@
 #![no_std]
 
 pub mod proof_format;
+pub mod transcript;
 pub mod vk_format;
 
 #[cfg(test)]

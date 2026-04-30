@@ -480,32 +480,46 @@ mod tests {
     /// via `include_bytes!`.
     ///
     /// - Default mode: re-runs the canonical-artifacts pipeline at
-    ///   `depth=5` (smallest tier — fastest test) and asserts the
-    ///   resulting bytes equal what's currently checked into
+    ///   each membership tier (depth=5/8/11) and asserts the resulting
+    ///   bytes equal what's currently checked into
     ///   `contracts/plonk-verifier/tests/fixtures/`. If the prover
-    ///   side ever changes shape (e.g. layout-pin tweak, RNG seed
-    ///   change), this test fails first — surfacing the drift before
-    ///   any verifier code is exercised.
+    ///   side ever changes shape (layout-pin tweak, RNG seed change,
+    ///   per-tier `DomainParams` regression), this test fails first —
+    ///   surfacing the drift before any verifier code is exercised.
     /// - `STELLAR_REGEN_FIXTURES=1`: writes fresh bytes to those
-    ///   four files instead of asserting. Run when the prover output
-    ///   has legitimately changed and the on-chain verifier should
-    ///   pick up the new bytes.
+    ///   files instead of asserting. Run when prover output has
+    ///   legitimately changed and the on-chain verifier should pick
+    ///   up the new bytes.
     ///
-    /// Smallest tier is sufficient because the verifier crate's
-    /// modules are size-agnostic (every `domain_size` ≤ 32768 routes
-    /// through the same `DomainParams` path); the per-tier
-    /// `accepts_canonical_proof_for_all_tiers` test above already
-    /// covers the cross-tier matrix off-chain.
+    /// Bundling all three tiers matters because the *on-chain*
+    /// verifier is what's being shipped — a size-dependent regression
+    /// in `DomainParams` / FFT precompute on the Soroban side could
+    /// slip past the off-chain `accepts_canonical_proof_for_all_tiers`.
+    /// The verifier crate drives `accepts_canonical_proof_d{N}` per
+    /// tier against these fixtures, closing that gap.
     #[test]
     fn plonk_verifier_fixtures_match_or_regenerate() {
         use std::fs;
         use std::path::PathBuf;
 
-        let (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat) =
-            build_canonical_artifact_bytes(5);
-
         let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("contracts/plonk-verifier/tests/fixtures");
+
+        // Defensive guard: `CARGO_MANIFEST_DIR` only resolves to the
+        // right path while `sep-xxxx-circuits` sits at workspace root.
+        // If the prover crate is ever moved (e.g. into `crates/…`),
+        // the join above would silently write to the wrong location;
+        // this assertion fails first with a clear message.
+        let verifier_manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("contracts/plonk-verifier/Cargo.toml");
+        assert!(
+            verifier_manifest.exists(),
+            "CARGO_MANIFEST_DIR ({}) does not contain \
+             contracts/plonk-verifier/Cargo.toml — this test assumes \
+             sep-xxxx-circuits sits at workspace root. Update the \
+             fixtures_dir derivation if the prover crate has moved.",
+            env!("CARGO_MANIFEST_DIR"),
+        );
 
         // Accept only `=1` — `is_ok()` would treat `=0` / `=false` as
         // truthy and silently regenerate, masking drift.
@@ -516,15 +530,6 @@ mod tests {
 
         if regenerate {
             fs::create_dir_all(&fixtures_dir).expect("create fixtures dir");
-            fs::write(fixtures_dir.join("vk-d5.bin"), &vk_bytes).unwrap();
-            fs::write(fixtures_dir.join("proof-d5.bin"), &proof_bytes).unwrap();
-            fs::write(fixtures_dir.join("srs-g2-compressed.bin"), srs_g2_compressed).unwrap();
-            fs::write(fixtures_dir.join("pi-d5.bin"), &pi_concat).unwrap();
-            eprintln!(
-                "regenerated plonk-verifier fixtures at {}",
-                fixtures_dir.display()
-            );
-            return;
         }
 
         let on_disk = |name: &str| -> Vec<u8> {
@@ -537,13 +542,54 @@ mod tests {
         let drift_msg = "fixture has drifted from prover-side canonical \
                          artifacts; rerun this test with STELLAR_REGEN_FIXTURES=1 \
                          to refresh bytes the Soroban plonk-verifier crate ships";
-        assert_eq!(on_disk("vk-d5.bin"), vk_bytes, "vk-d5.bin: {drift_msg}");
-        assert_eq!(on_disk("proof-d5.bin"), proof_bytes, "proof-d5.bin: {drift_msg}");
-        assert_eq!(
-            on_disk("srs-g2-compressed.bin"),
-            srs_g2_compressed,
-            "srs-g2-compressed.bin: {drift_msg}",
-        );
-        assert_eq!(on_disk("pi-d5.bin"), pi_concat, "pi-d5.bin: {drift_msg}");
+
+        // [τ]_2 comes from the EF KZG ceremony and is shared across
+        // tiers — pin it once. Tracked here so any divergence between
+        // tiers' baked VKs (which would indicate a baker bug) trips
+        // this test before reaching the verifier crate.
+        let mut srs_g2_first: Option<[u8; G2_COMPRESSED_LEN]> = None;
+
+        for &depth in &[5usize, 8, 11] {
+            let (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat) =
+                build_canonical_artifact_bytes(depth);
+
+            if let Some(first) = srs_g2_first {
+                assert_eq!(
+                    first, srs_g2_compressed,
+                    "srs-g2 differs between tiers (baker bug?)"
+                );
+            } else {
+                srs_g2_first = Some(srs_g2_compressed);
+            }
+
+            let vk_name = format!("vk-d{depth}.bin");
+            let proof_name = format!("proof-d{depth}.bin");
+            let pi_name = format!("pi-d{depth}.bin");
+
+            if regenerate {
+                fs::write(fixtures_dir.join(&vk_name), &vk_bytes).unwrap();
+                fs::write(fixtures_dir.join(&proof_name), &proof_bytes).unwrap();
+                fs::write(fixtures_dir.join(&pi_name), &pi_concat).unwrap();
+            } else {
+                assert_eq!(on_disk(&vk_name), vk_bytes, "{vk_name}: {drift_msg}");
+                assert_eq!(on_disk(&proof_name), proof_bytes, "{proof_name}: {drift_msg}");
+                assert_eq!(on_disk(&pi_name), pi_concat, "{pi_name}: {drift_msg}");
+            }
+        }
+
+        let srs_g2 = srs_g2_first.expect("at least one tier processed");
+        if regenerate {
+            fs::write(fixtures_dir.join("srs-g2-compressed.bin"), srs_g2).unwrap();
+            eprintln!(
+                "regenerated plonk-verifier fixtures (d5, d8, d11) at {}",
+                fixtures_dir.display()
+            );
+        } else {
+            assert_eq!(
+                on_disk("srs-g2-compressed.bin"),
+                srs_g2.to_vec(),
+                "srs-g2-compressed.bin: {drift_msg}",
+            );
+        }
     }
 }

@@ -631,7 +631,8 @@ mod tests {
     /// Smoke-test for the `multi_scalar_multiply` helper: two
     /// back-to-back calls in the same process on the canonical
     /// depth-5 fixture (real on-curve G1 points, challenges derived
-    /// from the real transcript) produce byte-equal `[D]_1`.
+    /// from the real transcript, `vanish_eval` / `L_0(ζ)` computed
+    /// the same way `verify` does) produce byte-equal `[D]_1`.
     ///
     /// **Scope is narrow.** Two calls in the same process can only
     /// catch *blatant* nondeterminism — uninitialized memory, an
@@ -639,7 +640,7 @@ mod tests {
     /// cross-execution determinism is established by the
     /// consensus-deterministic Soroban host primitives (`g1_msm`,
     /// `fr_*`), not by this test. The end-to-end
-    /// `verifier::tests::accepts_canonical_proof` covers
+    /// `verifier::tests::accepts_canonical_proof_d{5,8,11}` covers
     /// *correctness* of `[D]_1`; this one is a `≠` floor on
     /// *stability* in the same process — useful as a regression net,
     /// not as a determinism proof.
@@ -647,6 +648,9 @@ mod tests {
     fn msm_is_deterministic() {
         use crate::proof_format::{parse_proof_bytes, FR_LEN, PROOF_LEN};
         use crate::verifier_challenges::compute_challenges;
+        use crate::verifier_polys::{
+            evaluate_vanishing_poly, first_and_last_lagrange_coeffs, DomainParams,
+        };
         use crate::vk_format::{parse_vk_bytes, G2_COMPRESSED_LEN, VK_LEN};
         use soroban_sdk::BytesN;
 
@@ -677,23 +681,27 @@ mod tests {
             u: Fr::from_bytes(BytesN::from_array(&env, &raw.u)),
         };
 
-        // Use simple non-zero placeholders for vanish_eval / L_0(ζ);
-        // determinism doesn't depend on these matching the verify-path
-        // values, only on `aggregate_poly_commitments` + the MSM being
-        // a deterministic function of its inputs.
+        // Compute vanish_eval and L_0(ζ) the same way `verify` does
+        // so the determinism check exercises real verify-path inputs,
+        // not arbitrary placeholders.
+        let params = DomainParams::for_size(&env, vk.domain_size);
+        let vanish_eval = evaluate_vanishing_poly(&challenges.zeta, &params);
+        let (lagrange_1_eval, _) =
+            first_and_last_lagrange_coeffs(&challenges.zeta, &vanish_eval, &params);
+
         let agg_a = aggregate_poly_commitments(
             &env,
             &challenges,
-            fr(&env, 7),
-            fr(&env, 11),
+            vanish_eval.clone(),
+            lagrange_1_eval.clone(),
             &vk,
             &proof,
         );
         let agg_b = aggregate_poly_commitments(
             &env,
             &challenges,
-            fr(&env, 7),
-            fr(&env, 11),
+            vanish_eval,
+            lagrange_1_eval,
             &vk,
             &proof,
         );

@@ -290,9 +290,8 @@ mod tests {
 
     /// Bytes regenerated from the prover-side
     /// `plonk_verifier_fixtures_match_or_regenerate` test (the
-    /// off-chain `sep-xxxx-circuits` crate at depth=5 — smallest
-    /// membership tier, fastest to verify on-chain). Re-emit by
-    /// running:
+    /// off-chain `sep-xxxx-circuits` crate, all three membership
+    /// tiers). Re-emit by running:
     ///
     /// ```text
     /// STELLAR_REGEN_FIXTURES=1 cargo test --features plonk \
@@ -303,79 +302,119 @@ mod tests {
     /// from the workspace root. Without the env var that same test
     /// is a drift detector — it asserts these bytes still match what
     /// the canonical-witness pipeline produces today.
-    const FIXTURE_VK: &[u8; crate::vk_format::VK_LEN] =
+    ///
+    /// `[τ]_2` is shared across tiers (single SRS), so only one
+    /// `srs-g2-compressed.bin` ships.
+    const FIXTURE_VK_D5: &[u8; crate::vk_format::VK_LEN] =
         include_bytes!("../tests/fixtures/vk-d5.bin");
-    const FIXTURE_PROOF: &[u8; crate::proof_format::PROOF_LEN] =
+    const FIXTURE_PROOF_D5: &[u8; crate::proof_format::PROOF_LEN] =
         include_bytes!("../tests/fixtures/proof-d5.bin");
-    const FIXTURE_SRS_G2: &[u8; G2_COMPRESSED_LEN] =
-        include_bytes!("../tests/fixtures/srs-g2-compressed.bin");
-    const FIXTURE_PI: &[u8; 2 * FR_LEN] =
+    const FIXTURE_PI_D5: &[u8; 2 * FR_LEN] =
         include_bytes!("../tests/fixtures/pi-d5.bin");
 
-    /// Split the flat 64-byte PI fixture into the `[[u8; 32]; 2]`
-    /// shape `verify` expects.
-    fn fixture_public_inputs() -> [[u8; FR_LEN]; 2] {
+    const FIXTURE_VK_D8: &[u8; crate::vk_format::VK_LEN] =
+        include_bytes!("../tests/fixtures/vk-d8.bin");
+    const FIXTURE_PROOF_D8: &[u8; crate::proof_format::PROOF_LEN] =
+        include_bytes!("../tests/fixtures/proof-d8.bin");
+    const FIXTURE_PI_D8: &[u8; 2 * FR_LEN] =
+        include_bytes!("../tests/fixtures/pi-d8.bin");
+
+    const FIXTURE_VK_D11: &[u8; crate::vk_format::VK_LEN] =
+        include_bytes!("../tests/fixtures/vk-d11.bin");
+    const FIXTURE_PROOF_D11: &[u8; crate::proof_format::PROOF_LEN] =
+        include_bytes!("../tests/fixtures/proof-d11.bin");
+    const FIXTURE_PI_D11: &[u8; 2 * FR_LEN] =
+        include_bytes!("../tests/fixtures/pi-d11.bin");
+
+    const FIXTURE_SRS_G2: &[u8; G2_COMPRESSED_LEN] =
+        include_bytes!("../tests/fixtures/srs-g2-compressed.bin");
+
+    /// Split a flat 64-byte PI fixture into the `[[u8; 32]; 2]` shape
+    /// `verify` expects.
+    fn split_pi(pi: &[u8; 2 * FR_LEN]) -> [[u8; FR_LEN]; 2] {
         let mut out = [[0u8; FR_LEN]; 2];
-        out[0].copy_from_slice(&FIXTURE_PI[..FR_LEN]);
-        out[1].copy_from_slice(&FIXTURE_PI[FR_LEN..]);
+        out[0].copy_from_slice(&pi[..FR_LEN]);
+        out[1].copy_from_slice(&pi[FR_LEN..]);
         out
     }
 
-    /// **Load-bearing.** A canonical proof produced by the
-    /// prover-side at depth=5 verifies on the Soroban-portable
-    /// verifier crate. This is the test the entire C.2 prereq stack
-    /// has been building toward.
-    #[test]
-    fn accepts_canonical_proof() {
+    /// Drive the accept path on a given tier's fixtures. Used by the
+    /// per-tier accept tests to keep test bodies thin while still
+    /// surfacing tier-specific failures distinctly.
+    fn assert_accepts(
+        vk_bytes: &[u8; crate::vk_format::VK_LEN],
+        proof_bytes: &[u8; crate::proof_format::PROOF_LEN],
+        pi: &[u8; 2 * FR_LEN],
+        depth: usize,
+    ) {
         let env = Env::default();
-        let parsed_vk = parse_vk_bytes(FIXTURE_VK).expect("parse vk");
-        let parsed_proof = parse_proof_bytes(FIXTURE_PROOF).expect("parse proof");
-        let public_inputs = fixture_public_inputs();
+        let parsed_vk = parse_vk_bytes(vk_bytes).expect("parse vk");
+        let parsed_proof = parse_proof_bytes(proof_bytes).expect("parse proof");
+        let public_inputs = split_pi(pi);
         let result = verify(&env, &parsed_vk, FIXTURE_SRS_G2, &parsed_proof, &public_inputs);
-        assert_eq!(result, Ok(()), "canonical depth-5 proof was rejected");
+        assert_eq!(
+            result,
+            Ok(()),
+            "canonical depth-{depth} proof was rejected: {result:?}",
+        );
     }
 
-    /// Tampering with the public commitment (input[0]) flips
-    /// acceptance. Catches a bug where public inputs aren't fed into
-    /// the transcript correctly. Mirrors the off-chain
-    /// `rejects_tampered_commitment` test.
+    /// **Load-bearing.** Canonical proof at depth=5 verifies.
+    #[test]
+    fn accepts_canonical_proof_d5() {
+        assert_accepts(FIXTURE_VK_D5, FIXTURE_PROOF_D5, FIXTURE_PI_D5, 5);
+    }
+
+    /// **Load-bearing.** Canonical proof at depth=8 verifies. Pins
+    /// the on-chain `DomainParams` / FFT-precompute path for the
+    /// middle tier — a size-dependent regression here would slip
+    /// past the off-chain `accepts_canonical_proof_for_all_tiers`.
+    #[test]
+    fn accepts_canonical_proof_d8() {
+        assert_accepts(FIXTURE_VK_D8, FIXTURE_PROOF_D8, FIXTURE_PI_D8, 8);
+    }
+
+    /// **Load-bearing.** Canonical proof at depth=11 verifies. Pins
+    /// the largest-domain path on-chain (n=32768).
+    #[test]
+    fn accepts_canonical_proof_d11() {
+        assert_accepts(FIXTURE_VK_D11, FIXTURE_PROOF_D11, FIXTURE_PI_D11, 11);
+    }
+
+    /// Tampering with the public commitment (input[0]) rejects with
+    /// `PairingMismatch`. Catches a bug where public inputs aren't
+    /// fed into the transcript correctly. Mirrors the off-chain
+    /// `rejects_tampered_commitment` test, which pins the same mode.
     ///
-    /// We assert `is_err()` rather than pinning the exact
-    /// `VerifyError` variant. The off-chain reference at
-    /// `src/circuit/plonk/verifier.rs:rejects_tampered_commitment`
-    /// pins the failure mode to `PairingMismatch`; if a future
-    /// refactor adds an earlier sanity gate (e.g. PI canonicality
-    /// pre-check), this test should still pass — only the off-chain
-    /// reference need adapt.
+    /// If a future refactor intentionally adds an earlier sanity gate
+    /// (e.g. PI canonicality pre-check), update both this test and
+    /// the off-chain reference together.
     #[test]
     fn rejects_tampered_commitment() {
         let env = Env::default();
-        let parsed_vk = parse_vk_bytes(FIXTURE_VK).expect("parse vk");
-        let parsed_proof = parse_proof_bytes(FIXTURE_PROOF).expect("parse proof");
-        let mut public_inputs = fixture_public_inputs();
+        let parsed_vk = parse_vk_bytes(FIXTURE_VK_D5).expect("parse vk");
+        let parsed_proof = parse_proof_bytes(FIXTURE_PROOF_D5).expect("parse proof");
+        let mut public_inputs = split_pi(FIXTURE_PI_D5);
         // Flip the LSB (BE) of the commitment — a different valid Fr.
         public_inputs[0][FR_LEN - 1] ^= 0x01;
         let result = verify(&env, &parsed_vk, FIXTURE_SRS_G2, &parsed_proof, &public_inputs);
-        assert!(
-            result.is_err(),
-            "tampered commitment should be rejected: got {result:?}",
+        assert_eq!(
+            result,
+            Err(VerifyError::PairingMismatch),
+            "tampered commitment should reject with PairingMismatch",
         );
     }
 
-    /// Tampering with the epoch (input[1]) also rejects. Catches
-    /// public-input ordering bugs. See `rejects_tampered_commitment`
-    /// for why we don't pin the exact `VerifyError` variant.
+    /// Tampering with the epoch (input[1]) also rejects with
+    /// `PairingMismatch`. Catches public-input ordering bugs.
     #[test]
     fn rejects_tampered_epoch() {
         let env = Env::default();
-        let parsed_vk = parse_vk_bytes(FIXTURE_VK).expect("parse vk");
-        let parsed_proof = parse_proof_bytes(FIXTURE_PROOF).expect("parse proof");
-        let mut public_inputs = fixture_public_inputs();
+        let parsed_vk = parse_vk_bytes(FIXTURE_VK_D5).expect("parse vk");
+        let parsed_proof = parse_proof_bytes(FIXTURE_PROOF_D5).expect("parse proof");
+        let mut public_inputs = split_pi(FIXTURE_PI_D5);
         public_inputs[1][FR_LEN - 1] ^= 0x01;
         let result = verify(&env, &parsed_vk, FIXTURE_SRS_G2, &parsed_proof, &public_inputs);
-        assert!(
-            result.is_err(),
-            "tampered epoch should be rejected: got {result:?}",
-        );
+        assert_eq!(result, Err(VerifyError::PairingMismatch));
     }
 }

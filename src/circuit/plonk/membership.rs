@@ -22,16 +22,13 @@
 //!   medium (depth=8):  ~6,900 raw, padded to next pow2 = 8,192
 //!   large  (depth=11): ~8,800 raw, padded to next pow2 = 16,384
 //!
-//! Small + medium fit the n=16384 EF KZG SRS with comfortable headroom
-//! and are exercised by `membership_round_trip_prove_verify_*_tier`
-//! end-to-end.
-//!
-//! Large (depth=11) lands at the n=16384 SRS ceiling exactly, but
-//! jf-plonk's KZG preprocess needs strictly more powers than gates
-//! (for the quotient polynomial + blinding factors), so depth=11
-//! does **not** prove/verify under n=16384. PR #172 escalates the
-//! SRS to n=32768 (transcript index 3) and adds the depth=11
-//! round-trip there.
+//! All three tiers prove/verify against the embedded n=32768 EF KZG
+//! SRS (transcript index 3) and are exercised end-to-end by
+//! `membership_round_trip_prove_verify_*_tier`. The bump from n=16384
+//! to n=32768 was necessary because jf-plonk's KZG preprocess needs
+//! strictly more powers than gates (for the quotient polynomial +
+//! blinding factors) — at the large tier's padded count of 16,384
+//! exactly, n=16384 is one short.
 
 #![cfg(feature = "plonk")]
 
@@ -277,9 +274,9 @@ mod tests {
     ///
     /// The SRS-degree budget is set by the *finalised* (padded-to-next-pow2)
     /// gate count, so this test finalises the circuit before reading
-    /// `num_gates()` and asserts the finalised count fits the n=16384
-    /// EF KZG SRS ceiling. At depth=11 the finalised count is expected
-    /// to equal 16384 exactly — that's the budget worth tracking.
+    /// `num_gates()` and asserts the finalised count fits the n=32768
+    /// EF KZG SRS ceiling with at least 1 power of headroom (jf-plonk's
+    /// preprocess needs strictly more powers than gates).
     #[test]
     fn gate_count_per_tier() {
         for &depth in &[5usize, 8, 11] {
@@ -296,9 +293,10 @@ mod tests {
                 "[gate-count] MembershipCircuit depth={depth}: {raw} raw, {finalised} finalised"
             );
             assert!(
-                finalised <= 16384,
+                finalised < 32768,
                 "MembershipCircuit at depth={depth} finalises to {finalised} gates, \
-                 exceeds n=16384 EF KZG SRS ceiling. Need n=32768 (transcript index 3)."
+                 needs strictly less than n=32768 EF KZG SRS ceiling for jf-plonk preprocess. \
+                 Need a larger SRS (transcript indices ≥4)."
             );
         }
     }
@@ -316,16 +314,21 @@ mod tests {
     }
 
     /// Same round-trip on the medium tier (depth=8). Catches off-by-one
-    /// in the SRS-vs-domain sizing introduced by the n=4096 → n=16384
-    /// bump, on a circuit larger than the small tier (~6,900 raw gates
-    /// vs ~5,000) but still within comfortable n=16384 headroom.
-    ///
-    /// The large tier (depth=11) lands at the n=16384 ceiling exactly
-    /// and doesn't fit jf-plonk's preprocess (needs n=32768) — its
-    /// round-trip is added in PR #172 alongside the SRS bump.
+    /// in the SRS-vs-domain sizing on a circuit larger than the small
+    /// tier (~6,900 raw gates vs ~5,000).
     #[test]
     fn membership_round_trip_prove_verify_medium_tier() {
         run_round_trip_at_depth(8);
+    }
+
+    /// Same round-trip on the large tier (depth=11). The padded gate
+    /// count is exactly 16,384 — n=16384 is one short for jf-plonk's
+    /// preprocess (quotient + blinding need strictly more powers than
+    /// gates), so this test exercises the n=32768 bump end-to-end
+    /// at the production-relevant depth.
+    #[test]
+    fn membership_round_trip_prove_verify_large_tier() {
+        run_round_trip_at_depth(11);
     }
 
     fn run_round_trip_at_depth(depth: usize) {

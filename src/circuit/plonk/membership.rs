@@ -294,15 +294,13 @@ mod tests {
         let proof = crate::prover::plonk::prove(&mut rng, &keys.pk, &circuit).expect("prove");
 
         let public_inputs = vec![witness.commitment, Fr::from(witness.epoch)];
-        assert!(
-            crate::prover::plonk::verify(&keys.vk, &public_inputs, &proof),
-            "verifier rejected a valid membership proof at depth=5"
-        );
+        crate::prover::plonk::verify(&keys.vk, &public_inputs, &proof)
+            .expect("verifier rejected a valid membership proof at depth=5");
 
         // Tampered public commitment must fail verification.
         let wrong = vec![witness.commitment + Fr::from(1u64), Fr::from(witness.epoch)];
         assert!(
-            !crate::prover::plonk::verify(&keys.vk, &wrong, &proof),
+            crate::prover::plonk::verify(&keys.vk, &wrong, &proof).is_err(),
             "verifier accepted membership proof against wrong public commitment"
         );
     }

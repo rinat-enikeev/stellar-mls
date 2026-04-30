@@ -1,0 +1,33 @@
+[package]
+name = "plonk-verifier"
+version = "0.1.0"
+edition = "2021"
+description = "Soroban-portable PLONK verifier shared by sep-anarchy/democracy/oligarchy/oneonone/tyranny contracts. Re-implements the verifier flow from `sep-xxxx-circuits::circuit::plonk::verifier` using Soroban host primitives (env.crypto().keccak256, env.crypto().bls12_381().{g1_msm, pairing_check, fr_*}). The Rust reference is the spec; this crate is the on-chain implementation, byte-equivalent."
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+doctest = false
+
+[dependencies]
+# Soroban SDK 26.0.0-rc.1 — bumped from the contracts' current 25.3.0
+# floor for this Phase C.2 work. Per-contract bumps follow as each
+# is rewritten to import this crate.
+#
+# rustc floor: 1.91.0 (per soroban-sdk 26's Cargo.toml). Coordinate
+# rustup updates with the rest of the workspace before merging.
+soroban-sdk = "=26.0.0-rc.1"
+
+[dev-dependencies]
+soroban-sdk = { version = "=26.0.0-rc.1", features = ["testutils"] }
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true

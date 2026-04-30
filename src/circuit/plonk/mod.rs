@@ -29,6 +29,7 @@ pub mod baker;
 pub mod transcript;
 pub mod verifier_challenges;
 pub mod verifier_polys;
+pub mod verifier_lin_poly;
 
 #[cfg(test)]
 mod test_vectors;

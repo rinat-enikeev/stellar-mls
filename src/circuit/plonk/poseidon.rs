@@ -34,7 +34,7 @@ use std::sync::OnceLock;
 use ark_bls12_381_v05::Fr;
 use ark_crypto_primitives_v05::sponge::poseidon::{PoseidonConfig, PoseidonSponge};
 use ark_crypto_primitives_v05::sponge::CryptographicSponge;
-use ark_ff_v05::{Field, PrimeField};
+use ark_ff_v05::{Field, PrimeField, Zero};
 
 // Re-exported from the legacy module so we have a single source of truth
 // for the parameter constants. They're plain `pub const` and version-
@@ -103,11 +103,12 @@ pub fn poseidon_hash_one_v05(input: &Fr) -> Fr {
 //   }
 //   output = state[1]                   // squeeze rate position 0
 //
-// Per-hash gate count (rough):
-//   ARK:  3 add_constant per round × 64 rounds = 192
-//   S-box: full 3·3 mul + partial 1·3 mul = 24 + 168 = 192
-//   MDS:  3 lc per round × 64 rounds = 192
-//   Total: ≈ 576 gates per Poseidon hash.
+// Per-hash gate count is empirically ≈626 gates, pinned by
+// `gadget_hash_two_gate_count`. The exact figure depends on how
+// jf-relation composes `add_constant`, the S-box muls, and the
+// width-4 `lc` gates we feed our width-3 state into; tracking it via
+// the test, not arithmetic, keeps the comment honest under upstream
+// changes.
 // ---------------------------------------------------------------------------
 
 use jf_relation::{Circuit, CircuitError, PlonkCircuit, Variable};
@@ -224,7 +225,7 @@ fn apply_mds(
         // jf-relation's `lc` is GATE_WIDTH = 4 wide; pad with a zero
         // wire+coefficient since our state width is 3.
         let wires_in = [s[0], s[1], s[2], zero];
-        let coeffs = [mds[i][0], mds[i][1], mds[i][2], Fr::from(0u64)];
+        let coeffs = [mds[i][0], mds[i][1], mds[i][2], Fr::zero()];
         state[i] = circuit.lc(&wires_in, &coeffs)?;
     }
     Ok(())
@@ -302,14 +303,17 @@ mod tests {
     use super::*;
     use crate::poseidon as v04;
 
-    /// Two calls to `poseidon_config_v05()` must return identical
-    /// parameters — sanity check that derivation is deterministic.
+    /// Two independent invocations of the parameter-build function must
+    /// return identical parameters. Calls `build_poseidon_config_v05`
+    /// directly (twice) to bypass the `OnceLock` cache — `c1 == c2`
+    /// would be by-construction otherwise, since both refs would point
+    /// at the same cached entry.
     #[test]
     fn config_is_deterministic() {
-        let c1 = poseidon_config_v05();
-        let c2 = poseidon_config_v05();
-        // Both refs point to the same OnceLock entry, so this is by-construction.
-        // Verify shape:
+        let c1 = build_poseidon_config_v05();
+        let c2 = build_poseidon_config_v05();
+
+        // Shape:
         assert_eq!(c1.full_rounds, FULL_ROUNDS);
         assert_eq!(c1.partial_rounds, PARTIAL_ROUNDS);
         assert_eq!(c1.alpha, ALPHA);
@@ -323,6 +327,8 @@ mod tests {
         for row in &c1.mds {
             assert_eq!(row.len(), WIDTH);
         }
+
+        // Determinism: same inputs → same constants (independent of the cache).
         assert_eq!(c1.ark, c2.ark);
         assert_eq!(c1.mds, c2.mds);
     }
@@ -479,7 +485,7 @@ mod tests {
     /// Same property for hash_one.
     #[test]
     fn gadget_hash_one_matches_v05_native_at_witness_level() {
-        for &x in &[0u64, 1, 42, 1u64 << 50] {
+        for &x in &[0u64, 1, 42, 1u64 << 50, u64::MAX] {
             let x_v05 = Fr::from(x);
             let expected = poseidon_hash_one_v05(&x_v05);
 

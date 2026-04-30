@@ -228,16 +228,14 @@ mod tests {
     use sha3::{Digest, Keccak256};
     use soroban_sdk::Env;
 
-    /// G1 conversion: a known generator-shaped input round-trips. The
-    /// BLS12-381 G1 generator x is
-    /// `0x17F1D3A7…BB`; arkworks writes BE so the first 48 bytes of
-    /// the uncompressed buffer are exactly this BE form.
+    /// G1 conversion on a non-infinity, no-flags input — both halves
+    /// pass through unchanged. BLS12-381 G1 generator x starts with
+    /// `0x17F1D3A7…`; arkworks writes BE so the first 48 bytes of the
+    /// uncompressed buffer are exactly this BE form.
     #[test]
-    fn g1_le_to_be_strips_only_flag_bits() {
-        // Synthetic non-infinity point: x_be high byte = 0x17 (no flags),
-        // y_be high byte = 0x08 (no flags).
+    fn g1_le_to_be_passes_through_no_flag_input() {
         let mut bytes = [0u8; G1_LEN];
-        bytes[0] = 0x17; // x[0]
+        bytes[0] = 0x17; // x[0] — bits 5-7 already zero, no strip needed
         bytes[1] = 0xF1;
         bytes[G1_HALF] = 0x08; // y[0]
         bytes[G1_HALF + 1] = 0xB3;
@@ -246,6 +244,47 @@ mod tests {
         assert_eq!(x[1], 0xF1);
         assert_eq!(y[0], 0x08);
         assert_eq!(y[1], 0xB3);
+    }
+
+    /// Actually exercise the `bytes[0] &= 0x1F` mask: feed inputs
+    /// where bits 5-7 of `bytes[0]` are set (compression, infinity,
+    /// sort flags, in arkworks-bls12-381 0.5's encoding) and assert
+    /// the high bits are cleared while the low 5 bits + the rest of
+    /// the field element survive untouched.
+    ///
+    /// The previous `g1_le_to_be_passes_through_no_flag_input` would
+    /// have passed even if the mask were removed; this case fails
+    /// without it.
+    #[test]
+    fn g1_le_to_be_strips_high_flag_bits_from_x() {
+        // bytes[0] = 0xBA = 0b1011_1010 — top 3 bits (compression +
+        // sort) set, plus a non-zero low-5-bit field-element value
+        // (0b1_1010 = 0x1A) that must survive the strip.
+        let mut bytes = [0u8; G1_LEN];
+        bytes[0] = 0xBA;
+        bytes[1] = 0xCD;
+        bytes[G1_HALF] = 0x05; // y high byte: bit 7 unset, bits 0-4 = 0x05
+        bytes[G1_HALF + 1] = 0xEF;
+        let (x, y) = arkworks_g1_uncompressed_to_be_xy(&bytes);
+        // x[0] should have bits 5-7 cleared, low 5 bits (0x1A) preserved.
+        assert_eq!(x[0], 0x1A, "x[0] high bits not stripped: got 0x{:02x}", x[0]);
+        // x[1] is untouched.
+        assert_eq!(x[1], 0xCD);
+        // y[0] unchanged (no high bits set).
+        assert_eq!(y[0], 0x05);
+        assert_eq!(y[1], 0xEF);
+    }
+
+    /// Edge case: a hypothetical "all-flags-set" `bytes[0] = 0xE0`
+    /// (bits 5-7 all set, bits 0-4 zero) collapses to `x[0] = 0x00`.
+    /// The point's body bytes (zero in this case) survive intact.
+    #[test]
+    fn g1_le_to_be_strips_all_high_flag_bits() {
+        let mut bytes = [0u8; G1_LEN];
+        bytes[0] = 0xE0; // 0b1110_0000 — top 3 flag bits set, low bits zero
+        let (x, y) = arkworks_g1_uncompressed_to_be_xy(&bytes);
+        assert_eq!(x[0], 0x00);
+        assert_eq!(y[0], 0x00);
     }
 
     /// Infinity point: arkworks-bls12-381 sets bit 6 of `bytes[0]`
@@ -364,4 +403,139 @@ mod tests {
         let chal_raw = t_raw.squeeze();
         assert_eq!(chal_typed, chal_raw);
     }
+
+    /// Walk `append_vk_and_public_inputs` step by step and assert the
+    /// buffered bytes match a manually-concatenated reference stream.
+    /// Mirrors the off-chain reference's
+    /// `append_vk_step_by_step_matches_manual_byte_stream` test
+    /// (`src/circuit/plonk/transcript.rs`).
+    ///
+    /// This pins the most byte-sequence-sensitive function in the
+    /// module: header layout, 12-byte EVM pad, k → BE conversion,
+    /// selector / sigma ordering, infinity-substitution behavior.
+    /// A regression in append ordering surfaces here, not at the
+    /// next phase.
+    ///
+    /// The synthetic VK from `test_fixtures::build_synthetic_vk_bytes`
+    /// has commitment slot first-bytes in the low 5 bits (0x10–0x60
+    /// ranges), so `arkworks_g1_uncompressed_to_be_xy`'s `& 0x1F`
+    /// mask is a no-op on this input — the manual reference stream
+    /// can predict each commitment's byte exactly.
+    #[test]
+    fn append_vk_step_by_step_matches_manual_byte_stream() {
+        use crate::test_fixtures::build_synthetic_vk_bytes;
+        use crate::vk_format::{
+            parse_vk_bytes, NUM_K_CONSTANTS, NUM_SELECTOR_COMMS, NUM_SIGMA_COMMS,
+        };
+
+        let domain_size = 8192u64;
+        let num_inputs = 2u64;
+        let vk_bytes = build_synthetic_vk_bytes(domain_size, num_inputs);
+        let parsed = parse_vk_bytes(&vk_bytes).expect("parse vk");
+
+        // Synthetic SRS G2 element + public inputs.
+        let srs_g2_compressed: [u8; G2_COMPRESSED_LEN] = {
+            let mut a = [0u8; G2_COMPRESSED_LEN];
+            a[0] = 0xDE;
+            a[1] = 0xAD;
+            a
+        };
+        let public_inputs_be: [[u8; FR_LEN]; 2] = {
+            let mut p = [[0u8; FR_LEN]; 2];
+            p[0][0] = 0x70;
+            p[1][0] = 0x71;
+            p
+        };
+
+        // What our port buffers.
+        let env = Env::default();
+        let mut t = SolidityTranscript::new(&env);
+        t.append_vk_and_public_inputs(&parsed, &srs_g2_compressed, &public_inputs_be);
+        let actual = t.buffered_bytes();
+
+        // What jf-plonk's logic would produce, recreated manually.
+        let env2 = Env::default();
+        let mut expected = Bytes::new(&env2);
+        // 1. field size in bits (4 BE)
+        expected.extend_from_array(&FR_MODULUS_BITS.to_be_bytes());
+        // 2. domain size (8 BE u64)
+        expected.extend_from_array(&domain_size.to_be_bytes());
+        // 3. num_inputs (8 BE u64)
+        expected.extend_from_array(&num_inputs.to_be_bytes());
+        // 4. 12-byte EVM word-alignment pad
+        expected.extend_from_array(&[0u8; 12]);
+        // 5. SRS G2 element (96 compressed bytes)
+        expected.extend_from_array(&srs_g2_compressed);
+        // 6. k constants — 5 × Fr BE.
+        // The synthetic VK's k_constants[i][0] = 0x30 + i (LE), all other bytes 0.
+        // Reverse → BE high byte = 0, …, BE last byte = 0x30 + i.
+        for i in 0..NUM_K_CONSTANTS {
+            let mut k_be = [0u8; FR_LEN];
+            k_be[FR_LEN - 1] = 0x30 + i as u8; // last BE byte = first LE byte
+            expected.extend_from_array(&k_be);
+        }
+        // 7. selector commitments — 13 × G1 BE (x||y, 96 B each).
+        // Synthetic selector_commitments[i][0] = 0x20 + i (LE high byte
+        // of x, in BE form bytes[0]). Mask `& 0x1F` is a no-op on
+        // 0x20..0x2C since bits 5-7 are zero (0x20 = 0010_0000…, only
+        // bit 5 set — wait, that DOES get cleared).
+        //
+        // Actually 0x20 = 0010_0000, bit 5 = 1. The mask `& 0x1F` =
+        // `& 0001_1111` clears bits 5-7, so 0x20 → 0x00. Need to
+        // reflect that in the manual reference stream.
+        for i in 0..NUM_SELECTOR_COMMS {
+            let raw_first = 0x20u8 + i as u8;
+            let mut x_be = [0u8; G1_HALF];
+            x_be[0] = raw_first & 0x1F;
+            let y_be = [0u8; G1_HALF];
+            expected.extend_from_array(&x_be);
+            expected.extend_from_array(&y_be);
+        }
+        // 8. sigma commitments — 5 × G1 BE.
+        // sigma_commitments[i][0] = 0x10 + i (LE), masked → 0x10 + i
+        // since 0x10 < 0x20 (bits 5-7 all zero for 0x10..0x14).
+        for i in 0..NUM_SIGMA_COMMS {
+            let raw_first = 0x10u8 + i as u8;
+            let mut x_be = [0u8; G1_HALF];
+            x_be[0] = raw_first & 0x1F;
+            let y_be = [0u8; G1_HALF];
+            expected.extend_from_array(&x_be);
+            expected.extend_from_array(&y_be);
+        }
+        // 9. public inputs.
+        for pi in &public_inputs_be {
+            expected.extend_from_array(pi);
+        }
+
+        assert_eq!(actual.len(), expected.len(), "buffered length mismatch");
+        // Bytes::PartialEq compares contents in the same Env.  Both
+        // builders use independent envs so we copy actual → expected's
+        // env via to_alloc_vec / iter to compare.  Use byte-by-byte
+        // iteration since Bytes doesn't directly support cross-env
+        // equality.
+        let actual_bytes: alloc::vec::Vec<u8> =
+            (0..actual.len()).map(|i| actual.get_unchecked(i)).collect();
+        let expected_bytes: alloc::vec::Vec<u8> =
+            (0..expected.len()).map(|i| expected.get_unchecked(i)).collect();
+        if actual_bytes != expected_bytes {
+            // Find first divergence offset for an actionable error.
+            let off = actual_bytes
+                .iter()
+                .zip(expected_bytes.iter())
+                .position(|(a, b)| a != b)
+                .unwrap_or(actual_bytes.len().min(expected_bytes.len()));
+            let end = (off + 8).min(actual_bytes.len()).min(expected_bytes.len());
+            panic!(
+                "buffered bytes diverge at offset {off}: \
+                 actual[{off}..{end}]={:02x?} expected[{off}..{end}]={:02x?}",
+                &actual_bytes[off..end],
+                &expected_bytes[off..end],
+            );
+        }
+    }
+
+    // The `alloc::vec::Vec` use above requires the `alloc` import;
+    // `soroban-sdk` enables `alloc` transitively for tests via its
+    // testutils feature.
+    extern crate alloc;
 }

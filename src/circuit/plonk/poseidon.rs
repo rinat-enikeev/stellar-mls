@@ -522,15 +522,13 @@ mod tests {
         let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
         let keys = crate::prover::plonk::preprocess(&circuit).expect("preprocess");
         let proof = crate::prover::plonk::prove(&mut rng, &keys.pk, &circuit).expect("prove");
-        assert!(
-            crate::prover::plonk::verify(&keys.vk, &[expected], &proof),
-            "verifier rejected a valid Poseidon-gadget proof"
-        );
+        crate::prover::plonk::verify(&keys.vk, &[expected], &proof)
+            .expect("verifier rejected a valid Poseidon-gadget proof");
 
         // And confirm the verifier rejects a tampered public input.
         let wrong = expected + Fr::from(1u64);
         assert!(
-            !crate::prover::plonk::verify(&keys.vk, &[wrong], &proof),
+            crate::prover::plonk::verify(&keys.vk, &[wrong], &proof).is_err(),
             "verifier accepted Poseidon-gadget proof against wrong public input"
         );
     }

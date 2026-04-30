@@ -42,6 +42,9 @@ use crate::poseidon::poseidon_config;
 pub mod democracy;
 pub mod update;
 
+#[cfg(feature = "plonk")]
+pub mod plonk;
+
 /// The SEP-XXXX membership circuit.
 ///
 /// Proves: "I know a secret key whose Poseidon hash is a leaf in the

@@ -507,7 +507,12 @@ mod tests {
         let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("contracts/plonk-verifier/tests/fixtures");
 
-        let regenerate = std::env::var("STELLAR_REGEN_FIXTURES").is_ok();
+        // Accept only `=1` — `is_ok()` would treat `=0` / `=false` as
+        // truthy and silently regenerate, masking drift.
+        let regenerate = matches!(
+            std::env::var("STELLAR_REGEN_FIXTURES").as_deref(),
+            Ok("1")
+        );
 
         if regenerate {
             fs::create_dir_all(&fixtures_dir).expect("create fixtures dir");

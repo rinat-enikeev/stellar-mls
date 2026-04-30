@@ -628,16 +628,21 @@ mod tests {
         );
     }
 
-    /// The `multi_scalar_multiply` helper is deterministic for fixed
-    /// inputs. Calls `aggregate_poly_commitments` + the MSM twice on
-    /// the canonical depth-5 fixture (real on-curve G1 points,
-    /// challenges derived from the real transcript) and asserts the
-    /// resulting `[D]_1` is byte-equal across runs.
+    /// Smoke-test for the `multi_scalar_multiply` helper: two
+    /// back-to-back calls in the same process on the canonical
+    /// depth-5 fixture (real on-curve G1 points, challenges derived
+    /// from the real transcript) produce byte-equal `[D]_1`.
     ///
-    /// Catches host-MSM nondeterminism — e.g., scalar reduction order,
-    /// affine vs. projective normalisation differences. The
-    /// end-to-end `verifier::tests::accepts_canonical_proof` covers
-    /// the *correctness* of `[D]_1`; this one covers *stability*.
+    /// **Scope is narrow.** Two calls in the same process can only
+    /// catch *blatant* nondeterminism — uninitialized memory, an
+    /// internal RNG, scratch state leaking across calls. Genuine
+    /// cross-execution determinism is established by the
+    /// consensus-deterministic Soroban host primitives (`g1_msm`,
+    /// `fr_*`), not by this test. The end-to-end
+    /// `verifier::tests::accepts_canonical_proof` covers
+    /// *correctness* of `[D]_1`; this one is a `≠` floor on
+    /// *stability* in the same process — useful as a regression net,
+    /// not as a determinism proof.
     #[test]
     fn msm_is_deterministic() {
         use crate::proof_format::{parse_proof_bytes, FR_LEN, PROOF_LEN};

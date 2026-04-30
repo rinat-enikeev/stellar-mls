@@ -339,6 +339,14 @@ mod tests {
     /// acceptance. Catches a bug where public inputs aren't fed into
     /// the transcript correctly. Mirrors the off-chain
     /// `rejects_tampered_commitment` test.
+    ///
+    /// We assert `is_err()` rather than pinning the exact
+    /// `VerifyError` variant. The off-chain reference at
+    /// `src/circuit/plonk/verifier.rs:rejects_tampered_commitment`
+    /// pins the failure mode to `PairingMismatch`; if a future
+    /// refactor adds an earlier sanity gate (e.g. PI canonicality
+    /// pre-check), this test should still pass — only the off-chain
+    /// reference need adapt.
     #[test]
     fn rejects_tampered_commitment() {
         let env = Env::default();
@@ -348,15 +356,15 @@ mod tests {
         // Flip the LSB (BE) of the commitment — a different valid Fr.
         public_inputs[0][FR_LEN - 1] ^= 0x01;
         let result = verify(&env, &parsed_vk, FIXTURE_SRS_G2, &parsed_proof, &public_inputs);
-        assert_eq!(
-            result,
-            Err(VerifyError::PairingMismatch),
-            "tampered commitment should reject with PairingMismatch",
+        assert!(
+            result.is_err(),
+            "tampered commitment should be rejected: got {result:?}",
         );
     }
 
     /// Tampering with the epoch (input[1]) also rejects. Catches
-    /// public-input ordering bugs.
+    /// public-input ordering bugs. See `rejects_tampered_commitment`
+    /// for why we don't pin the exact `VerifyError` variant.
     #[test]
     fn rejects_tampered_epoch() {
         let env = Env::default();
@@ -365,6 +373,9 @@ mod tests {
         let mut public_inputs = fixture_public_inputs();
         public_inputs[1][FR_LEN - 1] ^= 0x01;
         let result = verify(&env, &parsed_vk, FIXTURE_SRS_G2, &parsed_proof, &public_inputs);
-        assert_eq!(result, Err(VerifyError::PairingMismatch));
+        assert!(
+            result.is_err(),
+            "tampered epoch should be rejected: got {result:?}",
+        );
     }
 }

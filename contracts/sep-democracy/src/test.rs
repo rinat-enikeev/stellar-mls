@@ -30,7 +30,10 @@ const DEMO_UPDATE_PI_D11: &[u8; 192] =
     include_bytes!("../../plonk-verifier/tests/fixtures/democracy-update-pi-d11.bin");
 
 const CANONICAL_EPOCH: u64 = 1234;
-const CANONICAL_THRESHOLD: u32 = 5;
+// Matches the K_MAX value baked into democracy-update fixtures across
+// all three tiers (quorum circuit at d=5/d=8, simplified at d=11 with
+// the same value for cross-tier consistency).
+const CANONICAL_THRESHOLD: u32 = 2;
 
 fn membership_proof(env: &Env, tier: u32) -> BytesN<1601> {
     BytesN::from_array(

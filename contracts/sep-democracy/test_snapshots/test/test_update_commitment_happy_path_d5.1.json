@@ -91,7 +91,7 @@
                       "symbol": "commitment"
                     },
                     "val": {
-                      "bytes": "395559c2d8352b5ca65b423f17fa7369a973c417e3001b92239bad514df9ab5e"
+                      "bytes": "4c71aea969a4570827f373e251c353d696eaf1214c727701e57bbfc7abd26c11"
                     }
                   },
                   {
@@ -107,7 +107,7 @@
                       "symbol": "occupancy_commitment"
                     },
                     "val": {
-                      "bytes": "000000000000000000000000000000000000000000000000000000000000a111"
+                      "bytes": "29085ebdbdf81d3a3efeb6c3be435c46af5da33c01f2938fb59dd2522de260cc"
                     }
                   },
                   {
@@ -115,7 +115,7 @@
                       "symbol": "threshold_numerator"
                     },
                     "val": {
-                      "u32": 5
+                      "u32": 2
                     }
                   },
                   {
@@ -177,7 +177,7 @@
                           "symbol": "commitment"
                         },
                         "val": {
-                          "bytes": "64a74d94d446795d873becca6719ca0efe4247d29a653e276d4f1f5ae07cfbc8"
+                          "bytes": "4125cb836a52ed96cfbf708a6587e8dd4f9d3df7664e24612d04f0c13b401d49"
                         }
                       },
                       {
@@ -193,7 +193,7 @@
                           "symbol": "occupancy_commitment"
                         },
                         "val": {
-                          "bytes": "000000000000000000000000000000000000000000000000000000000000a110"
+                          "bytes": "25d6064751425d3e031b767665104a773903183daf4380ae1d78f3f9940a8f86"
                         }
                       },
                       {
@@ -201,7 +201,7 @@
                           "symbol": "threshold_numerator"
                         },
                         "val": {
-                          "u32": 5
+                          "u32": 2
                         }
                       },
                       {
@@ -243,7 +243,7 @@
                     "symbol": "UsedProof"
                   },
                   {
-                    "bytes": "74beb787365db92dd40aa90e72e215eed53792a5053c0163fcd08d73891ce684"
+                    "bytes": "183c36ebf5de6a96213cbf63a6bd8d762d1cce14227eb64b58906a92c0586ed7"
                   }
                 ]
               },

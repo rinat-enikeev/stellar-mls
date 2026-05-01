@@ -27,7 +27,8 @@ use jf_relation::PlonkCircuit;
 use sha2::{Digest, Sha256};
 
 use crate::circuit::plonk::democracy::{
-    synthesize_democracy_update, DemocracyUpdateWitness,
+    synthesize_democracy_update, synthesize_democracy_update_quorum, DemocracySigner,
+    DemocracyUpdateQuorumWitness, DemocracyUpdateWitness, K_MAX as DEMOCRACY_K_MAX,
 };
 use crate::circuit::plonk::membership::{synthesize_membership, MembershipWitness};
 use crate::circuit::plonk::oligarchy::{
@@ -151,10 +152,15 @@ pub const ONEONONE_CREATE_VK_SHA256_HEX: &str =
     "1be7b883e1d6a62f204239439bcaf5a2ad437eb6013bf75b43c9eea0a08c207d";
 
 /// Pinned anchors for democracy-update VK shape per tier.
+///
+/// SMALL (d=5) and MEDIUM (d=8) anchor the **K-of-N quorum** circuit
+/// (`synthesize_democracy_update_quorum`). LARGE (d=11) anchors the
+/// **simplified single-signer** fallback (`synthesize_democracy_update`)
+/// because the quorum circuit blows the n=32768 SRS ceiling at depth 11.
 pub const DEMOCRACY_UPDATE_VK_SHA256_HEX_SMALL: &str =
-    "9772ebfa43f87d005628fe610d29d11d8dfeeafdc350724a21d41c43becafe70";
+    "3552128957a91c2d8cceadc6ef3a9c693784dabe13c415148c51116b23bd3cb9";
 pub const DEMOCRACY_UPDATE_VK_SHA256_HEX_MEDIUM: &str =
-    "cd3aaaeb26926d89c494fbf03506b8558e53dc055c5bff041b7e10cacc70f3e5";
+    "5159a426bbc1dd2d66d4bf986909c414dfe039feb74829d438f6dc5218231fb6";
 pub const DEMOCRACY_UPDATE_VK_SHA256_HEX_LARGE: &str =
     "73d120375c3edd0d793bb089bd42a2a9955d0ddb460b0d07cc67246ab579760e";
 
@@ -175,7 +181,14 @@ pub fn build_canonical_democracy_update_witness(depth: usize) -> DemocracyUpdate
     let salt_new: [u8; 32] = [0xFFu8; 32];
     let occ_old = Fr::from(0xA110u64);
     let occ_new = Fr::from(0xA111u64);
-    let threshold = 5u64;
+    // Aligned with `build_canonical_democracy_update_quorum_witness` so
+    // all three tiers' fixtures carry the same `threshold_numerator` PI
+    // value — sep-democracy's contract test suite then uses a single
+    // `CANONICAL_THRESHOLD` constant. The simplified circuit doesn't
+    // constrain threshold so any value would synthesize, but matching
+    // the quorum circuit (`K_MAX = 2`) keeps the cross-tier story
+    // uniform.
+    let threshold = DEMOCRACY_K_MAX as u64;
 
     let leaves: Vec<Fr> = secret_keys.iter().map(poseidon_hash_one_v05).collect();
     let num_leaves = 1usize << depth;
@@ -223,13 +236,110 @@ pub fn build_canonical_democracy_update_witness(depth: usize) -> DemocracyUpdate
     }
 }
 
+/// Canonical witness for the K-of-N quorum democracy-update circuit
+/// (d=5 / d=8 — the depths where it fits the n=32768 SRS budget).
+/// Mirrors `build_canonical_democracy_update_witness`'s deterministic
+/// secret-key set + epoch + salts so the two circuits share an
+/// occupancy/commitment lineage at fixture-generation time.
+pub fn build_canonical_democracy_update_quorum_witness(
+    depth: usize,
+) -> DemocracyUpdateQuorumWitness {
+    let secret_keys: Vec<Fr> = (1u64..=8).map(Fr::from).collect();
+    let epoch_old: u64 = 1234;
+    let salt_old: [u8; 32] = [0xEEu8; 32];
+    let salt_new: [u8; 32] = [0xFFu8; 32];
+    let salt_oc_old = Fr::from(0x55u64);
+    let salt_oc_new = Fr::from(0x66u64);
+    let count_old: u64 = 5;
+    let count_new: u64 = 5;
+    let threshold: u64 = DEMOCRACY_K_MAX as u64;
+
+    let leaves: Vec<Fr> = secret_keys.iter().map(poseidon_hash_one_v05).collect();
+    let num_leaves = 1usize << depth;
+    let mut nodes = vec![Fr::from(0u64); 2 * num_leaves];
+    for (i, leaf) in leaves.iter().enumerate() {
+        nodes[num_leaves + i] = *leaf;
+    }
+    for i in (1..num_leaves).rev() {
+        nodes[i] = poseidon_hash_two_v05(&nodes[2 * i], &nodes[2 * i + 1]);
+    }
+    let root = nodes[1];
+
+    let mut paths: Vec<Vec<Fr>> = Vec::with_capacity(DEMOCRACY_K_MAX);
+    for prover_index in 0..DEMOCRACY_K_MAX {
+        let mut path = Vec::with_capacity(depth);
+        let mut cur = num_leaves + prover_index;
+        for _ in 0..depth {
+            let sib = if cur % 2 == 0 { cur + 1 } else { cur - 1 };
+            path.push(nodes[sib]);
+            cur /= 2;
+        }
+        paths.push(path);
+    }
+
+    let occ_old = poseidon_hash_two_v05(&Fr::from(count_old), &salt_oc_old);
+    let occ_new = poseidon_hash_two_v05(&Fr::from(count_new), &salt_oc_new);
+
+    let salt_old_fr = Fr::from_le_bytes_mod_order(&salt_old);
+    let salt_new_fr = Fr::from_le_bytes_mod_order(&salt_new);
+    let inner_old = poseidon_hash_two_v05(&root, &Fr::from(epoch_old));
+    let mid_old = poseidon_hash_two_v05(&inner_old, &salt_old_fr);
+    let c_old = poseidon_hash_two_v05(&mid_old, &occ_old);
+    let inner_new = poseidon_hash_two_v05(&root, &Fr::from(epoch_old + 1));
+    let mid_new = poseidon_hash_two_v05(&inner_new, &salt_new_fr);
+    let c_new = poseidon_hash_two_v05(&mid_new, &occ_new);
+
+    let signers: [DemocracySigner; DEMOCRACY_K_MAX] = core::array::from_fn(|i| DemocracySigner {
+        secret_key: secret_keys[i],
+        merkle_path: paths[i].clone(),
+        leaf_index: i,
+        active: true,
+    });
+
+    DemocracyUpdateQuorumWitness {
+        c_old,
+        epoch_old,
+        c_new,
+        occupancy_commitment_old: occ_old,
+        occupancy_commitment_new: occ_new,
+        threshold_numerator: threshold,
+        signers,
+        member_root_old: root,
+        member_root_new: root,
+        member_count_old: count_old,
+        member_count_new: count_new,
+        salt_oc_old,
+        salt_oc_new,
+        salt_old,
+        salt_new,
+        depth,
+    }
+}
+
+/// Bake the democracy-update VK for the given depth. Tier 0/1 (d=5,
+/// d=8) bake the K-of-N quorum circuit; tier 2 (d=11) falls back to
+/// the simplified single-signer circuit because the quorum circuit
+/// blows the n=32768 SRS ceiling at depth 11. Public-input shape (6
+/// fields) is identical across both circuits, so the on-chain
+/// verifier surface is unchanged.
 pub fn bake_democracy_update_vk(depth: usize) -> Result<Vec<u8>, BakeError> {
     if pinned_democracy_update_vk_sha256_hex(depth).is_none() {
         return Err(BakeError::UnsupportedDepth(depth));
     }
-    let witness = build_canonical_democracy_update_witness(depth);
     let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
-    synthesize_democracy_update(&mut circuit, &witness).map_err(BakeError::Synthesize)?;
+    match depth {
+        5 | 8 => {
+            let witness = build_canonical_democracy_update_quorum_witness(depth);
+            synthesize_democracy_update_quorum(&mut circuit, &witness)
+                .map_err(BakeError::Synthesize)?;
+        }
+        11 => {
+            let witness = build_canonical_democracy_update_witness(depth);
+            synthesize_democracy_update(&mut circuit, &witness)
+                .map_err(BakeError::Synthesize)?;
+        }
+        _ => return Err(BakeError::UnsupportedDepth(depth)),
+    }
     circuit
         .finalize_for_arithmetization()
         .map_err(BakeError::Synthesize)?;

@@ -90,7 +90,7 @@
                       "symbol": "commitment"
                     },
                     "val": {
-                      "bytes": "64a74d94d446795d873becca6719ca0efe4247d29a653e276d4f1f5ae07cfbc8"
+                      "bytes": "4125cb836a52ed96cfbf708a6587e8dd4f9d3df7664e24612d04f0c13b401d49"
                     }
                   },
                   {
@@ -114,7 +114,7 @@
                       "symbol": "threshold_numerator"
                     },
                     "val": {
-                      "u32": 5
+                      "u32": 2
                     }
                   },
                   {

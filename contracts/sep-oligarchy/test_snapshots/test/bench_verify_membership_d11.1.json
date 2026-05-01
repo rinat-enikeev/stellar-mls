@@ -90,7 +90,7 @@
                       "symbol": "admin_threshold_numerator"
                     },
                     "val": {
-                      "u32": 5
+                      "u32": 1
                     }
                   },
                   {
@@ -98,7 +98,7 @@
                       "symbol": "commitment"
                     },
                     "val": {
-                      "bytes": "4aec773c1368340b9f716cf7b12e93722608ce8db8c338f7eb2b3af912ee5407"
+                      "bytes": "0f79fc4f187aab4b6a906493b00c396951da35f6e0e278a728b6382d81152c98"
                     }
                   },
                   {
@@ -106,7 +106,7 @@
                       "symbol": "epoch"
                     },
                     "val": {
-                      "u64": "1234"
+                      "u64": "0"
                     }
                   },
                   {

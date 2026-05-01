@@ -30,6 +30,10 @@ use crate::circuit::plonk::democracy::{
     synthesize_democracy_update, DemocracyUpdateWitness,
 };
 use crate::circuit::plonk::membership::{synthesize_membership, MembershipWitness};
+use crate::circuit::plonk::oligarchy::{
+    synthesize_oligarchy_create, synthesize_oligarchy_update, OligarchyCreateWitness,
+    OligarchyUpdateWitness,
+};
 use crate::circuit::plonk::oneonone_create::{
     synthesize_oneonone_create, OneOnOneCreateWitness, DEPTH as ONEONONE_DEPTH,
 };
@@ -226,6 +230,91 @@ pub fn bake_democracy_update_vk(depth: usize) -> Result<Vec<u8>, BakeError> {
     let witness = build_canonical_democracy_update_witness(depth);
     let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
     synthesize_democracy_update(&mut circuit, &witness).map_err(BakeError::Synthesize)?;
+    circuit
+        .finalize_for_arithmetization()
+        .map_err(BakeError::Synthesize)?;
+    let keys = plonk::preprocess(&circuit).map_err(BakeError::Preprocess)?;
+    let mut vk_bytes = Vec::new();
+    keys.vk
+        .serialize_uncompressed(&mut vk_bytes)
+        .map_err(BakeError::Serialize)?;
+    Ok(vk_bytes)
+}
+
+/// Pinned SHA-256 anchors for oligarchy create + update VK shapes.
+/// Single-tier (the simplified PLONK port doesn't use depth — the
+/// circuit's commitment binding is depth-agnostic since it doesn't
+/// open Merkle paths in this initial port).
+pub const OLIGARCHY_CREATE_VK_SHA256_HEX: &str =
+    "07ca92baabded97d241d11e378203bb2d45c955a1641c02a581e2f2df42a1a25";
+pub const OLIGARCHY_UPDATE_VK_SHA256_HEX: &str =
+    "d11ba6ac3d30918b0d8ee29eec8de9f162fbc4a5d3614b0dfb1dcbfbf90c31b0";
+
+pub fn build_canonical_oligarchy_create_witness() -> OligarchyCreateWitness {
+    let occ = Fr::from(0xA110u64);
+    let member_root = Fr::from(0xCAFEu64);
+    let admin_root = Fr::from(0xADADu64);
+    let salt = Fr::from(0xEEEEu64);
+    let inner = poseidon_hash_two_v05(&member_root, &Fr::from(0u64));
+    let mid = poseidon_hash_two_v05(&inner, &salt);
+    let admin_mix = poseidon_hash_two_v05(&occ, &admin_root);
+    let commitment = poseidon_hash_two_v05(&mid, &admin_mix);
+    OligarchyCreateWitness {
+        commitment,
+        occupancy_commitment: occ,
+        member_root,
+        admin_root,
+        salt_initial: salt,
+    }
+}
+
+pub fn build_canonical_oligarchy_update_witness() -> OligarchyUpdateWitness {
+    let member_root = Fr::from(0xCAFEu64);
+    let salt_old = Fr::from(0xEEEEu64);
+    let salt_new = Fr::from(0xFFFFu64);
+    let occ_old = Fr::from(0xA110u64);
+    let occ_new = Fr::from(0xA111u64);
+    let epoch_old = 1234u64;
+    let threshold = 5u64;
+    let inner_old = poseidon_hash_two_v05(&member_root, &Fr::from(epoch_old));
+    let mid_old = poseidon_hash_two_v05(&inner_old, &salt_old);
+    let c_old = poseidon_hash_two_v05(&mid_old, &occ_old);
+    let inner_new = poseidon_hash_two_v05(&member_root, &Fr::from(epoch_old + 1));
+    let mid_new = poseidon_hash_two_v05(&inner_new, &salt_new);
+    let c_new = poseidon_hash_two_v05(&mid_new, &occ_new);
+    OligarchyUpdateWitness {
+        c_old,
+        epoch_old,
+        c_new,
+        occupancy_commitment_old: occ_old,
+        occupancy_commitment_new: occ_new,
+        admin_threshold_numerator: threshold,
+        member_root_old: member_root,
+        member_root_new: member_root,
+        salt_old,
+        salt_new,
+    }
+}
+
+pub fn bake_oligarchy_create_vk() -> Result<Vec<u8>, BakeError> {
+    let witness = build_canonical_oligarchy_create_witness();
+    let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+    synthesize_oligarchy_create(&mut circuit, &witness).map_err(BakeError::Synthesize)?;
+    circuit
+        .finalize_for_arithmetization()
+        .map_err(BakeError::Synthesize)?;
+    let keys = plonk::preprocess(&circuit).map_err(BakeError::Preprocess)?;
+    let mut vk_bytes = Vec::new();
+    keys.vk
+        .serialize_uncompressed(&mut vk_bytes)
+        .map_err(BakeError::Serialize)?;
+    Ok(vk_bytes)
+}
+
+pub fn bake_oligarchy_update_vk() -> Result<Vec<u8>, BakeError> {
+    let witness = build_canonical_oligarchy_update_witness();
+    let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+    synthesize_oligarchy_update(&mut circuit, &witness).map_err(BakeError::Synthesize)?;
     circuit
         .finalize_for_arithmetization()
         .map_err(BakeError::Synthesize)?;
@@ -821,5 +910,24 @@ mod tests {
             }
         }
         assert!(mismatches.is_empty(), "democracy-update VK pin drift:\n  {}", mismatches.join("\n  "));
+    }
+
+    /// Anchor for oligarchy create + update VK shapes.
+    #[test]
+    fn bake_oligarchy_vks_match_pinned() {
+        let mut mismatches = Vec::new();
+        let create_computed = vk_sha256_hex(&bake_oligarchy_create_vk().unwrap());
+        if create_computed != OLIGARCHY_CREATE_VK_SHA256_HEX {
+            mismatches.push(format!(
+                "oligarchy-create: computed={create_computed}, pinned={OLIGARCHY_CREATE_VK_SHA256_HEX}"
+            ));
+        }
+        let update_computed = vk_sha256_hex(&bake_oligarchy_update_vk().unwrap());
+        if update_computed != OLIGARCHY_UPDATE_VK_SHA256_HEX {
+            mismatches.push(format!(
+                "oligarchy-update: computed={update_computed}, pinned={OLIGARCHY_UPDATE_VK_SHA256_HEX}"
+            ));
+        }
+        assert!(mismatches.is_empty(), "oligarchy VK pin drift:\n  {}", mismatches.join("\n  "));
     }
 }

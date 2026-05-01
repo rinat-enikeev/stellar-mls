@@ -115,16 +115,17 @@ enum DemoFixtures {
     private static func makeMessages(
         groupID: String,
         now: Date,
-        entries: [(sender: String, text: String, isMine: Bool, offsetSeconds: TimeInterval)]
+        entries: [(String, String, Bool, Int)]
     ) -> [ChatMessage] {
-        entries.enumerated().map { idx, entry in
-            ChatMessage(
+        entries.enumerated().map { idx, tuple in
+            let (sender, text, isMine, offsetSeconds) = tuple
+            return ChatMessage(
                 id: "demo-\(groupID.prefix(8))-\(idx)",
                 groupID: groupID,
-                senderPubkey: entry.isMine ? "" : entry.sender,
-                text: entry.text,
-                timestamp: now.addingTimeInterval(entry.offsetSeconds),
-                isMine: entry.isMine,
+                senderPubkey: isMine ? "" : sender,
+                text: text,
+                timestamp: now.addingTimeInterval(TimeInterval(offsetSeconds)),
+                isMine: isMine,
                 status: .delivered
             )
         }

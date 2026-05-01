@@ -161,6 +161,7 @@ struct OnboardingView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .padding(.horizontal, 32)
+            .accessibilityIdentifier(TestIDs.Onboarding.primary)
 
             if !isRevisit {
                 Button("Restore from Recovery Phrase") {

@@ -28,6 +28,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import chat.onym.android.ui.TestTags
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -190,7 +192,7 @@ fun StellarChatNavHost(
     Scaffold(
         bottomBar = {
             if (showBottomBar) {
-                NavigationBar {
+                NavigationBar(modifier = Modifier.testTag(TestTags.BottomNav.Bar)) {
                     tabs.forEach { tab ->
                         NavigationBarItem(
                             selected = currentRoute == tab.route,
@@ -204,7 +206,8 @@ fun StellarChatNavHost(
                                 }
                             },
                             icon = { Icon(tab.icon, contentDescription = tab.label) },
-                            label = { Text(tab.label) }
+                            label = { Text(tab.label) },
+                            modifier = Modifier.testTag(TestTags.BottomNav.item(tab.route))
                         )
                     }
                 }

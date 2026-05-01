@@ -112,6 +112,7 @@ struct GroupListView: View {
                 }
             }
         }
+        .accessibilityIdentifier(TestIDs.GroupList.screen)
         .navigationTitle("Chats")
         .toolbarTitleMenu {
             if !appState.isRelayConnected {
@@ -165,6 +166,8 @@ struct GroupListView: View {
                     } label: {
                         Image(systemName: "plus")
                     }
+                    .accessibilityIdentifier(TestIDs.GroupList.plusMenu)
+                    .accessibilityLabel("Add Group")
                 }
             }
         }
@@ -263,6 +266,8 @@ struct GroupRow: View {
                             Image(systemName: "pin.fill")
                                 .foregroundStyle(.orange)
                                 .font(.caption2)
+                                .accessibilityIdentifier(TestIDs.GroupList.pinnedIndicator)
+                                .accessibilityLabel("Pinned")
                         }
                         if group.forkedFromGroupID != nil {
                             Image(systemName: "arrow.triangle.branch")

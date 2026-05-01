@@ -30,7 +30,12 @@ const DEMO_UPDATE_PI_D11: &[u8; 192] =
     include_bytes!("../../plonk-verifier/tests/fixtures/democracy-update-pi-d11.bin");
 
 const CANONICAL_EPOCH: u64 = 1234;
-const CANONICAL_THRESHOLD: u32 = 5;
+// Matches the threshold value baked into democracy-update fixtures
+// across all three tiers. The quorum circuit at d=5/d=8 is exercised
+// non-trivially with `slack = K_MAX - threshold = 1`; the simplified
+// circuit at d=11 doesn't constrain threshold but uses the same value
+// for cross-tier consistency.
+const CANONICAL_THRESHOLD: u32 = 1;
 
 fn membership_proof(env: &Env, tier: u32) -> BytesN<1601> {
     BytesN::from_array(
@@ -343,7 +348,7 @@ fn test_update_commitment_rejects_wrong_threshold_pi() {
     let upi = pi_update(&env, 0);
     let c_old = upi.get(0).unwrap();
     let occ_old = upi.get(3).unwrap();
-    // Inject with threshold=99 but the canonical PI uses threshold=5
+    // Inject with threshold=99 but the canonical PI uses threshold=CANONICAL_THRESHOLD (1)
     inject_group(
         &env,
         &contract_id,

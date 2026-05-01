@@ -114,7 +114,7 @@
                       "symbol": "threshold_numerator"
                     },
                     "val": {
-                      "u32": 5
+                      "u32": 1
                     }
                   },
                   {

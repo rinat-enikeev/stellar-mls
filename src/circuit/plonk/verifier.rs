@@ -300,12 +300,15 @@ mod tests {
         bake_democracy_update_vk, bake_membership_vk, bake_oligarchy_create_vk,
         bake_oligarchy_update_vk, bake_oneonone_create_vk, bake_tyranny_create_vk,
         bake_tyranny_update_vk, bake_update_vk,
+        build_canonical_democracy_update_quorum_witness,
         build_canonical_democracy_update_witness, build_canonical_membership_witness,
         build_canonical_oligarchy_create_witness, build_canonical_oligarchy_update_witness,
         build_canonical_oneonone_create_witness, build_canonical_tyranny_create_witness,
         build_canonical_tyranny_update_witness, build_canonical_update_witness,
     };
-    use crate::circuit::plonk::democracy::synthesize_democracy_update;
+    use crate::circuit::plonk::democracy::{
+        synthesize_democracy_update, synthesize_democracy_update_quorum,
+    };
     use crate::circuit::plonk::membership::synthesize_membership;
     use crate::circuit::plonk::oligarchy::{
         synthesize_oligarchy_create, synthesize_oligarchy_update,
@@ -591,9 +594,38 @@ mod tests {
         depth: usize,
     ) -> (Vec<u8>, Vec<u8>, [u8; G2_COMPRESSED_LEN], Vec<u8>) {
         let vk_bytes = bake_democracy_update_vk(depth).expect("bake democracy-update vk");
-        let witness = build_canonical_democracy_update_witness(depth);
         let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
-        synthesize_democracy_update(&mut circuit, &witness).unwrap();
+        // Depth dispatch mirrors `bake_democracy_update_vk`: d=5/d=8
+        // use the quorum circuit, d=11 falls back to the simplified
+        // single-signer circuit. Both expose the same 6-field PI.
+        let pi_fields: [Fr; 6] = match depth {
+            5 | 8 => {
+                let w = build_canonical_democracy_update_quorum_witness(depth);
+                synthesize_democracy_update_quorum(&mut circuit, &w).unwrap();
+                [
+                    w.c_old,
+                    Fr::from(w.epoch_old),
+                    w.c_new,
+                    w.occupancy_commitment_old,
+                    w.occupancy_commitment_new,
+                    Fr::from(w.threshold_numerator),
+                ]
+            }
+            // TODO(#204): d=11 quorum — see baker.rs's matching arm.
+            11 => {
+                let w = build_canonical_democracy_update_witness(depth);
+                synthesize_democracy_update(&mut circuit, &w).unwrap();
+                [
+                    w.c_old,
+                    Fr::from(w.epoch_old),
+                    w.c_new,
+                    w.occupancy_commitment_old,
+                    w.occupancy_commitment_new,
+                    Fr::from(w.threshold_numerator),
+                ]
+            }
+            _ => unreachable!("guarded by bake_democracy_update_vk depth check"),
+        };
         circuit.finalize_for_arithmetization().unwrap();
         let keys = plonk::preprocess(&circuit).unwrap();
         let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
@@ -607,14 +639,7 @@ mod tests {
             super::compress_g2_for_transcript(&parsed_vk.open_key_powers_of_h[1])
                 .expect("compress");
         let mut pi_concat = Vec::with_capacity(6 * FR_LEN);
-        for fr in [
-            witness.c_old,
-            Fr::from(witness.epoch_old),
-            witness.c_new,
-            witness.occupancy_commitment_old,
-            witness.occupancy_commitment_new,
-            Fr::from(witness.threshold_numerator),
-        ] {
+        for fr in pi_fields {
             pi_concat.extend_from_slice(&fr.into_bigint().to_bytes_be());
         }
         (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat)

@@ -115,7 +115,7 @@
                       "symbol": "threshold_numerator"
                     },
                     "val": {
-                      "u32": 5
+                      "u32": 1
                     }
                   },
                   {
@@ -201,7 +201,7 @@
                           "symbol": "threshold_numerator"
                         },
                         "val": {
-                          "u32": 5
+                          "u32": 1
                         }
                       },
                       {
@@ -243,7 +243,7 @@
                     "symbol": "UsedProof"
                   },
                   {
-                    "bytes": "bb9158ba46bc0852926cc9732abda62e156dd0449a2f7f5037640a0e8bc9a137"
+                    "bytes": "1d8e282a0dbd4b6a40ab369bc75f433a8506f85cc13fce5c69b4b3312debe0ad"
                   }
                 ]
               },

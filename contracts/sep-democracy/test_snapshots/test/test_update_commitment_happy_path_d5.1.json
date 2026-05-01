@@ -91,7 +91,7 @@
                       "symbol": "commitment"
                     },
                     "val": {
-                      "bytes": "4c71aea969a4570827f373e251c353d696eaf1214c727701e57bbfc7abd26c11"
+                      "bytes": "331a2c8f50df8f875291abba684cf48c64e39b3f85f23b97fad93116bd4fe32f"
                     }
                   },
                   {
@@ -107,7 +107,7 @@
                       "symbol": "occupancy_commitment"
                     },
                     "val": {
-                      "bytes": "29085ebdbdf81d3a3efeb6c3be435c46af5da33c01f2938fb59dd2522de260cc"
+                      "bytes": "14ba3d10f0bfc4b01d36773c333d44e410404bc5aed55b1c503fb42f88f5d412"
                     }
                   },
                   {
@@ -115,7 +115,7 @@
                       "symbol": "threshold_numerator"
                     },
                     "val": {
-                      "u32": 2
+                      "u32": 1
                     }
                   },
                   {
@@ -201,7 +201,7 @@
                           "symbol": "threshold_numerator"
                         },
                         "val": {
-                          "u32": 2
+                          "u32": 1
                         }
                       },
                       {
@@ -243,7 +243,7 @@
                     "symbol": "UsedProof"
                   },
                   {
-                    "bytes": "183c36ebf5de6a96213cbf63a6bd8d762d1cce14227eb64b58906a92c0586ed7"
+                    "bytes": "cd628c882d0f8edcc49102357b8b6cae5c29879106b5806e1e8aec2c347ac381"
                   }
                 ]
               },

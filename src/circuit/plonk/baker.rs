@@ -183,12 +183,10 @@ pub fn build_canonical_democracy_update_witness(depth: usize) -> DemocracyUpdate
     let occ_new = Fr::from(0xA111u64);
     // Aligned with `build_canonical_democracy_update_quorum_witness` so
     // all three tiers' fixtures carry the same `threshold_numerator` PI
-    // value — sep-democracy's contract test suite then uses a single
+    // value — sep-democracy's contract test suite uses a single
     // `CANONICAL_THRESHOLD` constant. The simplified circuit doesn't
-    // constrain threshold so any value would synthesize, but matching
-    // the quorum circuit (`K_MAX = 2`) keeps the cross-tier story
-    // uniform.
-    let threshold = DEMOCRACY_K_MAX as u64;
+    // constrain threshold so any value would synthesize.
+    let threshold = 1u64;
 
     let leaves: Vec<Fr> = secret_keys.iter().map(poseidon_hash_one_v05).collect();
     let num_leaves = 1usize << depth;
@@ -241,6 +239,18 @@ pub fn build_canonical_democracy_update_witness(depth: usize) -> DemocracyUpdate
 /// Mirrors `build_canonical_democracy_update_witness`'s deterministic
 /// secret-key set + epoch + salts so the two circuits share an
 /// occupancy/commitment lineage at fixture-generation time.
+///
+/// **Non-boundary configuration on purpose.** K = K_MAX = 2 (both
+/// signers active), `threshold = 1`, `count_new = count_old + 1`.
+/// This exercises:
+///   - slack range gate non-trivially (`slack = K - threshold = 1`);
+///   - threshold range gate non-trivially (`threshold = 0b01`);
+///   - count-delta gate non-trivially (`diff = +1`, so the
+///     `(diff)(diff-1)(diff+1) = 0` product is satisfied via the
+///     `diff-1 = 0` factor, not the `diff = 0` shortcut).
+/// Boundary cases (K=threshold, diff=0) are exhaustively covered by
+/// the unit tests in `src/circuit/plonk/democracy.rs`; the production
+/// VK fixture exercises the non-trivial path.
 pub fn build_canonical_democracy_update_quorum_witness(
     depth: usize,
 ) -> DemocracyUpdateQuorumWitness {
@@ -251,8 +261,8 @@ pub fn build_canonical_democracy_update_quorum_witness(
     let salt_oc_old = Fr::from(0x55u64);
     let salt_oc_new = Fr::from(0x66u64);
     let count_old: u64 = 5;
-    let count_new: u64 = 5;
-    let threshold: u64 = DEMOCRACY_K_MAX as u64;
+    let count_new: u64 = 6;
+    let threshold: u64 = 1;
 
     let leaves: Vec<Fr> = secret_keys.iter().map(poseidon_hash_one_v05).collect();
     let num_leaves = 1usize << depth;
@@ -333,12 +343,15 @@ pub fn bake_democracy_update_vk(depth: usize) -> Result<Vec<u8>, BakeError> {
             synthesize_democracy_update_quorum(&mut circuit, &witness)
                 .map_err(BakeError::Synthesize)?;
         }
+        // TODO(#204): d=11 quorum — SRS bump or circuit shrinkage. Tier
+        // 2 currently bakes the simplified single-signer circuit, so
+        // admin authorization at d=11 is NOT in-circuit-enforced.
         11 => {
             let witness = build_canonical_democracy_update_witness(depth);
             synthesize_democracy_update(&mut circuit, &witness)
                 .map_err(BakeError::Synthesize)?;
         }
-        _ => return Err(BakeError::UnsupportedDepth(depth)),
+        _ => unreachable!("guarded by pinned_democracy_update_vk_sha256_hex above"),
     }
     circuit
         .finalize_for_arithmetization()

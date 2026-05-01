@@ -115,7 +115,7 @@
                       "symbol": "threshold_numerator"
                     },
                     "val": {
-                      "u32": 2
+                      "u32": 1
                     }
                   },
                   {
@@ -201,7 +201,7 @@
                           "symbol": "threshold_numerator"
                         },
                         "val": {
-                          "u32": 2
+                          "u32": 1
                         }
                       },
                       {
@@ -261,7 +261,7 @@
                           "symbol": "threshold_numerator"
                         },
                         "val": {
-                          "u32": 2
+                          "u32": 1
                         }
                       },
                       {
@@ -321,7 +321,7 @@
                           "symbol": "threshold_numerator"
                         },
                         "val": {
-                          "u32": 2
+                          "u32": 1
                         }
                       },
                       {

@@ -611,6 +611,7 @@ mod tests {
                     Fr::from(w.threshold_numerator),
                 ]
             }
+            // TODO(#204): d=11 quorum — see baker.rs's matching arm.
             11 => {
                 let w = build_canonical_democracy_update_witness(depth);
                 synthesize_democracy_update(&mut circuit, &w).unwrap();
@@ -623,7 +624,7 @@ mod tests {
                     Fr::from(w.threshold_numerator),
                 ]
             }
-            _ => panic!("unsupported democracy-update depth {depth}"),
+            _ => unreachable!("guarded by bake_democracy_update_vk depth check"),
         };
         circuit.finalize_for_arithmetization().unwrap();
         let keys = plonk::preprocess(&circuit).unwrap();

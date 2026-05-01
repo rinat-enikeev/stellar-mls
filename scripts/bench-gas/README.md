@@ -45,21 +45,23 @@ Outputs land under `scripts/bench-gas/results.{txt,jsonl}`.
 | Contract       | deploy | create_* | verify_membership | update_commitment | admin ops |
 |----------------|:------:|:--------:|:-----------------:|:-----------------:|:---------:|
 | sep-oneonone   | ✓      | ✓        | (V2)              | n/a               | ✓         |
-| sep-oligarchy  | ✓      | ✓        | ✓ (revert-mode)   | ✓ (revert-mode)   | ✓         |
+| sep-oligarchy  | ✓      | ✓        | ✓ (revert-mode)   | (V2)              | ✓         |
 | sep-anarchy    | ✓      | (V2)     | (V2)              | (V2)              | ✓         |
 | sep-democracy  | ✓      | (V2)     | (V2)              | (V2)              | ✓         |
 | sep-tyranny    | ✓      | (V2)     | (V2)              | (V2)              | ✓         |
 
 ### Bench mechanics
 
-* **`verify_membership`** returns `Ok(false)` on `InvalidProof`, so
-  the captured fee equals the success-path cost — the verifier runs
-  the full PLONK pairing check identically in both arms.
+* **`verify_membership`** returns `Ok(false)` on `InvalidProof` (no
+  revert), so we can submit a well-formed non-verifying proof, the
+  verifier runs the full PLONK pairing check, the function returns
+  `Ok(false)`, and the captured fee equals the real success-path
+  cost.
 * **`update_commitment`** errors out on `InvalidProof`, so the tx
-  reverts after the verifier. The captured fee misses the
-  post-verify storage writes (history archive + new entry + TTL
-  bumps), which PR #206 measured at ~75K CPU / ~75KB mem (≈1% of
-  total). The release notes flag this caveat.
+  would revert. Soroban-CLI runs simulation pre-flight and refuses
+  to submit reverting txs — so a non-verifying proof can't capture
+  a fee for this entrypoint. Deferred to V2 (real verifying proofs
+  via `gen-update-proof`).
 
 ## V2 follow-up
 

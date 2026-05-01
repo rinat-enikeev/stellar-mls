@@ -4,17 +4,19 @@
 # Coverage (V1):
 #   deploy, create_oligarchy_group (committed fixture, tier 0),
 #   verify_membership (revert-mode against post-create state),
-#   update_commitment (revert-mode against post-create state),
 #   set_restricted_mode, bump_group_ttl.
 #
 # Bench mechanics:
 #   * verify_membership returns Ok(false) on InvalidProof (no revert),
 #     so the captured fee equals the real success-path cost — the
 #     verifier runs the full pairing check identically in both arms.
-#   * update_commitment errors out on InvalidProof, so the tx reverts
-#     after the verifier. The fee misses the post-verify storage
-#     writes (history archive + new entry + TTL bumps), which PR #206
-#     measured at ~75K CPU / ~75KB mem (≈1% of total).
+#
+# Out of scope (V2):
+#   update_commitment — first run showed Soroban-CLI runs simulation
+#   pre-flight and refuses to submit txs that revert, so revert-mode
+#   bench can't capture a fee for ops whose contract path returns
+#   Err. Need real verifying proofs from gen-update-proof; tracked
+#   alongside the V2 anarchy/democracy/tyranny work.
 
 set -euo pipefail
 
@@ -41,14 +43,6 @@ GROUP_ID_HEX="$(printf '07%.0s' $(seq 1 32))"
 
 # verify-membership PI (revert-mode): [state.commitment, be32(0)]
 VERIFY_PI_JSON="[\"${CREATE_COMMITMENT_HEX}\",\"${ZERO32_HEX}\"]"
-
-# update_commitment PI (revert-mode): [c_old, be32(0), c_new, occ_old,
-#     occ_new, be32(threshold=1)]. c_new + occ_new are arbitrary
-#     canonical Fr (32-byte scalars, last byte ≠ 0).
-ONE32_HEX="${ZERO32_HEX:0:62}01"
-TWO32_HEX="${ZERO32_HEX:0:62}02"
-THRESHOLD_HEX="${ZERO32_HEX:0:62}01"
-UPDATE_PI_JSON="[\"${CREATE_COMMITMENT_HEX}\",\"${ZERO32_HEX}\",\"${ONE32_HEX}\",\"${CREATE_OCC_HEX}\",\"${TWO32_HEX}\",\"${THRESHOLD_HEX}\"]"
 
 echo "==> [$BENCH_CURRENT_CONTRACT] deploy"
 CID="$(bench_deploy \
@@ -79,11 +73,9 @@ bench_invoke "$CID" "verify_membership" "0" "verify_membership" \
     --proof "$CREATE_PROOF_HEX" \
     --public-inputs "$VERIFY_PI_JSON"
 
-echo "==> [$BENCH_CURRENT_CONTRACT] update_commitment(revert-mode)"
-bench_invoke "$CID" "update_commitment" "0" "update_commitment" \
-    --group-id "$GROUP_ID_HEX" \
-    --proof "$CREATE_PROOF_HEX" \
-    --public-inputs "$UPDATE_PI_JSON"
+# update_commitment is V2 — see header. Soroban-CLI rejects
+# simulation-failing txs before submission, so a "well-formed but
+# non-verifying proof" path doesn't capture a fee.
 
 echo "==> [$BENCH_CURRENT_CONTRACT] set_restricted_mode(true)"
 bench_invoke "$CID" "set_restricted_mode" "n/a" "set_restricted_mode" \

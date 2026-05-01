@@ -59,11 +59,9 @@ for c in sep-anarchy sep-democracy sep-oligarchy sep-oneonone sep-tyranny; do
         --out-dir "$BENCH_ARTIFACT_DIR" >/dev/null
 done
 
-echo "==> building proof-gen tools (gen-proof-tool feature)"
-cargo build --release \
-    --manifest-path "$REPO_ROOT/Cargo.toml" \
-    --features gen-proof-tool \
-    --bin gen-membership-proof \
-    --bin gen-update-proof >/dev/null 2>&1
+# V2 will compile `gen-membership-proof` / `gen-update-proof` here
+# once the deferred contract drivers consume them. V1 doesn't, so we
+# don't burn CI time on the `gen-proof-tool` feature build (and a
+# regression in those binaries can't fail the V1 bench).
 
 echo "==> setup complete"

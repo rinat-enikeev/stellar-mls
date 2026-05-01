@@ -38,7 +38,6 @@ pi_concat_to_json() {
     local n="$2"
     local out="$3"
     local i hex
-    : > "$out.tmp"
     {
         printf '['
         for (( i=0; i<n; i++ )); do
@@ -75,14 +74,24 @@ be32_zero_json() {
 
 # ---------- invocation + fee capture ----------
 
-# capture_tx_hash <stderr_logfile>
-# Greps the stellar CLI's stderr for the transaction hash. Returns the
-# hex hash on stdout, exits non-zero if not found.
-capture_tx_hash() {
+# capture_tx_hashes <stderr_logfile>
+# Echoes every transaction hash the stellar CLI logged, one per line,
+# in the order they were submitted. Anchored on the `Transaction hash
+# is <hex>` prefix to avoid matching wasm hashes, contract IDs, or
+# error blobs that happen to contain a 64-char hex run.
+#
+# `stellar contract deploy` submits two txs (upload_contract_wasm +
+# create_contract); a normal invoke submits one. Callers pick by
+# index.
+capture_tx_hashes() {
     local err="$1"
-    # CLI v26 prints `ℹ Transaction hash is <hex>` (note the leading
-    # info glyph). We tolerate either the glyph form or a bare line.
-    grep -oE '[0-9a-f]{64}' "$err" | head -1
+    grep -oE 'Transaction hash is [0-9a-f]{64}' "$err" | awk '{print $4}'
+}
+
+# capture_tx_hash <stderr_logfile>
+# Convenience: first hash from `capture_tx_hashes`. Empty if none.
+capture_tx_hash() {
+    capture_tx_hashes "$1" | head -1
 }
 
 # fetch_fee_stroops <hash>
@@ -159,11 +168,13 @@ emit_row() {
 # ---------- deploy + invoke wrappers ----------
 
 # bench_deploy <contract_alias> <wasm> <constructor_args...>
-# Deploys, captures the contract id (stdout) and the fee for the
-# deployment tx (stderr → tx hash → fetch fee). Echoes the contract
-# id on stdout for the caller to bind to a variable. Stderr is sunk
-# to $err synchronously (no `tee >()` race) and replayed for the
-# operator on completion.
+# Deploys and echoes the contract id on stdout for the caller to bind.
+# `stellar contract deploy` submits two txs:
+#   1. upload_contract_wasm  (size-dominated, the larger of the two)
+#   2. create_contract       (constructor execution)
+# Both fees are emitted as separate JSONL rows (deploy_upload,
+# deploy_create) so the headline cost isn't silently masked by
+# capturing only the first hash.
 bench_deploy() {
     local alias="$1"
     local wasm="$2"
@@ -183,11 +194,13 @@ bench_deploy() {
 
     cat "$err" >&2
 
-    local hash
-    hash="$(capture_tx_hash "$err" || true)"
+    local upload_hash create_hash
+    upload_hash="$(capture_tx_hashes "$err" | sed -n '1p')"
+    create_hash="$(capture_tx_hashes "$err" | sed -n '2p')"
     rm -f "$err"
 
-    emit_row "$BENCH_CURRENT_CONTRACT" "deploy" "n/a" "$hash"
+    emit_row "$BENCH_CURRENT_CONTRACT" "deploy_upload" "n/a" "$upload_hash"
+    emit_row "$BENCH_CURRENT_CONTRACT" "deploy_create" "n/a" "$create_hash"
     printf '%s' "$cid"
 }
 

@@ -44,14 +44,33 @@ jobs:
           key: bench-gas-rust-${{ hashFiles('Cargo.lock', 'contracts/**/Cargo.toml') }}
 
       - name: Install stellar CLI
+        env:
+          # Pin to the version the maintainer's local dev env runs
+          # (`stellar --version` → 26.0.0). Bump in lockstep with the
+          # rest of the repo if a deploy script switches.
+          STELLAR_VERSION: '26.0.0'
+          # SHA-256 of stellar-cli-26.0.0-x86_64-unknown-linux-gnu.tar.gz,
+          # captured 2026-05-01 from the official GitHub release. The job
+          # has `contents: write`, so verifying the toolchain we rely on
+          # before extracting is cheap insurance against an upstream
+          # release-asset compromise.
+          STELLAR_SHA256: '31c83db342d1184b31f6591e739950eb45756be46dcd7bb57e4f38e91ea32e84'
         run: |
-          # Pin to the same major the local dev environment ships
-          # with (`stellar --version` → 26.0.0 on the maintainer's
-          # box). Bump in lockstep with the rest of the repo if a
-          # deploy script switches.
-          STELLAR_VERSION="${STELLAR_CLI_VERSION:-26.0.0}"
-          curl -sSLf "https://github.com/stellar/stellar-cli/releases/download/v${STELLAR_VERSION}/stellar-cli-${STELLAR_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar -xz -C /usr/local/bin stellar
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          tarball="$tmp/stellar-cli.tar.gz"
+          curl -sSLf -o "$tarball" \
+            "https://github.com/stellar/stellar-cli/releases/download/v${STELLAR_VERSION}/stellar-cli-${STELLAR_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${STELLAR_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xz -C "$tmp" -f "$tarball"
+          # Don't assume the binary lives at the tarball root — extract
+          # to a scratch dir and `install` whatever named `stellar`
+          # turned up. v26 happens to have it at the root; later releases
+          # may not.
+          binary="$(find "$tmp" -maxdepth 3 -type f -name stellar -perm -u+x | head -1)"
+          test -n "$binary" || { echo "no stellar binary in tarball" >&2; exit 1; }
+          sudo install -m 0755 "$binary" /usr/local/bin/stellar
+          rm -rf "$tmp"
           stellar --version
 
       - name: Configure stellar testnet

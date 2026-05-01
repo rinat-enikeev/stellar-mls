@@ -3,7 +3,7 @@
 #
 # Coverage (V1):
 #   deploy, create_group (committed fixture), set_restricted_mode,
-#   bump_group_ttl, get_commitment.
+#   bump_group_ttl.
 #
 # Out of scope (V2):
 #   verify_membership — needs a fresh membership proof matching the
@@ -73,9 +73,9 @@ echo "==> [$BENCH_CURRENT_CONTRACT] bump_group_ttl"
 bench_invoke "$CID" "bump_group_ttl" "n/a" "bump_group_ttl" \
     --group-id-file-path "$WORK/group-id.json"
 
-# ---- get_commitment (read; submitted to capture the on-chain fee) ----
-echo "==> [$BENCH_CURRENT_CONTRACT] get_commitment"
-bench_invoke "$CID" "get_commitment" "n/a" "get_commitment" \
-    --group-id-file-path "$WORK/group-id.json"
+# Read-only entrypoints (`get_commitment`, `get_history`) are skipped
+# intentionally — `stellar contract invoke` short-circuits to a local
+# simulation for them regardless of `--send yes`, so no tx is submitted
+# and no fee is charged.
 
 echo "==> [$BENCH_CURRENT_CONTRACT] done"

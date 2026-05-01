@@ -5,6 +5,8 @@
 //! `group_id_fr = Fr::from(0x7777u64)`, so test groups derive the
 //! same value via `group_id = be32(0x7777)`.
 
+extern crate std;
+
 use super::*;
 use soroban_sdk::testutils::Address as _;
 
@@ -763,4 +765,96 @@ fn test_vectors_consistency() {
     assert_eq!(pi_count_for("Membership"), MEMBERSHIP_PI_COUNT);
     assert_eq!(pi_count_for("Create"), CREATE_PI_COUNT);
     assert_eq!(pi_count_for("Update"), UPDATE_PI_COUNT);
+}
+
+// ================================================================
+// Gas benchmarks (Phase C.5)
+// ================================================================
+
+fn bench_verify_membership_at_tier(tier: u32) {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = canonical_group_id(&env);
+    let pi = pi_membership(&env, tier);
+    let commitment = pi.get(0).unwrap();
+    let admin_comm = canonical_zero(&env);
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &commitment,
+        &admin_comm,
+        tier,
+        CANONICAL_EPOCH,
+    );
+
+    env.cost_estimate().budget().reset_tracker();
+    let result =
+        client.verify_membership(&group_id, &proof_for_tier(&env, tier, "membership"), &pi);
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
+
+    assert!(result, "tier {tier} membership proof should verify");
+    std::eprintln!(
+        "[gas-bench] sep-tyranny verify_membership(tier={}): cpu={} mem={}",
+        tier, cpu, mem
+    );
+}
+
+#[test]
+fn bench_verify_membership_d5() {
+    bench_verify_membership_at_tier(0);
+}
+
+#[test]
+fn bench_verify_membership_d8() {
+    bench_verify_membership_at_tier(1);
+}
+
+#[test]
+fn bench_verify_membership_d11() {
+    bench_verify_membership_at_tier(2);
+}
+
+fn bench_update_commitment_at_tier(tier: u32) {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = canonical_group_id(&env);
+    let upi = pi_update(&env, tier);
+    let c_old = upi.get(0).unwrap();
+    let admin_comm = upi.get(3).unwrap();
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &c_old,
+        &admin_comm,
+        tier,
+        CANONICAL_EPOCH,
+    );
+
+    env.cost_estimate().budget().reset_tracker();
+    client.update_commitment(&group_id, &proof_for_tier(&env, tier, "update"), &upi);
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
+
+    std::eprintln!(
+        "[gas-bench] sep-tyranny update_commitment(tier={}): cpu={} mem={}",
+        tier, cpu, mem
+    );
+}
+
+#[test]
+fn bench_update_commitment_d5() {
+    bench_update_commitment_at_tier(0);
+}
+
+#[test]
+fn bench_update_commitment_d8() {
+    bench_update_commitment_at_tier(1);
+}
+
+#[test]
+fn bench_update_commitment_d11() {
+    bench_update_commitment_at_tier(2);
 }

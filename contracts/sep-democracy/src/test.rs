@@ -1,5 +1,7 @@
 //! Inline test suite for the SEP Democracy contract — PLONK-migration era.
 
+extern crate std;
+
 use super::*;
 use soroban_sdk::testutils::Address as _;
 
@@ -868,4 +870,100 @@ fn test_vectors_consistency() {
         let cap = entry["capacity"].as_u64().unwrap() as u32;
         assert_eq!(tier_capacity(tier), cap);
     }
+}
+
+// ================================================================
+// Gas benchmarks (Phase C.5)
+// ================================================================
+//
+// Run with `cargo test --lib bench_ -- --nocapture` to print numbers.
+// Rust-native lower bounds — see the C.5 PR description for caveats.
+
+fn bench_verify_membership_at_tier(tier: u32) {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[(40 + tier as u8); 32]);
+    let pi = pi_membership(&env, tier);
+    let commitment = pi.get(0).unwrap();
+    let z = canonical_zero(&env);
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &commitment,
+        &z,
+        CANONICAL_THRESHOLD,
+        tier,
+        CANONICAL_EPOCH,
+    );
+
+    env.cost_estimate().budget().reset_tracker();
+    let result = client.verify_membership(&group_id, &membership_proof(&env, tier), &pi);
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
+
+    assert!(result, "tier {tier} canonical proof should verify");
+    std::eprintln!(
+        "[gas-bench] sep-democracy verify_membership(tier={}): cpu={} mem={}",
+        tier, cpu, mem
+    );
+}
+
+#[test]
+fn bench_verify_membership_d5() {
+    bench_verify_membership_at_tier(0);
+}
+
+#[test]
+fn bench_verify_membership_d8() {
+    bench_verify_membership_at_tier(1);
+}
+
+#[test]
+fn bench_verify_membership_d11() {
+    bench_verify_membership_at_tier(2);
+}
+
+fn bench_update_commitment_at_tier(tier: u32) {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[(50 + tier as u8); 32]);
+    let upi = pi_update(&env, tier);
+    let c_old = upi.get(0).unwrap();
+    let occ_old = upi.get(3).unwrap();
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &c_old,
+        &occ_old,
+        CANONICAL_THRESHOLD,
+        tier,
+        CANONICAL_EPOCH,
+    );
+
+    env.cost_estimate().budget().reset_tracker();
+    client.update_commitment(&group_id, &demo_update_proof(&env, tier), &upi);
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
+
+    std::eprintln!(
+        "[gas-bench] sep-democracy update_commitment(tier={}): cpu={} mem={}",
+        tier, cpu, mem
+    );
+}
+
+#[test]
+fn bench_update_commitment_d5() {
+    bench_update_commitment_at_tier(0);
+}
+
+#[test]
+fn bench_update_commitment_d8() {
+    bench_update_commitment_at_tier(1);
+}
+
+#[test]
+fn bench_update_commitment_d11() {
+    bench_update_commitment_at_tier(2);
 }

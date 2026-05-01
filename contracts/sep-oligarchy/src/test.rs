@@ -1,5 +1,7 @@
 //! Inline test suite for the SEP Oligarchy contract — PLONK-migration era.
 
+extern crate std;
+
 use super::*;
 use soroban_sdk::testutils::Address as _;
 
@@ -833,4 +835,112 @@ fn test_vectors_consistency() {
     // Cross-group cap pinned to the JSON.
     let max_groups = v["max_groups_per_tier"]["value"].as_u64().unwrap() as u32;
     assert_eq!(MAX_GROUPS_PER_TIER, max_groups);
+}
+
+// ================================================================
+// Gas benchmarks (Phase C.5)
+// ================================================================
+
+fn bench_verify_membership_at_tier(tier: u32) {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[(40 + tier as u8); 32]);
+    let pi = pi_membership(&env, tier);
+    let commitment = pi.get(0).unwrap();
+    let z = canonical_zero(&env);
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &commitment,
+        &z,
+        CANONICAL_THRESHOLD,
+        tier,
+        CANONICAL_EPOCH,
+    );
+
+    env.cost_estimate().budget().reset_tracker();
+    let result = client.verify_membership(&group_id, &membership_proof(&env, tier), &pi);
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
+
+    assert!(result, "tier {tier} membership proof should verify");
+    std::eprintln!(
+        "[gas-bench] sep-oligarchy verify_membership(tier={}): cpu={} mem={}",
+        tier, cpu, mem
+    );
+}
+
+#[test]
+fn bench_verify_membership_d5() {
+    bench_verify_membership_at_tier(0);
+}
+
+#[test]
+fn bench_verify_membership_d8() {
+    bench_verify_membership_at_tier(1);
+}
+
+#[test]
+fn bench_verify_membership_d11() {
+    bench_verify_membership_at_tier(2);
+}
+
+/// Single-tier (admin tree depth fixed at 5 across all member tiers).
+#[test]
+fn bench_create_oligarchy_group() {
+    let (env, client, _admin) = setup_env();
+    let c = caller(&env);
+    let pi = pi_from_concat(&env, OLI_CREATE_PI, 6);
+    let commitment = pi.get(0).unwrap();
+    let occ = pi.get(2).unwrap();
+
+    env.cost_estimate().budget().reset_tracker();
+    client.create_oligarchy_group(
+        &c,
+        &BytesN::from_array(&env, &[1u8; 32]),
+        &commitment,
+        &0u32,
+        &CANONICAL_THRESHOLD,
+        &occ,
+        &BytesN::from_array(&env, OLI_CREATE_PROOF),
+        &pi,
+    );
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
+
+    std::eprintln!(
+        "[gas-bench] sep-oligarchy create_oligarchy_group: cpu={} mem={}",
+        cpu, mem
+    );
+}
+
+#[test]
+fn bench_update_commitment() {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[7u8; 32]);
+    let upi = pi_from_concat(&env, OLI_UPDATE_PI, 6);
+    let c_old = upi.get(0).unwrap();
+    let occ_old = upi.get(3).unwrap();
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &c_old,
+        &occ_old,
+        CANONICAL_THRESHOLD,
+        0,
+        CANONICAL_EPOCH,
+    );
+
+    env.cost_estimate().budget().reset_tracker();
+    client.update_commitment(&group_id, &BytesN::from_array(&env, OLI_UPDATE_PROOF), &upi);
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
+
+    std::eprintln!(
+        "[gas-bench] sep-oligarchy update_commitment: cpu={} mem={}",
+        cpu, mem
+    );
 }

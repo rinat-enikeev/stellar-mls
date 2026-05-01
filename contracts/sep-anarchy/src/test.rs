@@ -15,6 +15,8 @@
 //! crate (which exercise the verify call end-to-end on the same
 //! bytes).
 
+extern crate std;
+
 use super::*;
 use soroban_sdk::testutils::Address as _;
 
@@ -811,4 +813,82 @@ fn test_vectors_consistency() {
     // ---- Max groups per tier ----
     let max = v["max_groups_per_tier"]["value"].as_u64().unwrap() as u32;
     assert_eq!(max, MAX_GROUPS_PER_TIER, "MAX_GROUPS_PER_TIER drift");
+}
+
+// ================================================================
+// 6. Gas benchmarks (Phase C.5)
+// ================================================================
+//
+// These tests exercise the on-chain verify path against the canonical
+// fixtures and print the CPU-instruction + memory cost incurred by
+// the host BLS12-381 + storage operations the verifier triggers. The
+// numbers are LOWER bounds — the soroban-sdk note (`testutils.rs`)
+// flags that "CPU instructions are likely to be underestimated when
+// running Rust code compared to running the WASM equivalent" — so a
+// real on-chain budget projection has to come from a testnet deploy
+// (tracked separately under the Phase C.5 follow-up). What these
+// tests DO catch is **regressions**: a circuit/verifier change that
+// 2× the cpu cost lights up here even before testnet CI lands.
+//
+// Run with `--nocapture` to see the printed numbers:
+//   cargo test --lib bench_ -- --nocapture
+
+/// Cost of a single `verify_membership` against a tier-0 group at the
+/// canonical commitment / epoch.
+#[test]
+fn bench_verify_membership() {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[40u8; 32]);
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &membership_commitment(&env),
+        0,
+        0,
+        CANONICAL_EPOCH,
+    );
+    let pi = membership_pi(&env, membership_commitment(&env), CANONICAL_EPOCH);
+
+    env.cost_estimate().budget().reset_tracker();
+    let result = client.verify_membership(&group_id, &membership_proof(&env), &pi);
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
+
+    assert!(result, "canonical proof should verify");
+    std::eprintln!(
+        "[gas-bench] sep-anarchy verify_membership(tier=0): cpu={} mem={}",
+        cpu, mem
+    );
+}
+
+/// Cost of a single `update_commitment` against a tier-0 group at the
+/// canonical `(c_old, epoch_old)` state. Includes proof-replay
+/// recording, history archive, and TTL bumps in addition to the
+/// PLONK verify.
+#[test]
+fn bench_update_commitment() {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[41u8; 32]);
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &update_c_old(&env),
+        0,
+        5,
+        CANONICAL_EPOCH,
+    );
+
+    env.cost_estimate().budget().reset_tracker();
+    client.update_commitment(&group_id, &update_proof(&env), &update_pi(&env));
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
+
+    std::eprintln!(
+        "[gas-bench] sep-anarchy update_commitment(tier=0): cpu={} mem={}",
+        cpu, mem
+    );
 }

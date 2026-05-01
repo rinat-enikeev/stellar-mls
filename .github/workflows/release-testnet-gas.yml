@@ -1,0 +1,94 @@
+# Run the testnet gas-cost bench against an already-published release
+# and attach the ASCII table as a release asset.
+#
+# Trigger model matches the project convention: manual workflow_dispatch
+# with an explicit tag. The tag must already exist (the regular Release
+# workflow creates it). This workflow is read-only WRT the codebase —
+# it doesn't push, doesn't bump versions, just measures and uploads.
+
+name: Release testnet gas benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to attach the bench table to (e.g. v1.10.89). Must already exist.'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: bench-gas-rust-${{ hashFiles('Cargo.lock', 'contracts/**/Cargo.toml') }}
+
+      - name: Install stellar CLI
+        run: |
+          # Match the version pinned by the rest of the project's
+          # testnet tooling. Update in lockstep with the rest of the
+          # repo if the deploy scripts switch.
+          STELLAR_VERSION="${STELLAR_CLI_VERSION:-22.6.0}"
+          curl -sSLf "https://github.com/stellar/stellar-cli/releases/download/v${STELLAR_VERSION}/stellar-cli-${STELLAR_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C /usr/local/bin stellar
+          stellar --version
+
+      - name: Configure stellar testnet
+        run: |
+          stellar network add testnet \
+            --rpc-url https://soroban-testnet.stellar.org \
+            --network-passphrase "Test SDF Network ; September 2015" || true
+
+      - name: Run gas benchmarks
+        env:
+          BENCH_NETWORK: testnet
+          BENCH_TAG: ${{ inputs.tag }}
+        run: |
+          chmod +x scripts/bench-gas/run.sh \
+                   scripts/bench-gas/setup.sh \
+                   scripts/bench-gas/contracts/*.sh
+          bash scripts/bench-gas/run.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gas-benchmarks-${{ inputs.tag }}
+          path: |
+            scripts/bench-gas/results.txt
+            scripts/bench-gas/results.jsonl
+          if-no-files-found: error
+
+      - name: Attach to GitHub release
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          cp scripts/bench-gas/results.txt   "gas-benchmarks-${TAG}.txt"
+          cp scripts/bench-gas/results.jsonl "gas-benchmarks-${TAG}.jsonl"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: |
+            gas-benchmarks-${{ inputs.tag }}.txt
+            gas-benchmarks-${{ inputs.tag }}.jsonl
+          fail_on_unmatched_files: true

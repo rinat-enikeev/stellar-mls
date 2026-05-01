@@ -348,7 +348,7 @@ fn test_update_commitment_rejects_wrong_threshold_pi() {
     let upi = pi_update(&env, 0);
     let c_old = upi.get(0).unwrap();
     let occ_old = upi.get(3).unwrap();
-    // Inject with threshold=99 but the canonical PI uses threshold=5
+    // Inject with threshold=99 but the canonical PI uses threshold=CANONICAL_THRESHOLD (1)
     inject_group(
         &env,
         &contract_id,

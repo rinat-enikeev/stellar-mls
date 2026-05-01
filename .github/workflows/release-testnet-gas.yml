@@ -1,0 +1,114 @@
+# Run the testnet gas-cost bench against an already-published release
+# and attach the ASCII table as a release asset.
+#
+# Trigger model matches the project convention: manual workflow_dispatch
+# with an explicit tag. The tag must already exist (the regular Release
+# workflow creates it). This workflow is read-only WRT the codebase —
+# it doesn't push, doesn't bump versions, just measures and uploads.
+
+name: Release testnet gas benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to attach the bench table to (e.g. v1.10.89). Must already exist.'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: bench-gas-rust-${{ hashFiles('Cargo.lock', 'contracts/**/Cargo.toml') }}
+
+      - name: Install stellar CLI
+        env:
+          # Pin to the version the maintainer's local dev env runs
+          # (`stellar --version` → 26.0.0). Bump in lockstep with the
+          # rest of the repo if a deploy script switches.
+          STELLAR_VERSION: '26.0.0'
+          # SHA-256 of stellar-cli-26.0.0-x86_64-unknown-linux-gnu.tar.gz,
+          # captured 2026-05-01 from the official GitHub release. The job
+          # has `contents: write`, so verifying the toolchain we rely on
+          # before extracting is cheap insurance against an upstream
+          # release-asset compromise.
+          STELLAR_SHA256: '31c83db342d1184b31f6591e739950eb45756be46dcd7bb57e4f38e91ea32e84'
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          tarball="$tmp/stellar-cli.tar.gz"
+          curl -sSLf -o "$tarball" \
+            "https://github.com/stellar/stellar-cli/releases/download/v${STELLAR_VERSION}/stellar-cli-${STELLAR_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${STELLAR_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xz -C "$tmp" -f "$tarball"
+          # Don't assume the binary lives at the tarball root — extract
+          # to a scratch dir and `install` whatever named `stellar`
+          # turned up. v26 happens to have it at the root; later releases
+          # may not.
+          binary="$(find "$tmp" -maxdepth 3 -type f -name stellar -perm -u+x | head -1)"
+          test -n "$binary" || { echo "no stellar binary in tarball" >&2; exit 1; }
+          sudo install -m 0755 "$binary" /usr/local/bin/stellar
+          rm -rf "$tmp"
+          stellar --version
+
+      - name: Configure stellar testnet
+        run: |
+          stellar network add testnet \
+            --rpc-url https://soroban-testnet.stellar.org \
+            --network-passphrase "Test SDF Network ; September 2015" || true
+
+      - name: Run gas benchmarks
+        env:
+          BENCH_NETWORK: testnet
+          BENCH_TAG: ${{ inputs.tag }}
+        run: |
+          chmod +x scripts/bench-gas/run.sh \
+                   scripts/bench-gas/setup.sh \
+                   scripts/bench-gas/contracts/*.sh
+          bash scripts/bench-gas/run.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gas-benchmarks-${{ inputs.tag }}
+          path: |
+            scripts/bench-gas/results.txt
+            scripts/bench-gas/results.jsonl
+          if-no-files-found: error
+
+      - name: Attach to GitHub release
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          cp scripts/bench-gas/results.txt   "gas-benchmarks-${TAG}.txt"
+          cp scripts/bench-gas/results.jsonl "gas-benchmarks-${TAG}.jsonl"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: |
+            gas-benchmarks-${{ inputs.tag }}.txt
+            gas-benchmarks-${{ inputs.tag }}.jsonl
+          fail_on_unmatched_files: true

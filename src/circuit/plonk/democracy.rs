@@ -17,12 +17,14 @@
 //!
 //! ## Constraints
 //!
-//!   1. K-of-N quorum (`K_MAX = 3`):
-//!      - 3 signer slots; each `(sk, merkle_path, leaf_idx, active)`.
+//!   1. K-of-N quorum (`K_MAX = 2`):
+//!      - 2 signer slots; each `(sk, merkle_path, leaf_idx, active)`.
 //!      - `active_i` is boolean per slot.
 //!      - Active slots are a strict prefix (`active_i ⇒ active_{i-1}`).
 //!      - For each active slot: `Poseidon(sk_i)` opens to
 //!        `member_root_old` at `leaf_idx_i`.
+//!      - For any pair of active slots, `leaf_idx_i ≠ leaf_idx_j`
+//!        (anti-double-count: prevents one signer filling both slots).
 //!      - K = Σ active_i.
 //!      - K ≥ threshold_numerator (slack range-checked into 2 bits;
 //!        threshold therefore restricted to [0, K_MAX] in this port).
@@ -42,16 +44,16 @@
 //!    `member_count`. Promoting to ratio (`K * 100 ≥ threshold *
 //!    member_count_old`) requires a multiplicative constraint with
 //!    a wider range check. Tracked for a follow-up.
-//!  - **Strict-ascending `leaf_idx`.** Not enforced in this port. An
-//!    attacker can submit two slots with the same leaf and have K
-//!    counted double. Practical impact is bounded by the K_MAX=3
-//!    cap and the occupancy/count binding (member_count_old must
-//!    match the on-chain occupancy commitment, which is set at
-//!    create). Tracked for a follow-up.
-//!  - **K_MAX = 3.** Caps quorum size at 3 signers in this PR.
-//!    Raising to 7+ is straightforward but inflates the circuit
-//!    (3-7 extra Merkle openings); keeping K_MAX small ensures the
-//!    n=32768 SRS budget stays well within reach at depth=11.
+//!  - **Strict-ascending `leaf_idx`.** Not enforced; only pairwise
+//!    distinctness is. Strict ordering (canonicalisation) is a
+//!    follow-up — distinctness alone is sufficient to prevent the
+//!    duplicate-leaf double-count attack at K_MAX=2.
+//!  - **K_MAX = 2.** Caps quorum size at 2 signers in this PR.
+//!    Raising to 3+ is straightforward but inflates the circuit
+//!    (extra Merkle opening per slot); keeping K_MAX small ensures
+//!    the n=32768 SRS budget stays well within reach at depth=8.
+//!    Depth=11 still falls back to the simplified single-signer
+//!    circuit below.
 
 #![cfg(feature = "plonk")]
 
@@ -178,6 +180,7 @@ pub fn synthesize_democracy_update_quorum(
     //             for circuit-shape uniformity. The Merkle gadget is
     //             called only for active slots, gated by an
     //             active-conditional enforce_equal.
+    let mut leaf_idx_field_vars: Vec<Variable> = Vec::with_capacity(K_MAX);
     for (i, signer) in witness.signers.iter().enumerate() {
         let sk_var = circuit.create_variable(signer.secret_key)?;
         let path_vars: Vec<Variable> = signer
@@ -188,6 +191,23 @@ pub fn synthesize_democracy_update_quorum(
         let bit_vars: Vec<BoolVar> = (0..witness.depth)
             .map(|j| circuit.create_boolean_variable(((signer.leaf_index >> j) & 1) == 1))
             .collect::<Result<_, _>>()?;
+
+        // Compose leaf_index as a field var from its bit decomposition,
+        // so we can enforce pairwise distinctness across active slots
+        // below. Constrains leaf_idx_var = Σ_j bit_j · 2^j.
+        let leaf_idx_var = circuit.create_variable(Fr::from(signer.leaf_index as u64))?;
+        let mut acc = circuit.zero();
+        let two = Fr::from(2u64);
+        let mut pow = Fr::from(1u64);
+        for bit in &bit_vars {
+            let bit_v: Variable = (*bit).into();
+            let pow_const = circuit.create_constant_variable(pow)?;
+            let term = circuit.mul(bit_v, pow_const)?;
+            acc = circuit.add(acc, term)?;
+            pow *= two;
+        }
+        circuit.enforce_equal(acc, leaf_idx_var)?;
+        leaf_idx_field_vars.push(leaf_idx_var);
 
         let leaf_var = poseidon_hash_one_gadget(circuit, sk_var)?;
         let computed_root =
@@ -203,6 +223,22 @@ pub fn synthesize_democracy_update_quorum(
         let _ = i;
     }
 
+    // Anti-double-count: forbid two active slots from sharing the
+    // same leaf_idx. For every pair (j, i) with i > j, enforce
+    //   active_j · active_i · is_equal(leaf_idx_j, leaf_idx_i) = 0
+    // i.e. if both slots are active, their leaf indices must differ.
+    for i in 1..K_MAX {
+        for j in 0..i {
+            let eq = circuit.is_equal(leaf_idx_field_vars[j], leaf_idx_field_vars[i])?;
+            let prev_a: Variable = active_vars[j].into();
+            let cur_a: Variable = active_vars[i].into();
+            let both_active = circuit.mul(prev_a, cur_a)?;
+            let eq_var: Variable = eq.into();
+            let bad = circuit.mul(both_active, eq_var)?;
+            circuit.enforce_constant(bad, Fr::from(0u64))?;
+        }
+    }
+
     // K = sum(active_i)
     let zero_var = circuit.zero();
     let mut k_var = zero_var;
@@ -213,7 +249,11 @@ pub fn synthesize_democracy_update_quorum(
 
     // K ≥ threshold ⇔ K = threshold + slack with slack ∈ [0, K_MAX].
     // Encode slack as 2-bit witness (covers [0, 3]; sufficient for
-    // K_MAX=3).
+    // K_MAX=2).
+    // `saturating_sub` here is a witness-generation convenience only;
+    // any wrong slack value (e.g. clamped to 0 when threshold > K)
+    // fails the in-circuit `K = threshold + slack` equality below, so
+    // the saturation is not load-bearing for soundness.
     let slack_value = (witness.signers.iter().filter(|s| s.active).count() as u64)
         .saturating_sub(witness.threshold_numerator);
     let slack_bit0 = circuit.create_boolean_variable((slack_value & 1) == 1)?;
@@ -304,6 +344,12 @@ pub fn synthesize_democracy_update(
         return Err(CircuitError::ParameterError(format!(
             "depth {} >= usize::BITS",
             witness.depth
+        )));
+    }
+    if witness.leaf_index_old >= (1usize << witness.depth) {
+        return Err(CircuitError::ParameterError(format!(
+            "leaf_index_old {} out of range",
+            witness.leaf_index_old
         )));
     }
 
@@ -520,10 +566,89 @@ mod tests {
     }
 
     #[test]
+    fn rejects_tampered_occ_old_pi() {
+        // Tampering `occupancy_commitment_old` in the public-input
+        // vector must not satisfy the circuit. Guards against PI
+        // re-use across different occupancy snapshots.
+        let sks: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+        let w = build_witness(&sks, 3, 42, K_MAX as u64, K_MAX, 5, 5);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_democracy_update_quorum(&mut c, &w).unwrap();
+        let mut bad_pi = pi(&w);
+        bad_pi[3] += Fr::from(1u64); // index 3 = occupancy_commitment_old
+        assert!(c.check_circuit_satisfiability(&bad_pi).is_err());
+    }
+
+    #[test]
+    fn rejects_active_prefix_violation() {
+        // active = [false, true] violates the strict-prefix
+        // requirement on the active boolean vector.
+        let sks: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+        let mut w = build_witness(&sks, 3, 42, 1, K_MAX, 5, 5);
+        // Both slots are active here; flip slot 0 inactive so the
+        // pattern is [false, true]. Threshold=1 still matches K=1
+        // arithmetically — the failure must come from the prefix gate.
+        w.signers[0].active = false;
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_democracy_update_quorum(&mut c, &w).unwrap();
+        assert!(c.check_circuit_satisfiability(&pi(&w)).is_err());
+    }
+
+    #[test]
+    fn inactive_slot_with_valid_different_root_passes() {
+        // An inactive slot may carry a perfectly valid Merkle opening
+        // to some *other* root — the active-conditional equality gate
+        // must mask it. Verifies the gating, not just dummy zeros.
+        let sks: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+        let mut w = build_witness(&sks, 3, 42, 1, 1, 5, 5);
+        // Build a disjoint tree; install a real opening from it in
+        // the inactive slot with a distinct leaf_idx.
+        let other_sks: Vec<Fr> = (100u64..104).map(Fr::from).collect();
+        let (_other_root, other_paths) = build_tree(&other_sks, 3);
+        w.signers[1] = DemocracySigner {
+            secret_key: other_sks[0],
+            merkle_path: other_paths[0].clone(),
+            leaf_index: 7,
+            active: false,
+        };
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_democracy_update_quorum(&mut c, &w).unwrap();
+        c.check_circuit_satisfiability(&pi(&w)).unwrap();
+    }
+
+    #[test]
+    fn rejects_duplicate_leaf_double_count() {
+        // One signer tries to fill both quorum slots: same sk, same
+        // path, same leaf_index, both active. Without the
+        // anti-double-count constraint the threshold check would pass
+        // (K=2 ≥ 2) collapsing the quorum to 1-of-N.
+        let sks: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+        let mut w = build_witness(&sks, 3, 42, K_MAX as u64, K_MAX, 5, 5);
+        w.signers[1] = w.signers[0].clone();
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_democracy_update_quorum(&mut c, &w).unwrap();
+        assert!(c.check_circuit_satisfiability(&pi(&w)).is_err());
+    }
+
+    #[test]
     fn round_trip_d5() {
         use rand_chacha::rand_core::SeedableRng;
         let sks: Vec<Fr> = (1u64..=8).map(Fr::from).collect();
         let w = build_witness(&sks, 5, 1234, K_MAX as u64, K_MAX, 8, 8);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_democracy_update_quorum(&mut c, &w).unwrap();
+        c.finalize_for_arithmetization().unwrap();
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
+        let keys = crate::prover::plonk::preprocess(&c).unwrap();
+        let proof = crate::prover::plonk::prove(&mut rng, &keys.pk, &c).unwrap();
+        crate::prover::plonk::verify(&keys.vk, &pi(&w), &proof).unwrap();
+    }
+
+    #[test]
+    fn round_trip_d8() {
+        use rand_chacha::rand_core::SeedableRng;
+        let sks: Vec<Fr> = (1u64..=8).map(Fr::from).collect();
+        let w = build_witness(&sks, 8, 1234, K_MAX as u64, K_MAX, 8, 8);
         let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
         synthesize_democracy_update_quorum(&mut c, &w).unwrap();
         c.finalize_for_arithmetization().unwrap();

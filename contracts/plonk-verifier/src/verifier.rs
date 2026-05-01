@@ -469,6 +469,42 @@ mod tests {
         );
     }
 
+    // 1v1 create-circuit fixtures — single tier (depth=5 hardcoded;
+    // sep-oneonone has no per-tier dimension). 2 PIs: `(commitment,
+    // epoch=0)`. The circuit enforces "exactly 2 non-zero leaves at
+    // founding" via in-circuit constants for positions 2..32.
+    const FIXTURE_ONEONONE_CREATE_VK: &[u8; crate::vk_format::VK_LEN] =
+        include_bytes!("../tests/fixtures/oneonone-create-vk.bin");
+    const FIXTURE_ONEONONE_CREATE_PROOF: &[u8; crate::proof_format::PROOF_LEN] =
+        include_bytes!("../tests/fixtures/oneonone-create-proof.bin");
+    const FIXTURE_ONEONONE_CREATE_PI: &[u8; 2 * FR_LEN] =
+        include_bytes!("../tests/fixtures/oneonone-create-pi.bin");
+
+    /// **Load-bearing.** Canonical 1v1 create proof verifies.
+    #[test]
+    fn accepts_canonical_oneonone_create_proof() {
+        let env = Env::default();
+        let parsed_vk = parse_vk_bytes(FIXTURE_ONEONONE_CREATE_VK).expect("parse vk");
+        let parsed_proof =
+            parse_proof_bytes(FIXTURE_ONEONONE_CREATE_PROOF).expect("parse proof");
+        let public_inputs = split_pi(FIXTURE_ONEONONE_CREATE_PI);
+        let result = verify(&env, &parsed_vk, FIXTURE_SRS_G2, &parsed_proof, &public_inputs);
+        assert_eq!(result, Ok(()), "1v1 create proof was rejected: {result:?}");
+    }
+
+    /// Tampered commitment in 1v1 create-PI rejects.
+    #[test]
+    fn rejects_tampered_oneonone_create_commitment() {
+        let env = Env::default();
+        let parsed_vk = parse_vk_bytes(FIXTURE_ONEONONE_CREATE_VK).expect("parse vk");
+        let parsed_proof =
+            parse_proof_bytes(FIXTURE_ONEONONE_CREATE_PROOF).expect("parse proof");
+        let mut public_inputs = split_pi(FIXTURE_ONEONONE_CREATE_PI);
+        public_inputs[0][FR_LEN - 1] ^= 0x01;
+        let result = verify(&env, &parsed_vk, FIXTURE_SRS_G2, &parsed_proof, &public_inputs);
+        assert_eq!(result, Err(VerifyError::PairingMismatch));
+    }
+
     /// Drive the reject path on update fixtures: tamper one PI byte and
     /// expect `Err(PairingMismatch)`. Catches verifier-side regressions
     /// in 3-PI public-input encoding that the 2-PI tamper tests

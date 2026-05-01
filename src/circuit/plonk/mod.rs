@@ -23,6 +23,7 @@
 pub mod poseidon;
 pub mod merkle;
 pub mod membership;
+pub mod oneonone_create;
 pub mod tyranny;
 pub mod update;
 pub mod proof_format;

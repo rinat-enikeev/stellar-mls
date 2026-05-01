@@ -27,6 +27,9 @@ use jf_relation::PlonkCircuit;
 use sha2::{Digest, Sha256};
 
 use crate::circuit::plonk::membership::{synthesize_membership, MembershipWitness};
+use crate::circuit::plonk::oneonone_create::{
+    synthesize_oneonone_create, OneOnOneCreateWitness, DEPTH as ONEONONE_DEPTH,
+};
 use crate::circuit::plonk::poseidon::{poseidon_hash_one_v05, poseidon_hash_two_v05};
 use crate::circuit::plonk::tyranny::{
     synthesize_tyranny_create, synthesize_tyranny_update, TyrannyCreateWitness,
@@ -133,6 +136,12 @@ pub fn pinned_tyranny_update_vk_sha256_hex(depth: usize) -> Option<&'static str>
         _ => None,
     }
 }
+
+/// SHA-256 of the canonical **OneOnOne create** VK (depth=5 only —
+/// 1v1 has no per-tier dimension). Anchors the create-circuit shape
+/// across builds.
+pub const ONEONONE_CREATE_VK_SHA256_HEX: &str =
+    "1be7b883e1d6a62f204239439bcaf5a2ad437eb6013bf75b43c9eea0a08c207d";
 
 /// Deterministic canonical witness for tier `(depth)`. The hash inputs
 /// depend only on `depth`, so the circuit shape and resulting VK
@@ -472,6 +481,59 @@ pub fn bake_tyranny_update_vk(depth: usize) -> Result<Vec<u8>, BakeError> {
     Ok(vk_bytes)
 }
 
+/// Deterministic canonical witness for the **1v1 create** circuit.
+/// Single tier (depth=5 only); two founding members at positions 0/1.
+pub fn build_canonical_oneonone_create_witness() -> OneOnOneCreateWitness {
+    let _ = ONEONONE_DEPTH; // compile-time pin: depth=5 in oneonone_create.rs
+    OneOnOneCreateWitness {
+        commitment: {
+            // Compute natively to match the in-circuit derivation.
+            let leaf_0 = poseidon_hash_one_v05(&Fr::from(1u64));
+            let leaf_1 = poseidon_hash_one_v05(&Fr::from(2u64));
+            // Walk the active spine: position 0 at every level; right
+            // sibling is the zero-subtree hash.
+            let zero_subtrees: [Fr; 5] = {
+                let mut z = [Fr::from(0u64); 5];
+                z[0] = poseidon_hash_two_v05(&Fr::from(0u64), &Fr::from(0u64));
+                for i in 1..5 {
+                    z[i] = poseidon_hash_two_v05(&z[i - 1], &z[i - 1]);
+                }
+                z
+            };
+            let mut current = poseidon_hash_two_v05(&leaf_0, &leaf_1);
+            for i in 1..5 {
+                current = poseidon_hash_two_v05(&current, &zero_subtrees[i - 1]);
+            }
+            let root = current;
+            let salt = [0xEEu8; 32];
+            let salt_fr = Fr::from_le_bytes_mod_order(&salt);
+            let inner = poseidon_hash_two_v05(&root, &Fr::from(0u64));
+            poseidon_hash_two_v05(&inner, &salt_fr)
+        },
+        secret_key_0: Fr::from(1u64),
+        secret_key_1: Fr::from(2u64),
+        salt: [0xEEu8; 32],
+    }
+}
+
+/// Bake the OneOnOne-create VK. Single tier (depth=5).
+pub fn bake_oneonone_create_vk() -> Result<Vec<u8>, BakeError> {
+    let witness = build_canonical_oneonone_create_witness();
+    let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+    synthesize_oneonone_create(&mut circuit, &witness).map_err(BakeError::Synthesize)?;
+    circuit
+        .finalize_for_arithmetization()
+        .map_err(BakeError::Synthesize)?;
+
+    let keys = plonk::preprocess(&circuit).map_err(BakeError::Preprocess)?;
+
+    let mut vk_bytes = Vec::new();
+    keys.vk
+        .serialize_uncompressed(&mut vk_bytes)
+        .map_err(BakeError::Serialize)?;
+    Ok(vk_bytes)
+}
+
 /// Build the canonical update circuit for `depth`, run jf-plonk's
 /// preprocessing against the embedded EF KZG SRS, and return the
 /// arkworks-uncompressed verifying-key bytes.
@@ -629,5 +691,25 @@ mod tests {
             }
         }
         assert!(mismatches.is_empty(), "tyranny VK pin drift:\n  {}", mismatches.join("\n  "));
+    }
+
+    /// Anchor for the OneOnOne-create VK shape.
+    #[test]
+    fn bake_oneonone_create_vk_matches_pinned() {
+        let bytes = bake_oneonone_create_vk().expect("bake");
+        let computed = vk_sha256_hex(&bytes);
+        assert_eq!(
+            computed, ONEONONE_CREATE_VK_SHA256_HEX,
+            "bake_oneonone_create_vk drifted from pinned SHA-256: \
+             computed={computed}, pinned={ONEONONE_CREATE_VK_SHA256_HEX}",
+        );
+    }
+
+    /// OneOnOne-create bake is deterministic.
+    #[test]
+    fn bake_oneonone_create_vk_is_deterministic() {
+        let a = bake_oneonone_create_vk().expect("first bake");
+        let b = bake_oneonone_create_vk().expect("second bake");
+        assert_eq!(a, b, "oneonone-create bake is non-deterministic");
     }
 }

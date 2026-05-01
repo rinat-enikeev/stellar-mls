@@ -23,6 +23,14 @@ jobs:
   bench:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # The repo's rust-toolchain.toml pins 1.88.0 (the version every
+      # mobile bundle and FFI surface compiles against), but
+      # `stellar contract build` pulls in soroban-sdk@26.0.0-rc.1
+      # which requires rustc 1.91.0. RUSTUP_TOOLCHAIN takes precedence
+      # over rust-toolchain.toml, so we override just for this job
+      # without touching the file every other CI path depends on.
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v4
         with:

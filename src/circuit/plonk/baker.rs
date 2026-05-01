@@ -26,6 +26,9 @@ use ark_serialize_v05::CanonicalSerialize;
 use jf_relation::PlonkCircuit;
 use sha2::{Digest, Sha256};
 
+use crate::circuit::plonk::democracy::{
+    synthesize_democracy_update, DemocracyUpdateWitness,
+};
 use crate::circuit::plonk::membership::{synthesize_membership, MembershipWitness};
 use crate::circuit::plonk::oneonone_create::{
     synthesize_oneonone_create, OneOnOneCreateWitness, DEPTH as ONEONONE_DEPTH,
@@ -142,6 +145,97 @@ pub fn pinned_tyranny_update_vk_sha256_hex(depth: usize) -> Option<&'static str>
 /// across builds.
 pub const ONEONONE_CREATE_VK_SHA256_HEX: &str =
     "1be7b883e1d6a62f204239439bcaf5a2ad437eb6013bf75b43c9eea0a08c207d";
+
+/// Pinned anchors for democracy-update VK shape per tier.
+pub const DEMOCRACY_UPDATE_VK_SHA256_HEX_SMALL: &str =
+    "9772ebfa43f87d005628fe610d29d11d8dfeeafdc350724a21d41c43becafe70";
+pub const DEMOCRACY_UPDATE_VK_SHA256_HEX_MEDIUM: &str =
+    "cd3aaaeb26926d89c494fbf03506b8558e53dc055c5bff041b7e10cacc70f3e5";
+pub const DEMOCRACY_UPDATE_VK_SHA256_HEX_LARGE: &str =
+    "73d120375c3edd0d793bb089bd42a2a9955d0ddb460b0d07cc67246ab579760e";
+
+pub fn pinned_democracy_update_vk_sha256_hex(depth: usize) -> Option<&'static str> {
+    match depth {
+        5 => Some(DEMOCRACY_UPDATE_VK_SHA256_HEX_SMALL),
+        8 => Some(DEMOCRACY_UPDATE_VK_SHA256_HEX_MEDIUM),
+        11 => Some(DEMOCRACY_UPDATE_VK_SHA256_HEX_LARGE),
+        _ => None,
+    }
+}
+
+pub fn build_canonical_democracy_update_witness(depth: usize) -> DemocracyUpdateWitness {
+    let secret_keys: Vec<Fr> = (1u64..=8).map(Fr::from).collect();
+    let prover_index = 3usize;
+    let epoch_old: u64 = 1234;
+    let salt_old: [u8; 32] = [0xEEu8; 32];
+    let salt_new: [u8; 32] = [0xFFu8; 32];
+    let occ_old = Fr::from(0xA110u64);
+    let occ_new = Fr::from(0xA111u64);
+    let threshold = 5u64;
+
+    let leaves: Vec<Fr> = secret_keys.iter().map(poseidon_hash_one_v05).collect();
+    let num_leaves = 1usize << depth;
+    let mut nodes = vec![Fr::from(0u64); 2 * num_leaves];
+    for (i, leaf) in leaves.iter().enumerate() {
+        nodes[num_leaves + i] = *leaf;
+    }
+    for i in (1..num_leaves).rev() {
+        nodes[i] = poseidon_hash_two_v05(&nodes[2 * i], &nodes[2 * i + 1]);
+    }
+    let root = nodes[1];
+
+    let mut path = Vec::with_capacity(depth);
+    let mut cur = num_leaves + prover_index;
+    for _ in 0..depth {
+        let sib = if cur % 2 == 0 { cur + 1 } else { cur - 1 };
+        path.push(nodes[sib]);
+        cur /= 2;
+    }
+
+    let salt_old_fr = Fr::from_le_bytes_mod_order(&salt_old);
+    let salt_new_fr = Fr::from_le_bytes_mod_order(&salt_new);
+    let inner_old = poseidon_hash_two_v05(&root, &Fr::from(epoch_old));
+    let mid_old = poseidon_hash_two_v05(&inner_old, &salt_old_fr);
+    let c_old = poseidon_hash_two_v05(&mid_old, &occ_old);
+    let inner_new = poseidon_hash_two_v05(&root, &Fr::from(epoch_old + 1));
+    let mid_new = poseidon_hash_two_v05(&inner_new, &salt_new_fr);
+    let c_new = poseidon_hash_two_v05(&mid_new, &occ_new);
+
+    DemocracyUpdateWitness {
+        c_old,
+        epoch_old,
+        c_new,
+        occupancy_commitment_old: occ_old,
+        occupancy_commitment_new: occ_new,
+        threshold_numerator: threshold,
+        secret_key: secret_keys[prover_index],
+        member_root_old: root,
+        member_root_new: root,
+        salt_old,
+        salt_new,
+        merkle_path_old: path,
+        leaf_index_old: prover_index,
+        depth,
+    }
+}
+
+pub fn bake_democracy_update_vk(depth: usize) -> Result<Vec<u8>, BakeError> {
+    if pinned_democracy_update_vk_sha256_hex(depth).is_none() {
+        return Err(BakeError::UnsupportedDepth(depth));
+    }
+    let witness = build_canonical_democracy_update_witness(depth);
+    let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+    synthesize_democracy_update(&mut circuit, &witness).map_err(BakeError::Synthesize)?;
+    circuit
+        .finalize_for_arithmetization()
+        .map_err(BakeError::Synthesize)?;
+    let keys = plonk::preprocess(&circuit).map_err(BakeError::Preprocess)?;
+    let mut vk_bytes = Vec::new();
+    keys.vk
+        .serialize_uncompressed(&mut vk_bytes)
+        .map_err(BakeError::Serialize)?;
+    Ok(vk_bytes)
+}
 
 /// Deterministic canonical witness for tier `(depth)`. The hash inputs
 /// depend only on `depth`, so the circuit shape and resulting VK
@@ -711,5 +805,21 @@ mod tests {
         let a = bake_oneonone_create_vk().expect("first bake");
         let b = bake_oneonone_create_vk().expect("second bake");
         assert_eq!(a, b, "oneonone-create bake is non-deterministic");
+    }
+
+    /// Anchor for democracy-update VK shapes across all 3 tiers.
+    #[test]
+    fn bake_democracy_update_vk_matches_pinned_for_all_tiers() {
+        let mut mismatches = Vec::new();
+        for &depth in &[5usize, 8, 11] {
+            let computed = vk_sha256_hex(&bake_democracy_update_vk(depth).unwrap());
+            let pinned = pinned_democracy_update_vk_sha256_hex(depth).unwrap();
+            if computed != pinned {
+                mismatches.push(format!(
+                    "democracy-update depth={depth}: computed={computed}, pinned={pinned}"
+                ));
+            }
+        }
+        assert!(mismatches.is_empty(), "democracy-update VK pin drift:\n  {}", mismatches.join("\n  "));
     }
 }

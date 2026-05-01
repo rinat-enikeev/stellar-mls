@@ -456,6 +456,228 @@ pub fn synthesize_democracy_update(
     Ok(())
 }
 
+// ================================================================
+// Create circuit (issue #5 / Phase C.4.c)
+// ================================================================
+//
+// `synthesize_democracy_create` produces a c with the **same 3-level
+// chain** that `synthesize_democracy_update_quorum` and the simplified
+// fallback `synthesize_democracy_update` both expect at update time:
+//
+//   c = Poseidon(Poseidon(Poseidon(member_root, 0), salt),
+//                occupancy_commitment_initial)
+//
+// This closes the lineage gap that left freshly-created democracy
+// groups bricked from update_commitment under the migration's
+// "simplified initial port" wiring (where create reused anarchy's
+// 2-level membership VK and produced a c shape `update_commitment`
+// could not satisfy without a Poseidon collision).
+//
+// **Public inputs (3, fixed order)** — distinct from membership's 2-PI
+// shape because `occupancy_commitment_initial` MUST be bound by the
+// proof to close the second gap from the contract's "Status —
+// simplified initial port" docstring (occupancy was previously
+// caller-asserted but unbound):
+//
+//   1. `commitment`
+//   2. `epoch`  (always 0 at create — the contract validates this
+//                  matches `BE(0)` so passing anything else fails the
+//                  PI gate before the verifier ever runs)
+//   3. `occupancy_commitment_initial`
+//
+// **Private witnesses**: `secret_key, member_root, salt, merkle_path,
+// leaf_index, depth`. Plus `member_root` MUST contain the creator's
+// `Poseidon(secret_key)` leaf — same key-ownership demonstration as
+// the standard membership circuit.
+
+/// Witness for the democracy create circuit.
+pub struct DemocracyCreateWitness {
+    pub commitment: Fr,
+    pub occupancy_commitment_initial: Fr,
+    pub secret_key: Fr,
+    pub member_root: Fr,
+    pub salt: [u8; 32],
+    pub merkle_path: Vec<Fr>,
+    pub leaf_index: usize,
+    pub depth: usize,
+}
+
+/// Allocate the democracy create circuit. Returns the public-input
+/// `Variable` for `commitment`. Public-input ordering is fixed:
+/// `(commitment, epoch=0, occupancy_commitment_initial)`.
+pub fn synthesize_democracy_create(
+    circuit: &mut PlonkCircuit<Fr>,
+    witness: &DemocracyCreateWitness,
+) -> Result<Variable, CircuitError> {
+    if witness.merkle_path.len() != witness.depth {
+        return Err(CircuitError::ParameterError(format!(
+            "merkle_path length {} != depth {}",
+            witness.merkle_path.len(),
+            witness.depth
+        )));
+    }
+    if witness.depth >= usize::BITS as usize {
+        return Err(CircuitError::ParameterError(format!(
+            "depth {} >= usize::BITS",
+            witness.depth
+        )));
+    }
+    if witness.leaf_index >= (1usize << witness.depth) {
+        return Err(CircuitError::ParameterError(format!(
+            "leaf_index {} out of range for depth {}",
+            witness.leaf_index, witness.depth,
+        )));
+    }
+
+    // ---- Public inputs (fixed order) ----
+    let commitment_var = circuit.create_public_variable(witness.commitment)?;
+    let epoch_var = circuit.create_public_variable(Fr::from(0u64))?;
+    let occ_var =
+        circuit.create_public_variable(witness.occupancy_commitment_initial)?;
+
+    // ---- Private witnesses ----
+    let secret_key_var = circuit.create_variable(witness.secret_key)?;
+    let member_root_var = circuit.create_variable(witness.member_root)?;
+    let salt_fr = Fr::from_le_bytes_mod_order(&witness.salt);
+    let salt_var = circuit.create_variable(salt_fr)?;
+    let path_vars: Vec<Variable> = witness
+        .merkle_path
+        .iter()
+        .map(|s| circuit.create_variable(*s))
+        .collect::<Result<_, _>>()?;
+    let bit_vars: Vec<BoolVar> = (0..witness.depth)
+        .map(|i| circuit.create_boolean_variable(((witness.leaf_index >> i) & 1) == 1))
+        .collect::<Result<_, _>>()?;
+
+    // ---- 1. leaf = Poseidon(secret_key) ----
+    let leaf_var = poseidon_hash_one_gadget(circuit, secret_key_var)?;
+
+    // ---- 2. Merkle membership against member_root ----
+    let computed_root =
+        compute_merkle_root_gadget(circuit, leaf_var, &path_vars, &bit_vars)?;
+    circuit.enforce_equal(computed_root, member_root_var)?;
+
+    // ---- 3. 3-level commitment chain (matches update_commitment) ----
+    let inner = poseidon_hash_two_gadget(circuit, member_root_var, epoch_var)?;
+    let mid = poseidon_hash_two_gadget(circuit, inner, salt_var)?;
+    let computed_c = poseidon_hash_two_gadget(circuit, mid, occ_var)?;
+    circuit.enforce_equal(computed_c, commitment_var)?;
+
+    Ok(commitment_var)
+}
+
+// ================================================================
+// Membership circuit (issue #5 / Phase C.4.c)
+// ================================================================
+//
+// `synthesize_democracy_membership` mirrors `synthesize_oligarchy_membership`
+// — proves "this caller knows a secret_key whose Poseidon-leaf opens
+// to `member_root` at some leaf_index, and the resulting commitment
+// matches what's stored on-chain" — but binds the commitment under
+// democracy's **3-level chain** (the same one
+// `synthesize_democracy_create` and `synthesize_democracy_update_quorum`
+// both use):
+//
+//   c = Poseidon(Poseidon(Poseidon(member_root, epoch), salt),
+//                occupancy_commitment)
+//
+// The standard membership circuit's 2-level chain doesn't match the
+// stored c after `create_group` (post-issue-#5 fix), so a member
+// proving against the wrong chain shape produces a c that the
+// contract's `public_inputs[0] == state.commitment` PI gate rejects.
+// This circuit closes that gap.
+//
+// **Public inputs (2, fixed order — matches standard membership for
+// wire-shape compatibility):**
+//   1. `commitment`
+//   2. `epoch`
+//
+// **Private witnesses:** `secret_key, member_root, salt, merkle_path,
+// leaf_index, occupancy_commitment`. The last is a per-state quantity
+// the prover gets via off-chain group coordination — same value the
+// contract stores in `CommitmentEntry.occupancy_commitment`.
+
+/// Witness inputs for the democracy-specific membership circuit.
+pub struct DemocracyMembershipWitness {
+    pub commitment: Fr,
+    pub epoch: u64,
+    pub secret_key: Fr,
+    pub member_root: Fr,
+    pub salt: [u8; 32],
+    pub merkle_path: Vec<Fr>,
+    pub leaf_index: usize,
+    pub depth: usize,
+    /// Per-state occupancy commitment — private. (Same value the
+    /// contract stores in `CommitmentEntry.occupancy_commitment`; not
+    /// promoted to a public input so wire-PI shape stays compatible
+    /// with the standard membership circuit.)
+    pub occupancy_commitment: Fr,
+}
+
+/// Allocate the democracy-specific membership circuit. Public-input
+/// ordering is byte-identical to `synthesize_membership`'s
+/// `(commitment, epoch)` so the contract surface (PI count + shape)
+/// is unchanged when `verify_membership` swaps to this VK.
+pub fn synthesize_democracy_membership(
+    circuit: &mut PlonkCircuit<Fr>,
+    witness: &DemocracyMembershipWitness,
+) -> Result<Variable, CircuitError> {
+    if witness.merkle_path.len() != witness.depth {
+        return Err(CircuitError::ParameterError(format!(
+            "merkle_path length {} != depth {}",
+            witness.merkle_path.len(),
+            witness.depth
+        )));
+    }
+    if witness.depth >= usize::BITS as usize {
+        return Err(CircuitError::ParameterError(format!(
+            "depth {} >= usize::BITS",
+            witness.depth
+        )));
+    }
+    if witness.leaf_index >= (1usize << witness.depth) {
+        return Err(CircuitError::ParameterError(format!(
+            "leaf_index {} out of range for depth {}",
+            witness.leaf_index, witness.depth,
+        )));
+    }
+
+    // ---- Public inputs ----
+    let commitment_var = circuit.create_public_variable(witness.commitment)?;
+    let epoch_var = circuit.create_public_variable(Fr::from(witness.epoch))?;
+
+    // ---- Private witnesses ----
+    let secret_key_var = circuit.create_variable(witness.secret_key)?;
+    let member_root_var = circuit.create_variable(witness.member_root)?;
+    let salt_fr = Fr::from_le_bytes_mod_order(&witness.salt);
+    let salt_var = circuit.create_variable(salt_fr)?;
+    let occ_var = circuit.create_variable(witness.occupancy_commitment)?;
+    let path_vars: Vec<Variable> = witness
+        .merkle_path
+        .iter()
+        .map(|sibling| circuit.create_variable(*sibling))
+        .collect::<Result<_, _>>()?;
+    let bit_vars: Vec<BoolVar> = (0..witness.depth)
+        .map(|i| circuit.create_boolean_variable(((witness.leaf_index >> i) & 1) == 1))
+        .collect::<Result<_, _>>()?;
+
+    // ---- 1. leaf = Poseidon(secret_key) ----
+    let leaf_var = poseidon_hash_one_gadget(circuit, secret_key_var)?;
+
+    // ---- 2. Merkle membership against member_root ----
+    let computed_root =
+        compute_merkle_root_gadget(circuit, leaf_var, &path_vars, &bit_vars)?;
+    circuit.enforce_equal(computed_root, member_root_var)?;
+
+    // ---- 3. 3-level commitment chain — matches create + update_quorum ----
+    let inner = poseidon_hash_two_gadget(circuit, member_root_var, epoch_var)?;
+    let mid = poseidon_hash_two_gadget(circuit, inner, salt_var)?;
+    let computed_c = poseidon_hash_two_gadget(circuit, mid, occ_var)?;
+    circuit.enforce_equal(computed_c, commitment_var)?;
+
+    Ok(commitment_var)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -297,9 +297,11 @@ mod tests {
     use rand_chacha::rand_core::SeedableRng;
 
     use crate::circuit::plonk::baker::{
-        bake_democracy_update_vk, bake_membership_vk, bake_oligarchy_create_vk,
-        bake_oligarchy_membership_vk, bake_oligarchy_update_vk, bake_oneonone_create_vk,
-        bake_tyranny_create_vk, bake_tyranny_update_vk, bake_update_vk,
+        bake_democracy_create_vk, bake_democracy_membership_vk, bake_democracy_update_vk,
+        bake_membership_vk, bake_oligarchy_create_vk, bake_oligarchy_membership_vk,
+        bake_oligarchy_update_vk, bake_oneonone_create_vk, bake_tyranny_create_vk,
+        bake_tyranny_update_vk, bake_update_vk, build_canonical_democracy_create_witness,
+        build_canonical_democracy_membership_witness,
         build_canonical_democracy_update_quorum_witness,
         build_canonical_democracy_update_witness, build_canonical_membership_witness,
         build_canonical_oligarchy_create_witness,
@@ -309,6 +311,7 @@ mod tests {
         build_canonical_tyranny_update_witness, build_canonical_update_witness,
     };
     use crate::circuit::plonk::democracy::{
+        synthesize_democracy_create, synthesize_democracy_membership,
         synthesize_democracy_update, synthesize_democracy_update_quorum,
     };
     use crate::circuit::plonk::membership::synthesize_membership;
@@ -589,6 +592,64 @@ mod tests {
         for fr in [witness.commitment, Fr::from(0u64)] {
             let bytes = fr.into_bigint().to_bytes_be();
             pi_concat.extend_from_slice(&bytes);
+        }
+        (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat)
+    }
+
+    fn build_canonical_democracy_create_artifact_bytes(
+        depth: usize,
+    ) -> (Vec<u8>, Vec<u8>, [u8; G2_COMPRESSED_LEN], Vec<u8>) {
+        let vk_bytes = bake_democracy_create_vk(depth).expect("bake democracy-create vk");
+        let witness = build_canonical_democracy_create_witness(depth);
+        let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_democracy_create(&mut circuit, &witness).unwrap();
+        circuit.finalize_for_arithmetization().unwrap();
+        let keys = plonk::preprocess(&circuit).unwrap();
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
+        let oracle_proof = plonk::prove(&mut rng, &keys.pk, &circuit).unwrap();
+        let mut proof_bytes = Vec::new();
+        oracle_proof
+            .serialize_uncompressed(&mut proof_bytes)
+            .unwrap();
+        let parsed_vk =
+            parse_vk_bytes(&vk_bytes).expect("parse democracy-create vk");
+        let srs_g2_compressed =
+            super::compress_g2_for_transcript(&parsed_vk.open_key_powers_of_h[1])
+                .expect("compress");
+        // PI shape: (commitment, epoch=0, occupancy_commitment_initial)
+        let mut pi_concat = Vec::with_capacity(3 * FR_LEN);
+        for fr in [witness.commitment, Fr::from(0u64), witness.occupancy_commitment_initial] {
+            pi_concat.extend_from_slice(&fr.into_bigint().to_bytes_be());
+        }
+        (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat)
+    }
+
+    fn build_canonical_democracy_membership_artifact_bytes(
+        depth: usize,
+    ) -> (Vec<u8>, Vec<u8>, [u8; G2_COMPRESSED_LEN], Vec<u8>) {
+        let vk_bytes =
+            bake_democracy_membership_vk(depth).expect("bake democracy-membership vk");
+        let witness = build_canonical_democracy_membership_witness(depth);
+        let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_democracy_membership(&mut circuit, &witness).unwrap();
+        circuit.finalize_for_arithmetization().unwrap();
+        let keys = plonk::preprocess(&circuit).unwrap();
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
+        let oracle_proof = plonk::prove(&mut rng, &keys.pk, &circuit).unwrap();
+        let mut proof_bytes = Vec::new();
+        oracle_proof
+            .serialize_uncompressed(&mut proof_bytes)
+            .unwrap();
+        let parsed_vk =
+            parse_vk_bytes(&vk_bytes).expect("parse democracy-membership vk");
+        let srs_g2_compressed =
+            super::compress_g2_for_transcript(&parsed_vk.open_key_powers_of_h[1])
+                .expect("compress");
+        // PI shape: (commitment, epoch) — wire-identical to standard
+        // membership; occupancy_commitment is private.
+        let mut pi_concat = Vec::with_capacity(2 * FR_LEN);
+        for fr in [witness.commitment, Fr::from(witness.epoch)] {
+            pi_concat.extend_from_slice(&fr.into_bigint().to_bytes_be());
         }
         (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat)
     }
@@ -879,6 +940,8 @@ mod tests {
                 "update" => "update-",
                 "tyranny-create" => "tyranny-create-",
                 "tyranny-update" => "tyranny-update-",
+                "democracy-create" => "democracy-create-",
+                "democracy-membership" => "democracy-membership-",
                 "democracy-update" => "democracy-update-",
                 "oligarchy-membership" => "oligarchy-membership-",
                 _ => unreachable!(),
@@ -944,9 +1007,31 @@ mod tests {
             );
 
             let (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat) =
+                build_canonical_democracy_create_artifact_bytes(depth);
+            process_tier(
+                "democracy-create",
+                depth,
+                vk_bytes,
+                proof_bytes,
+                srs_g2_compressed,
+                pi_concat,
+            );
+
+            let (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat) =
                 build_canonical_democracy_update_artifact_bytes(depth);
             process_tier(
                 "democracy-update",
+                depth,
+                vk_bytes,
+                proof_bytes,
+                srs_g2_compressed,
+                pi_concat,
+            );
+
+            let (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat) =
+                build_canonical_democracy_membership_artifact_bytes(depth);
+            process_tier(
+                "democracy-membership",
                 depth,
                 vk_bytes,
                 proof_bytes,

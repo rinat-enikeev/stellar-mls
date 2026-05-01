@@ -196,6 +196,19 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test:rules:1.6.1")
     androidTestImplementation("androidx.test.ext:junit-ktx:1.2.1")
+    androidTestImplementation("androidx.test:core-ktx:1.6.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    androidTestImplementation("androidx.test.espresso:espresso-intents:3.6.1")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+
+    // Compose UI testing — pulls test rule, finders and assertions for Compose semantics tree
+    androidTestImplementation(composeBom)
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    // ui-test-manifest registers the host activity used by createComposeRule(); only
+    // needed in debug variants since release strips test-only manifest entries.
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+
+    androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 }
 
 if (file("google-services.json").exists()) {

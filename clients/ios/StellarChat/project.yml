@@ -113,6 +113,22 @@ targets:
       - target: StellarChat
       - package: SwiftMLS
 
+  StellarChatUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - StellarChatUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: chat.onym.ios.uitests
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
+        TEST_TARGET_NAME: StellarChat
+    dependencies:
+      - target: StellarChat
+
   StellarChatNotificationService:
     type: app-extension
     platform: iOS
@@ -145,6 +161,7 @@ schemes:
       targets:
         StellarChat: all
         StellarChatTests: [test]
+        StellarChatUITests: [test]
     run:
       config: Debug
       environmentVariables:
@@ -153,6 +170,7 @@ schemes:
       config: Debug
       targets:
         - StellarChatTests
+        - StellarChatUITests
     profile:
       config: Release
     analyze:

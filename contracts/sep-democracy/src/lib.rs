@@ -17,15 +17,30 @@
 //! observers can't distinguish two groups with different thresholds
 //! by call-payload analysis.
 //!
-//! ## Note on circuit semantics
+//! ## Status — simplified initial port (DO NOT SHIP user-visible)
 //!
-//! The PLONK port at `circuit::plonk::democracy` is a *simplified*
-//! initial port: it binds occupancy commitments + threshold into the
-//! commitment derivation but does NOT yet enforce the K-of-N quorum
-//! + single-leaf-delta constraints from the Groth16 reference. The
-//! contract's verification path is structurally complete; full
-//! quorum semantics land in a follow-up PR. See the prover-side
-//! module's "Status — simplified initial port" docstring.
+//! Two security-load-bearing gaps live in this PR; both are tracked
+//! for follow-up before any mainnet/testnet promotion:
+//!
+//!   1. **Update circuit (`circuit::plonk::democracy`)**: binds
+//!      occupancy commitments + threshold into the commitment
+//!      derivation but does NOT yet enforce the K-of-N quorum +
+//!      single-leaf-delta constraints from the Groth16 reference.
+//!      Any single member with one secret_key can therefore
+//!      construct a valid update — `update_commitment` does not
+//!      enforce democratic semantics on its own.
+//!   2. **`create_group`**: reuses anarchy's 2-PI membership VK, so
+//!      `occupancy_commitment_initial` is NOT bound by the proof to
+//!      the committed `c`. A caller can supply any canonical Fr as
+//!      the initial occupancy commitment; from that point forward
+//!      `update_commitment`'s `occ_old_pi == current.occupancy_
+//!      commitment` check rests on a value the prover chose freely
+//!      at create.
+//!
+//! The contract's verification path is structurally complete; full
+//! quorum semantics + occupancy binding at create land in a follow-up
+//! PR. See the prover-side module's "Status — simplified initial
+//! port" docstring.
 
 #![no_std]
 use soroban_sdk::{
@@ -216,6 +231,16 @@ impl SepDemocracyContract {
     /// The full Groth16 democracy create circuit's specifics (occupancy
     /// binding at create) are not enforced here pending a per-tier
     /// democracy-create circuit port — flagged for follow-up.
+    ///
+    /// SECURITY: because the membership VK has 2 PIs (commitment, epoch),
+    /// `occupancy_commitment_initial` is NOT bound by the proof to the
+    /// committed `c` at create time. A caller may supply any canonical
+    /// Fr value as the initial occupancy commitment. From this point
+    /// forward `update_commitment`'s `occ_old_pi == current.occupancy_
+    /// commitment` check rests on a value the prover chose freely at
+    /// create. This is part of the simplified-port surface and must not
+    /// ship to anything user-visible until the per-tier democracy-create
+    /// circuit (with occupancy binding in-PI) lands.
     pub fn create_group(
         env: Env,
         caller: Address,
@@ -559,6 +584,10 @@ const _: () = {
     assert!(G2_COMPRESSED_LEN == 96);
 };
 
+/// Largest PI vector across both circuits used by this contract:
+/// membership = 2, update = 6. Bump this if a third circuit with a
+/// larger PI vector is added — otherwise its inputs will be silently
+/// truncated by the `&pi_buf[..n]` slice handed to the verifier.
 const MAX_PI_COUNT: usize = 6;
 
 fn verify_plonk_proof(
@@ -567,6 +596,11 @@ fn verify_plonk_proof(
     proof: &BytesN<1601>,
     public_inputs: &Vec<BytesN<32>>,
 ) -> Result<(), Error> {
+    // VKs are baked at compile time, so this branch is unreachable in
+    // practice. If a corrupted baked VK ever did fail to parse here, the
+    // resulting `InvalidProof` would be folded into `Ok(false)` by the
+    // read-only `verify_membership` path — masking the corruption as a
+    // routine bad proof. Keep the baked-VK SHA anchors loud.
     let parsed_vk = parse_vk_bytes(vk_bytes).map_err(|_| Error::InvalidProof)?;
     let proof_array: [u8; PROOF_LEN] = proof.to_array();
     let parsed_proof = parse_proof_bytes(&proof_array).map_err(|_| Error::InvalidProof)?;

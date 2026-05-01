@@ -167,6 +167,14 @@ emit_row() {
 
     local raw
     raw="$(fetch_fee_full "$hash" || echo '{}')"
+    # `stellar tx fetch fee --output json` returns
+    #   { "proposed": {fee, resource_fee, inclusion_fee},
+    #     "charged":  {fee, resource_fee, inclusion_fee,
+    #                  non_refundable_resource_fee, refundable_resource_fee} }
+    # `charged.fee` is the net amount the source account paid; that's
+    # what we surface as the headline `fee_stroops`. `proposed` is what
+    # the simulator pre-allocated — useful diagnostic, kept under
+    # `proposed_fee` for the renderer.
     jq -nc \
         --arg row_type "op" \
         --arg contract "$contract" \
@@ -176,10 +184,12 @@ emit_row() {
         --argjson raw "$raw" \
         --argjson extra "$extra" \
         '{row_type: $row_type, contract: $contract, op: $op, tier: $tier, hash: $hash,
-          fee_stroops: ($raw.totals.fee_charged // $raw.fee_charged // null),
-          inclusion_fee: ($raw.totals.inclusion_fee // null),
-          resource_fee: ($raw.totals.resource_fee // null),
-          refundable_fee_refund: ($raw.totals.refundable_fee_refund // null),
+          fee_stroops: $raw.charged.fee,
+          inclusion_fee: $raw.charged.inclusion_fee,
+          resource_fee: $raw.charged.resource_fee,
+          non_refundable_resource_fee: $raw.charged.non_refundable_resource_fee,
+          refundable_resource_fee: $raw.charged.refundable_resource_fee,
+          proposed_fee: $raw.proposed.fee,
           raw: $raw} + $extra' \
         >> "$BENCH_JSONL"
 }
@@ -187,13 +197,12 @@ emit_row() {
 # ---------- deploy + invoke wrappers ----------
 
 # bench_deploy <contract_alias> <wasm> <constructor_args...>
-# Deploys and echoes the contract id on stdout for the caller to bind.
-# `stellar contract deploy` submits two txs:
-#   1. upload_contract_wasm  (size-dominated, the larger of the two)
-#   2. create_contract       (constructor execution)
-# Both fees are emitted as separate JSONL rows (deploy_upload,
-# deploy_create) so the headline cost isn't silently masked by
-# capturing only the first hash.
+# Deploys and echoes the contract id on stdout. `stellar contract
+# deploy` v26 batches upload + create into a single transaction
+# (one tx hash, one stellar.expert URL printed) — the second 🔗
+# line in the output is the lab.stellar.org **contract** URL, not
+# a tx URL. So we emit a single `deploy` row with the captured
+# fee.
 bench_deploy() {
     local alias="$1"
     local wasm="$2"
@@ -213,13 +222,11 @@ bench_deploy() {
 
     cat "$err" >&2
 
-    local upload_hash create_hash
-    upload_hash="$(capture_tx_hashes "$err" | sed -n '1p')"
-    create_hash="$(capture_tx_hashes "$err" | sed -n '2p')"
+    local hash
+    hash="$(capture_tx_hash "$err" || true)"
     rm -f "$err"
 
-    emit_row "$BENCH_CURRENT_CONTRACT" "deploy_upload" "n/a" "$upload_hash"
-    emit_row "$BENCH_CURRENT_CONTRACT" "deploy_create" "n/a" "$create_hash"
+    emit_row "$BENCH_CURRENT_CONTRACT" "deploy" "n/a" "$hash"
     emit_contract_address "$BENCH_CURRENT_CONTRACT" "$cid"
     printf '%s' "$cid"
 }

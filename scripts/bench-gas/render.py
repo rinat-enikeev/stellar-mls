@@ -27,13 +27,11 @@ CONTRACT_ORDER = {
 }
 
 OP_ORDER = {
-    "deploy_upload": 0,
-    "deploy_create": 1,
-    "deploy": 1,  # legacy single-row path; kept so older JSONL still sorts
-    "create_group": 2,
-    "create_oligarchy_group": 2,
-    "verify_membership": 3,
-    "update_commitment": 4,
+    "deploy": 0,
+    "create_group": 1,
+    "create_oligarchy_group": 1,
+    "verify_membership": 2,
+    "update_commitment": 3,
     "set_restricted_mode": 10,
     "bump_group_ttl": 11,
 }
@@ -143,8 +141,13 @@ def build_gas_table(op_rows: list[dict]) -> str:
     if not op_rows:
         return "_(no transactions submitted)_"
 
+    # `Fee (XLM)` and `Stroops` are the same number in different units —
+    # `Resource` + `Inclusion` add up to `Stroops`. `Non-refundable` is
+    # the locked portion of `Resource`; `Refundable` is the rest of
+    # `Resource` (charged up-front, refunded if unused — but already
+    # netted out in the headline `Stroops`).
     headers = ["Contract", "Operation", "Tier", "Fee (XLM)",
-               "Stroops", "Inclusion", "Resource", "Refund"]
+               "Stroops", "Resource", "Non-refundable", "Refundable", "Inclusion"]
     lines = [
         "| " + " | ".join(headers) + " |",
         "|" + "|".join("---" for _ in headers) + "|",
@@ -156,9 +159,10 @@ def build_gas_table(op_rows: list[dict]) -> str:
             tier_str(row.get("tier", "")),
             stroops_to_xlm(row.get("fee_stroops")),
             fmt_stroops(row.get("fee_stroops")),
-            fmt_int(row.get("inclusion_fee")),
             fmt_int(row.get("resource_fee")),
-            fmt_int(row.get("refundable_fee_refund")),
+            fmt_int(row.get("non_refundable_resource_fee")),
+            fmt_int(row.get("refundable_resource_fee")),
+            fmt_int(row.get("inclusion_fee")),
         ]
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)

@@ -160,4 +160,44 @@ class GroupCryptoTest {
         val k2 = GroupCrypto.hkdf(ikm, salt, "info2".toByteArray(), 32)
         assertFalse(k1.contentEquals(k2))
     }
+
+    @Test
+    fun hkdf_differentSaltsDifferentOutput() {
+        val ikm = ByteArray(32) { 0x42 }
+        val info = "info".toByteArray()
+        val k1 = GroupCrypto.hkdf(ikm, "salt1".toByteArray(), info, 32)
+        val k2 = GroupCrypto.hkdf(ikm, "salt2".toByteArray(), info, 32)
+        assertFalse(k1.contentEquals(k2))
+    }
+
+    @Test
+    fun hkdf_respectsRequestedLength_16Bytes() {
+        val key = GroupCrypto.hkdf(
+            ikm = ByteArray(32),
+            salt = "salt".toByteArray(),
+            info = "info".toByteArray(),
+            length = 16
+        )
+        assertEquals(16, key.size)
+    }
+
+    @Test
+    fun hkdf_respectsRequestedLength_32Bytes() {
+        val key = GroupCrypto.hkdf(
+            ikm = ByteArray(32),
+            salt = "salt".toByteArray(),
+            info = "info".toByteArray(),
+            length = 32
+        )
+        assertEquals(32, key.size)
+    }
+
+    @Test
+    fun hkdf_differentIkmDifferentOutput() {
+        val salt = "salt".toByteArray()
+        val info = "info".toByteArray()
+        val k1 = GroupCrypto.hkdf(ByteArray(32) { 0x01 }, salt, info, 32)
+        val k2 = GroupCrypto.hkdf(ByteArray(32) { 0x02 }, salt, info, 32)
+        assertFalse(k1.contentEquals(k2))
+    }
 }

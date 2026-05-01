@@ -57,15 +57,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import chat.onym.android.BuildConfig
+import chat.onym.android.ui.TestTags
 import chat.onym.android.ui.components.QRCodeImage
 import chat.onym.android.ui.components.SettingsIconBox
 import chat.onym.android.ui.components.SettingsIconColors
@@ -87,12 +90,13 @@ fun SettingsScreen(
     onOpenAdvanced: () -> Unit = {},
     onJoinGroup: () -> Unit = {},
 ) {
-    var tab by remember { mutableStateOf(SettingsTab.Invite) }
+    var tab by rememberSaveable { mutableStateOf(SettingsTab.Invite) }
     var showAbout by remember { mutableStateOf(false) }
     var showRegenerateConfirm by remember { mutableStateOf(false) }
     var regenerateError by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
+        modifier = Modifier.testTag(TestTags.Settings.Screen),
         topBar = {
             TopAppBar(
                 title = { Text("Settings") },
@@ -120,12 +124,14 @@ fun SettingsScreen(
                 SegmentedButton(
                     selected = tab == SettingsTab.Invite,
                     onClick = { tab = SettingsTab.Invite },
-                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    modifier = Modifier.testTag(TestTags.Settings.InviteTab)
                 ) { Text("Invite Key") }
                 SegmentedButton(
                     selected = tab == SettingsTab.Preferences,
                     onClick = { tab = SettingsTab.Preferences },
-                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    modifier = Modifier.testTag(TestTags.Settings.PreferencesTab)
                 ) { Text("Preferences") }
             }
 

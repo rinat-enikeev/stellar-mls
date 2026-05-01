@@ -35,7 +35,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import chat.onym.android.ui.TestTags
 import chat.onym.android.model.ChatGroup
 import chat.onym.android.onchain.OnChainVerificationResult
 import chat.onym.android.ui.components.QRScannerView
@@ -92,6 +94,7 @@ fun JoinGroupScreen(
     }
 
     Scaffold(
+        modifier = Modifier.testTag(TestTags.JoinGroup.Screen),
         topBar = {
             TopAppBar(
                 title = { Text("Join Group") },
@@ -125,7 +128,8 @@ fun JoinGroupScreen(
                 label = { Text("Invite Code") },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(120.dp),
+                    .height(120.dp)
+                    .testTag(TestTags.JoinGroup.InviteField),
                 maxLines = 5
             )
 
@@ -139,7 +143,9 @@ fun JoinGroupScreen(
                         viewModel.inviteText = clip.getItemAt(0).text?.toString() ?: ""
                     }
                 },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(TestTags.JoinGroup.PasteButton)
             ) {
                 Text("Paste from Clipboard")
             }
@@ -148,7 +154,9 @@ fun JoinGroupScreen(
 
             OutlinedButton(
                 onClick = { showScanner = true },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(TestTags.JoinGroup.ScanButton)
             ) {
                 Text("Scan QR Code")
             }

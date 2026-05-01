@@ -80,8 +80,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import chat.onym.android.ui.TestTags
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -170,6 +172,7 @@ fun CreateGroupScreen(
     val bg = MaterialTheme.colorScheme.surfaceContainerLowest
 
     Scaffold(
+        modifier = Modifier.testTag(TestTags.CreateGroup.Screen),
         containerColor = bg,
         topBar = {
             TopAppBar(
@@ -200,10 +203,16 @@ fun CreateGroupScreen(
                 navigationIcon = {
                     when {
                         viewModel.phase == CreationPhase.INPUT && step == InputStep.PEOPLE -> {
-                            TextButton(onClick = { step = InputStep.IDENTITY }) { Text("Back") }
+                            TextButton(
+                                onClick = { step = InputStep.IDENTITY },
+                                modifier = Modifier.testTag(TestTags.CreateGroup.BackButton)
+                            ) { Text("Back") }
                         }
                         viewModel.phase == CreationPhase.INPUT -> {
-                            TextButton(onClick = onBack) { Text("Cancel") }
+                            TextButton(
+                                onClick = onBack,
+                                modifier = Modifier.testTag(TestTags.CreateGroup.CancelButton)
+                            ) { Text("Cancel") }
                         }
                         viewModel.phase == CreationPhase.DONE -> {
                             IconButton(onClick = {
@@ -220,18 +229,22 @@ fun CreateGroupScreen(
                         viewModel.phase == CreationPhase.INPUT && step == InputStep.IDENTITY -> {
                             TextButton(
                                 onClick = { step = InputStep.PEOPLE },
-                                enabled = viewModel.groupName.isNotBlank()
+                                enabled = viewModel.groupName.isNotBlank(),
+                                modifier = Modifier.testTag(TestTags.CreateGroup.NextButton)
                             ) { Text("Next", fontWeight = FontWeight.SemiBold) }
                         }
                         viewModel.phase == CreationPhase.INPUT && step == InputStep.PEOPLE -> {
-                            TextButton(onClick = {
-                                viewModel.startCreation(
-                                    keyManager,
-                                    groupListViewModel.defaultGroupTier,
-                                    groupListViewModel,
-                                    invitationTransport
-                                )
-                            }) { Text("Create", fontWeight = FontWeight.SemiBold) }
+                            TextButton(
+                                onClick = {
+                                    viewModel.startCreation(
+                                        keyManager,
+                                        groupListViewModel.defaultGroupTier,
+                                        groupListViewModel,
+                                        invitationTransport
+                                    )
+                                },
+                                modifier = Modifier.testTag(TestTags.CreateGroup.CreateButton)
+                            ) { Text("Create", fontWeight = FontWeight.SemiBold) }
                         }
                         viewModel.phase == CreationPhase.DONE -> {
                             TextButton(onClick = {
@@ -371,7 +384,9 @@ private fun IdentityStep(
             value = viewModel.groupName,
             onValueChange = { viewModel.groupName = it },
             placeholder = { Text("Group name", fontSize = 18.sp) },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(TestTags.CreateGroup.NameField),
             singleLine = true,
             shape = RoundedCornerShape(14.dp)
         )

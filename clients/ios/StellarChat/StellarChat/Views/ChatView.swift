@@ -446,6 +446,7 @@ struct ChatView: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                         .background(.quaternary, in: RoundedRectangle(cornerRadius: 20))
+                        .accessibilityIdentifier(TestIDs.Chat.messageInput)
                         .onSubmit {
                             UIImpactFeedbackGenerator(style: .light).impactOccurred()
                             Task { await viewModel.sendMessage() }
@@ -463,6 +464,8 @@ struct ChatView: View {
                             Image(systemName: "arrow.up.circle.fill")
                                 .font(.title2)
                         }
+                        .accessibilityIdentifier(TestIDs.Chat.send)
+                        .accessibilityLabel("Send")
                     }
                 }
                 .padding()
@@ -477,6 +480,8 @@ struct ChatView: View {
                 } label: {
                     Image(systemName: "person.3")
                 }
+                .accessibilityIdentifier(TestIDs.Chat.groupInfo)
+                .accessibilityLabel("Group info")
             }
         }
         .sheet(isPresented: $showGroupInfo) {
@@ -990,14 +995,20 @@ struct MessageBubble: View {
             Image(systemName: "clock")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .accessibilityIdentifier(TestIDs.Chat.statusSending)
+                .accessibilityLabel("Sending")
         case .sent:
             Image(systemName: "checkmark")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .accessibilityIdentifier(TestIDs.Chat.statusSent)
+                .accessibilityLabel("Sent")
         case .delivered:
             Image(systemName: "checkmark.circle.fill")
                 .font(.caption2)
                 .foregroundStyle(.blue)
+                .accessibilityIdentifier(TestIDs.Chat.statusDelivered)
+                .accessibilityLabel("Delivered")
         case .failed:
             Button {
                 onRetry?()
@@ -1007,6 +1018,8 @@ struct MessageBubble: View {
                     .font(.caption2)
                     .foregroundStyle(.red)
             }
+            .accessibilityIdentifier(TestIDs.Chat.statusFailed)
+            .accessibilityLabel("Tap to retry")
         }
     }
 

@@ -88,6 +88,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import chat.onym.android.ui.TestTags
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.text.font.FontWeight
@@ -167,16 +169,23 @@ fun ChatScreen(
     }
 
     Scaffold(
+        modifier = Modifier.testTag(TestTags.Chat.Screen),
         topBar = {
             TopAppBar(
                 title = { Text(groupName) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.testTag(TestTags.Chat.Back)
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
-                    IconButton(onClick = onGroupInfo) {
+                    IconButton(
+                        onClick = onGroupInfo,
+                        modifier = Modifier.testTag(TestTags.Chat.GroupInfo)
+                    ) {
                         Icon(Icons.Filled.Group, contentDescription = "Group Info")
                     }
                 }
@@ -757,7 +766,9 @@ fun ChatScreen(
                     TextField(
                         value = viewModel.inputText,
                         onValueChange = { viewModel.inputText = it },
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag(TestTags.Chat.MessageInput),
                         placeholder = { Text("Message...") },
                         singleLine = true
                     )
@@ -772,7 +783,8 @@ fun ChatScreen(
                             onClick = {
                                 view.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM)
                                 viewModel.sendMessage()
-                            }
+                            },
+                            modifier = Modifier.testTag(TestTags.Chat.SendButton)
                         ) {
                             Icon(
                                 Icons.AutoMirrored.Filled.Send,

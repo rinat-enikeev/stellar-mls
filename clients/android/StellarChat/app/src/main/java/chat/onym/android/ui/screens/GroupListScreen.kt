@@ -55,6 +55,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import chat.onym.android.ui.TestTags
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -95,11 +97,15 @@ fun GroupListScreen(
     var showOnboarding by remember { mutableStateOf(!prefs.getBoolean("has_seen_onboarding", false)) }
 
     Scaffold(
+        modifier = Modifier.testTag(TestTags.GroupList.Screen),
         topBar = {
             TopAppBar(
                 title = { Text("Chats") },
                 actions = {
-                    IconButton(onClick = onInvitations) {
+                    IconButton(
+                        onClick = onInvitations,
+                        modifier = Modifier.testTag(TestTags.GroupList.InvitationsButton)
+                    ) {
                         BadgedBox(
                             badge = {
                                 if (pendingInvitationCount > 0) {
@@ -114,7 +120,10 @@ fun GroupListScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showAddDialog = true }) {
+            FloatingActionButton(
+                onClick = { showAddDialog = true },
+                modifier = Modifier.testTag(TestTags.GroupList.Fab)
+            ) {
                 Icon(Icons.Default.Add, contentDescription = "Add Group")
             }
         }
@@ -157,7 +166,10 @@ fun GroupListScreen(
             ) {
                 if (groups.isEmpty()) {
                     Column(
-                        modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag(TestTags.GroupList.EmptyState)
+                            .padding(horizontal = 32.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
@@ -258,13 +270,17 @@ fun GroupListScreen(
         groupForContextMenu?.let { group ->
             AlertDialog(
                 onDismissRequest = { groupForContextMenu = null },
+                modifier = Modifier.testTag(TestTags.GroupList.ContextMenu),
                 title = { Text(group.name) },
                 text = {
                     Column {
-                        TextButton(onClick = {
-                            onTogglePin(group.id)
-                            groupForContextMenu = null
-                        }) {
+                        TextButton(
+                            onClick = {
+                                onTogglePin(group.id)
+                                groupForContextMenu = null
+                            },
+                            modifier = Modifier.testTag(TestTags.GroupList.ContextMenuPin)
+                        ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -274,10 +290,13 @@ fun GroupListScreen(
                                 Text(if (group.isPinned) "Unpin" else "Pin")
                             }
                         }
-                        TextButton(onClick = {
-                            groupForContextMenu = null
-                            groupToDelete = group
-                        }) {
+                        TextButton(
+                            onClick = {
+                                groupForContextMenu = null
+                                groupToDelete = group
+                            },
+                            modifier = Modifier.testTag(TestTags.GroupList.ContextMenuDelete)
+                        ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -291,7 +310,10 @@ fun GroupListScreen(
                 },
                 confirmButton = {},
                 dismissButton = {
-                    TextButton(onClick = { groupForContextMenu = null }) {
+                    TextButton(
+                        onClick = { groupForContextMenu = null },
+                        modifier = Modifier.testTag(TestTags.GroupList.ContextMenuCancel)
+                    ) {
                         Text("Cancel")
                     }
                 }
@@ -304,15 +326,21 @@ fun GroupListScreen(
                 title = { Text("Delete Group") },
                 text = { Text("Delete \"${group.name}\"? This cannot be undone.") },
                 confirmButton = {
-                    TextButton(onClick = {
-                        onDeleteGroup(group.id)
-                        groupToDelete = null
-                    }) {
+                    TextButton(
+                        onClick = {
+                            onDeleteGroup(group.id)
+                            groupToDelete = null
+                        },
+                        modifier = Modifier.testTag(TestTags.GroupList.DeleteDialogConfirm)
+                    ) {
                         Text("Delete", color = Color.Red)
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { groupToDelete = null }) {
+                    TextButton(
+                        onClick = { groupToDelete = null },
+                        modifier = Modifier.testTag(TestTags.GroupList.DeleteDialogCancel)
+                    ) {
                         Text("Cancel")
                     }
                 }
@@ -385,6 +413,7 @@ private fun GroupListItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .testTag(TestTags.GroupList.item(group.id))
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
@@ -533,7 +562,8 @@ fun OnboardingSheet(onDismiss: () -> Unit, isRevisit: Boolean = false, onRestore
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        modifier = Modifier.testTag(TestTags.GroupList.OnboardingSheet)
     ) {
         Column(
             modifier = Modifier
@@ -623,6 +653,7 @@ fun OnboardingSheet(onDismiss: () -> Unit, isRevisit: Boolean = false, onRestore
                 },
                 modifier = Modifier
                     .fillMaxWidth()
+                    .testTag(TestTags.GroupList.OnboardingPrimaryButton)
                     .padding(horizontal = 32.dp)
             ) {
                 val lastPageText = if (isRevisit) "Done" else "Get Started"

@@ -99,6 +99,7 @@ struct GroupInfoView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .accessibilityIdentifier(TestIDs.GroupInfo.close)
                 }
                 if isMember {
                     ToolbarItem(placement: .confirmationAction) {

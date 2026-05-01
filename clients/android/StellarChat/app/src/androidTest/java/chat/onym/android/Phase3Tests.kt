@@ -729,4 +729,155 @@ class Phase3Tests {
         val s2 = SEPCommitmentBuilder.generateSalt()
         assertFalse(s1.contentEquals(s2))
     }
+
+    // -----------------------------------------------------------------------
+    // 13. Tier Constants
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun tier_smallHasExpectedConstants() {
+        assertEquals(32, SEPTier.SMALL.maxMembers)
+        assertEquals(5, SEPTier.SMALL.depth)
+        assertEquals(0, SEPTier.SMALL.id)
+    }
+
+    @Test
+    fun tier_mediumHasExpectedConstants() {
+        assertEquals(256, SEPTier.MEDIUM.maxMembers)
+        assertEquals(8, SEPTier.MEDIUM.depth)
+        assertEquals(1, SEPTier.MEDIUM.id)
+    }
+
+    @Test
+    fun tier_largeHasExpectedConstants() {
+        assertEquals(2048, SEPTier.LARGE.maxMembers)
+        assertEquals(11, SEPTier.LARGE.depth)
+        assertEquals(2, SEPTier.LARGE.id)
+    }
+
+    @Test
+    fun tier_fromIdRoundTripsForEveryTier() {
+        for (tier in SEPTier.entries) {
+            assertEquals(tier, SEPTier.fromId(tier.id))
+        }
+    }
+
+    @Test
+    fun tier_capacityIsPowerOfDepth() {
+        for (tier in SEPTier.entries) {
+            assertEquals(1 shl tier.depth, tier.maxMembers)
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 14. Deterministic Salt Derivation
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun deriveSalt_isDeterministic() {
+        val previousSalt = ByteArray(32) { 0x42 }
+        val memberKey = ByteArray(48) { 0x07 }
+        val s1 = SEPCommitmentBuilder.deriveSalt(previousSalt, memberKey)
+        val s2 = SEPCommitmentBuilder.deriveSalt(previousSalt, memberKey)
+        assertArrayEquals(s1, s2)
+        assertEquals(32, s1.size)
+    }
+
+    @Test
+    fun deriveSalt_differentMemberKeysProduceDifferentOutputs() {
+        val previousSalt = ByteArray(32) { 0x42 }
+        val memberA = ByteArray(48) { 0x01 }
+        val memberB = ByteArray(48) { 0x02 }
+        val s1 = SEPCommitmentBuilder.deriveSalt(previousSalt, memberA)
+        val s2 = SEPCommitmentBuilder.deriveSalt(previousSalt, memberB)
+        assertFalse(s1.contentEquals(s2))
+    }
+
+    @Test
+    fun deriveSalt_differentPreviousSaltsProduceDifferentOutputs() {
+        val saltA = ByteArray(32) { 0x01 }
+        val saltB = ByteArray(32) { 0x02 }
+        val memberKey = ByteArray(48) { 0x07 }
+        val s1 = SEPCommitmentBuilder.deriveSalt(saltA, memberKey)
+        val s2 = SEPCommitmentBuilder.deriveSalt(saltB, memberKey)
+        assertFalse(s1.contentEquals(s2))
+    }
+
+    // -----------------------------------------------------------------------
+    // 15. AES-256-GCM Encrypt / Decrypt (instrumented — uses android.util.Base64)
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun encryptDecrypt_roundTrip_preservesAscii() {
+        val key = ByteArray(32) { 0x42 }
+        val plaintext = "Hello, secure world!"
+        val sealed = chat.onym.android.crypto.GroupCrypto.encrypt(plaintext, key)
+        val decrypted = chat.onym.android.crypto.GroupCrypto.decrypt(sealed, key)
+        assertEquals(plaintext, decrypted)
+    }
+
+    @Test
+    fun encryptDecrypt_roundTrip_preservesUnicode() {
+        val key = ByteArray(32) { 0x07 }
+        val plaintext = "Привет 🧗 — это тест"
+        val sealed = chat.onym.android.crypto.GroupCrypto.encrypt(plaintext, key)
+        val decrypted = chat.onym.android.crypto.GroupCrypto.decrypt(sealed, key)
+        assertEquals(plaintext, decrypted)
+    }
+
+    @Test
+    fun encryptDecrypt_roundTrip_preservesEmptyString() {
+        val key = ByteArray(32) { 0x99.toByte() }
+        val plaintext = ""
+        val sealed = chat.onym.android.crypto.GroupCrypto.encrypt(plaintext, key)
+        val decrypted = chat.onym.android.crypto.GroupCrypto.decrypt(sealed, key)
+        assertEquals(plaintext, decrypted)
+    }
+
+    @Test
+    fun encryptDecrypt_roundTrip_preservesLongPayload() {
+        val key = ByteArray(32) { 0x33 }
+        val plaintext = "lorem ipsum ".repeat(500) // ~6KB
+        val sealed = chat.onym.android.crypto.GroupCrypto.encrypt(plaintext, key)
+        val decrypted = chat.onym.android.crypto.GroupCrypto.decrypt(sealed, key)
+        assertEquals(plaintext, decrypted)
+    }
+
+    @Test
+    fun encrypt_producesNewSealedEnvelopeEachTime() {
+        // AES-GCM uses a random 12-byte nonce, so two encryptions of the
+        // same plaintext under the same key MUST produce distinct ciphertexts.
+        val key = ByteArray(32) { 0x42 }
+        val plaintext = "stable input"
+        val sealed1 = chat.onym.android.crypto.GroupCrypto.encrypt(plaintext, key)
+        val sealed2 = chat.onym.android.crypto.GroupCrypto.encrypt(plaintext, key)
+        assertNotEquals(sealed1, sealed2)
+        // Both still decrypt back to the same plaintext.
+        assertEquals(plaintext, chat.onym.android.crypto.GroupCrypto.decrypt(sealed1, key))
+        assertEquals(plaintext, chat.onym.android.crypto.GroupCrypto.decrypt(sealed2, key))
+    }
+
+    @Test
+    fun encryptedEnvelope_isValidJsonWithExpectedScheme() {
+        val key = ByteArray(32) { 0x42 }
+        val sealed = chat.onym.android.crypto.GroupCrypto.encrypt("payload", key)
+        val obj = org.json.JSONObject(sealed)
+        assertEquals(1, obj.getInt("version"))
+        assertEquals("aes-256-gcm-v1", obj.getString("scheme"))
+        assertTrue(obj.getString("nonce").isNotBlank())
+        assertTrue(obj.getString("ciphertext").isNotBlank())
+        assertTrue(obj.getString("authentication_tag").isNotBlank())
+    }
+
+    @Test
+    fun encryptDecrypt_roundTripWithDerivedMessageKey() {
+        // Mirror production: deriveMessageKey is what real chat sends use.
+        val secret = ByteArray(32) { 0x42 }
+        val salt = ByteArray(32) { 0x07 }
+        val key = chat.onym.android.crypto.GroupCrypto.deriveMessageKey(secret, 0, salt)
+        val plaintext = "production-derived key path"
+        val sealed = chat.onym.android.crypto.GroupCrypto.encrypt(plaintext, key)
+        val decrypted = chat.onym.android.crypto.GroupCrypto.decrypt(sealed, key)
+        assertEquals(plaintext, decrypted)
+    }
 }

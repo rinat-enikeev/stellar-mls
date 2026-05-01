@@ -48,6 +48,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import chat.onym.android.ui.TestTags
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -154,7 +156,9 @@ fun ContactsScreen(
 
     val isEmpty = activeContacts.isEmpty() && invitedPending.isEmpty() && phonebook.isEmpty()
 
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
+    LazyColumn(modifier = Modifier
+        .fillMaxSize()
+        .testTag(TestTags.Contacts.Screen)) {
         if (isEmpty && permission != ContactsPermission.AUTHORIZED) {
             item {
                 Box(

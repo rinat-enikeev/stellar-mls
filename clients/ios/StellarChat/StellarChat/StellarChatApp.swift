@@ -39,6 +39,22 @@ class StellarChatAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        // XCUITest hook: when the test bundle launches the app with
+        // RESET_ONBOARDING=1 in the environment, wipe the onboarding flags
+        // so the welcome sheet renders on first display. This runs BEFORE
+        // the WindowGroup body, which is critical — `@AppStorage` reads its
+        // value during the first render, so any reset has to happen before
+        // SwiftUI evaluates the sheet's `isPresented` binding.
+        //
+        // We use an environment variable rather than a `-key value` launch
+        // argument because NSArgumentDomain has higher priority than the
+        // application domain in UserDefaults' lookup chain, which means a
+        // launch-arg override would also undo the app's later
+        // `hasSeenOnboarding = true` write — leaving the sheet stuck open.
+        if ProcessInfo.processInfo.environment["RESET_ONBOARDING"] == "1" {
+            UserDefaults.standard.removeObject(forKey: "hasSeenOnboarding")
+            UserDefaults.standard.removeObject(forKey: "hasSeenFirstGroupWelcome")
+        }
         return true
     }
 

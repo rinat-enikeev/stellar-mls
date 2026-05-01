@@ -861,6 +861,7 @@ struct CreateGroupView: View {
                     dismiss()
                 }
                 .fontWeight(.semibold)
+                .accessibilityIdentifier(TestIDs.CreateGroup.openButton)
             }
         }
     }

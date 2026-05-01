@@ -22,6 +22,7 @@
 
 pub mod poseidon;
 pub mod merkle;
+pub mod democracy;
 pub mod membership;
 pub mod oneonone_create;
 pub mod tyranny;

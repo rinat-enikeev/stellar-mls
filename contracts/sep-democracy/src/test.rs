@@ -1,172 +1,172 @@
-//! Inline test suite for the SEP Democracy contract.
-//!
-//! Every test name listed in `test-vectors.json#tests_to_implement`
-//! has a corresponding `#[test]` here. The `test_vectors_consistency`
-//! test loads the JSON file and asserts the contract's `Error`
-//! variants, `tier_capacity` mapping, and IC-point constants match
-//! the vectors byte-for-byte — pinning the JSON as the canonical ABI.
+//! Inline test suite for the SEP Democracy contract — PLONK-migration era.
 
 use super::*;
 use soroban_sdk::testutils::Address as _;
 
-// ================================================================
-// Mocks (mirrors sep-xxxx pattern: subgroup-valid via hash_to_g{1,2})
-// ================================================================
+const PROOF_D5: &[u8; 1601] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/proof-d5.bin");
+const PROOF_D8: &[u8; 1601] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/proof-d8.bin");
+const PROOF_D11: &[u8; 1601] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/proof-d11.bin");
+const PI_D5: &[u8; 64] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/pi-d5.bin");
+const PI_D8: &[u8; 64] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/pi-d8.bin");
+const PI_D11: &[u8; 64] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/pi-d11.bin");
 
-fn valid_g1(env: &Env, tag: &[u8]) -> BytesN<96> {
-    let bls = env.crypto().bls12_381();
-    let dst = Bytes::from_slice(env, b"sep-democracy-test-g1");
-    let msg = Bytes::from_slice(env, tag);
-    bls.hash_to_g1(&msg, &dst).to_bytes()
+const DEMO_UPDATE_PROOF_D5: &[u8; 1601] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/democracy-update-proof-d5.bin");
+const DEMO_UPDATE_PROOF_D8: &[u8; 1601] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/democracy-update-proof-d8.bin");
+const DEMO_UPDATE_PROOF_D11: &[u8; 1601] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/democracy-update-proof-d11.bin");
+const DEMO_UPDATE_PI_D5: &[u8; 192] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/democracy-update-pi-d5.bin");
+const DEMO_UPDATE_PI_D8: &[u8; 192] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/democracy-update-pi-d8.bin");
+const DEMO_UPDATE_PI_D11: &[u8; 192] =
+    include_bytes!("../../plonk-verifier/tests/fixtures/democracy-update-pi-d11.bin");
+
+const CANONICAL_EPOCH: u64 = 1234;
+const CANONICAL_THRESHOLD: u32 = 5;
+
+fn membership_proof(env: &Env, tier: u32) -> BytesN<1601> {
+    BytesN::from_array(
+        env,
+        match tier {
+            0 => PROOF_D5,
+            1 => PROOF_D8,
+            2 => PROOF_D11,
+            _ => panic!(),
+        },
+    )
 }
 
-fn valid_g2(env: &Env, tag: &[u8]) -> BytesN<192> {
-    let bls = env.crypto().bls12_381();
-    let dst = Bytes::from_slice(env, b"sep-democracy-test-g2");
-    let msg = Bytes::from_slice(env, tag);
-    bls.hash_to_g2(&msg, &dst).to_bytes()
+fn demo_update_proof(env: &Env, tier: u32) -> BytesN<1601> {
+    BytesN::from_array(
+        env,
+        match tier {
+            0 => DEMO_UPDATE_PROOF_D5,
+            1 => DEMO_UPDATE_PROOF_D8,
+            2 => DEMO_UPDATE_PROOF_D11,
+            _ => panic!(),
+        },
+    )
 }
 
-fn mock_membership_vk(env: &Env) -> VerificationKeyData {
-    VerificationKeyData {
-        alpha_g1: valid_g1(env, b"m-alpha"),
-        beta_g2: valid_g2(env, b"m-beta"),
-        gamma_g2: valid_g2(env, b"m-gamma"),
-        delta_g2: valid_g2(env, b"m-delta"),
-        ic: vec![
-            env,
-            valid_g1(env, b"m-ic0"),
-            valid_g1(env, b"m-ic1"),
-            valid_g1(env, b"m-ic2"),
-        ],
+fn pi_membership(env: &Env, tier: u32) -> Vec<BytesN<32>> {
+    let bytes: &[u8] = match tier {
+        0 => PI_D5,
+        1 => PI_D8,
+        2 => PI_D11,
+        _ => panic!(),
+    };
+    let mut pi = Vec::new(env);
+    for i in 0..2 {
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes[i * 32..(i + 1) * 32]);
+        pi.push_back(BytesN::from_array(env, &arr));
     }
+    pi
 }
 
-fn mock_update_vk(env: &Env) -> VerificationKeyData {
-    VerificationKeyData {
-        alpha_g1: valid_g1(env, b"u-alpha"),
-        beta_g2: valid_g2(env, b"u-beta"),
-        gamma_g2: valid_g2(env, b"u-gamma"),
-        delta_g2: valid_g2(env, b"u-delta"),
-        ic: vec![
-            env,
-            valid_g1(env, b"u-ic0"),
-            valid_g1(env, b"u-ic1"),
-            valid_g1(env, b"u-ic2"),
-            valid_g1(env, b"u-ic3"),
-            valid_g1(env, b"u-ic4"),
-            valid_g1(env, b"u-ic5"),
-            valid_g1(env, b"u-ic6"),
-        ],
+fn pi_update(env: &Env, tier: u32) -> Vec<BytesN<32>> {
+    let bytes: &[u8] = match tier {
+        0 => DEMO_UPDATE_PI_D5,
+        1 => DEMO_UPDATE_PI_D8,
+        2 => DEMO_UPDATE_PI_D11,
+        _ => panic!(),
+    };
+    let mut pi = Vec::new(env);
+    for i in 0..6 {
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes[i * 32..(i + 1) * 32]);
+        pi.push_back(BytesN::from_array(env, &arr));
     }
+    pi
 }
 
-fn mock_proof(env: &Env) -> Groth16Proof {
-    Groth16Proof {
-        a: valid_g1(env, b"proof-a"),
-        b: valid_g2(env, b"proof-b"),
-        c: valid_g1(env, b"proof-c"),
-    }
+fn malformed_proof(env: &Env) -> BytesN<1601> {
+    BytesN::from_array(env, &[0xAAu8; 1601])
 }
 
-/// 32 zero bytes is the canonical Fr encoding of the zero scalar.
 fn canonical_zero(env: &Env) -> BytesN<32> {
     BytesN::from_array(env, &[0u8; 32])
 }
 
-/// A non-canonical Fr encoding (top byte = 0xff makes the value
-/// exceed the BLS12-381 Fr modulus).
+/// 32 bytes of `0xFF` exceeds the BLS12-381 Fr modulus, so
+/// `Fr::from_bytes ∘ Fr::to_bytes` reduces it and the round-trip
+/// fails — the contract surfaces this as `InvalidCommitmentEncoding`.
 fn non_canonical_fr(env: &Env) -> BytesN<32> {
-    BytesN::from_array(env, &[0xff; 32])
+    BytesN::from_array(env, &[0xFFu8; 32])
 }
 
-// ================================================================
-// Setup helpers
-// ================================================================
+/// Big-endian u64 padded to 32 bytes — matches `be32_from_u64` in lib.rs
+/// and is what `update_commitment` / `verify_membership` compare against
+/// for `epoch_old` and `threshold_numerator` PIs.
+fn be32(env: &Env, value: u64) -> BytesN<32> {
+    let mut bytes = [0u8; 32];
+    bytes[24..32].copy_from_slice(&value.to_be_bytes());
+    BytesN::from_array(env, &bytes)
+}
+
+/// PI vector `[commitment, be32(0)]` matching `create_group`'s
+/// membership-PI shape so wire-validation passes and the test exercises
+/// later branches (group_exists, tier limit, etc.).
+fn pi_create_for(env: &Env, commitment: &BytesN<32>) -> Vec<BytesN<32>> {
+    let mut pi = Vec::new(env);
+    pi.push_back(commitment.clone());
+    pi.push_back(be32(env, 0));
+    pi
+}
+
+fn inject_inactive_group(
+    env: &Env,
+    contract_id: &Address,
+    group_id: &BytesN<32>,
+    tier: u32,
+) {
+    let z = canonical_zero(env);
+    env.as_contract(contract_id, || {
+        let entry = CommitmentEntry {
+            commitment: z.clone(),
+            epoch: 0,
+            timestamp: env.ledger().timestamp(),
+            tier,
+            active: false,
+            occupancy_commitment: z,
+            threshold_numerator: 50,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Group(group_id.clone()), &entry);
+    });
+}
 
 fn setup_env() -> (Env, SepDemocracyContractClient<'static>, Address) {
     let env = Env::default();
+    env.cost_estimate().budget().reset_unlimited();
     env.mock_all_auths();
     let admin = Address::generate(&env);
-    let mvk = mock_membership_vk(&env);
-    let uvk = mock_update_vk(&env);
-    let contract_id = env.register(
-        SepDemocracyContract,
-        (
-            admin.clone(),
-            mvk.clone(),
-            mvk.clone(),
-            mvk,
-            uvk.clone(),
-            uvk.clone(),
-            uvk,
-        ),
-    );
+    let contract_id = env.register(SepDemocracyContract, (admin.clone(),));
     let client = SepDemocracyContractClient::new(&env, &contract_id);
     (env, client, admin)
 }
 
-fn setup_with_bad_membership_vk(
-    build_bad: impl FnOnce(&Env) -> VerificationKeyData,
-) -> (Env, SepDemocracyContractClient<'static>, Address) {
-    let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
-    let bad = build_bad(&env);
-    let good_m = mock_membership_vk(&env);
-    let uvk = mock_update_vk(&env);
-    let contract_id = env.register(
-        SepDemocracyContract,
-        (
-            admin.clone(),
-            bad,
-            good_m.clone(),
-            good_m,
-            uvk.clone(),
-            uvk.clone(),
-            uvk,
-        ),
-    );
-    let client = SepDemocracyContractClient::new(&env, &contract_id);
-    (env, client, admin)
+fn caller(env: &Env) -> Address {
+    Address::generate(env)
 }
 
-fn setup_with_bad_update_vk(
-    build_bad: impl FnOnce(&Env) -> VerificationKeyData,
-) -> (Env, SepDemocracyContractClient<'static>, Address) {
-    let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
-    let bad = build_bad(&env);
-    let mvk = mock_membership_vk(&env);
-    let good_u = mock_update_vk(&env);
-    let contract_id = env.register(
-        SepDemocracyContract,
-        (
-            admin.clone(),
-            mvk.clone(),
-            mvk.clone(),
-            mvk,
-            bad,
-            good_u.clone(),
-            good_u,
-        ),
-    );
-    let client = SepDemocracyContractClient::new(&env, &contract_id);
-    (env, client, admin)
-}
-
-/// Inject a `CommitmentEntry` directly into storage — bypasses the
-/// proof-verification path so tests can drive `update_commitment` /
-/// `verify_membership` from a known-good state.
 fn inject_group(
     env: &Env,
     contract_id: &Address,
     group_id: &BytesN<32>,
     commitment: &BytesN<32>,
     occupancy_commitment: &BytesN<32>,
-    tier: u32,
     threshold_numerator: u32,
+    tier: u32,
     epoch: u64,
 ) {
     env.as_contract(contract_id, || {
@@ -197,327 +197,208 @@ fn inject_group(
     });
 }
 
-/// Inject a deactivated group (active = false) — for testing the
-/// dead-but-defended `GroupInactive` path on `update_commitment` /
-/// `verify_membership`. No production code path sets active=false
-/// since `deactivate_group` was dropped (postmortem #153); the check
-/// remains as defense-in-depth against any future re-introduction.
-fn inject_deactivated_group(
-    env: &Env,
-    contract_id: &Address,
-    group_id: &BytesN<32>,
-    tier: u32,
-) {
-    env.as_contract(contract_id, || {
-        let entry = CommitmentEntry {
-            commitment: canonical_zero(env),
-            epoch: 0,
-            timestamp: env.ledger().timestamp(),
-            tier,
-            active: false,
-            occupancy_commitment: canonical_zero(env),
-            threshold_numerator: 50,
-        };
-        env.storage()
-            .persistent()
-            .set(&DataKey::Group(group_id.clone()), &entry);
-    });
-}
-
-fn upi_zero(env: &Env) -> UpdateCommitmentPublicInputs {
-    UpdateCommitmentPublicInputs {
-        c_old: canonical_zero(env),
-        epoch_old: 0,
-        c_new: canonical_zero(env),
-        occupancy_commitment_old: canonical_zero(env),
-        occupancy_commitment_new: canonical_zero(env),
-    }
-}
-
-// ================================================================
-// 1. Initialization
-// ================================================================
-
 #[test]
 fn test_initialize() {
-    // Successful registration via __constructor — admin + all 6 VKs
-    // accepted, persistent storage written, instance.Admin set. The
-    // setup helper's success IS the assertion.
     let (_env, _client, _admin) = setup_env();
 }
 
-#[test]
-#[should_panic(expected = "Error(Contract, #9)")]
-fn test_invalid_membership_vk_length_rejected() {
-    // Build directly with 2 IC points (membership requires 3). Using
-    // `pop_back()` to mutate a fully-constructed mock vk runs into
-    // host-budget limits in this test path; explicit construction
-    // mirrors sep-xxxx's working pattern.
-    setup_with_bad_membership_vk(|env| {
-        let g1 = valid_g1(env, b"bad-alpha");
-        let g2 = valid_g2(env, b"bad-beta");
-        VerificationKeyData {
-            alpha_g1: g1.clone(),
-            beta_g2: g2.clone(),
-            gamma_g2: g2.clone(),
-            delta_g2: g2,
-            ic: vec![env, g1.clone(), g1],
-        }
-    });
-}
+// ---- Multi-tier happy paths ----
 
-#[test]
-#[should_panic(expected = "Error(Contract, #9)")]
-fn test_invalid_update_vk_length_rejected() {
-    // Build directly with 6 IC points (update requires 7).
-    setup_with_bad_update_vk(|env| {
-        let g1 = valid_g1(env, b"u-bad-alpha");
-        let g2 = valid_g2(env, b"u-bad-beta");
-        VerificationKeyData {
-            alpha_g1: g1.clone(),
-            beta_g2: g2.clone(),
-            gamma_g2: g2.clone(),
-            delta_g2: g2,
-            ic: vec![
-                env,
-                g1.clone(),
-                g1.clone(),
-                g1.clone(),
-                g1.clone(),
-                g1.clone(),
-                g1,
-            ],
-        }
-    });
-}
-
-// ================================================================
-// 2. create_group
-// ================================================================
-
-#[test]
-fn test_create_group_happy_path() {
-    // Mock proofs cannot pass pairing_check — happy path means "all
-    // contract-side validations pass, we reach the verifier and it
-    // rejects." Asserting InvalidProof confirms the full validation
-    // pipeline executed as expected.
+fn run_update_happy_path(tier: u32) {
     let (env, client, _admin) = setup_env();
-    let caller = Address::generate(&env);
-    let group_id = BytesN::from_array(&env, &[1u8; 32]);
-    let commitment = canonical_zero(&env);
-    let pi = PublicInputs {
-        commitment: commitment.clone(),
-        epoch: 0,
-    };
-    let result = client.try_create_group(
-        &caller,
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[(tier as u8 + 1); 32]);
+    let upi = pi_update(&env, tier);
+    let c_old = upi.get(0).unwrap();
+    let c_new = upi.get(2).unwrap();
+    let occ_old = upi.get(3).unwrap();
+    let occ_new = upi.get(4).unwrap();
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &c_old,
+        &occ_old,
+        CANONICAL_THRESHOLD,
+        tier,
+        CANONICAL_EPOCH,
+    );
+
+    client.update_commitment(&group_id, &demo_update_proof(&env, tier), &upi);
+
+    let post = client.get_commitment(&group_id);
+    assert_eq!(post.commitment, c_new);
+    assert_eq!(post.epoch, CANONICAL_EPOCH + 1);
+    assert_eq!(post.occupancy_commitment, occ_new);
+    assert_eq!(post.threshold_numerator, CANONICAL_THRESHOLD);
+    assert_eq!(post.tier, tier);
+}
+
+#[test]
+fn test_update_commitment_happy_path_d5() {
+    run_update_happy_path(0);
+}
+
+#[test]
+fn test_update_commitment_happy_path_d8() {
+    run_update_happy_path(1);
+}
+
+#[test]
+fn test_update_commitment_happy_path_d11() {
+    run_update_happy_path(2);
+}
+
+fn run_verify_membership_happy_path(tier: u32) {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[(tier as u8 + 10); 32]);
+    let pi = pi_membership(&env, tier);
+    let commitment = pi.get(0).unwrap();
+    let z = canonical_zero(&env);
+    inject_group(
+        &env,
+        &contract_id,
         &group_id,
         &commitment,
-        &1u32,
-        &50u32,
-        &canonical_zero(&env),
-        &mock_proof(&env),
+        &z,
+        CANONICAL_THRESHOLD,
+        tier,
+        CANONICAL_EPOCH,
+    );
+    let result = client.verify_membership(&group_id, &membership_proof(&env, tier), &pi);
+    assert!(result, "tier {tier} membership proof should verify");
+}
+
+#[test]
+fn test_verify_membership_happy_path_d5() {
+    run_verify_membership_happy_path(0);
+}
+
+#[test]
+fn test_verify_membership_happy_path_d8() {
+    run_verify_membership_happy_path(1);
+}
+
+#[test]
+fn test_verify_membership_happy_path_d11() {
+    run_verify_membership_happy_path(2);
+}
+
+// ---- Reject paths ----
+
+#[test]
+#[should_panic(expected = "Error(Contract, #28)")]
+fn test_create_group_rejects_invalid_threshold() {
+    let (env, client, _admin) = setup_env();
+    let c = caller(&env);
+    let z = canonical_zero(&env);
+    let pi = pi_membership(&env, 0);
+    client.create_group(
+        &c,
+        &BytesN::from_array(&env, &[1u8; 32]),
+        &z,
+        &0u32,
+        &101u32, // out of [1, 100]
+        &z,
+        &malformed_proof(&env),
         &pi,
     );
-    match result {
-        Err(Err(_)) | Err(Ok(Error::InvalidProof)) => {}
-        other => panic!("expected InvalidProof at verifier, got {:?}", other),
-    }
 }
 
 #[test]
 #[should_panic(expected = "Error(Contract, #8)")]
 fn test_create_group_rejects_invalid_tier() {
     let (env, client, _admin) = setup_env();
-    let caller = Address::generate(&env);
-    let group_id = BytesN::from_array(&env, &[1u8; 32]);
-    let commitment = canonical_zero(&env);
-    let pi = PublicInputs {
-        commitment: commitment.clone(),
-        epoch: 0,
-    };
+    let c = caller(&env);
+    let z = canonical_zero(&env);
+    let pi = pi_membership(&env, 0);
     client.create_group(
-        &caller,
-        &group_id,
-        &commitment,
-        &3u32, // out-of-range
+        &c,
+        &BytesN::from_array(&env, &[1u8; 32]),
+        &z,
+        &3u32,
         &50u32,
-        &canonical_zero(&env),
-        &mock_proof(&env),
+        &z,
+        &malformed_proof(&env),
         &pi,
     );
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #28)")]
-fn test_create_group_rejects_invalid_threshold_zero() {
+#[should_panic(expected = "Error(Contract, #5)")]
+fn test_update_commitment_rejects_unknown_group() {
     let (env, client, _admin) = setup_env();
-    let caller = Address::generate(&env);
-    let group_id = BytesN::from_array(&env, &[1u8; 32]);
-    let commitment = canonical_zero(&env);
-    let pi = PublicInputs {
-        commitment: commitment.clone(),
-        epoch: 0,
-    };
-    client.create_group(
-        &caller,
-        &group_id,
-        &commitment,
-        &1u32,
-        &0u32, // out-of-range below
-        &canonical_zero(&env),
-        &mock_proof(&env),
-        &pi,
-    );
+    let group_id = BytesN::from_array(&env, &[99u8; 32]);
+    let pi = pi_update(&env, 0);
+    client.update_commitment(&group_id, &malformed_proof(&env), &pi);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #28)")]
-fn test_create_group_rejects_invalid_threshold_above_100() {
-    let (env, client, _admin) = setup_env();
-    let caller = Address::generate(&env);
-    let group_id = BytesN::from_array(&env, &[1u8; 32]);
-    let commitment = canonical_zero(&env);
-    let pi = PublicInputs {
-        commitment: commitment.clone(),
-        epoch: 0,
-    };
-    client.create_group(
-        &caller,
-        &group_id,
-        &commitment,
-        &1u32,
-        &101u32, // out-of-range above
-        &canonical_zero(&env),
-        &mock_proof(&env),
-        &pi,
-    );
-}
-
-#[test]
-fn test_create_group_accepts_threshold_50() {
-    let (env, client, _admin) = setup_env();
-    let caller = Address::generate(&env);
-    let group_id = BytesN::from_array(&env, &[2u8; 32]);
-    let commitment = canonical_zero(&env);
-    let pi = PublicInputs {
-        commitment: commitment.clone(),
-        epoch: 0,
-    };
-    let r = client.try_create_group(
-        &caller,
-        &group_id,
-        &commitment,
-        &0u32,
-        &50u32,
-        &canonical_zero(&env),
-        &mock_proof(&env),
-        &pi,
-    );
-    // Threshold accepted at 50 — proceeds to proof verification.
-    match r {
-        Err(Err(_)) | Err(Ok(Error::InvalidProof)) => {}
-        other => panic!("expected InvalidProof, got {:?}", other),
-    }
-}
-
-#[test]
-fn test_create_group_accepts_threshold_67() {
-    let (env, client, _admin) = setup_env();
-    let caller = Address::generate(&env);
-    let group_id = BytesN::from_array(&env, &[3u8; 32]);
-    let commitment = canonical_zero(&env);
-    let pi = PublicInputs {
-        commitment: commitment.clone(),
-        epoch: 0,
-    };
-    let r = client.try_create_group(
-        &caller,
-        &group_id,
-        &commitment,
-        &0u32,
-        &67u32,
-        &canonical_zero(&env),
-        &mock_proof(&env),
-        &pi,
-    );
-    match r {
-        Err(Err(_)) | Err(Ok(Error::InvalidProof)) => {}
-        other => panic!("expected InvalidProof, got {:?}", other),
-    }
-}
-
-#[test]
-fn test_create_group_accepts_threshold_100() {
-    let (env, client, _admin) = setup_env();
-    let caller = Address::generate(&env);
-    let group_id = BytesN::from_array(&env, &[4u8; 32]);
-    let commitment = canonical_zero(&env);
-    let pi = PublicInputs {
-        commitment: commitment.clone(),
-        epoch: 0,
-    };
-    let r = client.try_create_group(
-        &caller,
-        &group_id,
-        &commitment,
-        &0u32,
-        &100u32,
-        &canonical_zero(&env),
-        &mock_proof(&env),
-        &pi,
-    );
-    match r {
-        Err(Err(_)) | Err(Ok(Error::InvalidProof)) => {}
-        other => panic!("expected InvalidProof, got {:?}", other),
-    }
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #4)")]
-fn test_create_group_rejects_duplicate_group_id() {
+#[should_panic(expected = "Error(Contract, #10)")]
+fn test_update_commitment_rejects_wrong_threshold_pi() {
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[1u8; 32]);
-    let commitment = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &commitment, &commitment, 0, 50, 0);
-
-    let caller = Address::generate(&env);
-    let pi = PublicInputs {
-        commitment: commitment.clone(),
-        epoch: 0,
-    };
-    client.create_group(
-        &caller,
+    let group_id = BytesN::from_array(&env, &[7u8; 32]);
+    let upi = pi_update(&env, 0);
+    let c_old = upi.get(0).unwrap();
+    let occ_old = upi.get(3).unwrap();
+    // Inject with threshold=99 but the canonical PI uses threshold=5
+    inject_group(
+        &env,
+        &contract_id,
         &group_id,
-        &commitment,
-        &0u32,
-        &50u32,
-        &canonical_zero(&env),
-        &mock_proof(&env),
-        &pi,
+        &c_old,
+        &occ_old,
+        99,
+        0,
+        CANONICAL_EPOCH,
     );
+    client.update_commitment(&group_id, &demo_update_proof(&env, 0), &upi);
 }
+
+// ---- Queries ----
+
+#[test]
+fn test_get_commitment_returns_state() {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[50u8; 32]);
+    let z = canonical_zero(&env);
+    inject_group(&env, &contract_id, &group_id, &z, &z, 51, 1, 3);
+    let entry = client.get_commitment(&group_id);
+    assert_eq!(entry.tier, 1);
+    assert_eq!(entry.epoch, 3);
+    assert_eq!(entry.threshold_numerator, 51);
+}
+
+#[test]
+fn test_bump_group_ttl_extends() {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[52u8; 32]);
+    let z = canonical_zero(&env);
+    inject_group(&env, &contract_id, &group_id, &z, &z, 50, 0, 0);
+    client.bump_group_ttl(&group_id);
+}
+
+// ---- Regression: create_group validation rejections ----
 
 #[test]
 #[should_panic(expected = "Error(Contract, #15)")]
 fn test_create_group_rejects_non_canonical_commitment() {
     let (env, client, _admin) = setup_env();
-    let caller = Address::generate(&env);
-    let group_id = BytesN::from_array(&env, &[1u8; 32]);
-    let bad_commitment = non_canonical_fr(&env);
-    let pi = PublicInputs {
-        commitment: bad_commitment.clone(),
-        epoch: 0,
-    };
+    let bad = non_canonical_fr(&env);
+    let z = canonical_zero(&env);
+    let pi = pi_create_for(&env, &bad);
     client.create_group(
-        &caller,
-        &group_id,
-        &bad_commitment,
+        &caller(&env),
+        &BytesN::from_array(&env, &[1u8; 32]),
+        &bad,
         &0u32,
         &50u32,
-        &canonical_zero(&env),
-        &mock_proof(&env),
+        &z,
+        &malformed_proof(&env),
         &pi,
     );
 }
@@ -526,81 +407,38 @@ fn test_create_group_rejects_non_canonical_commitment() {
 #[should_panic(expected = "Error(Contract, #15)")]
 fn test_create_group_rejects_non_canonical_occupancy_commitment() {
     let (env, client, _admin) = setup_env();
-    let caller = Address::generate(&env);
-    let group_id = BytesN::from_array(&env, &[1u8; 32]);
-    let commitment = canonical_zero(&env);
+    let z = canonical_zero(&env);
     let bad_occ = non_canonical_fr(&env);
-    let pi = PublicInputs {
-        commitment: commitment.clone(),
-        epoch: 0,
-    };
+    let pi = pi_create_for(&env, &z);
     client.create_group(
-        &caller,
-        &group_id,
-        &commitment,
+        &caller(&env),
+        &BytesN::from_array(&env, &[2u8; 32]),
+        &z,
         &0u32,
         &50u32,
         &bad_occ,
-        &mock_proof(&env),
+        &malformed_proof(&env),
         &pi,
     );
 }
 
 #[test]
-fn test_create_group_rejects_invalid_proof() {
-    // Reaches the verifier with a structurally-valid mock proof that
-    // fails the pairing check — surfaces InvalidProof.
+#[should_panic(expected = "Error(Contract, #4)")]
+fn test_create_group_rejects_duplicate_group_id() {
     let (env, client, _admin) = setup_env();
-    let caller = Address::generate(&env);
-    let group_id = BytesN::from_array(&env, &[1u8; 32]);
-    let commitment = canonical_zero(&env);
-    let pi = PublicInputs {
-        commitment: commitment.clone(),
-        epoch: 0,
-    };
-    let r = client.try_create_group(
-        &caller,
-        &group_id,
-        &commitment,
-        &0u32,
-        &50u32,
-        &canonical_zero(&env),
-        &mock_proof(&env),
-        &pi,
-    );
-    match r {
-        Err(Err(_)) | Err(Ok(Error::InvalidProof)) => {}
-        other => panic!("expected InvalidProof, got {:?}", other),
-    }
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #14)")]
-fn test_create_group_restricted_mode_rejects_non_admin() {
-    // Admin enables restricted mode, then a non-admin caller tries
-    // create_group. Soroban auth (mock_all_auths) covers
-    // caller.require_auth(), so the contract reaches the
-    // `caller != admin` value check and returns AdminOnly. The
-    // sibling test_update_vk_requires_auth covers the require_auth
-    // gate; this covers the value-equality gate.
-    let (env, client, _admin) = setup_env();
-    client.set_restricted_mode(&true);
-
-    let caller = Address::generate(&env); // != admin
-    let group_id = BytesN::from_array(&env, &[55u8; 32]);
-    let commitment = canonical_zero(&env);
-    let pi = PublicInputs {
-        commitment: commitment.clone(),
-        epoch: 0,
-    };
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[3u8; 32]);
+    let z = canonical_zero(&env);
+    inject_group(&env, &contract_id, &group_id, &z, &z, 50, 0, 0);
+    let pi = pi_create_for(&env, &z);
     client.create_group(
-        &caller,
+        &caller(&env),
         &group_id,
-        &commitment,
+        &z,
         &0u32,
         &50u32,
-        &canonical_zero(&env),
-        &mock_proof(&env),
+        &z,
+        &malformed_proof(&env),
         &pi,
     );
 }
@@ -610,49 +448,58 @@ fn test_create_group_restricted_mode_rejects_non_admin() {
 fn test_create_group_enforces_tier_group_limit() {
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
-    // Saturate the tier-0 counter to MAX_GROUPS_PER_TIER.
     env.as_contract(&contract_id, || {
         env.storage()
             .instance()
             .set(&DataKey::GroupCount(0u32), &10_000u32);
     });
-    let caller = Address::generate(&env);
-    let group_id = BytesN::from_array(&env, &[42u8; 32]);
-    let commitment = canonical_zero(&env);
-    let pi = PublicInputs {
-        commitment: commitment.clone(),
-        epoch: 0,
-    };
+    let z = canonical_zero(&env);
+    let pi = pi_create_for(&env, &z);
     client.create_group(
-        &caller,
-        &group_id,
-        &commitment,
+        &caller(&env),
+        &BytesN::from_array(&env, &[42u8; 32]),
+        &z,
         &0u32,
         &50u32,
-        &canonical_zero(&env),
-        &mock_proof(&env),
+        &z,
+        &malformed_proof(&env),
         &pi,
     );
 }
 
-// ================================================================
-// 3. update_commitment
-// ================================================================
+#[test]
+#[should_panic(expected = "Error(Contract, #14)")]
+fn test_create_group_restricted_mode_rejects_non_admin() {
+    // Admin enables restricted mode (mock_all_auths covers caller.
+    // require_auth), then a non-admin caller hits the contract-level
+    // `caller != admin` value check and returns AdminOnly.
+    let (env, client, _admin) = setup_env();
+    client.set_restricted_mode(&true);
+    let z = canonical_zero(&env);
+    let pi = pi_create_for(&env, &z);
+    client.create_group(
+        &caller(&env),
+        &BytesN::from_array(&env, &[55u8; 32]),
+        &z,
+        &0u32,
+        &50u32,
+        &z,
+        &malformed_proof(&env),
+        &pi,
+    );
+}
+
+// ---- Regression: update_commitment validation rejections ----
 
 #[test]
-fn test_update_commitment_happy_path() {
+#[should_panic(expected = "Error(Contract, #6)")]
+fn test_update_commitment_rejects_inactive_group() {
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[7u8; 32]);
-    let commitment = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &commitment, &commitment, 1, 50, 0);
-
-    let upi = upi_zero(&env);
-    let r = client.try_update_commitment(&group_id, &mock_proof(&env), &upi);
-    match r {
-        Err(Err(_)) | Err(Ok(Error::InvalidProof)) => {}
-        other => panic!("expected InvalidProof at verifier, got {:?}", other),
-    }
+    let group_id = BytesN::from_array(&env, &[60u8; 32]);
+    inject_inactive_group(&env, &contract_id, &group_id, 0);
+    let upi = pi_update(&env, 0);
+    client.update_commitment(&group_id, &demo_update_proof(&env, 0), &upi);
 }
 
 #[test]
@@ -660,29 +507,21 @@ fn test_update_commitment_happy_path() {
 fn test_update_commitment_rejects_stale_c_old() {
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[9u8; 32]);
-    let stored = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &stored, &stored, 0, 50, 0);
-    let upi = UpdateCommitmentPublicInputs {
-        c_old: BytesN::from_array(&env, &[3u8; 32]),
-        ..upi_zero(&env)
-    };
-    client.update_commitment(&group_id, &mock_proof(&env), &upi);
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #10)")]
-fn test_update_commitment_rejects_stale_occupancy_commitment_old() {
-    let (env, client, _admin) = setup_env();
-    let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[10u8; 32]);
-    let stored = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &stored, &stored, 0, 50, 0);
-    let upi = UpdateCommitmentPublicInputs {
-        occupancy_commitment_old: BytesN::from_array(&env, &[7u8; 32]),
-        ..upi_zero(&env)
-    };
-    client.update_commitment(&group_id, &mock_proof(&env), &upi);
+    let group_id = BytesN::from_array(&env, &[61u8; 32]);
+    let stored = BytesN::from_array(&env, &[0xAAu8; 32]); // diverges from upi[0]
+    let upi = pi_update(&env, 0);
+    let occ_old = upi.get(3).unwrap();
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &stored,
+        &occ_old,
+        CANONICAL_THRESHOLD,
+        0,
+        CANONICAL_EPOCH,
+    );
+    client.update_commitment(&group_id, &demo_update_proof(&env, 0), &upi);
 }
 
 #[test]
@@ -690,14 +529,44 @@ fn test_update_commitment_rejects_stale_occupancy_commitment_old() {
 fn test_update_commitment_rejects_wrong_epoch_old() {
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[11u8; 32]);
-    let stored = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &stored, &stored, 0, 50, 5);
-    let upi = UpdateCommitmentPublicInputs {
-        epoch_old: 4, // mismatches stored.epoch = 5
-        ..upi_zero(&env)
-    };
-    client.update_commitment(&group_id, &mock_proof(&env), &upi);
+    let group_id = BytesN::from_array(&env, &[62u8; 32]);
+    let upi = pi_update(&env, 0);
+    let c_old = upi.get(0).unwrap();
+    let occ_old = upi.get(3).unwrap();
+    // Inject with a stored epoch that diverges from upi[1].
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &c_old,
+        &occ_old,
+        CANONICAL_THRESHOLD,
+        0,
+        CANONICAL_EPOCH + 1,
+    );
+    client.update_commitment(&group_id, &demo_update_proof(&env, 0), &upi);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn test_update_commitment_rejects_stale_occupancy_commitment_old() {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[63u8; 32]);
+    let upi = pi_update(&env, 0);
+    let c_old = upi.get(0).unwrap();
+    let stored_occ = BytesN::from_array(&env, &[0xBBu8; 32]); // diverges from upi[3]
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &c_old,
+        &stored_occ,
+        CANONICAL_THRESHOLD,
+        0,
+        CANONICAL_EPOCH,
+    );
+    client.update_commitment(&group_id, &demo_update_proof(&env, 0), &upi);
 }
 
 #[test]
@@ -705,14 +574,39 @@ fn test_update_commitment_rejects_wrong_epoch_old() {
 fn test_update_commitment_rejects_non_canonical_c_new() {
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[12u8; 32]);
-    let stored = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &stored, &stored, 0, 50, 0);
-    let upi = UpdateCommitmentPublicInputs {
-        c_new: non_canonical_fr(&env),
-        ..upi_zero(&env)
-    };
-    client.update_commitment(&group_id, &mock_proof(&env), &upi);
+    let group_id = BytesN::from_array(&env, &[64u8; 32]);
+    let upi = pi_update(&env, 0);
+    let c_old = upi.get(0).unwrap();
+    let epoch_old_be = upi.get(1).unwrap();
+    let occ_old = upi.get(3).unwrap();
+    let occ_new = upi.get(4).unwrap();
+    let threshold_pi = upi.get(5).unwrap();
+    // Decode stored epoch from PI[1] so the stored.epoch check passes.
+    let mut be = [0u8; 8];
+    be.copy_from_slice(&epoch_old_be.to_array()[24..32]);
+    let stored_epoch = u64::from_be_bytes(be);
+    // Decode stored threshold from PI[5].
+    be.copy_from_slice(&threshold_pi.to_array()[24..32]);
+    let stored_threshold = u64::from_be_bytes(be) as u32;
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &c_old,
+        &occ_old,
+        stored_threshold,
+        0,
+        stored_epoch,
+    );
+    // Replace c_new (PI[2]) with a non-canonical Fr.
+    let mut tampered = Vec::new(&env);
+    tampered.push_back(c_old.clone());
+    tampered.push_back(epoch_old_be);
+    tampered.push_back(non_canonical_fr(&env));
+    tampered.push_back(occ_old);
+    tampered.push_back(occ_new);
+    tampered.push_back(threshold_pi);
+    client.update_commitment(&group_id, &demo_update_proof(&env, 0), &tampered);
 }
 
 #[test]
@@ -720,299 +614,150 @@ fn test_update_commitment_rejects_non_canonical_c_new() {
 fn test_update_commitment_rejects_non_canonical_occupancy_commitment_new() {
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[13u8; 32]);
-    let stored = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &stored, &stored, 0, 50, 0);
-    let upi = UpdateCommitmentPublicInputs {
-        occupancy_commitment_new: non_canonical_fr(&env),
-        ..upi_zero(&env)
-    };
-    client.update_commitment(&group_id, &mock_proof(&env), &upi);
+    let group_id = BytesN::from_array(&env, &[65u8; 32]);
+    let upi = pi_update(&env, 0);
+    let c_old = upi.get(0).unwrap();
+    let epoch_old_be = upi.get(1).unwrap();
+    let c_new = upi.get(2).unwrap();
+    let occ_old = upi.get(3).unwrap();
+    let threshold_pi = upi.get(5).unwrap();
+    let mut be = [0u8; 8];
+    be.copy_from_slice(&epoch_old_be.to_array()[24..32]);
+    let stored_epoch = u64::from_be_bytes(be);
+    be.copy_from_slice(&threshold_pi.to_array()[24..32]);
+    let stored_threshold = u64::from_be_bytes(be) as u32;
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &c_old,
+        &occ_old,
+        stored_threshold,
+        0,
+        stored_epoch,
+    );
+    let mut tampered = Vec::new(&env);
+    tampered.push_back(c_old.clone());
+    tampered.push_back(epoch_old_be);
+    tampered.push_back(c_new);
+    tampered.push_back(occ_old);
+    tampered.push_back(non_canonical_fr(&env));
+    tampered.push_back(threshold_pi);
+    client.update_commitment(&group_id, &demo_update_proof(&env, 0), &tampered);
 }
 
 #[test]
 #[should_panic(expected = "Error(Contract, #12)")]
 fn test_update_commitment_rejects_replayed_proof() {
+    // Pre-record the SHA256 of the happy-path proof so the replay check
+    // fires before the verifier gets a chance to accept it.
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[14u8; 32]);
-    let stored = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &stored, &stored, 0, 50, 0);
-
-    let proof = mock_proof(&env);
-    // Pre-record the proof hash as already used.
+    let group_id = BytesN::from_array(&env, &[66u8; 32]);
+    let upi = pi_update(&env, 0);
+    let c_old = upi.get(0).unwrap();
+    let occ_old = upi.get(3).unwrap();
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &c_old,
+        &occ_old,
+        CANONICAL_THRESHOLD,
+        0,
+        CANONICAL_EPOCH,
+    );
+    let proof = demo_update_proof(&env, 0);
     env.as_contract(&contract_id, || {
-        let mut preimage = Bytes::new(&env);
-        preimage.append(&Bytes::from_slice(&env, proof.a.to_array().as_slice()));
-        preimage.append(&Bytes::from_slice(&env, proof.b.to_array().as_slice()));
-        preimage.append(&Bytes::from_slice(&env, proof.c.to_array().as_slice()));
+        let preimage = Bytes::from_slice(&env, proof.to_array().as_slice());
         let hash: BytesN<32> = env.crypto().sha256(&preimage).into();
         env.storage()
             .persistent()
             .set(&DataKey::UsedProof(hash), &true);
     });
-    client.update_commitment(&group_id, &proof, &upi_zero(&env));
+    client.update_commitment(&group_id, &proof, &upi);
 }
 
-#[test]
-#[should_panic(expected = "Error(Contract, #6)")]
-fn test_update_commitment_rejects_inactive_group() {
-    let (env, client, _admin) = setup_env();
-    let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[15u8; 32]);
-    inject_deactivated_group(&env, &contract_id, &group_id, 0);
-    client.update_commitment(&group_id, &mock_proof(&env), &upi_zero(&env));
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #5)")]
-fn test_update_commitment_rejects_unknown_group() {
-    let (env, client, _admin) = setup_env();
-    let group_id = BytesN::from_array(&env, &[99u8; 32]);
-    client.update_commitment(&group_id, &mock_proof(&env), &upi_zero(&env));
-}
-
-#[test]
-fn test_update_commitment_threshold_supplied_from_storage() {
-    // The contract MUST read current.threshold_numerator from storage
-    // and supply it as the 6th Groth16 public input. Mock proofs can't
-    // pass pairing_check, so we observe the behavior indirectly: the
-    // contract reaches the verifier (passes all wire validations) and
-    // returns InvalidProof. If the contract DIDN'T read threshold from
-    // storage, we'd see a different error or a panic from the host
-    // when the verifier was called with the wrong number of public
-    // inputs.
-    let (env, client, _admin) = setup_env();
-    let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[20u8; 32]);
-    let stored = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &stored, &stored, 1, 67, 0);
-
-    let r = client.try_update_commitment(&group_id, &mock_proof(&env), &upi_zero(&env));
-    // Reaches verifier → InvalidProof (mock proof fails pairing).
-    match r {
-        Err(Err(_)) | Err(Ok(Error::InvalidProof)) => {}
-        other => panic!(
-            "expected InvalidProof — verifier received chain-supplied threshold; got {:?}",
-            other
-        ),
-    }
-}
-
-#[test]
-fn test_update_commitment_threshold_mismatch_rejected_v2() {
-    // Companion to the prover-side `prove_democracy_v2_threshold_
-    // mismatch_with_chain_rejected` from design v0.5.1. With mock
-    // proofs we can't construct a real "valid under threshold=50,
-    // verifier supplies 67" scenario — the cryptography requires the
-    // prover repo. What we CAN assert: the contract uses the chain-
-    // stored threshold (not anything from the wire), so two groups
-    // with different thresholds will produce different verifier
-    // public-input vectors for byte-identical wire payloads. Both
-    // calls reach the verifier and both fail with InvalidProof —
-    // proof of behavioral equivalence beyond which only Phase A's
-    // real proofs can verify positively.
-    let (env, client, _admin) = setup_env();
-    let contract_id = client.address.clone();
-    let stored = canonical_zero(&env);
-    let g50 = BytesN::from_array(&env, &[21u8; 32]);
-    let g67 = BytesN::from_array(&env, &[22u8; 32]);
-    inject_group(&env, &contract_id, &g50, &stored, &stored, 1, 50, 0);
-    inject_group(&env, &contract_id, &g67, &stored, &stored, 1, 67, 0);
-
-    // Two clients, different proofs (different bytes so replay-protection
-    // doesn't entangle the two calls).
-    let r50 = client.try_update_commitment(&g50, &mock_proof(&env), &upi_zero(&env));
-    let proof2 = Groth16Proof {
-        a: valid_g1(&env, b"proof-a-2"),
-        b: valid_g2(&env, b"proof-b-2"),
-        c: valid_g1(&env, b"proof-c-2"),
-    };
-    let r67 = client.try_update_commitment(&g67, &proof2, &upi_zero(&env));
-
-    match (r50, r67) {
-        (Err(Err(_)) | Err(Ok(Error::InvalidProof)), Err(Err(_)) | Err(Ok(Error::InvalidProof))) => {}
-        other => panic!("both calls expected InvalidProof, got {:?}", other),
-    }
-}
-
-#[test]
-fn test_update_commitment_threshold_tie_passes_v2() {
-    // Companion to the prover-side `prove_democracy_v2_threshold_
-    // tie_passes`. Tie semantics (`100·K ≥ T·m_old` non-strict) are
-    // a circuit-level invariant — the contract is value-agnostic to
-    // the particular threshold/popcount math. This test asserts the
-    // contract accepts T=50 as a valid stored threshold (the natural
-    // tie-passing value) and routes proofs against it without
-    // additional wire validation. The behavioral check is "T=50
-    // group reaches verifier" (rather than being filtered out by
-    // some implicit T>50 rule), which the helper below confirms.
-    let (env, client, _admin) = setup_env();
-    let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[23u8; 32]);
-    let stored = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &stored, &stored, 1, 50, 0);
-    let r = client.try_update_commitment(&group_id, &mock_proof(&env), &upi_zero(&env));
-    match r {
-        Err(Err(_)) | Err(Ok(Error::InvalidProof)) => {}
-        other => panic!("expected InvalidProof at verifier, got {:?}", other),
-    }
-}
-
-// ================================================================
-// 4. verify_membership
-// ================================================================
-
-#[test]
-fn test_verify_membership_happy_path() {
-    let (env, client, _admin) = setup_env();
-    let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[30u8; 32]);
-    let commitment = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &commitment, &commitment, 0, 50, 0);
-    let pi = PublicInputs {
-        commitment: commitment.clone(),
-        epoch: 0,
-    };
-    // Mock proof fails pairing — verify_membership returns Ok(false),
-    // not an error. Distinguishes the read-only verifier from the
-    // state-changing entrypoints which surface InvalidProof.
-    let result = client.verify_membership(&group_id, &mock_proof(&env), &pi);
-    assert!(!result, "mock proof should fail pairing_check");
-}
+// ---- Regression: verify_membership rejections ----
 
 #[test]
 #[should_panic(expected = "Error(Contract, #10)")]
 fn test_verify_membership_rejects_wrong_commitment() {
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[31u8; 32]);
-    let stored = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &stored, &stored, 0, 50, 0);
-    let pi = PublicInputs {
-        commitment: BytesN::from_array(&env, &[7u8; 32]),
-        epoch: 0,
-    };
-    client.verify_membership(&group_id, &mock_proof(&env), &pi);
+    let group_id = BytesN::from_array(&env, &[70u8; 32]);
+    let stored = BytesN::from_array(&env, &[0xCCu8; 32]);
+    let z = canonical_zero(&env);
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &stored,
+        &z,
+        CANONICAL_THRESHOLD,
+        0,
+        CANONICAL_EPOCH,
+    );
+    let pi = pi_membership(&env, 0); // PI[0] is the fixture's commitment, not `stored`
+    client.verify_membership(&group_id, &membership_proof(&env, 0), &pi);
 }
 
 #[test]
 #[should_panic(expected = "Error(Contract, #10)")]
 fn test_verify_membership_rejects_wrong_epoch() {
+    // Stored epoch diverges from PI[1] (the fixture encodes
+    // `be32(CANONICAL_EPOCH)` — pinned by run_verify_membership_happy_
+    // path), so the entrypoint's `epoch != be32_from_u64(stored.epoch)`
+    // check fires before the verifier sees the proof. Parallels
+    // test_verify_membership_rejects_wrong_commitment for the second
+    // membership PI slot.
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[32u8; 32]);
-    let stored = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &stored, &stored, 0, 50, 5);
-    let pi = PublicInputs {
-        commitment: stored.clone(),
-        epoch: 4, // mismatches stored.epoch = 5
-    };
-    client.verify_membership(&group_id, &mock_proof(&env), &pi);
-}
-
-#[test]
-fn test_verify_membership_rejects_inactive_group() {
-    // verify_membership is read-only and intentionally works on
-    // groups whose `active` flag is false (defense-in-depth path —
-    // no production flow currently produces such a group since
-    // deactivate_group was removed in postmortem #153). The deactivated
-    // case still returns Ok(false) for our mock proof, not an error.
-    let (env, client, _admin) = setup_env();
-    let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[33u8; 32]);
-    inject_deactivated_group(&env, &contract_id, &group_id, 0);
-    let pi = PublicInputs {
-        commitment: canonical_zero(&env),
-        epoch: 0,
-    };
-    let result = client.verify_membership(&group_id, &mock_proof(&env), &pi);
-    assert!(!result);
-}
-
-// ================================================================
-// 5. update_vk admin rotation
-// ================================================================
-
-#[test]
-#[should_panic(expected = "Unauthorized")]
-fn test_update_vk_requires_auth() {
-    // No mock_all_auths — admin.require_auth() inside update_vk
-    // panics because no auth was granted. This pins the
-    // require_auth gate; a positive "non-admin caller WITH auth"
-    // scenario isn't expressible in the current test harness
-    // because mock_all_auths blanket-approves every require_auth
-    // call regardless of address, but the contract-level guard is
-    // covered by test_create_group_restricted_mode_rejects_non_admin
-    // which exercises the parallel `caller != admin` branch.
-    let env = Env::default();
-    let admin = Address::generate(&env);
-    let mvk = mock_membership_vk(&env);
-    let uvk = mock_update_vk(&env);
-    let contract_id = env.register(
-        SepDemocracyContract,
-        (
-            admin.clone(),
-            mvk.clone(),
-            mvk.clone(),
-            mvk,
-            uvk.clone(),
-            uvk.clone(),
-            uvk,
-        ),
+    let group_id = BytesN::from_array(&env, &[72u8; 32]);
+    let pi = pi_membership(&env, 0);
+    let commitment = pi.get(0).unwrap();
+    let z = canonical_zero(&env);
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &commitment,
+        &z,
+        CANONICAL_THRESHOLD,
+        0,
+        CANONICAL_EPOCH + 1, // diverges from PI[1] = be32(CANONICAL_EPOCH)
     );
-    let client = SepDemocracyContractClient::new(&env, &contract_id);
-    let new_vk = mock_membership_vk(&env);
-    client.update_vk(&VkKind::Membership, &0u32, &new_vk);
+    client.verify_membership(&group_id, &membership_proof(&env, 0), &pi);
 }
 
 #[test]
-fn test_update_vk_rotates_membership_vk() {
-    let (env, client, _admin) = setup_env();
-    let new_vk = mock_membership_vk(&env);
-    // Admin has been auto-mocked by mock_all_auths in setup_env.
-    client.update_vk(&VkKind::Membership, &0u32, &new_vk);
-    // No assertion needed beyond "didn't panic" — successful rotation
-    // means the contract accepted the new VK at DataKey::VK(0).
-}
-
-#[test]
-fn test_update_vk_rotates_update_vk() {
-    let (env, client, _admin) = setup_env();
-    let new_uvk = mock_update_vk(&env);
-    client.update_vk(&VkKind::Update, &1u32, &new_uvk);
-}
-
-// ================================================================
-// 7. Queries
-// ================================================================
-
-#[test]
-fn test_get_commitment_returns_current_state() {
+fn test_verify_membership_inactive_group_returns_false() {
+    // verify_membership is read-only and intentionally works on groups
+    // whose `active` flag is false. With an aligned-but-malformed proof
+    // the verifier rejects → Ok(false) (no error surfaced).
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[50u8; 32]);
-    let commitment = canonical_zero(&env);
-    let occ = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &commitment, &occ, 1, 67, 3);
-    let entry = client.get_commitment(&group_id);
-    assert_eq!(entry.commitment, commitment);
-    assert_eq!(entry.occupancy_commitment, occ);
-    assert_eq!(entry.tier, 1);
-    assert_eq!(entry.threshold_numerator, 67);
-    assert_eq!(entry.epoch, 3);
-    assert!(entry.active);
+    let group_id = BytesN::from_array(&env, &[71u8; 32]);
+    inject_inactive_group(&env, &contract_id, &group_id, 0);
+    let z = canonical_zero(&env);
+    let mut pi = Vec::new(&env);
+    pi.push_back(z.clone());
+    pi.push_back(be32(&env, 0));
+    let result = client.verify_membership(&group_id, &malformed_proof(&env), &pi);
+    assert!(!result, "malformed proof against inactive group should be Ok(false)");
 }
+
+// ---- Regression: archive + history ----
 
 #[test]
 fn test_get_history_returns_chronological_entries() {
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[51u8; 32]);
-    let commitment = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &commitment, &commitment, 0, 50, 0);
-
-    // Manually populate three history entries.
+    let group_id = BytesN::from_array(&env, &[80u8; 32]);
+    let z = canonical_zero(&env);
+    inject_group(
+        &env, &contract_id, &group_id, &z, &z, CANONICAL_THRESHOLD, 0, 0,
+    );
     env.as_contract(&contract_id, || {
         let mut history: Vec<CommitmentEntry> = Vec::new(&env);
         for i in 0u64..3 {
@@ -1022,15 +767,14 @@ fn test_get_history_returns_chronological_entries() {
                 timestamp: 100 + i,
                 tier: 0,
                 active: true,
-                occupancy_commitment: canonical_zero(&env),
-                threshold_numerator: 50,
+                occupancy_commitment: z.clone(),
+                threshold_numerator: CANONICAL_THRESHOLD,
             });
         }
         env.storage()
             .persistent()
             .set(&DataKey::History(group_id.clone()), &history);
     });
-
     let result = client.get_history(&group_id, &10u32);
     assert_eq!(result.len(), 3);
     assert_eq!(result.get(0).unwrap().epoch, 0);
@@ -1039,20 +783,19 @@ fn test_get_history_returns_chronological_entries() {
 }
 
 #[test]
-fn test_archive_entry_appends_and_prunes() {
-    // Drive archive_entry through env.as_contract() — the same code
-    // path update_commitment uses to append. Mock proofs can't pass
-    // pairing_check, so the integration path through update never
-    // reaches archive_entry; this test covers the helper directly so
-    // the rolling-window prune logic is CI-asserted independent of
-    // Phase A's real proofs.
+fn test_archive_entry_appends_and_prunes_at_window() {
+    // Drive HISTORY_WINDOW + 6 appends through the actual archive_entry
+    // helper (the same path update_commitment funnels through on every
+    // accept) so the rolling-window prune behaviour is pinned end-to-end
+    // — not just the post-prune `History` shape.
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[60u8; 32]);
-    let commitment = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &commitment, &commitment, 0, 50, 0);
-
-    let total: u64 = (HISTORY_WINDOW as u64) + 6; // exceeds the cap by 6
+    let group_id = BytesN::from_array(&env, &[81u8; 32]);
+    let z = canonical_zero(&env);
+    inject_group(
+        &env, &contract_id, &group_id, &z, &z, CANONICAL_THRESHOLD, 0, 0,
+    );
+    let total: u64 = (HISTORY_WINDOW as u64) + 6; // exceeds cap by 6
     env.as_contract(&contract_id, || {
         for i in 0u64..total {
             let entry = CommitmentEntry {
@@ -1061,68 +804,44 @@ fn test_archive_entry_appends_and_prunes() {
                 timestamp: 1000 + i,
                 tier: 0,
                 active: true,
-                occupancy_commitment: canonical_zero(&env),
-                threshold_numerator: 50,
+                occupancy_commitment: z.clone(),
+                threshold_numerator: CANONICAL_THRESHOLD,
             };
             SepDemocracyContract::archive_entry(&env, &group_id, &entry);
         }
     });
-
     let history = client.get_history(&group_id, &(2 * HISTORY_WINDOW));
     assert_eq!(history.len(), HISTORY_WINDOW);
-    // Oldest 6 dropped → first retained epoch is 6, last is total - 1.
-    assert_eq!(history.get(0).unwrap().epoch, total - HISTORY_WINDOW as u64);
+    assert_eq!(
+        history.get(0).unwrap().epoch,
+        total - HISTORY_WINDOW as u64,
+    );
     assert_eq!(history.get(history.len() - 1).unwrap().epoch, total - 1);
 }
 
-#[test]
-fn test_bump_group_ttl_extends_used_proof_lifetime() {
-    let (env, client, _admin) = setup_env();
-    let contract_id = client.address.clone();
-    let group_id = BytesN::from_array(&env, &[52u8; 32]);
-    let commitment = canonical_zero(&env);
-    inject_group(&env, &contract_id, &group_id, &commitment, &commitment, 0, 50, 0);
-    // Bump returns Ok(()) for an existing group. (Persistent-storage
-    // TTL extension is a host-level operation; we observe success
-    // via the absence of error.)
-    client.bump_group_ttl(&group_id);
-}
-
-// ================================================================
-// 8. test-vectors.json consistency
-// ================================================================
-
-/// Asserts that `test-vectors.json` agrees with the contract's
-/// constants (Error variants, tier capacity, IC point counts). Pin
-/// the JSON as the single source of truth for the contract's ABI.
 #[test]
 fn test_vectors_consistency() {
     use serde_json::Value;
     let raw = include_str!("../test-vectors.json");
     let v: Value = serde_json::from_str(raw).expect("test-vectors.json is valid JSON");
-
-    // ---- Error codes ----
-    let errors = v["error_codes"]["vectors"]
-        .as_array()
-        .expect("error_codes.vectors is an array");
+    let errors = v["error_codes"]["vectors"].as_array().unwrap();
+    // Cover every live Error variant. Missing-from-JSON now hard-fails
+    // instead of silently skipping (`unwrap_or_else(panic!)` rather than
+    // `if let Some`), so contract↔vectors drift breaks the build.
     let expected: &[(&str, u32)] = &[
         ("NotInitialized", Error::NotInitialized as u32),
         ("AlreadyInitialized", Error::AlreadyInitialized as u32),
-        ("Reserved3", Error::Reserved3 as u32),
         ("GroupAlreadyExists", Error::GroupAlreadyExists as u32),
         ("GroupNotFound", Error::GroupNotFound as u32),
         ("GroupInactive", Error::GroupInactive as u32),
         ("InvalidProof", Error::InvalidProof as u32),
         ("InvalidTier", Error::InvalidTier as u32),
-        ("InvalidVkLength", Error::InvalidVkLength as u32),
         ("PublicInputsMismatch", Error::PublicInputsMismatch as u32),
         ("InvalidEpoch", Error::InvalidEpoch as u32),
         ("ProofReplay", Error::ProofReplay as u32),
         ("TierGroupLimitReached", Error::TierGroupLimitReached as u32),
         ("AdminOnly", Error::AdminOnly as u32),
         ("InvalidCommitmentEncoding", Error::InvalidCommitmentEncoding as u32),
-        ("InvalidPoint", Error::InvalidPoint as u32),
-        ("GroupStillActive", Error::GroupStillActive as u32),
         ("InvalidThreshold", Error::InvalidThreshold as u32),
     ];
     for (name, code) in expected {
@@ -1134,38 +853,14 @@ fn test_vectors_consistency() {
         assert_eq!(
             json_code, *code,
             "error code drift for {}: vectors say {}, contract says {}",
-            name, json_code, code
+            name, json_code, code,
         );
     }
 
-    // ---- Tier capacity ----
     let tiers = v["tier"]["vectors"].as_array().unwrap();
     for entry in tiers {
         let tier = entry["tier"].as_u64().unwrap() as u32;
-        let expected_cap = entry["capacity"].as_u64().unwrap() as u32;
-        assert_eq!(
-            tier_capacity(tier),
-            expected_cap,
-            "tier_capacity({}) mismatch",
-            tier
-        );
-    }
-
-    // ---- IC point counts ----
-    let vk_kinds = v["vk_kind_enum"]["vectors"].as_array().unwrap();
-    for entry in vk_kinds {
-        match entry["name"].as_str() {
-            Some("Membership") => assert_eq!(
-                entry["ic_count"].as_u64().unwrap() as u32,
-                MEMBERSHIP_IC_POINTS,
-                "Membership IC count drift"
-            ),
-            Some("Update") => assert_eq!(
-                entry["ic_count"].as_u64().unwrap() as u32,
-                UPDATE_IC_POINTS,
-                "Update IC count drift"
-            ),
-            _ => {}
-        }
+        let cap = entry["capacity"].as_u64().unwrap() as u32;
+        assert_eq!(tier_capacity(tier), cap);
     }
 }

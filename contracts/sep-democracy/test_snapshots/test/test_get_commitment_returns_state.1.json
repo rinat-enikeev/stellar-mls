@@ -70,7 +70,7 @@
                     "symbol": "Group"
                   },
                   {
-                    "bytes": "3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c"
+                    "bytes": "3232323232323232323232323232323232323232323232323232323232323232"
                   }
                 ]
               },
@@ -82,7 +82,7 @@
                       "symbol": "active"
                     },
                     "val": {
-                      "bool": false
+                      "bool": true
                     }
                   },
                   {
@@ -98,7 +98,7 @@
                       "symbol": "epoch"
                     },
                     "val": {
-                      "u64": "0"
+                      "u64": "3"
                     }
                   },
                   {
@@ -114,7 +114,7 @@
                       "symbol": "threshold_numerator"
                     },
                     "val": {
-                      "u32": 50
+                      "u32": 51
                     }
                   },
                   {
@@ -122,7 +122,7 @@
                       "symbol": "tier"
                     },
                     "val": {
-                      "u32": 0
+                      "u32": 1
                     }
                   },
                   {
@@ -134,6 +134,33 @@
                     }
                   }
                 ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "History"
+                  },
+                  {
+                    "bytes": "3232323232323232323232323232323232323232323232323232323232323232"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "vec": []
               }
             }
           },
@@ -166,6 +193,21 @@
                       },
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "GroupCount"
+                          },
+                          {
+                            "u32": 1
+                          }
+                        ]
+                      },
+                      "val": {
+                        "u32": 1
                       }
                     }
                   ]

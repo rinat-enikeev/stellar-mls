@@ -25,6 +25,7 @@
       ]
     ],
     [],
+    [],
     []
   ],
   "ledger": {
@@ -70,7 +71,7 @@
                     "symbol": "Group"
                   },
                   {
-                    "bytes": "3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c"
+                    "bytes": "0303030303030303030303030303030303030303030303030303030303030303"
                   }
                 ]
               },
@@ -82,7 +83,7 @@
                       "symbol": "active"
                     },
                     "val": {
-                      "bool": false
+                      "bool": true
                     }
                   },
                   {
@@ -90,7 +91,7 @@
                       "symbol": "commitment"
                     },
                     "val": {
-                      "bytes": "0000000000000000000000000000000000000000000000000000000000000000"
+                      "bytes": "40084e61c80c0467a2a3e0a8431317c9e1de0f2615396c617e577c39e67efc43"
                     }
                   },
                   {
@@ -98,7 +99,7 @@
                       "symbol": "epoch"
                     },
                     "val": {
-                      "u64": "0"
+                      "u64": "1235"
                     }
                   },
                   {
@@ -106,7 +107,7 @@
                       "symbol": "occupancy_commitment"
                     },
                     "val": {
-                      "bytes": "0000000000000000000000000000000000000000000000000000000000000000"
+                      "bytes": "000000000000000000000000000000000000000000000000000000000000a111"
                     }
                   },
                   {
@@ -114,7 +115,7 @@
                       "symbol": "threshold_numerator"
                     },
                     "val": {
-                      "u32": 50
+                      "u32": 5
                     }
                   },
                   {
@@ -122,7 +123,7 @@
                       "symbol": "tier"
                     },
                     "val": {
-                      "u32": 0
+                      "u32": 2
                     }
                   },
                   {
@@ -139,7 +140,122 @@
           },
           "ext": "v0"
         },
-        "live_until": 4095
+        "live_until": 518400
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "History"
+                  },
+                  {
+                    "bytes": "0303030303030303030303030303030303030303030303030303030303030303"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "vec": [
+                  {
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "active"
+                        },
+                        "val": {
+                          "bool": true
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "commitment"
+                        },
+                        "val": {
+                          "bytes": "0cc9fdcdf2c8b60e2a9f6f4203623ee5921fa96be4a707e28f3e8d77f96e4d3e"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "epoch"
+                        },
+                        "val": {
+                          "u64": "1234"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "occupancy_commitment"
+                        },
+                        "val": {
+                          "bytes": "000000000000000000000000000000000000000000000000000000000000a110"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "threshold_numerator"
+                        },
+                        "val": {
+                          "u32": 5
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "tier"
+                        },
+                        "val": {
+                          "u32": 2
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "timestamp"
+                        },
+                        "val": {
+                          "u64": "0"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 518400
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "UsedProof"
+                  },
+                  {
+                    "bytes": "bb9158ba46bc0852926cc9732abda62e156dd0449a2f7f5037640a0e8bc9a137"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "bool": true
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 518400
       },
       {
         "entry": {
@@ -166,6 +282,21 @@
                       },
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "GroupCount"
+                          },
+                          {
+                            "u32": 2
+                          }
+                        ]
+                      },
+                      "val": {
+                        "u32": 1
                       }
                     }
                   ]

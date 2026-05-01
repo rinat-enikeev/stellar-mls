@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Render the bench JSONL into an ASCII table for the GitHub release.
+"""Render the bench JSONL into a Markdown release body.
 
 Input:  one JSON object per line, schema produced by `lib.sh`'s
-        `emit_row` (contract, op, tier, fee_stroops, hash, ...).
-Output: a single ASCII table; rows sorted by (contract, op, tier),
-        XLM = stroops / 10_000_000 with 7 decimal places.
+        `emit_row` (row_type=op) + `emit_contract_address`
+        (row_type=contract).
+Output: a single Markdown document — contract-address table (with
+        stellar.expert links) above the gas table.
+
+The workflow uses this output directly as the GitHub release body
+(`body_path:` for softprops/action-gh-release@v2), not as an asset.
 """
 from __future__ import annotations
 
@@ -23,14 +27,21 @@ CONTRACT_ORDER = {
 }
 
 OP_ORDER = {
-    "deploy": 0,
-    "create_group": 1,
-    "create_oligarchy_group": 1,
-    "verify_membership": 2,
-    "update_commitment": 3,
+    "deploy_upload": 0,
+    "deploy_create": 1,
+    "deploy": 1,  # legacy single-row path; kept so older JSONL still sorts
+    "create_group": 2,
+    "create_oligarchy_group": 2,
+    "verify_membership": 3,
+    "update_commitment": 4,
     "set_restricted_mode": 10,
     "bump_group_ttl": 11,
-    "get_commitment": 12,
+}
+
+NETWORK_TO_EXPERT = {
+    "testnet": "https://stellar.expert/explorer/testnet",
+    "public": "https://stellar.expert/explorer/public",
+    "mainnet": "https://stellar.expert/explorer/public",
 }
 
 
@@ -67,21 +78,30 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def load_rows(path: Path) -> list[dict]:
-    rows: list[dict] = []
+def load_rows(path: Path) -> tuple[list[dict], list[dict]]:
+    """Returns (op_rows, contract_rows)."""
+    op_rows: list[dict] = []
+    contract_rows: list[dict] = []
     with path.open() as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             try:
-                rows.append(json.loads(line))
+                row = json.loads(line)
             except json.JSONDecodeError as exc:
                 print(f"warning: skipping unparseable line: {exc}", file=sys.stderr)
-    return rows
+                continue
+            row_type = row.get("row_type")
+            if row_type == "contract":
+                contract_rows.append(row)
+            else:
+                # row_type=op or absent (legacy schema)
+                op_rows.append(row)
+    return op_rows, contract_rows
 
 
-def sort_key(row: dict) -> tuple:
+def sort_op(row: dict) -> tuple:
     return (
         CONTRACT_ORDER.get(row.get("contract", ""), 99),
         OP_ORDER.get(row.get("op", ""), 99),
@@ -89,67 +109,99 @@ def sort_key(row: dict) -> tuple:
     )
 
 
-def build_table(rows: list[dict]) -> str:
-    headers = ["Contract", "Operation", "Tier", "Fee (XLM)", "Stroops",
-               "Inclusion", "Resource", "Refund"]
-    body = []
-    for row in sorted(rows, key=sort_key):
-        body.append([
-            row.get("contract", "?"),
-            row.get("op", "?"),
+def sort_contract(row: dict) -> int:
+    return CONTRACT_ORDER.get(row.get("contract", ""), 99)
+
+
+def truncate_addr(addr: str) -> str:
+    if len(addr) <= 16:
+        return addr
+    return f"{addr[:6]}…{addr[-6:]}"
+
+
+def build_contract_table(contract_rows: list[dict], network: str) -> str:
+    if not contract_rows:
+        return "_(no contracts deployed)_"
+
+    expert = NETWORK_TO_EXPERT.get(network, NETWORK_TO_EXPERT["testnet"])
+    lines = [
+        "| Contract | Address |",
+        "|---|---|",
+    ]
+    for row in sorted(contract_rows, key=sort_contract):
+        addr = row.get("address", "")
+        contract = row.get("contract", "?")
+        if not addr:
+            lines.append(f"| `{contract}` | _(deploy failed)_ |")
+            continue
+        link = f"[`{truncate_addr(addr)}`]({expert}/contract/{addr})"
+        lines.append(f"| `{contract}` | {link} |")
+    return "\n".join(lines)
+
+
+def build_gas_table(op_rows: list[dict]) -> str:
+    if not op_rows:
+        return "_(no transactions submitted)_"
+
+    headers = ["Contract", "Operation", "Tier", "Fee (XLM)",
+               "Stroops", "Inclusion", "Resource", "Refund"]
+    lines = [
+        "| " + " | ".join(headers) + " |",
+        "|" + "|".join("---" for _ in headers) + "|",
+    ]
+    for row in sorted(op_rows, key=sort_op):
+        cells = [
+            f"`{row.get('contract', '?')}`",
+            f"`{row.get('op', '?')}`",
             tier_str(row.get("tier", "")),
             stroops_to_xlm(row.get("fee_stroops")),
             fmt_stroops(row.get("fee_stroops")),
             fmt_int(row.get("inclusion_fee")),
             fmt_int(row.get("resource_fee")),
             fmt_int(row.get("refundable_fee_refund")),
-        ])
-
-    widths = [
-        max(len(h), max((len(r[i]) for r in body), default=0))
-        for i, h in enumerate(headers)
-    ]
-
-    def fmt_row(cells: list[str]) -> str:
-        return "| " + " | ".join(c.ljust(widths[i]) for i, c in enumerate(cells)) + " |"
-
-    sep = "|-" + "-|-".join("-" * w for w in widths) + "-|"
-    lines = [fmt_row(headers), sep]
-    lines.extend(fmt_row(r) for r in body)
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
 
 def main() -> int:
     args = parse_args()
-    rows = load_rows(args.jsonl)
+    op_rows, contract_rows = load_rows(args.jsonl)
 
     captured_at = datetime.datetime.now(datetime.timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
-    header = (
-        f"SEP MLS testnet gas benchmarks — {args.tag}\n"
-        f"Network: {args.network}    Captured: {captured_at}\n"
-        f"Total rows: {len(rows)}\n"
-        "\n"
-        "Notes:\n"
-        "  * Stroops are testnet stroops; 1 XLM = 10,000,000 stroops.\n"
-        "  * `verify_membership` rows are captured in revert-mode (well-\n"
-        "    formed proof, non-matching PI) where applicable; the verifier\n"
-        "    runs the full PLONK pairing check identically in success and\n"
-        "    failure paths, so the fee equals the success-path cost.\n"
-        "  * `update_commitment` revert-mode rows underestimate the true\n"
-        "    cost by ~1% — the post-verify storage writes (history archive\n"
-        "    + new entry + TTL bumps) are skipped on revert.\n"
-        "  * sep-anarchy / sep-democracy / sep-tyranny verifier ops are\n"
-        "    deferred to a follow-up release (require runtime proof gen).\n"
-    )
 
-    if not rows:
-        body = "(no rows captured)"
-    else:
-        body = build_table(rows)
+    body_lines = [
+        f"# SEP MLS testnet gas benchmarks — {args.tag}",
+        "",
+        f"- **Network:** {args.network}",
+        f"- **Captured:** {captured_at}",
+        f"- **Op rows:** {len(op_rows)}    **Contracts deployed:** {len(contract_rows)}",
+        "",
+        "## Deployed contracts",
+        "",
+        build_contract_table(contract_rows, args.network),
+        "",
+        "## Per-op gas costs",
+        "",
+        build_gas_table(op_rows),
+        "",
+        "## Notes",
+        "",
+        "- Stroops are testnet stroops; 1 XLM = 10,000,000 stroops.",
+        "- `verify_membership` rows are captured in revert-mode (well-formed proof, "
+        "non-matching PI) where applicable; the verifier runs the full PLONK pairing "
+        "check identically in success and failure paths, so the fee equals the "
+        "success-path cost.",
+        "- `update_commitment` revert-mode rows underestimate the true cost by ~1% — "
+        "the post-verify storage writes (history archive + new entry + TTL bumps) "
+        "are skipped on revert.",
+        "- sep-anarchy / sep-democracy / sep-tyranny verifier ops are deferred to a "
+        "follow-up release (require runtime proof gen).",
+    ]
 
-    args.output.write_text(header + "\n" + body + "\n")
+    args.output.write_text("\n".join(body_lines) + "\n")
     return 0
 
 

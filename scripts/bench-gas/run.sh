@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 BENCH_JSONL="${BENCH_JSONL:-$SCRIPT_DIR/results.jsonl}"
-BENCH_TABLE="${BENCH_TABLE:-$SCRIPT_DIR/results.txt}"
+BENCH_BODY="${BENCH_BODY:-$SCRIPT_DIR/results.md}"
 export BENCH_JSONL
 
 : > "$BENCH_JSONL"
@@ -32,14 +32,14 @@ for c in "${CONTRACTS[@]}"; do
     bash "$driver" || echo "    [$c] driver exited non-zero — continuing"
 done
 
-echo "==> rendering ASCII table → $BENCH_TABLE"
+echo "==> rendering markdown release body → $BENCH_BODY"
 python3 "$SCRIPT_DIR/render.py" \
     --jsonl "$BENCH_JSONL" \
-    --output "$BENCH_TABLE" \
+    --output "$BENCH_BODY" \
     --network "$BENCH_NETWORK" \
     --tag "${BENCH_TAG:-(untagged)}"
 
 echo
 echo "==> done"
 echo "    jsonl: $BENCH_JSONL"
-echo "    table: $BENCH_TABLE"
+echo "    body:  $BENCH_BODY"

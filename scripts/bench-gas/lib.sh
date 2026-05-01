@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # Shared helpers for the testnet gas benchmark suite.
 #
-# Encoding contract:
-#   `stellar contract invoke` accepts `--<arg>-file-path <PATH>` for any
-#   typed arg, where the file contains a JSON value matching the
-#   contract's schema:
-#     - BytesN<N>          → JSON string of N hex chars × 2: `"<hex>"`
-#     - Vec<BytesN<32>>    → JSON array of hex strings:        `["<hex>", ...]`
+# Encoding contract (corrected after the v1 run on testnet showed the
+# CLI receiving JSON-wrapped hex as raw bytes):
+#   * `--<arg>-file-path <PATH>` reads the file as **raw bytes** and
+#     binds them as the arg value. Useful only for binary-shaped types
+#     when you have a binary file to feed in.
+#   * For `BytesN<N>` we pass `--<arg> <hex>` inline (CLI parses hex
+#     into the typed BytesN). Inline length is fine for proofs at
+#     1601 bytes (~3KB hex on a Linux ARG_MAX of 128KB+).
+#   * For `Vec<BytesN<32>>` we pass `--<arg> '<json_array>'` inline
+#     (CLI parses JSON array of hex strings into the typed Vec).
 #
 # Fee capture: `stellar contract invoke` (default --send=yes) prints
 # the tx hash to stderr in the line `ℹ Transaction hash is <hex>`. We
@@ -19,42 +23,35 @@
 set -euo pipefail
 
 # ---------- low-level encoders ----------
+# All encoders return hex (or JSON arrays of hex) on stdout — callers
+# splice the value into the CLI invocation directly. No more temp
+# files holding JSON-wrapped values; the v1 run proved the CLI's
+# --<arg>-file-path treats the file as raw bytes regardless of
+# extension, so JSON wrappers leaked through to the contract as
+# literal `"<hex>"` byte strings.
 
-# bin_to_hex_json <input.bin> <output.json>
-# Wraps raw bytes as `"<hex>"` (a JSON string). Suitable for BytesN<N>.
-bin_to_hex_json() {
-    local in="$1"
-    local out="$2"
-    local hex
-    hex="$(xxd -p -c 99999 "$in" | tr -d '\n')"
-    printf '"%s"' "$hex" > "$out"
+# bin_hex <input.bin>
+# Echoes raw bytes hex-encoded (no `0x`, no quotes, no newline).
+# Suitable for `--<arg> $(bin_hex …)` where the arg is BytesN<N>.
+bin_hex() {
+    xxd -p -c 99999 "$1" | tr -d '\n'
 }
 
-# pi_concat_to_json <input.bin> <num_fields> <output.json>
-# Splits a flat 32*N byte file into a JSON array of N hex-encoded
-# 32-byte chunks. Suitable for Vec<BytesN<32>>.
-pi_concat_to_json() {
+# pi_concat_json_array <input.bin> <num_fields>
+# Splits a flat 32*N byte file into a JSON array of N hex strings.
+# Suitable for `--<arg> "$(pi_concat_json_array … )"` where the arg is
+# Vec<BytesN<32>>.
+pi_concat_json_array() {
     local in="$1"
     local n="$2"
-    local out="$3"
     local i hex
-    {
-        printf '['
-        for (( i=0; i<n; i++ )); do
-            hex="$(dd if="$in" bs=32 skip="$i" count=1 2>/dev/null | xxd -p -c 99999 | tr -d '\n')"
-            if (( i > 0 )); then printf ','; fi
-            printf '"%s"' "$hex"
-        done
-        printf ']'
-    } > "$out"
-}
-
-# hex_to_json <hex_string> <output.json>
-# Wraps a hex string (no 0x prefix) as a JSON BytesN value.
-hex_to_json() {
-    local hex="$1"
-    local out="$2"
-    printf '"%s"' "$hex" > "$out"
+    printf '['
+    for (( i=0; i<n; i++ )); do
+        hex="$(dd if="$in" bs=32 skip="$i" count=1 2>/dev/null | xxd -p -c 99999 | tr -d '\n')"
+        if (( i > 0 )); then printf ','; fi
+        printf '"%s"' "$hex"
+    done
+    printf ']'
 }
 
 # read_pi_field_hex <pi.bin> <field_index>
@@ -65,12 +62,8 @@ read_pi_field_hex() {
     dd if="$pi" bs=32 skip="$i" count=1 2>/dev/null | xxd -p -c 99999 | tr -d '\n'
 }
 
-# be32_zero_json <output.json>
-# JSON for 32 zero bytes (= big-endian repr of u64 zero, used for epoch=0).
-be32_zero_json() {
-    local out="$1"
-    printf '"%s"' "$(printf '%064d' 0)" > "$out"
-}
+# Constants used across drivers.
+ZERO32_HEX="$(printf '%064d' 0)"
 
 # ---------- invocation + fee capture ----------
 
@@ -125,6 +118,23 @@ fetch_fee_full() {
     stellar tx fetch fee --hash "$hash" --output json "${rpc_args[@]}"
 }
 
+# emit_contract_address <contract> <address>
+# One row per deployed contract — the renderer pulls these into the
+# stellar.expert link table at the top of the release body.
+emit_contract_address() {
+    local contract="$1"
+    local address="$2"
+    if [ -z "$address" ]; then
+        return 0
+    fi
+    jq -n \
+        --arg row_type "contract" \
+        --arg contract "$contract" \
+        --arg address "$address" \
+        '{row_type: $row_type, contract: $contract, address: $address}' \
+        >> "$BENCH_JSONL"
+}
+
 # emit_row <contract> <op> <tier> <hash> [extra_json]
 # Append a JSONL row to $BENCH_JSONL with fee + cost data for the tx.
 emit_row() {
@@ -135,14 +145,17 @@ emit_row() {
     local extra="${5:-{\}}"
 
     if [ -z "$hash" ]; then
-        # Fee capture failed (often: tx wasn't submitted, e.g. read-only).
-        # Emit a row with null fee fields so the renderer can flag it.
+        # Fee capture failed (the tx wasn't submitted — most often the
+        # CLI rejected it at simulation time, or it's a read-only
+        # entrypoint that short-circuits to local sim). Emit a row
+        # with null fee fields so the renderer can flag it.
         jq -n \
+            --arg row_type "op" \
             --arg contract "$contract" \
             --arg op "$op" \
             --arg tier "$tier" \
             --argjson extra "$extra" \
-            '{contract: $contract, op: $op, tier: $tier, fee_stroops: null, hash: null} + $extra' \
+            '{row_type: $row_type, contract: $contract, op: $op, tier: $tier, fee_stroops: null, hash: null} + $extra' \
             >> "$BENCH_JSONL"
         return 0
     fi
@@ -150,13 +163,14 @@ emit_row() {
     local raw
     raw="$(fetch_fee_full "$hash" || echo '{}')"
     jq -n \
+        --arg row_type "op" \
         --arg contract "$contract" \
         --arg op "$op" \
         --arg tier "$tier" \
         --arg hash "$hash" \
         --argjson raw "$raw" \
         --argjson extra "$extra" \
-        '{contract: $contract, op: $op, tier: $tier, hash: $hash,
+        '{row_type: $row_type, contract: $contract, op: $op, tier: $tier, hash: $hash,
           fee_stroops: ($raw.totals.fee_charged // $raw.fee_charged // null),
           inclusion_fee: ($raw.totals.inclusion_fee // null),
           resource_fee: ($raw.totals.resource_fee // null),
@@ -201,6 +215,7 @@ bench_deploy() {
 
     emit_row "$BENCH_CURRENT_CONTRACT" "deploy_upload" "n/a" "$upload_hash"
     emit_row "$BENCH_CURRENT_CONTRACT" "deploy_create" "n/a" "$create_hash"
+    emit_contract_address "$BENCH_CURRENT_CONTRACT" "$cid"
     printf '%s' "$cid"
 }
 

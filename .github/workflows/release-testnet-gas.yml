@@ -97,26 +97,22 @@ jobs:
                    scripts/bench-gas/contracts/*.sh
           bash scripts/bench-gas/run.sh
 
-      - name: Upload artifacts
+      - name: Upload workflow artifacts (raw JSONL + rendered body)
         uses: actions/upload-artifact@v4
         with:
           name: gas-benchmarks-${{ inputs.tag }}
           path: |
-            scripts/bench-gas/results.txt
+            scripts/bench-gas/results.md
             scripts/bench-gas/results.jsonl
           if-no-files-found: error
 
-      - name: Attach to GitHub release
-        env:
-          TAG: ${{ inputs.tag }}
-        run: |
-          cp scripts/bench-gas/results.txt   "gas-benchmarks-${TAG}.txt"
-          cp scripts/bench-gas/results.jsonl "gas-benchmarks-${TAG}.jsonl"
-
-      - uses: softprops/action-gh-release@v2
+      - name: Set release body to bench output
+        # Replaces the release body wholesale with the rendered
+        # markdown (table + contract addresses linking to
+        # stellar.expert). The raw JSONL is still attached as a
+        # workflow artifact for downstream tooling but no longer
+        # rides along on the release itself.
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag }}
-          files: |
-            gas-benchmarks-${{ inputs.tag }}.txt
-            gas-benchmarks-${{ inputs.tag }}.jsonl
-          fail_on_unmatched_files: true
+          body_path: scripts/bench-gas/results.md

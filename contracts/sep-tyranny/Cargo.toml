@@ -2,7 +2,7 @@
 name = "sep-tyranny-contract"
 version = "0.1.0"
 edition = "2021"
-description = "Soroban smart contract for SEP Tyranny: per-type single-admin governance with cryptographically-bound admin pubkey commitment, no admin tree, no quorum."
+description = "Soroban smart contract for SEP Tyranny: per-type single-admin governance. PLONK-verified (BLS12-381 + EF KZG SRS) via the shared plonk-verifier crate."
 license = "MIT"
 publish = false
 
@@ -11,13 +11,11 @@ crate-type = ["cdylib"]
 doctest = false
 
 [dependencies]
-# Pinned with `=` (not `^=`) because soroban-sdk 25.3.1 raised its rustc
-# floor to 1.91, which the dev-toolchain doesn't currently meet. Bumping
-# this needs a coordinated rustup update — don't loosen casually.
-soroban-sdk = "=25.3.0"
+soroban-sdk = { version = "=26.0.0-rc.1", features = ["alloc"] }
+plonk-verifier = { path = "../plonk-verifier" }
 
 [dev-dependencies]
-soroban-sdk = { version = "=25.3.0", features = ["testutils"] }
+soroban-sdk = { version = "=26.0.0-rc.1", features = ["alloc", "testutils"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 
 [profile.release]

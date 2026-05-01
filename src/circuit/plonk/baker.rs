@@ -28,6 +28,10 @@ use sha2::{Digest, Sha256};
 
 use crate::circuit::plonk::membership::{synthesize_membership, MembershipWitness};
 use crate::circuit::plonk::poseidon::{poseidon_hash_one_v05, poseidon_hash_two_v05};
+use crate::circuit::plonk::tyranny::{
+    synthesize_tyranny_create, synthesize_tyranny_update, TyrannyCreateWitness,
+    TyrannyUpdateWitness,
+};
 use crate::circuit::plonk::update::{synthesize_update, UpdateWitness};
 use crate::prover::plonk;
 
@@ -93,6 +97,39 @@ pub fn pinned_update_vk_sha256_hex(depth: usize) -> Option<&'static str> {
         5 => Some(UPDATE_VK_SHA256_HEX_SMALL),
         8 => Some(UPDATE_VK_SHA256_HEX_MEDIUM),
         11 => Some(UPDATE_VK_SHA256_HEX_LARGE),
+        _ => None,
+    }
+}
+
+/// Pinned SHA-256 anchors for tyranny-create per-tier VKs.
+pub const TYRANNY_CREATE_VK_SHA256_HEX_SMALL: &str =
+    "94591dda611688c17cc7733fb8adeeeea0a2f65d74ae2a901f3fbd56ba16a976";
+pub const TYRANNY_CREATE_VK_SHA256_HEX_MEDIUM: &str =
+    "e87e5ab7927c5a08175534030d4540eee09fee1a4dae9d8c0afcfc6a4f93e6b0";
+pub const TYRANNY_CREATE_VK_SHA256_HEX_LARGE: &str =
+    "17c97f3beea08eb686283ac1b9f44eabb6e4f8cf7d40bd6965da023ec76e1ff3";
+
+pub const TYRANNY_UPDATE_VK_SHA256_HEX_SMALL: &str =
+    "fac8ade73d201d209a819e39f70b51cce715448c7b9d0bd75492fc8a797e9df2";
+pub const TYRANNY_UPDATE_VK_SHA256_HEX_MEDIUM: &str =
+    "80cf443718dd94159aeb17d0274f13717beb9d1539fea5be14a97e7986e6f8e8";
+pub const TYRANNY_UPDATE_VK_SHA256_HEX_LARGE: &str =
+    "04b729f34b67c726cf34ba568970cb6df5357fef923736fb4f6a6dab42edd798";
+
+pub fn pinned_tyranny_create_vk_sha256_hex(depth: usize) -> Option<&'static str> {
+    match depth {
+        5 => Some(TYRANNY_CREATE_VK_SHA256_HEX_SMALL),
+        8 => Some(TYRANNY_CREATE_VK_SHA256_HEX_MEDIUM),
+        11 => Some(TYRANNY_CREATE_VK_SHA256_HEX_LARGE),
+        _ => None,
+    }
+}
+
+pub fn pinned_tyranny_update_vk_sha256_hex(depth: usize) -> Option<&'static str> {
+    match depth {
+        5 => Some(TYRANNY_UPDATE_VK_SHA256_HEX_SMALL),
+        8 => Some(TYRANNY_UPDATE_VK_SHA256_HEX_MEDIUM),
+        11 => Some(TYRANNY_UPDATE_VK_SHA256_HEX_LARGE),
         _ => None,
     }
 }
@@ -293,6 +330,148 @@ pub fn bake_membership_vk(depth: usize) -> Result<Vec<u8>, BakeError> {
     Ok(vk_bytes)
 }
 
+/// Canonical tyranny-create witness at `depth`. Reuses anarchy
+/// canonical secret keys + admin at index 0; group_id_fr pinned to
+/// `0x7777`.
+pub fn build_canonical_tyranny_create_witness(depth: usize) -> TyrannyCreateWitness {
+    let secret_keys: Vec<Fr> = (1u64..=8).map(Fr::from).collect();
+    let admin_index = 0usize;
+    let salt: [u8; 32] = [0xEEu8; 32];
+    let group_id_fr = Fr::from(0x7777u64);
+
+    let leaves: Vec<Fr> = secret_keys.iter().map(poseidon_hash_one_v05).collect();
+    let num_leaves = 1usize << depth;
+    let mut nodes = vec![Fr::from(0u64); 2 * num_leaves];
+    for (i, leaf) in leaves.iter().enumerate() {
+        nodes[num_leaves + i] = *leaf;
+    }
+    for i in (1..num_leaves).rev() {
+        nodes[i] = poseidon_hash_two_v05(&nodes[2 * i], &nodes[2 * i + 1]);
+    }
+    let root = nodes[1];
+
+    let mut path = Vec::with_capacity(depth);
+    let mut cur = num_leaves + admin_index;
+    for _ in 0..depth {
+        let sib = if cur % 2 == 0 { cur + 1 } else { cur - 1 };
+        path.push(nodes[sib]);
+        cur /= 2;
+    }
+
+    let admin_leaf = poseidon_hash_one_v05(&secret_keys[admin_index]);
+    let admin_comm = poseidon_hash_two_v05(&admin_leaf, &group_id_fr);
+    let salt_fr = Fr::from_le_bytes_mod_order(&salt);
+    let inner = poseidon_hash_two_v05(&root, &Fr::from(0u64));
+    let commitment = poseidon_hash_two_v05(&inner, &salt_fr);
+
+    TyrannyCreateWitness {
+        commitment,
+        admin_pubkey_commitment: admin_comm,
+        group_id_fr,
+        admin_secret_key: secret_keys[admin_index],
+        member_root: root,
+        salt,
+        merkle_path: path,
+        leaf_index: admin_index,
+        depth,
+    }
+}
+
+/// Canonical tyranny-update witness at `depth`. epoch_old=1234, same
+/// admin (index 0), salt_old=0xEE, salt_new=0xFF, no roster change.
+pub fn build_canonical_tyranny_update_witness(depth: usize) -> TyrannyUpdateWitness {
+    let secret_keys: Vec<Fr> = (1u64..=8).map(Fr::from).collect();
+    let admin_index = 0usize;
+    let epoch_old: u64 = 1234;
+    let salt_old: [u8; 32] = [0xEEu8; 32];
+    let salt_new: [u8; 32] = [0xFFu8; 32];
+    let group_id_fr = Fr::from(0x7777u64);
+
+    let leaves: Vec<Fr> = secret_keys.iter().map(poseidon_hash_one_v05).collect();
+    let num_leaves = 1usize << depth;
+    let mut nodes = vec![Fr::from(0u64); 2 * num_leaves];
+    for (i, leaf) in leaves.iter().enumerate() {
+        nodes[num_leaves + i] = *leaf;
+    }
+    for i in (1..num_leaves).rev() {
+        nodes[i] = poseidon_hash_two_v05(&nodes[2 * i], &nodes[2 * i + 1]);
+    }
+    let root = nodes[1];
+
+    let mut path = Vec::with_capacity(depth);
+    let mut cur = num_leaves + admin_index;
+    for _ in 0..depth {
+        let sib = if cur % 2 == 0 { cur + 1 } else { cur - 1 };
+        path.push(nodes[sib]);
+        cur /= 2;
+    }
+
+    let admin_leaf = poseidon_hash_one_v05(&secret_keys[admin_index]);
+    let admin_comm = poseidon_hash_two_v05(&admin_leaf, &group_id_fr);
+    let salt_old_fr = Fr::from_le_bytes_mod_order(&salt_old);
+    let salt_new_fr = Fr::from_le_bytes_mod_order(&salt_new);
+    let c_old = poseidon_hash_two_v05(
+        &poseidon_hash_two_v05(&root, &Fr::from(epoch_old)),
+        &salt_old_fr,
+    );
+    let c_new = poseidon_hash_two_v05(
+        &poseidon_hash_two_v05(&root, &Fr::from(epoch_old + 1)),
+        &salt_new_fr,
+    );
+
+    TyrannyUpdateWitness {
+        c_old,
+        epoch_old,
+        c_new,
+        admin_pubkey_commitment: admin_comm,
+        group_id_fr,
+        admin_secret_key: secret_keys[admin_index],
+        member_root_old: root,
+        member_root_new: root,
+        salt_old,
+        salt_new,
+        merkle_path_old: path,
+        leaf_index_old: admin_index,
+        depth,
+    }
+}
+
+pub fn bake_tyranny_create_vk(depth: usize) -> Result<Vec<u8>, BakeError> {
+    if pinned_tyranny_create_vk_sha256_hex(depth).is_none() {
+        return Err(BakeError::UnsupportedDepth(depth));
+    }
+    let witness = build_canonical_tyranny_create_witness(depth);
+    let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+    synthesize_tyranny_create(&mut circuit, &witness).map_err(BakeError::Synthesize)?;
+    circuit
+        .finalize_for_arithmetization()
+        .map_err(BakeError::Synthesize)?;
+    let keys = plonk::preprocess(&circuit).map_err(BakeError::Preprocess)?;
+    let mut vk_bytes = Vec::new();
+    keys.vk
+        .serialize_uncompressed(&mut vk_bytes)
+        .map_err(BakeError::Serialize)?;
+    Ok(vk_bytes)
+}
+
+pub fn bake_tyranny_update_vk(depth: usize) -> Result<Vec<u8>, BakeError> {
+    if pinned_tyranny_update_vk_sha256_hex(depth).is_none() {
+        return Err(BakeError::UnsupportedDepth(depth));
+    }
+    let witness = build_canonical_tyranny_update_witness(depth);
+    let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+    synthesize_tyranny_update(&mut circuit, &witness).map_err(BakeError::Synthesize)?;
+    circuit
+        .finalize_for_arithmetization()
+        .map_err(BakeError::Synthesize)?;
+    let keys = plonk::preprocess(&circuit).map_err(BakeError::Preprocess)?;
+    let mut vk_bytes = Vec::new();
+    keys.vk
+        .serialize_uncompressed(&mut vk_bytes)
+        .map_err(BakeError::Serialize)?;
+    Ok(vk_bytes)
+}
+
 /// Build the canonical update circuit for `depth`, run jf-plonk's
 /// preprocessing against the embedded EF KZG SRS, and return the
 /// arkworks-uncompressed verifying-key bytes.
@@ -421,5 +600,34 @@ mod tests {
             Err(BakeError::UnsupportedDepth(7)) => {}
             other => panic!("expected UnsupportedDepth(7), got {other:?}"),
         }
+    }
+
+    /// Anchor for tyranny-create + tyranny-update VK shapes across all
+    /// three tiers. Mismatches print computed=… so the failure surface
+    /// can be pasted into the `TYRANNY_*_VK_SHA256_HEX_*` constants.
+    #[test]
+    fn bake_tyranny_vks_match_pinned_for_all_tiers() {
+        let mut mismatches = Vec::new();
+        for &depth in &[5usize, 8, 11] {
+            for (label, computed, pinned) in [
+                (
+                    "tyranny-create",
+                    vk_sha256_hex(&bake_tyranny_create_vk(depth).unwrap()),
+                    pinned_tyranny_create_vk_sha256_hex(depth).unwrap(),
+                ),
+                (
+                    "tyranny-update",
+                    vk_sha256_hex(&bake_tyranny_update_vk(depth).unwrap()),
+                    pinned_tyranny_update_vk_sha256_hex(depth).unwrap(),
+                ),
+            ] {
+                if computed != pinned {
+                    mismatches.push(format!(
+                        "{label} depth={depth}: computed={computed}, pinned={pinned}"
+                    ));
+                }
+            }
+        }
+        assert!(mismatches.is_empty(), "tyranny VK pin drift:\n  {}", mismatches.join("\n  "));
     }
 }

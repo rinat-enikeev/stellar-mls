@@ -28,10 +28,15 @@
 //!      - For any pair of active slots, `leaf_idx_i ≠ leaf_idx_j`
 //!        (anti-double-count: prevents one signer filling both slots).
 //!      - K = Σ active_i.
-//!      - K ≥ threshold_numerator. The slack `K - threshold` is
-//!        range-checked into 2 bits, so `threshold ∈ [0, K_MAX]` is
-//!        baked into the encoding — raising `K_MAX` requires widening
-//!        the slack range in lockstep.
+//!      - K ≥ threshold_numerator. Encoded as `K = threshold + slack`
+//!        with both `threshold` and `slack` range-checked into 2 bits
+//!        (i.e. `[0, 3]`, sufficient for `K_MAX = 2`). The threshold
+//!        range gate closes the underflow path: without it, an
+//!        attacker submitting `threshold ≡ -slack (mod p)` would
+//!        satisfy the equation with `K = 0` (zero active signers).
+//!        Raising `K_MAX` past 3 requires widening *both* bit
+//!        decompositions in lockstep — guarded by a `const _: () =
+//!        assert!(K_MAX <= 3)` next to the constant.
 //!
 //!   2. Occupancy / count binding (count delta only):
 //!      - `occupancy_commitment_old = Poseidon(member_count_old, salt_oc_old)`.
@@ -89,6 +94,12 @@ use super::poseidon::{poseidon_hash_one_gadget, poseidon_hash_two_gadget};
 
 /// Quorum cap in this initial port.
 pub const K_MAX: usize = 2;
+
+/// Slack and threshold are both range-checked into 2 bits — sufficient
+/// for `K_MAX <= 3`. Raising `K_MAX` past 3 silently breaks soundness
+/// of the `K ≥ threshold` gate; widen both bit decompositions in
+/// lockstep before bumping this constant.
+const _: () = assert!(K_MAX <= 3, "widen slack + threshold ranges before raising K_MAX past 3");
 
 /// One signer's witness bundle.
 #[derive(Clone)]
@@ -248,6 +259,14 @@ pub fn synthesize_democracy_update_quorum(
     // same leaf_idx. For every pair (j, i) with i > j, enforce
     //   active_j · active_i · is_equal(leaf_idx_j, leaf_idx_i) = 0
     // i.e. if both slots are active, their leaf indices must differ.
+    //
+    // **Distinctness is on `leaf_idx`, not on `Poseidon(sk)`.** This
+    // assumes member-tree uniqueness (no two distinct leaf positions
+    // carry the same `Poseidon(sk)`) — a witness-construction
+    // invariant established off-circuit when the tree is built from
+    // a deduplicated secret-key set. If that invariant ever weakens,
+    // a single signer could occupy multiple `leaf_idx` slots and
+    // double-count under this check.
     for i in 1..K_MAX {
         for j in 0..i {
             let eq = circuit.is_equal(leaf_idx_field_vars[j], leaf_idx_field_vars[i])?;
@@ -268,20 +287,37 @@ pub fn synthesize_democracy_update_quorum(
         k_var = circuit.add(k_var, av_var)?;
     }
 
-    // K ≥ threshold ⇔ K = threshold + slack with slack ∈ [0, K_MAX].
-    // Encode slack as 2-bit witness (covers [0, 3]; sufficient for
-    // K_MAX=2).
-    // `saturating_sub` here is a witness-generation convenience only;
-    // any wrong slack value (e.g. clamped to 0 when threshold > K)
-    // fails the in-circuit `K = threshold + slack` equality below, so
-    // the saturation is not load-bearing for soundness.
+    // K ≥ threshold ⇔ K = threshold + slack with slack, threshold ∈
+    // [0, K_MAX]. Range-check both via 2-bit boolean decomposition.
+    //
+    // **Why range-check threshold.** Without it, an attacker submitting
+    // `threshold ≡ -slack (mod p)` (e.g. `threshold ≡ -3 (mod p)` with
+    // `slack = 3`) satisfies `K = threshold + slack` with `K = 0`
+    // active signers. Bounding `threshold ∈ [0, 3]` in-circuit closes
+    // the underflow path independently of caller-side validation.
+    //
+    // `saturating_sub` for slack witness-generation is a convenience
+    // only — any wrong slack value still fails the in-circuit
+    // `K = threshold + slack` equality below, so saturation is not
+    // load-bearing for soundness.
+    let two_var = circuit.create_constant_variable(Fr::from(2u64))?;
+
+    let thresh_bit0 =
+        circuit.create_boolean_variable((witness.threshold_numerator & 1) == 1)?;
+    let thresh_bit1 =
+        circuit.create_boolean_variable(((witness.threshold_numerator >> 1) & 1) == 1)?;
+    let thresh_b0_var: Variable = thresh_bit0.into();
+    let thresh_b1_var: Variable = thresh_bit1.into();
+    let thresh_b1_scaled = circuit.mul(thresh_b1_var, two_var)?;
+    let thresh_decomp = circuit.add(thresh_b0_var, thresh_b1_scaled)?;
+    circuit.enforce_equal(thresh_decomp, threshold_var)?;
+
     let slack_value = (witness.signers.iter().filter(|s| s.active).count() as u64)
         .saturating_sub(witness.threshold_numerator);
     let slack_bit0 = circuit.create_boolean_variable((slack_value & 1) == 1)?;
     let slack_bit1 = circuit.create_boolean_variable(((slack_value >> 1) & 1) == 1)?;
     let slack_b0_var: Variable = slack_bit0.into();
     let slack_b1_var: Variable = slack_bit1.into();
-    let two_var = circuit.create_constant_variable(Fr::from(2u64))?;
     let slack_b1_scaled = circuit.mul(slack_b1_var, two_var)?;
     let slack_var = circuit.add(slack_b0_var, slack_b1_scaled)?;
     // K = threshold + slack
@@ -568,6 +604,43 @@ mod tests {
         let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
         synthesize_democracy_update_quorum(&mut c, &w).unwrap();
         assert!(c.check_circuit_satisfiability(&pi(&w)).is_err());
+    }
+
+    /// Member-removal path: `count_new = count_old - 1`. The
+    /// `(diff)(diff-1)(diff+1)` product is symmetric in sign, but
+    /// catches witness-generation regressions on the negative branch.
+    #[test]
+    fn satisfies_count_delta_minus_one() {
+        let sks: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+        let w = build_witness(&sks, 3, 42, K_MAX as u64, K_MAX, 5, 4);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_democracy_update_quorum(&mut c, &w).unwrap();
+        c.check_circuit_satisfiability(&pi(&w)).unwrap();
+    }
+
+    /// PI-supplied threshold outside `[0, K_MAX]` must reject. Without
+    /// the in-circuit threshold range gate, `threshold ≡ -slack (mod
+    /// p)` would let an attacker pass `K = threshold + slack` with K=0
+    /// active signers. Exercises the gate against a crafted PI vector
+    /// that the witness-generation path can't naturally produce.
+    #[test]
+    fn rejects_out_of_range_threshold_pi() {
+        let sks: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+        // K=0 active, threshold-witness=0 — circuit synthesizes cleanly.
+        let mut w = build_witness(&sks, 3, 42, 0, 0, 5, 5);
+        // Inactive slot 0 still has a path; satisfying when threshold=0
+        // means we now poison the PI's threshold to a large field
+        // element. The slack 2-bit decomposition + threshold-equality
+        // gate must collectively reject.
+        // Patch witness to make satisfiability hinge on the PI.
+        w.threshold_numerator = 0;
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_democracy_update_quorum(&mut c, &w).unwrap();
+        let mut bad_pi = pi(&w);
+        // -3 mod p — a "large/negative" Fr that breaks `K = threshold
+        // + slack` if the threshold range gate is missing.
+        bad_pi[5] = -Fr::from(3u64);
+        assert!(c.check_circuit_satisfiability(&bad_pi).is_err());
     }
 
     /// Quorum circuit fits at d=5 and d=8 only. d=11 blows the

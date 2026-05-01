@@ -538,7 +538,14 @@ const _: () = {
     assert!(G2_COMPRESSED_LEN == 96);
 };
 
+// Stack buffer width for `verify_plonk_proof`. Must dominate every
+// per-circuit PI count this contract dispatches against.
 const MAX_PI_COUNT: usize = 6;
+const _: () = {
+    assert!(MEMBERSHIP_PI_COUNT as usize <= MAX_PI_COUNT);
+    assert!(CREATE_PI_COUNT as usize <= MAX_PI_COUNT);
+    assert!(UPDATE_PI_COUNT as usize <= MAX_PI_COUNT);
+};
 
 fn verify_plonk_proof(
     env: &Env,

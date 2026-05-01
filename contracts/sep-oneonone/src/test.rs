@@ -1,5 +1,7 @@
 //! Inline test suite for the SEP 1v1 contract — PLONK-migration era.
 
+extern crate std;
+
 use super::*;
 use soroban_sdk::testutils::Address as _;
 
@@ -464,4 +466,57 @@ fn test_vectors_consistency() {
         .as_u64()
         .unwrap();
     assert_eq!(test_count, 21, "test count pin drift");
+}
+
+// ================================================================
+// Gas benchmarks (Phase C.5)
+// ================================================================
+
+#[test]
+fn bench_verify_membership() {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[40u8; 32]);
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &membership_commitment(&env),
+        CANONICAL_MEMBERSHIP_EPOCH,
+    );
+    let pi = membership_pi(
+        &env,
+        membership_commitment(&env),
+        CANONICAL_MEMBERSHIP_EPOCH,
+    );
+
+    env.cost_estimate().budget().reset_tracker();
+    let result = client.verify_membership(&group_id, &membership_proof(&env), &pi);
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
+
+    assert!(result, "canonical 1v1 membership proof should verify");
+    std::eprintln!(
+        "[gas-bench] sep-oneonone verify_membership: cpu={} mem={}",
+        cpu, mem
+    );
+}
+
+#[test]
+fn bench_create_group() {
+    let (env, client, _admin) = setup_env();
+    let c = caller(&env);
+    let commitment = create_commitment(&env);
+    let pi = create_pi(&env);
+    let group_id = BytesN::from_array(&env, &[42u8; 32]);
+
+    env.cost_estimate().budget().reset_tracker();
+    client.create_group(&c, &group_id, &commitment, &create_proof(&env), &pi);
+    let cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    let mem = env.cost_estimate().budget().memory_bytes_cost();
+
+    std::eprintln!(
+        "[gas-bench] sep-oneonone create_group: cpu={} mem={}",
+        cpu, mem
+    );
 }

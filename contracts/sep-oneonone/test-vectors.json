@@ -174,6 +174,7 @@
       "test_verify_membership_happy_path",
       "test_verify_membership_rejects_wrong_commitment",
       "test_verify_membership_rejects_wrong_epoch",
+      "test_verify_membership_well_formed_wrong_vk_returns_false",
       "test_set_restricted_mode_requires_auth",
       "test_get_commitment_returns_state",
       "test_get_commitment_rejects_unknown_group",
@@ -184,11 +185,11 @@
     "categories": {
       "initialization": 1,
       "create_group": 10,
-      "verify_membership": 3,
+      "verify_membership": 4,
       "admin_entrypoints": 1,
       "queries": 4,
       "abi_pin": 1,
-      "total": 20
+      "total": 21
     }
   }
 }

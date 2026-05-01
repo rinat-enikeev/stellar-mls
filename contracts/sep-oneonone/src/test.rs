@@ -339,6 +339,29 @@ fn test_verify_membership_rejects_wrong_epoch() {
     client.verify_membership(&group_id, &malformed_proof(&env), &pi);
 }
 
+/// Pins the trap-vs-`Ok(false)` boundary documented at
+/// `verify_membership`'s docstring: a byte-valid PLONK proof for a
+/// *different* circuit (the canonical create proof, valid against
+/// `ONEONONE_CREATE_VK`) parses cleanly through `parse_proof_bytes`,
+/// fails verification against `MEMBERSHIP_VK`, and surfaces as
+/// `Err(InvalidProof) → Ok(false)` — i.e. it does NOT trap in BLS
+/// host primitives. Catches a regression where the verifier glue
+/// drifts toward propagating verify-failure as a host trap.
+#[test]
+fn test_verify_membership_well_formed_wrong_vk_returns_false() {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[33u8; 32]);
+    let commitment = create_commitment(&env);
+    inject_group(&env, &contract_id, &group_id, &commitment, 0);
+    let pi = membership_pi(&env, commitment, 0);
+    let result = client.verify_membership(&group_id, &create_proof(&env), &pi);
+    assert!(
+        !result,
+        "well-formed PLONK proof for the wrong VK must return Ok(false), not trap"
+    );
+}
+
 // ================================================================
 // 4. Admin entrypoints
 // ================================================================
@@ -440,5 +463,5 @@ fn test_vectors_consistency() {
     let test_count = v["tests_to_implement"]["categories"]["total"]
         .as_u64()
         .unwrap();
-    assert_eq!(test_count, 20, "test count pin drift");
+    assert_eq!(test_count, 21, "test count pin drift");
 }

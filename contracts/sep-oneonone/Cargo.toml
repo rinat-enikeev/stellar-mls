@@ -11,6 +11,14 @@ crate-type = ["cdylib"]
 doctest = false
 
 [dependencies]
+# `=26.0.0-rc.1` is intentional and workspace-coordinated: Phase C.2
+# bumped sep-anarchy + plonk-verifier + sep-oneonone to the same
+# release-candidate floor (see contracts/plonk-verifier/Cargo.toml for
+# the rustc-floor note). The `=` exact pin is load-bearing for the
+# baked immutable VKs — a host-primitive ABI shift between RC builds
+# could change BLS12-381 / Keccak semantics and re-mint the
+# verification path. When 26.0.0 final ships, bump all three crates
+# in the same PR.
 soroban-sdk = { version = "=26.0.0-rc.1", features = ["alloc"] }
 plonk-verifier = { path = "../plonk-verifier" }
 

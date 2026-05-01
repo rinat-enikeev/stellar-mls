@@ -39,7 +39,7 @@
 #![cfg(feature = "plonk")]
 
 use ark_bls12_381_v05::Fr;
-use ark_ff_v05::{Field, Zero};
+use ark_ff_v05::Field;
 
 use crate::circuit::plonk::proof_format::{NUM_WIRE_SIGMA_EVALS, NUM_WIRE_TYPES};
 use crate::circuit::plonk::vk_format::NUM_SIGMA_COMMS;
@@ -107,7 +107,7 @@ pub fn compute_lin_poly_constant_term(
 mod tests {
     use super::*;
     use ark_bls12_381_v05::{Bls12_381, Fr};
-    use ark_ff_v05::{BigInteger, One, PrimeField};
+    use ark_ff_v05::{BigInteger, One, PrimeField, Zero};
     use ark_serialize_v05::{CanonicalDeserialize, CanonicalSerialize};
     use ark_std_v05::UniformRand;
     use jf_plonk::proof_system::structs::VerifyingKey;

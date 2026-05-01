@@ -68,17 +68,22 @@ ZERO32_HEX="$(printf '%064d' 0)"
 # ---------- invocation + fee capture ----------
 
 # capture_tx_hashes <stderr_logfile>
-# Echoes every transaction hash the stellar CLI logged, one per line,
-# in the order they were submitted. Anchored on the `Transaction hash
-# is <hex>` prefix to avoid matching wasm hashes, contract IDs, or
-# error blobs that happen to contain a 64-char hex run.
+# Echoes every successfully-submitted transaction hash the stellar
+# CLI logged, one per line, in submission order. Anchored on the
+# stellar.expert URL line, which v26 prints only after the network
+# accepts the tx — so simulation-failed ops that never hit chain are
+# correctly skipped.
 #
 # `stellar contract deploy` submits two txs (upload_contract_wasm +
 # create_contract); a normal invoke submits one. Callers pick by
 # index.
+#
+# v26 sample lines this matches (one per accepted tx):
+#   🔗 https://stellar.expert/explorer/testnet/tx/<64-hex>
 capture_tx_hashes() {
     local err="$1"
-    grep -oE 'Transaction hash is [0-9a-f]{64}' "$err" | awk '{print $4}'
+    grep -oE 'stellar\.expert/explorer/[a-z]+/tx/[0-9a-f]{64}' "$err" \
+        | grep -oE '[0-9a-f]{64}'
 }
 
 # capture_tx_hash <stderr_logfile>
@@ -127,7 +132,7 @@ emit_contract_address() {
     if [ -z "$address" ]; then
         return 0
     fi
-    jq -n \
+    jq -nc \
         --arg row_type "contract" \
         --arg contract "$contract" \
         --arg address "$address" \
@@ -149,7 +154,7 @@ emit_row() {
         # CLI rejected it at simulation time, or it's a read-only
         # entrypoint that short-circuits to local sim). Emit a row
         # with null fee fields so the renderer can flag it.
-        jq -n \
+        jq -nc \
             --arg row_type "op" \
             --arg contract "$contract" \
             --arg op "$op" \
@@ -162,7 +167,7 @@ emit_row() {
 
     local raw
     raw="$(fetch_fee_full "$hash" || echo '{}')"
-    jq -n \
+    jq -nc \
         --arg row_type "op" \
         --arg contract "$contract" \
         --arg op "$op" \

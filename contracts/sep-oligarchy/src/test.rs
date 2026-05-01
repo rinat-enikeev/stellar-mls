@@ -26,7 +26,12 @@ const OLI_UPDATE_PI: &[u8; 192] =
     include_bytes!("../../plonk-verifier/tests/fixtures/oligarchy-update-pi.bin");
 
 const CANONICAL_EPOCH: u64 = 1234;
-const CANONICAL_THRESHOLD: u32 = 5;
+// Matches the threshold value baked into the oligarchy-update VK
+// fixture by `build_canonical_oligarchy_update_quorum_witness` —
+// `K = K_MAX = 2`, threshold = 1, slack = 1 (non-boundary so the
+// production VK exercises the threshold + slack range gates
+// non-trivially through the canonical witness).
+const CANONICAL_THRESHOLD: u32 = 1;
 
 fn membership_proof(env: &Env, tier: u32) -> BytesN<1601> {
     BytesN::from_array(

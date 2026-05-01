@@ -302,7 +302,8 @@ mod tests {
         bake_tyranny_update_vk, bake_update_vk,
         build_canonical_democracy_update_quorum_witness,
         build_canonical_democracy_update_witness, build_canonical_membership_witness,
-        build_canonical_oligarchy_create_witness, build_canonical_oligarchy_update_witness,
+        build_canonical_oligarchy_create_witness,
+        build_canonical_oligarchy_update_quorum_witness,
         build_canonical_oneonone_create_witness, build_canonical_tyranny_create_witness,
         build_canonical_tyranny_update_witness, build_canonical_update_witness,
     };
@@ -311,7 +312,7 @@ mod tests {
     };
     use crate::circuit::plonk::membership::synthesize_membership;
     use crate::circuit::plonk::oligarchy::{
-        synthesize_oligarchy_create, synthesize_oligarchy_update,
+        synthesize_oligarchy_create, synthesize_oligarchy_update_quorum,
     };
     use crate::circuit::plonk::oneonone_create::synthesize_oneonone_create;
     use crate::circuit::plonk::proof_format::parse_proof_bytes;
@@ -679,9 +680,9 @@ mod tests {
     fn build_canonical_oligarchy_update_artifact_bytes(
     ) -> (Vec<u8>, Vec<u8>, [u8; G2_COMPRESSED_LEN], Vec<u8>) {
         let vk_bytes = bake_oligarchy_update_vk().expect("bake oligarchy-update vk");
-        let witness = build_canonical_oligarchy_update_witness();
+        let witness = build_canonical_oligarchy_update_quorum_witness();
         let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
-        synthesize_oligarchy_update(&mut circuit, &witness).unwrap();
+        synthesize_oligarchy_update_quorum(&mut circuit, &witness).unwrap();
         circuit.finalize_for_arithmetization().unwrap();
         let keys = plonk::preprocess(&circuit).unwrap();
         let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);

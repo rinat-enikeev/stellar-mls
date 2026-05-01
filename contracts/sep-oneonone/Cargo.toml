@@ -2,7 +2,7 @@
 name = "sep-oneonone-contract"
 version = "0.1.0"
 edition = "2021"
-description = "Soroban smart contract for SEP 1v1: per-type immutable two-party group. No update path, no deactivate, no quorum, no admin set, no tier parameter (tier=0 hardcoded)."
+description = "Soroban smart contract for SEP 1v1: per-type immutable two-party group. No update path, no deactivate, no quorum, no admin set, no tier parameter (tier=0 hardcoded). PLONK-verified (BLS12-381 + EF KZG SRS) via the shared plonk-verifier crate."
 license = "MIT"
 publish = false
 
@@ -11,13 +11,19 @@ crate-type = ["cdylib"]
 doctest = false
 
 [dependencies]
-# Pinned with `=` (not `^=`) because soroban-sdk 25.3.1 raised its rustc
-# floor to 1.91, which the dev-toolchain doesn't currently meet. Bumping
-# this needs a coordinated rustup update — don't loosen casually.
-soroban-sdk = "=25.3.0"
+# `=26.0.0-rc.1` is intentional and workspace-coordinated: Phase C.2
+# bumped sep-anarchy + plonk-verifier + sep-oneonone to the same
+# release-candidate floor (see contracts/plonk-verifier/Cargo.toml for
+# the rustc-floor note). The `=` exact pin is load-bearing for the
+# baked immutable VKs — a host-primitive ABI shift between RC builds
+# could change BLS12-381 / Keccak semantics and re-mint the
+# verification path. When 26.0.0 final ships, bump all three crates
+# in the same PR.
+soroban-sdk = { version = "=26.0.0-rc.1", features = ["alloc"] }
+plonk-verifier = { path = "../plonk-verifier" }
 
 [dev-dependencies]
-soroban-sdk = { version = "=25.3.0", features = ["testutils"] }
+soroban-sdk = { version = "=26.0.0-rc.1", features = ["alloc", "testutils"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 
 [profile.release]

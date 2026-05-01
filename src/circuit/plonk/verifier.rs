@@ -297,12 +297,13 @@ mod tests {
     use rand_chacha::rand_core::SeedableRng;
 
     use crate::circuit::plonk::baker::{
-        bake_membership_vk, bake_tyranny_create_vk, bake_tyranny_update_vk,
-        bake_update_vk, build_canonical_membership_witness,
-        build_canonical_tyranny_create_witness, build_canonical_tyranny_update_witness,
-        build_canonical_update_witness,
+        bake_membership_vk, bake_oneonone_create_vk, bake_tyranny_create_vk,
+        bake_tyranny_update_vk, bake_update_vk, build_canonical_membership_witness,
+        build_canonical_oneonone_create_witness, build_canonical_tyranny_create_witness,
+        build_canonical_tyranny_update_witness, build_canonical_update_witness,
     };
     use crate::circuit::plonk::membership::synthesize_membership;
+    use crate::circuit::plonk::oneonone_create::synthesize_oneonone_create;
     use crate::circuit::plonk::proof_format::parse_proof_bytes;
     use crate::circuit::plonk::tyranny::{
         synthesize_tyranny_create, synthesize_tyranny_update,
@@ -547,6 +548,38 @@ mod tests {
         (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat)
     }
 
+    /// 1v1-create-circuit equivalent of
+    /// `build_canonical_artifact_bytes`. Single tier (depth=5);
+    /// public-input shape `(commitment, epoch=0)`.
+    fn build_canonical_oneonone_create_artifact_bytes(
+    ) -> (Vec<u8>, Vec<u8>, [u8; G2_COMPRESSED_LEN], Vec<u8>) {
+        let vk_bytes = bake_oneonone_create_vk().expect("bake oneonone-create vk");
+        let witness = build_canonical_oneonone_create_witness();
+        let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_oneonone_create(&mut circuit, &witness).unwrap();
+        circuit.finalize_for_arithmetization().unwrap();
+        let keys = plonk::preprocess(&circuit).unwrap();
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
+        let oracle_proof = plonk::prove(&mut rng, &keys.pk, &circuit).unwrap();
+        let mut proof_bytes = Vec::new();
+        oracle_proof
+            .serialize_uncompressed(&mut proof_bytes)
+            .unwrap();
+
+        let parsed_vk = parse_vk_bytes(&vk_bytes).expect("parse oneonone-create vk");
+        let srs_g2_compressed =
+            super::compress_g2_for_transcript(&parsed_vk.open_key_powers_of_h[1])
+                .expect("compress [τ]_2");
+
+        // PI: (commitment, epoch=0).
+        let mut pi_concat = Vec::with_capacity(2 * FR_LEN);
+        for fr in [witness.commitment, Fr::from(0u64)] {
+            let bytes = fr.into_bigint().to_bytes_be();
+            pi_concat.extend_from_slice(&bytes);
+        }
+        (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat)
+    }
+
     /// Update-circuit equivalent of `build_canonical_artifact_bytes`.
     /// Returns (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat
     /// for `(c_old, epoch_old, c_new)` BE-encoded). The
@@ -746,6 +779,42 @@ mod tests {
                 proof_bytes,
                 srs_g2_compressed,
                 pi_concat,
+            );
+        }
+
+        // 1v1 create — single tier (depth=5). Bare filenames
+        // `oneonone-create-{vk,proof,pi}.bin` (no `-d{N}` suffix).
+        let (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat) =
+            build_canonical_oneonone_create_artifact_bytes();
+        if let Some(first) = srs_g2_first {
+            assert_eq!(
+                first, srs_g2_compressed,
+                "oneonone-create srs-g2 differs from membership/update"
+            );
+        }
+        if regenerate {
+            fs::write(fixtures_dir.join("oneonone-create-vk.bin"), &vk_bytes).unwrap();
+            fs::write(
+                fixtures_dir.join("oneonone-create-proof.bin"),
+                &proof_bytes,
+            )
+            .unwrap();
+            fs::write(fixtures_dir.join("oneonone-create-pi.bin"), &pi_concat).unwrap();
+        } else {
+            assert_eq!(
+                on_disk("oneonone-create-vk.bin"),
+                vk_bytes,
+                "oneonone-create-vk.bin: {drift_msg}"
+            );
+            assert_eq!(
+                on_disk("oneonone-create-proof.bin"),
+                proof_bytes,
+                "oneonone-create-proof.bin: {drift_msg}"
+            );
+            assert_eq!(
+                on_disk("oneonone-create-pi.bin"),
+                pi_concat,
+                "oneonone-create-pi.bin: {drift_msg}"
             );
         }
 

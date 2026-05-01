@@ -32,8 +32,9 @@ use crate::circuit::plonk::democracy::{
 };
 use crate::circuit::plonk::membership::{synthesize_membership, MembershipWitness};
 use crate::circuit::plonk::oligarchy::{
-    synthesize_oligarchy_create, synthesize_oligarchy_update_quorum, OligarchyAdminSigner,
-    OligarchyCreateWitness, OligarchyUpdateQuorumWitness, OLIGARCHY_ADMIN_DEPTH,
+    synthesize_oligarchy_create, synthesize_oligarchy_membership,
+    synthesize_oligarchy_update_quorum, OligarchyAdminSigner, OligarchyCreateWitness,
+    OligarchyMembershipWitness, OligarchyUpdateQuorumWitness, OLIGARCHY_ADMIN_DEPTH,
     OLIGARCHY_K_MAX,
 };
 use crate::circuit::plonk::oneonone_create::{
@@ -384,11 +385,67 @@ pub const OLIGARCHY_CREATE_VK_SHA256_HEX: &str =
 pub const OLIGARCHY_UPDATE_VK_SHA256_HEX: &str =
     "f89a3e30c48b6d81e9276dacd7f5b41b497ca954369426d5fa995f5343592cf4";
 
+/// Pinned anchors for the **oligarchy-specific** membership VK shape
+/// per tier (issue #208). The standard `bake_membership_vk` produces
+/// a VK whose 2-level commitment relation `c = H(H(root, epoch),
+/// salt)` doesn't match what `synthesize_oligarchy_create` /
+/// `_update_quorum` store on-chain (3-level chain with the
+/// `H(occ, admin_root)` leg). `synthesize_oligarchy_membership` uses
+/// the matching 3-level chain, so honestly-created oligarchy groups
+/// can produce valid `verify_membership` proofs against their stored
+/// commitment.
+pub const OLIGARCHY_MEMBERSHIP_VK_SHA256_HEX_SMALL: &str =
+    "7344fc658b14d8cfc181ca2c584e87c3fbd31ad21cebe4c0eba405eff54f6fdc";
+pub const OLIGARCHY_MEMBERSHIP_VK_SHA256_HEX_MEDIUM: &str =
+    "a5e25424e982a83e64eee8030def0fba42af173e0c612bcb965bdb5535a30918";
+pub const OLIGARCHY_MEMBERSHIP_VK_SHA256_HEX_LARGE: &str =
+    "29fa62c87eff3548476e314ed06f5a5f77c7d3ebbe0e0fb741da43024a217c33";
+
+pub fn pinned_oligarchy_membership_vk_sha256_hex(depth: usize) -> Option<&'static str> {
+    match depth {
+        5 => Some(OLIGARCHY_MEMBERSHIP_VK_SHA256_HEX_SMALL),
+        8 => Some(OLIGARCHY_MEMBERSHIP_VK_SHA256_HEX_MEDIUM),
+        11 => Some(OLIGARCHY_MEMBERSHIP_VK_SHA256_HEX_LARGE),
+        _ => None,
+    }
+}
+
+/// Canonical witness for the oligarchy create circuit.
+///
+/// `member_root` is the **real Merkle root** of a depth-5 tree built
+/// from secret keys 1..=8 — same shape as
+/// `build_canonical_oligarchy_membership_witness(5)`, so the create +
+/// oligarchy-membership-d5 fixtures share `(member_root, salt, occ,
+/// admin_root)` state. That coordination lets sep-oligarchy's
+/// lifecycle test do `create_oligarchy_group → verify_membership`
+/// end-to-end against precomputed proof bytes (issue #208's audit
+/// follow-up).
+///
+/// Tier-1/-2 oligarchy-membership fixtures use the same secret-key
+/// set at depth 8 / 11 (different roots, same keys); they don't
+/// share state with create because create is single-tier and we'd
+/// need separate create fixtures per tier to lifecycle-test the
+/// other 2 tiers. The depth-5 lifecycle test is sufficient to close
+/// the audit's verify_membership gap.
 pub fn build_canonical_oligarchy_create_witness() -> OligarchyCreateWitness {
+    let secret_keys: Vec<Fr> = (1u64..=8).map(Fr::from).collect();
     let occ = Fr::from(0xA110u64);
-    let member_root = Fr::from(0xCAFEu64);
     let admin_root = Fr::from(0xADADu64);
-    let salt = Fr::from(0xEEEEu64);
+    let salt = Fr::from_le_bytes_mod_order(&[0xAAu8; 32]);
+
+    // Build depth-5 member tree (matches `build_canonical_oligarchy_membership_witness(5)`).
+    const DEPTH: usize = 5;
+    let leaves: Vec<Fr> = secret_keys.iter().map(poseidon_hash_one_v05).collect();
+    let num_leaves = 1usize << DEPTH;
+    let mut nodes = vec![Fr::from(0u64); 2 * num_leaves];
+    for (i, leaf) in leaves.iter().enumerate() {
+        nodes[num_leaves + i] = *leaf;
+    }
+    for i in (1..num_leaves).rev() {
+        nodes[i] = poseidon_hash_two_v05(&nodes[2 * i], &nodes[2 * i + 1]);
+    }
+    let member_root = nodes[1];
+
     let inner = poseidon_hash_two_v05(&member_root, &Fr::from(0u64));
     let mid = poseidon_hash_two_v05(&inner, &salt);
     let admin_mix = poseidon_hash_two_v05(&occ, &admin_root);
@@ -517,6 +574,94 @@ pub fn bake_oligarchy_update_vk() -> Result<Vec<u8>, BakeError> {
     let witness = build_canonical_oligarchy_update_quorum_witness();
     let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
     synthesize_oligarchy_update_quorum(&mut circuit, &witness)
+        .map_err(BakeError::Synthesize)?;
+    circuit
+        .finalize_for_arithmetization()
+        .map_err(BakeError::Synthesize)?;
+    let keys = plonk::preprocess(&circuit).map_err(BakeError::Preprocess)?;
+    let mut vk_bytes = Vec::new();
+    keys.vk
+        .serialize_uncompressed(&mut vk_bytes)
+        .map_err(BakeError::Serialize)?;
+    Ok(vk_bytes)
+}
+
+/// Canonical witness for the oligarchy-specific membership circuit
+/// (issue #208). Shares `(secret_keys, salt, occupancy_commitment,
+/// admin_root, epoch)` state with `build_canonical_oligarchy_create_witness`
+/// at depth=5 — coordinated so sep-oligarchy's lifecycle test
+/// (`create_oligarchy_group → verify_membership`) can use precomputed
+/// proof bytes from `oligarchy-create-proof.bin` and
+/// `oligarchy-membership-proof-d5.bin` against a single stored
+/// commitment.
+///
+/// **Epoch is 0** to match create's `epoch=0`. Membership fixtures
+/// bind to a fresh-create state; testing membership after multiple
+/// updates would require additional fixtures (out of scope for #208).
+///
+/// At depths 8 and 11 the same secret-key set is used but the tree
+/// (and therefore `member_root` and `commitment`) differs. Those
+/// fixtures are self-consistent but don't share state with create.
+pub fn build_canonical_oligarchy_membership_witness(
+    depth: usize,
+) -> OligarchyMembershipWitness {
+    let secret_keys: Vec<Fr> = (1u64..=8).map(Fr::from).collect();
+    let prover_index = 3usize;
+    let epoch: u64 = 0;
+    let salt: [u8; 32] = [0xAAu8; 32];
+    let occ = Fr::from(0xA110u64);
+    let admin_root = Fr::from(0xADADu64);
+
+    let leaves: Vec<Fr> = secret_keys.iter().map(poseidon_hash_one_v05).collect();
+    let num_leaves = 1usize << depth;
+    let mut nodes = vec![Fr::from(0u64); 2 * num_leaves];
+    for (i, leaf) in leaves.iter().enumerate() {
+        nodes[num_leaves + i] = *leaf;
+    }
+    for i in (1..num_leaves).rev() {
+        nodes[i] = poseidon_hash_two_v05(&nodes[2 * i], &nodes[2 * i + 1]);
+    }
+    let member_root = nodes[1];
+
+    let mut path = Vec::with_capacity(depth);
+    let mut cur = num_leaves + prover_index;
+    for _ in 0..depth {
+        let sib = if cur % 2 == 0 { cur + 1 } else { cur - 1 };
+        path.push(nodes[sib]);
+        cur /= 2;
+    }
+
+    let salt_fr = Fr::from_le_bytes_mod_order(&salt);
+    let inner = poseidon_hash_two_v05(&member_root, &Fr::from(epoch));
+    let mid = poseidon_hash_two_v05(&inner, &salt_fr);
+    let admin_mix = poseidon_hash_two_v05(&occ, &admin_root);
+    let commitment = poseidon_hash_two_v05(&mid, &admin_mix);
+
+    OligarchyMembershipWitness {
+        commitment,
+        epoch,
+        secret_key: secret_keys[prover_index],
+        member_root,
+        salt,
+        merkle_path: path,
+        leaf_index: prover_index,
+        depth,
+        occupancy_commitment: occ,
+        admin_root,
+    }
+}
+
+/// Bake the oligarchy-specific membership VK at `depth`. Per-tier —
+/// member tree depth varies (5/8/11), unlike the single-tier
+/// oligarchy create + update VKs which only walk the fixed-depth-5
+/// admin tree.
+pub fn bake_oligarchy_membership_vk(depth: usize) -> Result<Vec<u8>, BakeError> {
+    if pinned_oligarchy_membership_vk_sha256_hex(depth).is_none() {
+        return Err(BakeError::UnsupportedDepth(depth));
+    }
+    let witness = build_canonical_oligarchy_membership_witness(depth);
+    let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+    synthesize_oligarchy_membership(&mut circuit, &witness)
         .map_err(BakeError::Synthesize)?;
     circuit
         .finalize_for_arithmetization()
@@ -1132,5 +1277,26 @@ mod tests {
             ));
         }
         assert!(mismatches.is_empty(), "oligarchy VK pin drift:\n  {}", mismatches.join("\n  "));
+    }
+
+    /// Anchor for oligarchy-specific membership VK shapes across all
+    /// 3 tiers (issue #208).
+    #[test]
+    fn bake_oligarchy_membership_vk_matches_pinned_for_all_tiers() {
+        let mut mismatches = Vec::new();
+        for &depth in &[5usize, 8, 11] {
+            let computed = vk_sha256_hex(&bake_oligarchy_membership_vk(depth).unwrap());
+            let pinned = pinned_oligarchy_membership_vk_sha256_hex(depth).unwrap();
+            if computed != pinned {
+                mismatches.push(format!(
+                    "oligarchy-membership depth={depth}: computed={computed}, pinned={pinned}"
+                ));
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "oligarchy-membership VK pin drift:\n  {}",
+            mismatches.join("\n  ")
+        );
     }
 }

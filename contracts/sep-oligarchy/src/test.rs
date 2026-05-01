@@ -5,18 +5,22 @@ extern crate std;
 use super::*;
 use soroban_sdk::testutils::Address as _;
 
+// Per-tier oligarchy-specific membership fixtures (issue #208 — the
+// stored on-chain commitment uses a 3-level Poseidon chain that the
+// standard `proof-d{N}.bin` fixtures, which bind a 2-level chain,
+// cannot satisfy without a Poseidon preimage).
 const PROOF_D5: &[u8; 1601] =
-    include_bytes!("../../plonk-verifier/tests/fixtures/proof-d5.bin");
+    include_bytes!("../../plonk-verifier/tests/fixtures/oligarchy-membership-proof-d5.bin");
 const PROOF_D8: &[u8; 1601] =
-    include_bytes!("../../plonk-verifier/tests/fixtures/proof-d8.bin");
+    include_bytes!("../../plonk-verifier/tests/fixtures/oligarchy-membership-proof-d8.bin");
 const PROOF_D11: &[u8; 1601] =
-    include_bytes!("../../plonk-verifier/tests/fixtures/proof-d11.bin");
+    include_bytes!("../../plonk-verifier/tests/fixtures/oligarchy-membership-proof-d11.bin");
 const PI_D5: &[u8; 64] =
-    include_bytes!("../../plonk-verifier/tests/fixtures/pi-d5.bin");
+    include_bytes!("../../plonk-verifier/tests/fixtures/oligarchy-membership-pi-d5.bin");
 const PI_D8: &[u8; 64] =
-    include_bytes!("../../plonk-verifier/tests/fixtures/pi-d8.bin");
+    include_bytes!("../../plonk-verifier/tests/fixtures/oligarchy-membership-pi-d8.bin");
 const PI_D11: &[u8; 64] =
-    include_bytes!("../../plonk-verifier/tests/fixtures/pi-d11.bin");
+    include_bytes!("../../plonk-verifier/tests/fixtures/oligarchy-membership-pi-d11.bin");
 
 const OLI_CREATE_PROOF: &[u8; 1601] =
     include_bytes!("../../plonk-verifier/tests/fixtures/oligarchy-create-proof.bin");
@@ -27,7 +31,12 @@ const OLI_UPDATE_PROOF: &[u8; 1601] =
 const OLI_UPDATE_PI: &[u8; 192] =
     include_bytes!("../../plonk-verifier/tests/fixtures/oligarchy-update-pi.bin");
 
+// Update fixtures bind to `epoch_old = 1234`; oligarchy-membership
+// fixtures bind to `epoch = 0` (matches create's `epoch = 0` so the
+// lifecycle test `create → verify_membership` works against a
+// shared stored commitment).
 const CANONICAL_EPOCH: u64 = 1234;
+const CANONICAL_MEMBERSHIP_EPOCH: u64 = 0;
 // Matches the threshold value baked into the oligarchy-update VK
 // fixture by `build_canonical_oligarchy_update_quorum_witness` —
 // `K = K_MAX = 2`, threshold = 1, slack = 1 (non-boundary so the
@@ -650,7 +659,14 @@ fn test_update_rejects_replayed_proof() {
     client.update_commitment(&group_id, &BytesN::from_array(&env, OLI_UPDATE_PROOF), &upi);
 }
 
-/// **Load-bearing.** Multi-tier verify_membership using anarchy VKs.
+/// **Load-bearing.** Multi-tier verify_membership using
+/// **oligarchy-specific** membership VKs (issue #208 — replaces the
+/// shared anarchy/standard VKs which use a 2-level commitment chain
+/// incompatible with oligarchy's stored 3-level commitment).
+///
+/// The injected stored state binds `(commitment, epoch=
+/// CANONICAL_MEMBERSHIP_EPOCH)`, matching the canonical
+/// oligarchy-membership-d{N} fixture's PI.
 fn run_verify_membership(tier: u32) {
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
@@ -666,7 +682,7 @@ fn run_verify_membership(tier: u32) {
         &z,
         CANONICAL_THRESHOLD,
         tier,
-        CANONICAL_EPOCH,
+        CANONICAL_MEMBERSHIP_EPOCH,
     );
     let result = client.verify_membership(&group_id, &membership_proof(&env, tier), &pi);
     assert!(result, "tier {tier} membership proof should verify");
@@ -704,7 +720,7 @@ fn test_verify_membership_rejects_wrong_commitment() {
         &z,
         CANONICAL_THRESHOLD,
         0,
-        CANONICAL_EPOCH,
+        CANONICAL_MEMBERSHIP_EPOCH,
     );
     client.verify_membership(&group_id, &membership_proof(&env, 0), &pi);
 }
@@ -856,7 +872,7 @@ fn bench_verify_membership_at_tier(tier: u32) {
         &z,
         CANONICAL_THRESHOLD,
         tier,
-        CANONICAL_EPOCH,
+        CANONICAL_MEMBERSHIP_EPOCH,
     );
 
     env.cost_estimate().budget().reset_tracker();
@@ -943,4 +959,130 @@ fn bench_update_commitment() {
         "[gas-bench] sep-oligarchy update_commitment: cpu={} mem={}",
         cpu, mem
     );
+}
+
+// ================================================================
+// 7. Lifecycle tests (issue #208 audit follow-up)
+// ================================================================
+//
+// These tests exercise the contract's public entrypoints
+// **end-to-end**, without `inject_group`'s synthetic-storage
+// shortcut. The audit caught that all existing happy paths bypass
+// `create_oligarchy_group`, so a real lifecycle's
+// `create → update / verify_membership` flow was unverified — and
+// for sep-oligarchy specifically, the simplified-port wiring left
+// `verify_membership` non-functional on properly-created groups
+// (different commitment relations on each side). With the
+// oligarchy-specific membership VK + the canonical create +
+// oligarchy-membership-d5 fixtures coordinated to share
+// `(member_root, salt, occ, admin_root, epoch=0)` state, the
+// `create → verify_membership` round-trip works against
+// precomputed proof bytes.
+
+/// Real lifecycle: create a group via `create_oligarchy_group`, then
+/// immediately prove + verify membership against the just-stored
+/// commitment using the canonical oligarchy-membership-d5 fixture.
+#[test]
+fn test_create_then_verify_membership_lifecycle() {
+    let (env, client, _admin) = setup_env();
+    let c = caller(&env);
+
+    // 1. Create the group via the public entrypoint.
+    let create_pi = pi_from_concat(&env, OLI_CREATE_PI, 6);
+    let commitment = create_pi.get(0).unwrap();
+    let occ = create_pi.get(2).unwrap();
+    let group_id = BytesN::from_array(&env, &[100u8; 32]);
+
+    client.create_oligarchy_group(
+        &c,
+        &group_id,
+        &commitment,
+        &0u32, // tier 0 — matches canonical create + membership-d5 fixtures
+        &CANONICAL_THRESHOLD,
+        &occ,
+        &BytesN::from_array(&env, OLI_CREATE_PROOF),
+        &create_pi,
+    );
+
+    // 2. Sanity: stored state matches what we passed in.
+    let stored = client.get_commitment(&group_id);
+    assert_eq!(stored.commitment, commitment, "stored commitment matches create PI");
+    assert_eq!(stored.epoch, 0, "fresh-create epoch is 0");
+    assert_eq!(stored.tier, 0);
+
+    // 3. Verify membership against the just-created group.
+    let membership_pi = pi_membership(&env, 0);
+    assert_eq!(
+        membership_pi.get(0).unwrap(),
+        commitment,
+        "fixture coordination: membership-d5 PI[0] must equal create PI[0]",
+    );
+
+    let result = client.verify_membership(
+        &group_id,
+        &membership_proof(&env, 0),
+        &membership_pi,
+    );
+    assert!(
+        result,
+        "lifecycle verify_membership against a real-create group must succeed",
+    );
+}
+
+/// Real lifecycle: drive `create_oligarchy_group` end-to-end (no
+/// `inject_group`), then drive `update_commitment` end-to-end. The
+/// canonical create + update fixtures bind to different epochs so
+/// the test uses two separate groups — one for each entrypoint —
+/// rather than chaining the lineage. The point is to prove both
+/// public entrypoints accept real proofs end-to-end.
+#[test]
+fn test_create_then_update_lifecycle() {
+    let (env, client, _admin) = setup_env();
+    let c = caller(&env);
+
+    let create_pi = pi_from_concat(&env, OLI_CREATE_PI, 6);
+    let commitment = create_pi.get(0).unwrap();
+    let occ = create_pi.get(2).unwrap();
+    let create_group_id = BytesN::from_array(&env, &[101u8; 32]);
+    client.create_oligarchy_group(
+        &c,
+        &create_group_id,
+        &commitment,
+        &0u32,
+        &CANONICAL_THRESHOLD,
+        &occ,
+        &BytesN::from_array(&env, OLI_CREATE_PROOF),
+        &create_pi,
+    );
+
+    // Update is exercised against a separately-injected group whose
+    // stored state matches the canonical update fixture
+    // (`epoch_old = CANONICAL_EPOCH = 1234`, K=2 quorum). The
+    // canonical create fixture binds to `epoch=0`, so coordinating
+    // a single create→update lineage would require proving a
+    // multi-epoch chain, out of scope for #208.
+    let upi = pi_from_concat(&env, OLI_UPDATE_PI, 6);
+    let c_old = upi.get(0).unwrap();
+    let occ_old = upi.get(3).unwrap();
+    let upd_group_id = BytesN::from_array(&env, &[102u8; 32]);
+    inject_group(
+        &env,
+        &client.address.clone(),
+        &upd_group_id,
+        &c_old,
+        &occ_old,
+        CANONICAL_THRESHOLD,
+        0,
+        CANONICAL_EPOCH,
+    );
+
+    client.update_commitment(
+        &upd_group_id,
+        &BytesN::from_array(&env, OLI_UPDATE_PROOF),
+        &upi,
+    );
+
+    let post = client.get_commitment(&upd_group_id);
+    assert_eq!(post.commitment, upi.get(2).unwrap());
+    assert_eq!(post.epoch, CANONICAL_EPOCH + 1);
 }

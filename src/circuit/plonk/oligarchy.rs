@@ -407,6 +407,153 @@ pub fn synthesize_oligarchy_update_quorum(
     Ok(())
 }
 
+// ================================================================
+// Oligarchy-specific membership circuit (issue #208).
+// ================================================================
+//
+// `synthesize_oligarchy_membership` mirrors the standard membership
+// circuit's role — proving "this caller knows a secret_key whose
+// Poseidon-leaf opens to `member_root` at some leaf_index, and the
+// resulting commitment matches what's stored on-chain" — but binds
+// the commitment under oligarchy's **3-level chain** (the same one
+// `synthesize_oligarchy_create` and `synthesize_oligarchy_update_quorum`
+// use):
+//
+//   c = Poseidon(Poseidon(Poseidon(member_root, epoch), salt),
+//                Poseidon(occupancy_commitment, admin_root))
+//
+// The standard membership circuit's 2-level chain
+// (`Poseidon(Poseidon(member_root, epoch), salt)`) doesn't match the
+// stored c after `create_oligarchy_group`, so a member proving
+// against the wrong chain shape produces a c that the contract's
+// `public_inputs[0] == state.commitment` PI gate rejects. This
+// circuit closes that gap.
+//
+// **Public inputs (2, fixed order — matches standard membership for
+// wire-shape compatibility):**
+//   1. `commitment`
+//   2. `epoch`
+//
+// **Private witnesses:** `secret_key, member_root, salt, merkle_path,
+// leaf_index, occupancy_commitment, admin_root`. The last two are
+// per-state quantities the prover gets via off-chain group
+// coordination (admin_root specifically is documented in
+// `oligarchy.rs`'s create-circuit doc as a "circuit-internal private
+// witness reconstructed off-chain by group members").
+//
+// **Soundness:** the 4-input chain
+// `c = Poseidon(Poseidon(Poseidon(root, epoch), salt),
+//               Poseidon(occ, admin_root))`
+// has Poseidon collision-resistance: given a fixed PI `c`, finding
+// any `(root, salt, occ, admin_root)` that hashes to it is infeasible
+// regardless of the prover's freedom over the witnesses. The prover
+// MUST use the real values the legitimate group uses.
+//
+// Per-tier (same 3 depths as standard membership: 5 / 8 / 11). The
+// circuit shape is identical to standard membership plus 2 extra
+// Poseidon hashes (the `H(occ, admin_root)` step + the outer wrap),
+// so gate count grows by ~500 over standard membership and fits
+// comfortably in the n=32768 SRS.
+
+/// Witness inputs for the oligarchy-specific membership circuit.
+///
+/// `commitment` and `epoch` are the **public** inputs allocated in
+/// `synthesize_oligarchy_membership`; the rest are private witnesses.
+pub struct OligarchyMembershipWitness {
+    /// 3-level Poseidon-bound oligarchy commitment — public.
+    pub commitment: Fr,
+    /// Group epoch — public.
+    pub epoch: u64,
+    /// Prover's BLS12-381 scalar — private.
+    pub secret_key: Fr,
+    /// Member-tree Poseidon Merkle root — private.
+    pub member_root: Fr,
+    /// 32-byte per-state salt; reduced mod r in-circuit — private.
+    pub salt: [u8; 32],
+    /// Sibling hashes from leaf to member_root, length = depth — private.
+    pub merkle_path: Vec<Fr>,
+    /// Leaf position in the member tree — private.
+    pub leaf_index: usize,
+    /// Member tree depth.
+    pub depth: usize,
+    /// Per-state occupancy commitment — private. (Same value the
+    /// contract stores in `CommitmentEntry.occupancy_commitment`; not
+    /// promoted to a public input so wire-PI shape stays compatible
+    /// with the standard membership circuit.)
+    pub occupancy_commitment: Fr,
+    /// Per-state admin tree root — private. Off-chain quantity per
+    /// design v0.1.4 §3.5 (admin_root is reconstructed off-chain by
+    /// group members; never stored on-chain).
+    pub admin_root: Fr,
+}
+
+/// Allocate the oligarchy-specific membership circuit. Public-input
+/// ordering is byte-identical to `synthesize_membership`'s
+/// `(commitment, epoch)` so the contract surface (PI count + shape)
+/// is unchanged when `verify_membership` swaps to this VK.
+pub fn synthesize_oligarchy_membership(
+    circuit: &mut PlonkCircuit<Fr>,
+    witness: &OligarchyMembershipWitness,
+) -> Result<Variable, CircuitError> {
+    if witness.merkle_path.len() != witness.depth {
+        return Err(CircuitError::ParameterError(format!(
+            "merkle_path length {} != depth {}",
+            witness.merkle_path.len(),
+            witness.depth
+        )));
+    }
+    if witness.depth >= usize::BITS as usize {
+        return Err(CircuitError::ParameterError(format!(
+            "depth {} >= usize::BITS",
+            witness.depth
+        )));
+    }
+    if witness.leaf_index >= (1usize << witness.depth) {
+        return Err(CircuitError::ParameterError(format!(
+            "leaf_index {} out of range for depth {}",
+            witness.leaf_index, witness.depth,
+        )));
+    }
+
+    // ---- Public inputs (fixed order, matches standard membership) ----
+    let commitment_var = circuit.create_public_variable(witness.commitment)?;
+    let epoch_var = circuit.create_public_variable(Fr::from(witness.epoch))?;
+
+    // ---- Private witnesses ----
+    let secret_key_var = circuit.create_variable(witness.secret_key)?;
+    let member_root_var = circuit.create_variable(witness.member_root)?;
+    let salt_fr = Fr::from_le_bytes_mod_order(&witness.salt);
+    let salt_var = circuit.create_variable(salt_fr)?;
+    let occ_var = circuit.create_variable(witness.occupancy_commitment)?;
+    let admin_root_var = circuit.create_variable(witness.admin_root)?;
+
+    let path_vars: Vec<Variable> = witness
+        .merkle_path
+        .iter()
+        .map(|sibling| circuit.create_variable(*sibling))
+        .collect::<Result<_, _>>()?;
+    let bit_vars: Vec<BoolVar> = (0..witness.depth)
+        .map(|i| circuit.create_boolean_variable(((witness.leaf_index >> i) & 1) == 1))
+        .collect::<Result<_, _>>()?;
+
+    // ---- 1. leaf = Poseidon(secret_key) ----
+    let leaf_var = poseidon_hash_one_gadget(circuit, secret_key_var)?;
+
+    // ---- 2. Merkle membership against member_root ----
+    let computed_root =
+        compute_merkle_root_gadget(circuit, leaf_var, &path_vars, &bit_vars)?;
+    circuit.enforce_equal(computed_root, member_root_var)?;
+
+    // ---- 3. 3-level commitment chain — matches create + update_quorum ----
+    let inner = poseidon_hash_two_gadget(circuit, member_root_var, epoch_var)?;
+    let mid = poseidon_hash_two_gadget(circuit, inner, salt_var)?;
+    let admin_mix = poseidon_hash_two_gadget(circuit, occ_var, admin_root_var)?;
+    let computed_c = poseidon_hash_two_gadget(circuit, mid, admin_mix)?;
+    circuit.enforce_equal(computed_c, commitment_var)?;
+
+    Ok(commitment_var)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -936,5 +1083,197 @@ mod tests {
         let keys = crate::prover::plonk::preprocess(&c).unwrap();
         let proof = crate::prover::plonk::prove(&mut rng, &keys.pk, &c).unwrap();
         crate::prover::plonk::verify(&keys.vk, &pi_quorum(&w), &proof).unwrap();
+    }
+
+    // ============================================================
+    // Oligarchy-specific membership circuit (issue #208)
+    // ============================================================
+
+    /// Build a member tree from `secret_keys` and return root + paths.
+    fn build_member_tree(secret_keys: &[Fr], depth: usize) -> (Fr, Vec<Vec<Fr>>) {
+        let leaves: Vec<Fr> = secret_keys.iter().map(poseidon_hash_one_v05).collect();
+        let num_leaves = 1usize << depth;
+        let mut nodes = vec![Fr::from(0u64); 2 * num_leaves];
+        for (i, leaf) in leaves.iter().enumerate() {
+            nodes[num_leaves + i] = *leaf;
+        }
+        for i in (1..num_leaves).rev() {
+            nodes[i] = poseidon_hash_two_v05(&nodes[2 * i], &nodes[2 * i + 1]);
+        }
+        let root = nodes[1];
+        let mut paths: Vec<Vec<Fr>> = Vec::with_capacity(secret_keys.len());
+        for prover_index in 0..secret_keys.len() {
+            let mut path = Vec::with_capacity(depth);
+            let mut cur = num_leaves + prover_index;
+            for _ in 0..depth {
+                let sib = if cur % 2 == 0 { cur + 1 } else { cur - 1 };
+                path.push(nodes[sib]);
+                cur /= 2;
+            }
+            paths.push(path);
+        }
+        (root, paths)
+    }
+
+    /// Native equivalent of the oligarchy 3-level commitment chain.
+    fn native_oligarchy_c(
+        member_root: Fr,
+        epoch: u64,
+        salt: Fr,
+        occ: Fr,
+        admin_root: Fr,
+    ) -> Fr {
+        let inner = poseidon_hash_two_v05(&member_root, &Fr::from(epoch));
+        let mid = poseidon_hash_two_v05(&inner, &salt);
+        let admin_mix = poseidon_hash_two_v05(&occ, &admin_root);
+        poseidon_hash_two_v05(&mid, &admin_mix)
+    }
+
+    fn build_membership_witness(
+        secret_keys: &[Fr],
+        prover_index: usize,
+        depth: usize,
+        epoch: u64,
+    ) -> OligarchyMembershipWitness {
+        let (root, paths) = build_member_tree(secret_keys, depth);
+        let salt = [0xAAu8; 32];
+        let salt_fr = Fr::from_le_bytes_mod_order(&salt);
+        let occ = Fr::from(0xA110u64);
+        let admin_root = Fr::from(0xADADu64);
+        let commitment = native_oligarchy_c(root, epoch, salt_fr, occ, admin_root);
+        OligarchyMembershipWitness {
+            commitment,
+            epoch,
+            secret_key: secret_keys[prover_index],
+            member_root: root,
+            salt,
+            merkle_path: paths[prover_index].clone(),
+            leaf_index: prover_index,
+            depth,
+            occupancy_commitment: occ,
+            admin_root,
+        }
+    }
+
+    #[test]
+    fn oligarchy_membership_satisfies() {
+        let sks: Vec<Fr> = (1u64..=8).map(Fr::from).collect();
+        let w = build_membership_witness(&sks, 3, 5, 1234);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_oligarchy_membership(&mut c, &w).unwrap();
+        c.check_circuit_satisfiability(&[w.commitment, Fr::from(w.epoch)]).unwrap();
+    }
+
+    #[test]
+    fn oligarchy_membership_rejects_wrong_admin_root() {
+        let sks: Vec<Fr> = (1u64..=8).map(Fr::from).collect();
+        let mut w = build_membership_witness(&sks, 3, 5, 1234);
+        // Tampering admin_root flips the H(occ, admin_root) leg, breaking
+        // the 3-level commitment chain. Pins that admin_root is bound
+        // into the on-chain commitment.
+        w.admin_root += Fr::from(1u64);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_oligarchy_membership(&mut c, &w).unwrap();
+        assert!(c
+            .check_circuit_satisfiability(&[w.commitment, Fr::from(w.epoch)])
+            .is_err());
+    }
+
+    #[test]
+    fn oligarchy_membership_rejects_wrong_occupancy() {
+        let sks: Vec<Fr> = (1u64..=8).map(Fr::from).collect();
+        let mut w = build_membership_witness(&sks, 3, 5, 1234);
+        w.occupancy_commitment += Fr::from(1u64);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_oligarchy_membership(&mut c, &w).unwrap();
+        assert!(c
+            .check_circuit_satisfiability(&[w.commitment, Fr::from(w.epoch)])
+            .is_err());
+    }
+
+    #[test]
+    fn oligarchy_membership_rejects_non_member_secret_key() {
+        let sks: Vec<Fr> = (1u64..=8).map(Fr::from).collect();
+        let mut w = build_membership_witness(&sks, 3, 5, 1234);
+        // Replace the secret key with one not in the tree — the Merkle
+        // gate must reject regardless of the c-chain reconciliation.
+        w.secret_key = Fr::from(999u64);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_oligarchy_membership(&mut c, &w).unwrap();
+        assert!(c
+            .check_circuit_satisfiability(&[w.commitment, Fr::from(w.epoch)])
+            .is_err());
+    }
+
+    #[test]
+    fn oligarchy_membership_rejects_tampered_merkle_path() {
+        let sks: Vec<Fr> = (1u64..=8).map(Fr::from).collect();
+        let mut w = build_membership_witness(&sks, 3, 5, 1234);
+        w.merkle_path[1] += Fr::from(1u64);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_oligarchy_membership(&mut c, &w).unwrap();
+        assert!(c
+            .check_circuit_satisfiability(&[w.commitment, Fr::from(w.epoch)])
+            .is_err());
+    }
+
+    #[test]
+    fn oligarchy_membership_rejects_tampered_commitment_pi() {
+        let sks: Vec<Fr> = (1u64..=8).map(Fr::from).collect();
+        let w = build_membership_witness(&sks, 3, 5, 1234);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_oligarchy_membership(&mut c, &w).unwrap();
+        let bad = w.commitment + Fr::from(1u64);
+        assert!(c
+            .check_circuit_satisfiability(&[bad, Fr::from(w.epoch)])
+            .is_err());
+    }
+
+    #[test]
+    fn oligarchy_membership_rejects_tampered_epoch_pi() {
+        let sks: Vec<Fr> = (1u64..=8).map(Fr::from).collect();
+        let w = build_membership_witness(&sks, 3, 5, 1234);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_oligarchy_membership(&mut c, &w).unwrap();
+        assert!(c
+            .check_circuit_satisfiability(&[w.commitment, Fr::from(w.epoch + 1)])
+            .is_err());
+    }
+
+    /// Gate-count guard at every supported tier — fits n=32768 SRS.
+    #[test]
+    fn oligarchy_membership_gate_count_per_tier() {
+        for &depth in &[5usize, 8, 11] {
+            let sks: Vec<Fr> = (1u64..=8).map(Fr::from).collect();
+            let w = build_membership_witness(&sks, 3, depth, 1234);
+            let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+            synthesize_oligarchy_membership(&mut c, &w).unwrap();
+            c.finalize_for_arithmetization().unwrap();
+            std::eprintln!(
+                "[gate-count] oligarchy_membership depth={}: {} gates",
+                depth,
+                c.num_gates()
+            );
+            assert!(c.num_gates() < 32768);
+        }
+    }
+
+    #[test]
+    fn oligarchy_membership_round_trip() {
+        use rand_chacha::rand_core::SeedableRng;
+        let sks: Vec<Fr> = (1u64..=8).map(Fr::from).collect();
+        let w = build_membership_witness(&sks, 3, 5, 1234);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_oligarchy_membership(&mut c, &w).unwrap();
+        c.finalize_for_arithmetization().unwrap();
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
+        let keys = crate::prover::plonk::preprocess(&c).unwrap();
+        let proof = crate::prover::plonk::prove(&mut rng, &keys.pk, &c).unwrap();
+        crate::prover::plonk::verify(
+            &keys.vk,
+            &[w.commitment, Fr::from(w.epoch)],
+            &proof,
+        )
+        .unwrap();
     }
 }

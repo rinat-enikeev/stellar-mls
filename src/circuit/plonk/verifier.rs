@@ -298,11 +298,12 @@ mod tests {
 
     use crate::circuit::plonk::baker::{
         bake_democracy_update_vk, bake_membership_vk, bake_oligarchy_create_vk,
-        bake_oligarchy_update_vk, bake_oneonone_create_vk, bake_tyranny_create_vk,
-        bake_tyranny_update_vk, bake_update_vk,
+        bake_oligarchy_membership_vk, bake_oligarchy_update_vk, bake_oneonone_create_vk,
+        bake_tyranny_create_vk, bake_tyranny_update_vk, bake_update_vk,
         build_canonical_democracy_update_quorum_witness,
         build_canonical_democracy_update_witness, build_canonical_membership_witness,
         build_canonical_oligarchy_create_witness,
+        build_canonical_oligarchy_membership_witness,
         build_canonical_oligarchy_update_quorum_witness,
         build_canonical_oneonone_create_witness, build_canonical_tyranny_create_witness,
         build_canonical_tyranny_update_witness, build_canonical_update_witness,
@@ -312,7 +313,8 @@ mod tests {
     };
     use crate::circuit::plonk::membership::synthesize_membership;
     use crate::circuit::plonk::oligarchy::{
-        synthesize_oligarchy_create, synthesize_oligarchy_update_quorum,
+        synthesize_oligarchy_create, synthesize_oligarchy_membership,
+        synthesize_oligarchy_update_quorum,
     };
     use crate::circuit::plonk::oneonone_create::synthesize_oneonone_create;
     use crate::circuit::plonk::proof_format::parse_proof_bytes;
@@ -677,6 +679,36 @@ mod tests {
         (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat)
     }
 
+    fn build_canonical_oligarchy_membership_artifact_bytes(
+        depth: usize,
+    ) -> (Vec<u8>, Vec<u8>, [u8; G2_COMPRESSED_LEN], Vec<u8>) {
+        let vk_bytes =
+            bake_oligarchy_membership_vk(depth).expect("bake oligarchy-membership vk");
+        let witness = build_canonical_oligarchy_membership_witness(depth);
+        let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_oligarchy_membership(&mut circuit, &witness).unwrap();
+        circuit.finalize_for_arithmetization().unwrap();
+        let keys = plonk::preprocess(&circuit).unwrap();
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
+        let oracle_proof = plonk::prove(&mut rng, &keys.pk, &circuit).unwrap();
+        let mut proof_bytes = Vec::new();
+        oracle_proof
+            .serialize_uncompressed(&mut proof_bytes)
+            .unwrap();
+        let parsed_vk =
+            parse_vk_bytes(&vk_bytes).expect("parse oligarchy-membership vk");
+        let srs_g2_compressed =
+            super::compress_g2_for_transcript(&parsed_vk.open_key_powers_of_h[1])
+                .expect("compress");
+        // PI shape: (commitment, epoch) — 2 fields, byte-identical to
+        // standard membership.
+        let mut pi_concat = Vec::with_capacity(2 * FR_LEN);
+        for fr in [witness.commitment, Fr::from(witness.epoch)] {
+            pi_concat.extend_from_slice(&fr.into_bigint().to_bytes_be());
+        }
+        (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat)
+    }
+
     fn build_canonical_oligarchy_update_artifact_bytes(
     ) -> (Vec<u8>, Vec<u8>, [u8; G2_COMPRESSED_LEN], Vec<u8>) {
         let vk_bytes = bake_oligarchy_update_vk().expect("bake oligarchy-update vk");
@@ -848,6 +880,7 @@ mod tests {
                 "tyranny-create" => "tyranny-create-",
                 "tyranny-update" => "tyranny-update-",
                 "democracy-update" => "democracy-update-",
+                "oligarchy-membership" => "oligarchy-membership-",
                 _ => unreachable!(),
             };
             let vk_name = format!("{prefix}vk-d{depth}.bin");
@@ -914,6 +947,17 @@ mod tests {
                 build_canonical_democracy_update_artifact_bytes(depth);
             process_tier(
                 "democracy-update",
+                depth,
+                vk_bytes,
+                proof_bytes,
+                srs_g2_compressed,
+                pi_concat,
+            );
+
+            let (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat) =
+                build_canonical_oligarchy_membership_artifact_bytes(depth);
+            process_tier(
+                "oligarchy-membership",
                 depth,
                 vk_bytes,
                 proof_bytes,

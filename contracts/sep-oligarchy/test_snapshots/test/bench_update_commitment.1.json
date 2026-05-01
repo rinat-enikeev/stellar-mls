@@ -90,7 +90,7 @@
                       "symbol": "admin_threshold_numerator"
                     },
                     "val": {
-                      "u32": 5
+                      "u32": 1
                     }
                   },
                   {
@@ -98,7 +98,7 @@
                       "symbol": "commitment"
                     },
                     "val": {
-                      "bytes": "3a39253d0ab9193fcffdc486b3d4aeb541edb72626a02c1c88b6818206cceda2"
+                      "bytes": "24449a298164bb2658bf13e3e8ce5f0ffe7b00eec016c8888027e1471138ae72"
                     }
                   },
                   {
@@ -114,7 +114,7 @@
                       "symbol": "occupancy_commitment"
                     },
                     "val": {
-                      "bytes": "000000000000000000000000000000000000000000000000000000000000a111"
+                      "bytes": "14ba3d10f0bfc4b01d36773c333d44e410404bc5aed55b1c503fb42f88f5d412"
                     }
                   },
                   {
@@ -176,7 +176,7 @@
                           "symbol": "admin_threshold_numerator"
                         },
                         "val": {
-                          "u32": 5
+                          "u32": 1
                         }
                       },
                       {
@@ -184,7 +184,7 @@
                           "symbol": "commitment"
                         },
                         "val": {
-                          "bytes": "704a13890e75af8cd01562a7f445e50e2c7b8a68adc8cf91d26dd655f8d7a569"
+                          "bytes": "5a9f3612012e846b4ca4ae3e9351eaca50995cef1bbfcf361f6b855cbe94b8dc"
                         }
                       },
                       {
@@ -200,7 +200,7 @@
                           "symbol": "occupancy_commitment"
                         },
                         "val": {
-                          "bytes": "000000000000000000000000000000000000000000000000000000000000a110"
+                          "bytes": "25d6064751425d3e031b767665104a773903183daf4380ae1d78f3f9940a8f86"
                         }
                       },
                       {
@@ -242,7 +242,7 @@
                     "symbol": "UsedProof"
                   },
                   {
-                    "bytes": "30e05b7ccb27d85a0756ac78df838e3354a2607642225ebcd50b318b78c2dbeb"
+                    "bytes": "688954c2f7eec74ddc6117c428518ab7d3a3c5bce9c36287a0ad2acdeb0919d3"
                   }
                 ]
               },
@@ -346,7 +346,7 @@
                     "symbol": "commitment"
                   },
                   "val": {
-                    "bytes": "3a39253d0ab9193fcffdc486b3d4aeb541edb72626a02c1c88b6818206cceda2"
+                    "bytes": "24449a298164bb2658bf13e3e8ce5f0ffe7b00eec016c8888027e1471138ae72"
                   }
                 },
                 {
@@ -362,7 +362,7 @@
                     "symbol": "occupancy_commitment"
                   },
                   "val": {
-                    "bytes": "000000000000000000000000000000000000000000000000000000000000a111"
+                    "bytes": "14ba3d10f0bfc4b01d36773c333d44e410404bc5aed55b1c503fb42f88f5d412"
                   }
                 },
                 {

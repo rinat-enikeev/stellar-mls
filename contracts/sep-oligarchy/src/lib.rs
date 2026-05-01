@@ -54,12 +54,21 @@ fn tier_capacity(tier: u32) -> u32 {
     }
 }
 
+// Per-tier oligarchy-specific membership VKs (issue #208). The
+// standard `vk-d{N}.bin` files used by the other 4 contracts encode
+// a 2-level commitment relation `c = H(H(root, epoch), salt)` that
+// doesn't match what `synthesize_oligarchy_create` /
+// `synthesize_oligarchy_update_quorum` store on-chain (3-level chain
+// with the `H(occ, admin_root)` leg). The
+// `oligarchy-membership-vk-d{N}.bin` files anchor the matching
+// 3-level chain so honestly-created oligarchy groups can produce
+// valid `verify_membership` proofs against their stored commitment.
 const VK_MEMBERSHIP_D5: &[u8] =
-    include_bytes!("../../plonk-verifier/tests/fixtures/vk-d5.bin");
+    include_bytes!("../../plonk-verifier/tests/fixtures/oligarchy-membership-vk-d5.bin");
 const VK_MEMBERSHIP_D8: &[u8] =
-    include_bytes!("../../plonk-verifier/tests/fixtures/vk-d8.bin");
+    include_bytes!("../../plonk-verifier/tests/fixtures/oligarchy-membership-vk-d8.bin");
 const VK_MEMBERSHIP_D11: &[u8] =
-    include_bytes!("../../plonk-verifier/tests/fixtures/vk-d11.bin");
+    include_bytes!("../../plonk-verifier/tests/fixtures/oligarchy-membership-vk-d11.bin");
 
 const VK_CREATE: &[u8] =
     include_bytes!("../../plonk-verifier/tests/fixtures/oligarchy-create-vk.bin");

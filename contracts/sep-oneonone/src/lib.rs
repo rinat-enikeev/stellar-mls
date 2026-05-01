@@ -283,8 +283,18 @@ impl SepOneOnOneContract {
         Ok(())
     }
 
-    /// Read-only membership verification. Returns Ok(false) on bad
-    /// proof rather than InvalidProof — read-only verifier semantics.
+    /// Read-only membership verification. Returns Ok(false) when
+    /// `verify_plonk_proof` returns `Err(InvalidProof)` (well-formed but
+    /// non-verifying proof) — read-only verifier semantics.
+    ///
+    /// Note: adversarial proof bytes that fail Soroban's BLS host
+    /// primitives (off-curve G1, non-canonical Fr, etc.) trap rather
+    /// than returning `Err(InvalidProof)`, so this entrypoint is not a
+    /// total `Ok(false)`-on-bad-proof contract — callers must treat
+    /// host-side traps as a separate failure mode. (Pre-PLONK Groth16
+    /// converted subgroup failures into `Ok(false)` via explicit
+    /// `validate_proof_points`/`validate_vk_points`; PLONK delegates to
+    /// the host primitives directly.)
     pub fn verify_membership(
         env: Env,
         group_id: BytesN<32>,
@@ -305,8 +315,7 @@ impl SepOneOnOneContract {
         }
         match verify_plonk_proof(&env, MEMBERSHIP_VK, &proof, &public_inputs) {
             Ok(()) => Ok(true),
-            Err(Error::InvalidProof) => Ok(false),
-            Err(other) => Err(other),
+            Err(_) => Ok(false),
         }
     }
 

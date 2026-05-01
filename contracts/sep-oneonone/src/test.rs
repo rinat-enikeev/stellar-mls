@@ -253,6 +253,21 @@ fn test_create_group_restricted_mode_rejects_non_admin() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #12)")]
+fn test_create_group_rejects_replayed_proof() {
+    let (env, client, _admin) = setup_env();
+    let c = caller(&env);
+    let commitment = create_commitment(&env);
+    let pi = create_pi(&env);
+    let group_id_a = BytesN::from_array(&env, &[1u8; 32]);
+    client.create_group(&c, &group_id_a, &commitment, &create_proof(&env), &pi);
+
+    // Same proof, distinct group_id → ProofReplay (#12).
+    let group_id_b = BytesN::from_array(&env, &[2u8; 32]);
+    client.create_group(&c, &group_id_b, &commitment, &create_proof(&env), &pi);
+}
+
+#[test]
 #[should_panic(expected = "Error(Contract, #13)")]
 fn test_create_group_enforces_count_limit() {
     let (env, client, _admin) = setup_env();
@@ -325,7 +340,22 @@ fn test_verify_membership_rejects_wrong_epoch() {
 }
 
 // ================================================================
-// 4. Queries
+// 4. Admin entrypoints
+// ================================================================
+
+#[test]
+#[should_panic(expected = "Unauthorized")]
+fn test_set_restricted_mode_requires_auth() {
+    let env = Env::default();
+    env.cost_estimate().budget().reset_unlimited();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(SepOneOnOneContract, (admin,));
+    let client = SepOneOnOneContractClient::new(&env, &contract_id);
+    client.set_restricted_mode(&true);
+}
+
+// ================================================================
+// 5. Queries
 // ================================================================
 
 #[test]
@@ -371,7 +401,7 @@ fn test_bump_group_ttl_rejects_unknown() {
 }
 
 // ================================================================
-// 5. test-vectors.json consistency
+// 6. test-vectors.json consistency
 // ================================================================
 
 #[test]
@@ -406,4 +436,9 @@ fn test_vectors_consistency() {
 
     let max = v["max_groups"]["value"].as_u64().unwrap() as u32;
     assert_eq!(max, MAX_GROUPS, "MAX_GROUPS drift");
+
+    let test_count = v["tests_to_implement"]["categories"]["total"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(test_count, 20, "test count pin drift");
 }

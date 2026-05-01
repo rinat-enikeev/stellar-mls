@@ -65,6 +65,65 @@ read_pi_field_hex() {
 # Constants used across drivers.
 ZERO32_HEX="$(printf '%064d' 0)"
 
+# ---------- V2 proof generators ----------
+# Wrappers around the `gen-membership-proof` / `gen-update-proof`
+# binaries (built under `--features gen-proof-tool` by setup.sh).
+# Each call writes `proof.bin`, `proof.hex`, `commitment.hex`,
+# `public_inputs.json`, etc. into a fresh out-dir; callers consume
+# the artifacts via `bench_gen_*_load`.
+#
+# Witness defaults are baked in below — they're shape-only fixtures
+# (the VK is shape-dependent, not witness-dependent), so the same
+# (secret_keys, prover_index) works at every depth.
+
+# 8 canonical secret keys; tree pads beyond that. prover_index=3.
+BENCH_GEN_SECRET_KEYS='0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08'
+BENCH_GEN_PROVER_INDEX='3'
+BENCH_GEN_SALT_OLD='0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+BENCH_GEN_SALT_NEW='0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
+
+# bench_gen_membership_proof <depth> <out_dir>
+# Generates a membership proof at the given depth (5/8/11) at epoch 0
+# with the canonical witness. Writes proof.bin / commitment.hex /
+# public_inputs.json into out_dir.
+bench_gen_membership_proof() {
+    local depth="$1"
+    local out_dir="$2"
+    mkdir -p "$out_dir"
+    "${BENCH_REPO_ROOT}/target/release/gen-membership-proof" \
+        --depth "$depth" \
+        --epoch 0 \
+        --salt "$BENCH_GEN_SALT_OLD" \
+        --secret-keys "$BENCH_GEN_SECRET_KEYS" \
+        --prover-index "$BENCH_GEN_PROVER_INDEX" \
+        --out-dir "$out_dir" >&2
+}
+
+# bench_gen_update_proof <depth> <out_dir>
+# Generates an update proof at the given depth: c_old comes from the
+# epoch=0 / salt_old witness (matches `bench_gen_membership_proof`'s
+# commitment), c_new comes from the epoch=1 / salt_new witness.
+# Re-using salt_old here keeps c_old aligned with the post-create
+# state set by the membership-proof's create_group call.
+bench_gen_update_proof() {
+    local depth="$1"
+    local out_dir="$2"
+    mkdir -p "$out_dir"
+    "${BENCH_REPO_ROOT}/target/release/gen-update-proof" \
+        --depth "$depth" \
+        --epoch-old 0 \
+        --salt-old "$BENCH_GEN_SALT_OLD" \
+        --salt-new "$BENCH_GEN_SALT_NEW" \
+        --secret-keys "$BENCH_GEN_SECRET_KEYS" \
+        --prover-index "$BENCH_GEN_PROVER_INDEX" \
+        --out-dir "$out_dir" >&2
+}
+
+# Helpers to read out-dir artifacts back as shell-safe strings.
+bench_gen_proof_hex() { cat "$1/proof.hex"; }
+bench_gen_pi_json()   { cat "$1/public_inputs.json"; }
+bench_gen_commitment_hex() { cat "$1/commitment.hex"; }
+
 # ---------- invocation + fee capture ----------
 
 # capture_tx_hashes <stderr_logfile>

@@ -194,16 +194,17 @@ def main() -> int:
         "## Notes",
         "",
         "- Stroops are testnet stroops; 1 XLM = 10,000,000 stroops.",
-        "- `verify_membership` rows are captured in revert-mode (well-formed proof, "
-        "non-matching PI) where applicable; the verifier returns `Ok(false)` on "
-        "`InvalidProof` (no revert), so the verifier runs the full PLONK pairing "
-        "check and the fee equals the success-path cost.",
-        "- `update_commitment` is deferred to V2 — Soroban-CLI runs simulation "
-        "pre-flight and won't submit txs that revert, so a non-verifying proof "
-        "can't capture a fee. V2 will use `gen-update-proof` to produce real "
-        "verifying proofs.",
-        "- sep-anarchy / sep-democracy / sep-tyranny verifier ops are deferred to a "
-        "follow-up release (require runtime proof gen).",
+        "- `verify_membership` rows for `sep-oligarchy` are captured in revert-mode "
+        "(well-formed proof, non-matching PI); the verifier returns `Ok(false)` "
+        "on `InvalidProof` without reverting, so the captured fee equals the "
+        "success-path cost. Rows for `sep-anarchy` and `sep-democracy` use real "
+        "verifying proofs (V2).",
+        "- `update_commitment` for `sep-anarchy` uses real proofs via "
+        "`gen-update-proof` and captures the full success-path cost including "
+        "post-verify storage writes.",
+        "- `sep-tyranny` and the `update_commitment` rows for `sep-democracy` / "
+        "`sep-oligarchy` / `sep-oneonone.verify_membership` are deferred to V3 — "
+        "they need contract-specific proof generators that don't exist yet.",
     ]
 
     args.output.write_text("\n".join(body_lines) + "\n")

@@ -45,10 +45,11 @@ jobs:
 
       - name: Install stellar CLI
         run: |
-          # Match the version pinned by the rest of the project's
-          # testnet tooling. Update in lockstep with the rest of the
-          # repo if the deploy scripts switch.
-          STELLAR_VERSION="${STELLAR_CLI_VERSION:-22.6.0}"
+          # Pin to the same major the local dev environment ships
+          # with (`stellar --version` → 26.0.0 on the maintainer's
+          # box). Bump in lockstep with the rest of the repo if a
+          # deploy script switches.
+          STELLAR_VERSION="${STELLAR_CLI_VERSION:-26.0.0}"
           curl -sSLf "https://github.com/stellar/stellar-cli/releases/download/v${STELLAR_VERSION}/stellar-cli-${STELLAR_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
             | tar -xz -C /usr/local/bin stellar
           stellar --version

@@ -25,6 +25,7 @@
       ]
     ],
     [],
+    [],
     []
   ],
   "ledger": {
@@ -82,7 +83,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 4095
+        "live_until": 518400
       },
       {
         "entry": {
@@ -109,7 +110,7 @@
                       "symbol": "commitment"
                     },
                     "val": {
-                      "bytes": "66d6ca2b0096160993f6ffc7d93ef2d0ef617a0b5c2b6501ac55ff4891ee78be"
+                      "bytes": "238fca30d26655eb1205a69fbfb8d1ab20d087db4c1ca779d1bb61c016527d6d"
                     }
                   },
                   {
@@ -117,7 +118,7 @@
                       "symbol": "epoch"
                     },
                     "val": {
-                      "u64": "999"
+                      "u64": "1235"
                     }
                   },
                   {
@@ -125,7 +126,7 @@
                       "symbol": "tier"
                     },
                     "val": {
-                      "u32": 0
+                      "u32": 1
                     }
                   },
                   {
@@ -142,7 +143,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 4095
+        "live_until": 518400
       },
       {
         "entry": {
@@ -163,13 +164,77 @@
               },
               "durability": "persistent",
               "val": {
-                "vec": []
+                "vec": [
+                  {
+                    "map": [
+                      {
+                        "key": {
+                          "symbol": "commitment"
+                        },
+                        "val": {
+                          "bytes": "396674e44a07f6db22db5986d49ca17a7ef5cff37956ce001e0d0b5841ad08e8"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "epoch"
+                        },
+                        "val": {
+                          "u64": "1234"
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "tier"
+                        },
+                        "val": {
+                          "u32": 1
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "timestamp"
+                        },
+                        "val": {
+                          "u64": "0"
+                        }
+                      }
+                    ]
+                  }
+                ]
               }
             }
           },
           "ext": "v0"
         },
-        "live_until": 4095
+        "live_until": 518400
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "UsedProof"
+                  },
+                  {
+                    "bytes": "0605f72c6b2345ba3e0aedacf8535dd5317559b77d11d50527674f77782c8e3b"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "bool": true
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 518400
       },
       {
         "entry": {
@@ -205,7 +270,7 @@
                             "symbol": "GroupCount"
                           },
                           {
-                            "u32": 0
+                            "u32": 1
                           }
                         ]
                       },

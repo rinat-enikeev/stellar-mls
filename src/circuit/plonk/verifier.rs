@@ -297,11 +297,16 @@ mod tests {
     use rand_chacha::rand_core::SeedableRng;
 
     use crate::circuit::plonk::baker::{
-        bake_membership_vk, bake_update_vk, build_canonical_membership_witness,
+        bake_membership_vk, bake_tyranny_create_vk, bake_tyranny_update_vk,
+        bake_update_vk, build_canonical_membership_witness,
+        build_canonical_tyranny_create_witness, build_canonical_tyranny_update_witness,
         build_canonical_update_witness,
     };
     use crate::circuit::plonk::membership::synthesize_membership;
     use crate::circuit::plonk::proof_format::parse_proof_bytes;
+    use crate::circuit::plonk::tyranny::{
+        synthesize_tyranny_create, synthesize_tyranny_update,
+    };
     use crate::circuit::plonk::update::synthesize_update;
     use crate::circuit::plonk::vk_format::parse_vk_bytes;
     use crate::prover::plonk;
@@ -477,6 +482,71 @@ mod tests {
         (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat)
     }
 
+    fn build_canonical_tyranny_create_artifact_bytes(
+        depth: usize,
+    ) -> (Vec<u8>, Vec<u8>, [u8; G2_COMPRESSED_LEN], Vec<u8>) {
+        let vk_bytes = bake_tyranny_create_vk(depth).expect("bake tyranny-create vk");
+        let witness = build_canonical_tyranny_create_witness(depth);
+        let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_tyranny_create(&mut circuit, &witness).unwrap();
+        circuit.finalize_for_arithmetization().unwrap();
+        let keys = plonk::preprocess(&circuit).unwrap();
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
+        let oracle_proof = plonk::prove(&mut rng, &keys.pk, &circuit).unwrap();
+        let mut proof_bytes = Vec::new();
+        oracle_proof
+            .serialize_uncompressed(&mut proof_bytes)
+            .unwrap();
+        let parsed_vk = parse_vk_bytes(&vk_bytes).expect("parse tyranny-create vk");
+        let srs_g2_compressed =
+            super::compress_g2_for_transcript(&parsed_vk.open_key_powers_of_h[1])
+                .expect("compress");
+        // PI: (commitment, 0, admin_pubkey_commitment, group_id_fr).
+        let mut pi_concat = Vec::with_capacity(4 * FR_LEN);
+        for fr in [
+            witness.commitment,
+            Fr::from(0u64),
+            witness.admin_pubkey_commitment,
+            witness.group_id_fr,
+        ] {
+            pi_concat.extend_from_slice(&fr.into_bigint().to_bytes_be());
+        }
+        (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat)
+    }
+
+    fn build_canonical_tyranny_update_artifact_bytes(
+        depth: usize,
+    ) -> (Vec<u8>, Vec<u8>, [u8; G2_COMPRESSED_LEN], Vec<u8>) {
+        let vk_bytes = bake_tyranny_update_vk(depth).expect("bake tyranny-update vk");
+        let witness = build_canonical_tyranny_update_witness(depth);
+        let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_tyranny_update(&mut circuit, &witness).unwrap();
+        circuit.finalize_for_arithmetization().unwrap();
+        let keys = plonk::preprocess(&circuit).unwrap();
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
+        let oracle_proof = plonk::prove(&mut rng, &keys.pk, &circuit).unwrap();
+        let mut proof_bytes = Vec::new();
+        oracle_proof
+            .serialize_uncompressed(&mut proof_bytes)
+            .unwrap();
+        let parsed_vk = parse_vk_bytes(&vk_bytes).expect("parse tyranny-update vk");
+        let srs_g2_compressed =
+            super::compress_g2_for_transcript(&parsed_vk.open_key_powers_of_h[1])
+                .expect("compress");
+        // PI: (c_old, epoch_old, c_new, admin_pubkey_commitment, group_id_fr).
+        let mut pi_concat = Vec::with_capacity(5 * FR_LEN);
+        for fr in [
+            witness.c_old,
+            Fr::from(witness.epoch_old),
+            witness.c_new,
+            witness.admin_pubkey_commitment,
+            witness.group_id_fr,
+        ] {
+            pi_concat.extend_from_slice(&fr.into_bigint().to_bytes_be());
+        }
+        (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat)
+    }
+
     /// Update-circuit equivalent of `build_canonical_artifact_bytes`.
     /// Returns (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat
     /// for `(c_old, epoch_old, c_new)` BE-encoded). The
@@ -610,11 +680,12 @@ mod tests {
 
             // Membership fixtures keep their bare names (`vk-d5.bin`)
             // for compatibility with PR #193's verifier-crate
-            // include_bytes! sites; update fixtures get an
-            // `update-` prefix.
+            // include_bytes! sites; other circuits get a prefix.
             let prefix = match kind {
                 "membership" => "",
                 "update" => "update-",
+                "tyranny-create" => "tyranny-create-",
+                "tyranny-update" => "tyranny-update-",
                 _ => unreachable!(),
             };
             let vk_name = format!("{prefix}vk-d{depth}.bin");
@@ -648,6 +719,28 @@ mod tests {
                 build_canonical_update_artifact_bytes(depth);
             process_tier(
                 "update",
+                depth,
+                vk_bytes,
+                proof_bytes,
+                srs_g2_compressed,
+                pi_concat,
+            );
+
+            let (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat) =
+                build_canonical_tyranny_create_artifact_bytes(depth);
+            process_tier(
+                "tyranny-create",
+                depth,
+                vk_bytes,
+                proof_bytes,
+                srs_g2_compressed,
+                pi_concat,
+            );
+
+            let (vk_bytes, proof_bytes, srs_g2_compressed, pi_concat) =
+                build_canonical_tyranny_update_artifact_bytes(depth);
+            process_tier(
+                "tyranny-update",
                 depth,
                 vk_bytes,
                 proof_bytes,

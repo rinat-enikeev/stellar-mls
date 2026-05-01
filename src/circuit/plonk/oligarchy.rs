@@ -13,11 +13,10 @@
 //!   membership, with the commitment chain reconciled to match
 //!   create's `Poseidon(occ, admin_root)` mix.
 //! - `synthesize_oligarchy_update` (kept verbatim from PR #200's
-//!   simplified port) — Poseidon-only commitment chain that does
+//!   pre-quorum port) — Poseidon-only commitment chain that does
 //!   **not** include `admin_root`, so it's not lineage-compatible
 //!   with `synthesize_oligarchy_create`. Retained as a migration
-//!   fallback / reference; production VKs should bake the quorum
-//!   variant.
+//!   fallback / reference; production VKs bake the quorum variant.
 //!
 //! ## Quorum + delta semantics (issue #202)
 //!
@@ -31,18 +30,21 @@
 //!      with both range-checked into 2 bits.
 //!   2. **Member count delta** — `occupancy_commitment_X =
 //!      Poseidon(member_count_X, salt_oc_X)` with
-//!      `|count_new - count_old| ≤ 1`. Same caveats as democracy:
-//!      tree-level delta (the new root differs by exactly one leaf)
-//!      is **not** enforced — `member_root_new` is a free witness
-//!      bounded only by the count.
+//!      `|count_new - count_old| ≤ 1`. Tree-level single-leaf
+//!      delta (the new root differs by exactly one leaf) is
+//!      **intentionally not enforced** in v0.1.5 — `member_root_new`
+//!      is a free witness bounded only by the count. The earlier
+//!      draft's tree-delta + `target_tree` dispatcher was withdrawn
+//!      with the §3.5 "which tree changed" hiding claim; see the
+//!      design doc and the v0.1.5 stanza for rationale.
 //!   3. **Commitment chain reconciliation** — c_old / c_new use the
 //!      same chain as create:
 //!      `c_X = Poseidon(Poseidon(Poseidon(member_root_X, epoch_X),
 //!                               salt_X),
 //!                      Poseidon(occ_X, admin_root_X))`.
-//!      The simplified-port update was lineage-incompatible with
-//!      create (omitted `admin_root` from the third hash), so this
-//!      is a **soundness fix** in addition to the quorum upgrade.
+//!      The pre-quorum update was lineage-incompatible with create
+//!      (omitted `admin_root` from the third hash), so this is a
+//!      **soundness fix** in addition to the quorum upgrade.
 //!
 //! ## Public inputs (unchanged across both update variants)
 //!
@@ -206,7 +208,8 @@ pub struct OligarchyUpdateQuorumWitness {
     // Member counts + occupancy salts (occupancy commitment = Poseidon
     // of these). Matches democracy's pattern — count-only single-leaf
     // delta, **not** tree-level. Tree-level delta on the member tree
-    // is a future follow-up.
+    // was withdrawn from the v0.1.5 spec (issue #217) — admins are
+    // intended to make multi-leaf updates under the quorum check.
     pub member_count_old: u64,
     pub member_count_new: u64,
     pub salt_oc_old: Fr,

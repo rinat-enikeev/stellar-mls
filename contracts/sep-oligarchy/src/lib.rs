@@ -16,13 +16,24 @@
 //! `admin_threshold_numerator` is contract-supplied at update time
 //! and never on the wire.
 //!
-//! ## Status — simplified initial port
+//! ## Update circuit semantics — design intent (issue #217 / v0.1.5)
 //!
-//! The PLONK ports at `circuit::plonk::oligarchy` preserve the
-//! public-input shapes of the originals but reduce in-circuit
-//! semantics to commitment binding. The full Groth16 reference
-//! enforced K-of-N admin quorum + single-leaf delta + admin-tree
-//! membership; those constraints are flagged for a follow-up PR.
+//! The deployed PLONK update circuit
+//! (`synthesize_oligarchy_update_quorum`) enforces K-of-N admin
+//! quorum on the prior admin set, count-only member-tree delta,
+//! admin-tree signer membership, and full commitment-chain
+//! reconciliation. It does NOT enforce the earlier draft's
+//! single-leaf-delta + `target_tree` dispatcher (§4.7.7 of the
+//! design doc). That mechanism backed the v0.1.4 "which tree
+//! changed in any given update" hiding claim, withdrawn in
+//! v0.1.5: the privacy gain (~1 bit/update against an on-chain-
+//! only observer) was judged not worth the ~570 R1CS, ~25%
+//! circuit-size growth, and the multi-leaf-update friction the
+//! constraint imposed on legitimate admin operations. Admins are
+//! intended to be able to re-shape both trees, multi-leaf, in a
+//! single proof under the quorum check. See
+//! `docs/oligarchy-update-testnet-design.md` §3.5 + §4.7.7 for
+//! the full rationale.
 
 #![no_std]
 use soroban_sdk::{

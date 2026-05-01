@@ -618,22 +618,32 @@ mod tests {
         c.check_circuit_satisfiability(&pi(&w)).unwrap();
     }
 
+    /// Positive baseline for `rejects_out_of_range_threshold_pi`:
+    /// `K=0`, `threshold=0` is a satisfiable configuration. Without
+    /// this companion, the negative test could pass for the wrong
+    /// reason (e.g. if the K=0 path were silently broken) — pinning
+    /// the baseline guarantees the negative-test failure isolates to
+    /// the threshold range gate.
+    #[test]
+    fn satisfies_zero_quorum_zero_threshold() {
+        let sks: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+        let w = build_witness(&sks, 3, 42, 0, 0, 5, 5);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_democracy_update_quorum(&mut c, &w).unwrap();
+        c.check_circuit_satisfiability(&pi(&w)).unwrap();
+    }
+
     /// PI-supplied threshold outside `[0, K_MAX]` must reject. Without
     /// the in-circuit threshold range gate, `threshold ≡ -slack (mod
     /// p)` would let an attacker pass `K = threshold + slack` with K=0
     /// active signers. Exercises the gate against a crafted PI vector
     /// that the witness-generation path can't naturally produce.
+    /// Companion: `satisfies_zero_quorum_zero_threshold` confirms the
+    /// unpatched PI baseline is satisfiable.
     #[test]
     fn rejects_out_of_range_threshold_pi() {
         let sks: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
-        // K=0 active, threshold-witness=0 — circuit synthesizes cleanly.
-        let mut w = build_witness(&sks, 3, 42, 0, 0, 5, 5);
-        // Inactive slot 0 still has a path; satisfying when threshold=0
-        // means we now poison the PI's threshold to a large field
-        // element. The slack 2-bit decomposition + threshold-equality
-        // gate must collectively reject.
-        // Patch witness to make satisfiability hinge on the PI.
-        w.threshold_numerator = 0;
+        let w = build_witness(&sks, 3, 42, 0, 0, 5, 5);
         let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
         synthesize_democracy_update_quorum(&mut c, &w).unwrap();
         let mut bad_pi = pi(&w);
@@ -641,6 +651,20 @@ mod tests {
         // + slack` if the threshold range gate is missing.
         bad_pi[5] = -Fr::from(3u64);
         assert!(c.check_circuit_satisfiability(&bad_pi).is_err());
+    }
+
+    /// `threshold = 3` is in-range for the 2-bit threshold gate
+    /// (`3 = 0b11`) but unsatisfiable with `K_MAX = 2`: the slack
+    /// `K - threshold = 2 - 3 = -1` can't fit a 2-bit unsigned
+    /// decomposition. Pins the slack range check independently of the
+    /// threshold range check.
+    #[test]
+    fn rejects_threshold_above_k_max() {
+        let sks: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+        let w = build_witness(&sks, 3, 42, 3, K_MAX, 5, 5);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_democracy_update_quorum(&mut c, &w).unwrap();
+        assert!(c.check_circuit_satisfiability(&pi(&w)).is_err());
     }
 
     /// Quorum circuit fits at d=5 and d=8 only. d=11 blows the
@@ -856,11 +880,13 @@ mod tests {
         ]
     }
 
-    /// Satisfiability of the simplified circuit at production depth
-    /// (d=11). The quorum circuit doesn't fit at d=11; this is the
-    /// path tier 2 actually verifies against — leaving it untested
-    /// would silently retire the only coverage of code on the verifier
-    /// hot path.
+    /// Satisfiability + gate-count guard for the simplified circuit at
+    /// production depth (d=11). The quorum circuit doesn't fit at
+    /// d=11; this is the path tier 2 actually verifies against. The
+    /// gate-count assertion guards against an accidental change
+    /// pushing the simplified circuit past the n=32768 SRS ceiling
+    /// (the quorum circuit's `gate_count_per_supported_tier` only
+    /// covers d∈{5, 8}).
     #[test]
     fn simplified_satisfies_d11() {
         let sks: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
@@ -868,6 +894,16 @@ mod tests {
         let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
         synthesize_democracy_update(&mut c, &w).unwrap();
         c.check_circuit_satisfiability(&pi_simplified(&w)).unwrap();
+        c.finalize_for_arithmetization().unwrap();
+        eprintln!(
+            "[gate-count] simplified democracy_update depth=11: {} gates",
+            c.num_gates()
+        );
+        assert!(
+            c.num_gates() < 32768,
+            "simplified democracy_update at d=11 ({} gates) over n=32768 SRS ceiling",
+            c.num_gates(),
+        );
     }
 
     /// Round-trip the simplified circuit through prove+verify. Run at

@@ -1,10 +1,12 @@
-//! Democracy `Update` circuit (PLONK port) — K-of-N quorum + delta.
+//! Democracy `Update` circuit (PLONK port) — K-of-N quorum + count delta.
 //!
-//! ## Status — quorum + delta enforced
+//! ## Status — quorum + count delta enforced
 //!
 //! This iteration upgrades the previous "commitment-only" port (PR
 //! #199) to enforce a K-of-N admin quorum, occupancy/count binding,
-//! and single-leaf delta consistency.
+//! and a count-only single-leaf delta on `member_count`. The
+//! simplified single-signer circuit below carries forward as the
+//! d=11 fallback.
 //!
 //! ## Public inputs (6, fixed order — unchanged from PR #199)
 //!
@@ -26,13 +28,32 @@
 //!      - For any pair of active slots, `leaf_idx_i ≠ leaf_idx_j`
 //!        (anti-double-count: prevents one signer filling both slots).
 //!      - K = Σ active_i.
-//!      - K ≥ threshold_numerator (slack range-checked into 2 bits;
-//!        threshold therefore restricted to [0, K_MAX] in this port).
+//!      - K ≥ threshold_numerator. The slack `K - threshold` is
+//!        range-checked into 2 bits, so `threshold ∈ [0, K_MAX]` is
+//!        baked into the encoding — raising `K_MAX` requires widening
+//!        the slack range in lockstep.
 //!
-//!   2. Occupancy / count binding:
+//!   2. Occupancy / count binding (count delta only):
 //!      - `occupancy_commitment_old = Poseidon(member_count_old, salt_oc_old)`.
 //!      - `occupancy_commitment_new = Poseidon(member_count_new, salt_oc_new)`.
-//!      - `|member_count_new - member_count_old| ≤ 1` (single-leaf delta).
+//!      - `|member_count_new - member_count_old| ≤ 1`, encoded as
+//!        `(diff)(diff-1)(diff+1) = 0` over Fr.
+//!
+//!     **Scope of the delta.** This binds only the *scalar count*, not
+//!     the *tree*. `member_root_new` is a free witness — an active
+//!     quorum can rotate to any new root as long as the count delta
+//!     stays in `{-1, 0, +1}`. A tree-level single-leaf delta proof
+//!     (the new root differs from the old by exactly one leaf at
+//!     `leaf_idx_target`) is deferred to a follow-up; the contract
+//!     surface and PI shape are stable for the upgrade.
+//!
+//!     **Count range.** `member_count_*` field elements are *not*
+//!     range-checked in-circuit. Soundness for u64 semantics relies on
+//!     the off-circuit binding: the stored `occupancy_commitment` was
+//!     originally produced from a u64 count, and Poseidon collision
+//!     resistance forces the witness to recover the same u64. Callers
+//!     deriving the count from the witness MUST go through the
+//!     commitment binding — never trust the raw witness scalar.
 //!
 //!   3. Commitment binding (3-level Poseidon, unchanged):
 //!      `c_X = Poseidon(Poseidon(Poseidon(root_X, epoch_X), salt_X), occ_X)`.
@@ -48,6 +69,8 @@
 //!    distinctness is. Strict ordering (canonicalisation) is a
 //!    follow-up — distinctness alone is sufficient to prevent the
 //!    duplicate-leaf double-count attack at K_MAX=2.
+//!  - **Tree-level single-leaf delta.** Not enforced; only the count
+//!    delta is. See constraint 2.
 //!  - **K_MAX = 2.** Caps quorum size at 2 signers in this PR.
 //!    Raising to 3+ is straightforward but inflates the circuit
 //!    (extra Merkle opening per slot); keeping K_MAX small ensures
@@ -164,10 +187,10 @@ pub fn synthesize_democracy_update_quorum(
 
     // Prefix constraint: active_i ⇒ active_{i-1} for i ≥ 1.
     // Equivalent: active_i * (1 - active_{i-1}) = 0.
+    let one_var = circuit.create_constant_variable(Fr::from(1u64))?;
     for i in 1..K_MAX {
         let prev_var: Variable = active_vars[i - 1].into();
-        let one = circuit.create_constant_variable(Fr::from(1u64))?;
-        let neg_prev = circuit.sub(one, prev_var)?;
+        let neg_prev = circuit.sub(one_var, prev_var)?;
         let cur_var: Variable = active_vars[i].into();
         let prod = circuit.mul(cur_var, neg_prev)?;
         circuit.enforce_constant(prod, Fr::from(0u64))?;
@@ -219,8 +242,6 @@ pub fn synthesize_democracy_update_quorum(
         let active_var: Variable = active_vars[i].into();
         let prod = circuit.mul(active_var, diff)?;
         circuit.enforce_constant(prod, Fr::from(0u64))?;
-
-        let _ = i;
     }
 
     // Anti-double-count: forbid two active slots from sharing the
@@ -656,5 +677,141 @@ mod tests {
         let keys = crate::prover::plonk::preprocess(&c).unwrap();
         let proof = crate::prover::plonk::prove(&mut rng, &keys.pk, &c).unwrap();
         crate::prover::plonk::verify(&keys.vk, &pi(&w), &proof).unwrap();
+    }
+
+    #[test]
+    fn rejects_tampered_active_merkle_path() {
+        // Flipping any node of an active signer's Merkle path must
+        // break the active-conditional `computed_root == root_old`
+        // gate (`democracy.rs` constraint 1, line ~189). Guards
+        // against regressions that turn the gate into a no-op.
+        let sks: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+        let mut w = build_witness(&sks, 3, 42, K_MAX as u64, K_MAX, 5, 5);
+        w.signers[0].merkle_path[1] += Fr::from(1u64);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_democracy_update_quorum(&mut c, &w).unwrap();
+        assert!(c.check_circuit_satisfiability(&pi(&w)).is_err());
+    }
+
+    #[test]
+    fn rejects_tampered_c_old_pi() {
+        let sks: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+        let w = build_witness(&sks, 3, 42, K_MAX as u64, K_MAX, 5, 5);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_democracy_update_quorum(&mut c, &w).unwrap();
+        let mut bad_pi = pi(&w);
+        bad_pi[0] += Fr::from(1u64);
+        assert!(c.check_circuit_satisfiability(&bad_pi).is_err());
+    }
+
+    #[test]
+    fn rejects_tampered_epoch_old_pi() {
+        let sks: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+        let w = build_witness(&sks, 3, 42, K_MAX as u64, K_MAX, 5, 5);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_democracy_update_quorum(&mut c, &w).unwrap();
+        let mut bad_pi = pi(&w);
+        bad_pi[1] += Fr::from(1u64);
+        assert!(c.check_circuit_satisfiability(&bad_pi).is_err());
+    }
+
+    #[test]
+    fn rejects_tampered_c_new_pi() {
+        let sks: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+        let w = build_witness(&sks, 3, 42, K_MAX as u64, K_MAX, 5, 5);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_democracy_update_quorum(&mut c, &w).unwrap();
+        let mut bad_pi = pi(&w);
+        bad_pi[2] += Fr::from(1u64);
+        assert!(c.check_circuit_satisfiability(&bad_pi).is_err());
+    }
+
+    // ============================================================
+    // Simplified single-signer fallback (synthesize_democracy_update)
+    // covers tier 2 (d=11) until the quorum circuit fits the SRS.
+    // ============================================================
+
+    fn build_simplified_witness(
+        secret_keys: &[Fr],
+        depth: usize,
+        epoch_old: u64,
+        threshold: u64,
+    ) -> DemocracyUpdateWitness {
+        let (root, paths) = build_tree(secret_keys, depth);
+        let salt_old = [0xCCu8; 32];
+        let salt_new = [0xDDu8; 32];
+        let salt_oc_old = Fr::from(0x77u64);
+        let salt_oc_new = Fr::from(0x88u64);
+        let count = 5u64;
+        let occ_old = poseidon_hash_two_v05(&Fr::from(count), &salt_oc_old);
+        let occ_new = poseidon_hash_two_v05(&Fr::from(count), &salt_oc_new);
+        let salt_old_fr = Fr::from_le_bytes_mod_order(&salt_old);
+        let salt_new_fr = Fr::from_le_bytes_mod_order(&salt_new);
+        let inner_old = poseidon_hash_two_v05(&root, &Fr::from(epoch_old));
+        let mid_old = poseidon_hash_two_v05(&inner_old, &salt_old_fr);
+        let c_old = poseidon_hash_two_v05(&mid_old, &occ_old);
+        let inner_new = poseidon_hash_two_v05(&root, &Fr::from(epoch_old + 1));
+        let mid_new = poseidon_hash_two_v05(&inner_new, &salt_new_fr);
+        let c_new = poseidon_hash_two_v05(&mid_new, &occ_new);
+
+        DemocracyUpdateWitness {
+            c_old,
+            epoch_old,
+            c_new,
+            occupancy_commitment_old: occ_old,
+            occupancy_commitment_new: occ_new,
+            threshold_numerator: threshold,
+            secret_key: secret_keys[0],
+            member_root_old: root,
+            member_root_new: root,
+            salt_old,
+            salt_new,
+            merkle_path_old: paths[0].clone(),
+            leaf_index_old: 0,
+            depth,
+        }
+    }
+
+    fn pi_simplified(w: &DemocracyUpdateWitness) -> Vec<Fr> {
+        vec![
+            w.c_old,
+            Fr::from(w.epoch_old),
+            w.c_new,
+            w.occupancy_commitment_old,
+            w.occupancy_commitment_new,
+            Fr::from(w.threshold_numerator),
+        ]
+    }
+
+    /// Satisfiability of the simplified circuit at production depth
+    /// (d=11). The quorum circuit doesn't fit at d=11; this is the
+    /// path tier 2 actually verifies against — leaving it untested
+    /// would silently retire the only coverage of code on the verifier
+    /// hot path.
+    #[test]
+    fn simplified_satisfies_d11() {
+        let sks: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+        let w = build_simplified_witness(&sks, 11, 99, 1);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_democracy_update(&mut c, &w).unwrap();
+        c.check_circuit_satisfiability(&pi_simplified(&w)).unwrap();
+    }
+
+    /// Round-trip the simplified circuit through prove+verify. Run at
+    /// d=8 to keep the test snappy; d=11 round-trip is exercised by
+    /// the baker fixture regen path (`bake_democracy_update_vk_*`).
+    #[test]
+    fn simplified_round_trip_d8() {
+        use rand_chacha::rand_core::SeedableRng;
+        let sks: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+        let w = build_simplified_witness(&sks, 8, 1234, 1);
+        let mut c = PlonkCircuit::<Fr>::new_turbo_plonk();
+        synthesize_democracy_update(&mut c, &w).unwrap();
+        c.finalize_for_arithmetization().unwrap();
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed([0u8; 32]);
+        let keys = crate::prover::plonk::preprocess(&c).unwrap();
+        let proof = crate::prover::plonk::prove(&mut rng, &keys.pk, &c).unwrap();
+        crate::prover::plonk::verify(&keys.vk, &pi_simplified(&w), &proof)
+            .unwrap();
     }
 }

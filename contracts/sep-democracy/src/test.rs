@@ -703,6 +703,34 @@ fn test_verify_membership_rejects_wrong_commitment() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn test_verify_membership_rejects_wrong_epoch() {
+    // Stored epoch diverges from PI[1] (the fixture encodes
+    // `be32(CANONICAL_EPOCH)` — pinned by run_verify_membership_happy_
+    // path), so the entrypoint's `epoch != be32_from_u64(stored.epoch)`
+    // check fires before the verifier sees the proof. Parallels
+    // test_verify_membership_rejects_wrong_commitment for the second
+    // membership PI slot.
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = BytesN::from_array(&env, &[72u8; 32]);
+    let pi = pi_membership(&env, 0);
+    let commitment = pi.get(0).unwrap();
+    let z = canonical_zero(&env);
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &commitment,
+        &z,
+        CANONICAL_THRESHOLD,
+        0,
+        CANONICAL_EPOCH + 1, // diverges from PI[1] = be32(CANONICAL_EPOCH)
+    );
+    client.verify_membership(&group_id, &membership_proof(&env, 0), &pi);
+}
+
+#[test]
 fn test_verify_membership_inactive_group_returns_false() {
     // verify_membership is read-only and intentionally works on groups
     // whose `active` flag is false. With an aligned-but-malformed proof
@@ -756,10 +784,10 @@ fn test_get_history_returns_chronological_entries() {
 
 #[test]
 fn test_archive_entry_appends_and_prunes_at_window() {
-    // Populate History past HISTORY_WINDOW directly via the persistent
-    // store, then call get_history. update_commitment funnels through
-    // archive_entry on every accept, so this pins the rolling-window
-    // prune behavior independent of the verifier path.
+    // Drive HISTORY_WINDOW + 6 appends through the actual archive_entry
+    // helper (the same path update_commitment funnels through on every
+    // accept) so the rolling-window prune behaviour is pinned end-to-end
+    // — not just the post-prune `History` shape.
     let (env, client, _admin) = setup_env();
     let contract_id = client.address.clone();
     let group_id = BytesN::from_array(&env, &[81u8; 32]);
@@ -769,9 +797,8 @@ fn test_archive_entry_appends_and_prunes_at_window() {
     );
     let total: u64 = (HISTORY_WINDOW as u64) + 6; // exceeds cap by 6
     env.as_contract(&contract_id, || {
-        let mut history: Vec<CommitmentEntry> = Vec::new(&env);
         for i in 0u64..total {
-            history.push_back(CommitmentEntry {
+            let entry = CommitmentEntry {
                 commitment: BytesN::from_array(&env, &[(i & 0xff) as u8; 32]),
                 epoch: i,
                 timestamp: 1000 + i,
@@ -779,20 +806,9 @@ fn test_archive_entry_appends_and_prunes_at_window() {
                 active: true,
                 occupancy_commitment: z.clone(),
                 threshold_numerator: CANONICAL_THRESHOLD,
-            });
+            };
+            SepDemocracyContract::archive_entry(&env, &group_id, &entry);
         }
-        // Drive the prune branch.
-        if history.len() > HISTORY_WINDOW {
-            let mut pruned = Vec::new(&env);
-            let start = history.len() - HISTORY_WINDOW;
-            for i in start..history.len() {
-                pruned.push_back(history.get(i).unwrap());
-            }
-            history = pruned;
-        }
-        env.storage()
-            .persistent()
-            .set(&DataKey::History(group_id.clone()), &history);
     });
     let history = client.get_history(&group_id, &(2 * HISTORY_WINDOW));
     assert_eq!(history.len(), HISTORY_WINDOW);

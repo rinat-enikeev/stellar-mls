@@ -12,10 +12,13 @@
 //!     occupancy_commitment_old, occupancy_commitment_new,
 //!     threshold_numerator)`.
 //!
-//! `threshold_numerator` is contract-supplied (read from
-//! `current.threshold_numerator`) and never on the wire — so chain
-//! observers can't distinguish two groups with different thresholds
-//! by call-payload analysis.
+//! `update_commitment` re-derives `threshold_numerator` from
+//! `current.threshold_numerator` and asserts equality with PI[5], so a
+//! caller cannot lie to the verifier about the threshold the proof
+//! commits to. The threshold IS, however, present in the wire-supplied
+//! `public_inputs` vector — chain observers reading the call payload
+//! can distinguish two groups with different thresholds. On-wire
+//! threshold privacy is not a property of this design.
 //!
 //! ## Status — simplified initial port (DO NOT SHIP user-visible)
 //!
@@ -346,7 +349,13 @@ impl SepDemocracyContract {
     }
 
     /// Advance with quorum + occupancy binding. PI[5] (threshold) is
-    /// contract-supplied from `current.threshold_numerator`.
+    /// re-derived from `current.threshold_numerator` for the equality
+    /// check, but the wire-supplied `public_inputs[5]` carries the same
+    /// value — so chain observers CAN distinguish two groups with
+    /// different thresholds by inspecting the call payload of an
+    /// update. The contract-supplied derivation defends against a
+    /// caller lying about the threshold the proof was generated
+    /// against; it does not provide on-wire threshold privacy.
     pub fn update_commitment(
         env: Env,
         group_id: BytesN<32>,
@@ -586,8 +595,10 @@ const _: () = {
 
 /// Largest PI vector across both circuits used by this contract:
 /// membership = 2, update = 6. Bump this if a third circuit with a
-/// larger PI vector is added — otherwise its inputs will be silently
-/// truncated by the `&pi_buf[..n]` slice handed to the verifier.
+/// larger PI vector is added — `verify_plonk_proof` rejects vectors
+/// of length `> MAX_PI_COUNT` with `PublicInputsMismatch`, so an
+/// undersized buffer would surface as a hard error from every call
+/// using the new circuit (no silent truncation).
 const MAX_PI_COUNT: usize = 6;
 
 fn verify_plonk_proof(

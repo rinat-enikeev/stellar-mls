@@ -11,24 +11,22 @@
     "vectors": [
       { "name": "NotInitialized", "code": 1 },
       { "name": "AlreadyInitialized", "code": 2 },
-      { "name": "Reserved3", "code": 3, "note": "previously Unauthorized; admin checks now use require_auth() which panics" },
       { "name": "GroupAlreadyExists", "code": 4 },
       { "name": "GroupNotFound", "code": 5 },
       { "name": "GroupInactive", "code": 6 },
       { "name": "InvalidProof", "code": 7 },
       { "name": "InvalidTier", "code": 8 },
-      { "name": "InvalidVkLength", "code": 9 },
       { "name": "PublicInputsMismatch", "code": 10 },
       { "name": "InvalidEpoch", "code": 11 },
       { "name": "ProofReplay", "code": 12 },
       { "name": "TierGroupLimitReached", "code": 13 },
       { "name": "AdminOnly", "code": 14, "note": "create_group in restricted mode rejects non-admin callers (caller != admin after caller.require_auth)" },
       { "name": "InvalidCommitmentEncoding", "code": 15 },
-      { "name": "InvalidPoint", "code": 26 },
-      { "name": "GroupStillActive", "code": 27 },
       { "name": "InvalidThreshold", "code": 28, "note": "create_group rejects threshold_numerator < 1 || > 100; per design v0.5.1 §4.7.6" }
     ],
     "dropped_from_sep_xxxx": [
+      { "name": "Reserved3", "code": 3, "reason": "previously Unauthorized; admin checks now use require_auth() which panics. Variant removed from the contract enum on the PLONK migration; code 3 is unallocated." },
+      { "name": "InvalidVkLength", "code": 9, "reason": "VK byte buffers are baked at compile time and the PLONK parser surfaces length errors as parse failures folded into InvalidProof; no caller-visible length error remains." },
       { "name": "UnknownVkKind", "code": 16, "reason": "VkKind is exhaustively matched in update_vk; the variant was unreachable. Removed in PR #148 review (chunk 1 #4)." },
       { "name": "OneOnOneImmutable", "code": 17, "reason": "no 1v1 in this contract" },
       { "name": "UnknownGroupType", "code": 18, "reason": "single-type contract" },
@@ -39,6 +37,8 @@
       { "name": "Invalid1v1Tier", "code": 23, "reason": "no 1v1 in this contract" },
       { "name": "MemberCountMismatch", "code": 24, "reason": "v1 democracy artifact; v2 uses occupancy_commitment" },
       { "name": "MemberCountOutOfRange", "code": 25, "reason": "v1 democracy artifact; v2 internalises count constraints in-circuit" },
+      { "name": "InvalidPoint", "code": 26, "reason": "PLONK verifier surfaces curve-decoding failures as parse failures folded into InvalidProof; no separate caller-visible code." },
+      { "name": "GroupStillActive", "code": 27, "reason": "deactivate_group was removed in postmortem #153 (frontrun); no active/inactive transition remains, so the guard is gone." },
       { "name": "GroupTypeMismatch", "code": 29, "reason": "no polymorphic dispatch in single-type contract" }
     ]
   },

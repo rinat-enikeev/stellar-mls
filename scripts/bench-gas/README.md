@@ -40,48 +40,66 @@ Requirements: `stellar` CLI, `cargo`, `jq`, `xxd`, `python3`.
 
 Outputs land under `scripts/bench-gas/results.{txt,jsonl}`.
 
-## Coverage matrix (V1)
+## Coverage matrix (V2)
 
 | Contract       | deploy | create_* | verify_membership | update_commitment | admin ops |
 |----------------|:------:|:--------:|:-----------------:|:-----------------:|:---------:|
-| sep-oneonone   | ✓      | ✓        | (V2)              | n/a               | ✓         |
-| sep-oligarchy  | ✓      | ✓        | ✓ (revert-mode)   | (V2)              | ✓         |
-| sep-anarchy    | ✓      | (V2)     | (V2)              | (V2)              | ✓         |
-| sep-democracy  | ✓      | (V2)     | (V2)              | (V2)              | ✓         |
-| sep-tyranny    | ✓      | (V2)     | (V2)              | (V2)              | ✓         |
+| sep-oneonone   | ✓      | ✓        | (V3)              | n/a               | ✓         |
+| sep-oligarchy  | ✓      | ✓        | ✓ (revert-mode)   | (V3)              | ✓         |
+| sep-anarchy    | ✓      | ✓ × 3    | ✓ × 3             | ✓ × 3             | ✓         |
+| sep-democracy  | ✓      | ✓ × 3    | ✓ × 3             | (V3)              | ✓         |
+| sep-tyranny    | ✓      | (V3)     | (V3)              | (V3)              | ✓         |
+
+`× 3` = covered at all three tiers (d=5, d=8, d=11).
 
 ### Bench mechanics
 
-* **`verify_membership`** returns `Ok(false)` on `InvalidProof` (no
-  revert), so we can submit a well-formed non-verifying proof, the
-  verifier runs the full PLONK pairing check, the function returns
-  `Ok(false)`, and the captured fee equals the real success-path
-  cost.
-* **`update_commitment`** errors out on `InvalidProof`, so the tx
-  would revert. Soroban-CLI runs simulation pre-flight and refuses
-  to submit reverting txs — so a non-verifying proof can't capture
-  a fee for this entrypoint. Deferred to V2 (real verifying proofs
-  via `gen-update-proof`).
+* **V1 contracts (`sep-oneonone`, `sep-oligarchy`)** use committed
+  fixtures from `contracts/plonk-verifier/tests/fixtures/`. Their
+  `create_*` paths use contract-specific create circuits we don't
+  have generators for, so V2 doesn't extend them.
+* **V2 contracts (`sep-anarchy`, `sep-democracy`)** generate fresh
+  PLONK proofs at runtime via `gen-membership-proof` /
+  `gen-update-proof`. Both contracts use `MEMBERSHIP_VK` for create
+  (so a membership proof IS a create proof), and `sep-anarchy`'s
+  update circuit matches `gen-update-proof`'s circuit shape.
+* **`verify_membership` revert-mode caveat (oligarchy only)**: the
+  verifier returns `Ok(false)` on `InvalidProof` without reverting,
+  so the captured fee equals the success-path cost — the verifier
+  runs the full PLONK pairing check identically in both arms. V2
+  rows for anarchy/democracy use real verifying proofs and capture
+  the genuine `Ok(true)` fee.
+* **VK shape-only invariant**: for any depth-`d` circuit the baked
+  VK depends on circuit topology, not witness values. So a witness
+  generated from `(secret_keys, prover_index, salt)` of our choice
+  produces a proof that verifies under the on-chain VK regardless
+  of what the contract's bake-time witness was.
 
-## V2 follow-up
+## V3 follow-up
 
-The contracts deferred above use `MEMBERSHIP_VK` for create
-(anarchy/democracy) or per-tier `VK_CREATE_D{5,8,11}` (tyranny).
-None has a fixture-only path that produces a successful
-`create_group` from a fresh deploy without runtime proof generation.
+V2 unlocks the contracts whose verifier circuits match the
+existing `gen-membership-proof` / `gen-update-proof` shapes. V3
+needs contract-specific gen tools to extend coverage further:
 
-V2 plan:
-1. Workflow step builds `gen-membership-proof` + `gen-update-proof`
-   under `--features gen-proof-tool`.
-2. For each tier, generate a fresh `(proof, public_inputs)` bundle
-   matching the deploy-time witness defaults (`secret-keys`,
-   `prover-index`, `salt`).
-3. Drive `create_group` → `verify_membership` → `update_commitment`
-   against the fresh proofs, capturing real success-path fees.
+* `gen-democracy-update-proof` — for `sep-democracy.update_commitment`
+  (uses `VK_DEMO_UPDATE_D{5,8,11}`; constrains a quorum threshold +
+  occupancy commitment that the generic update circuit doesn't).
+* `gen-oligarchy-create-proof` / `gen-oligarchy-update-proof` —
+  oligarchy already has committed fixtures for these (V1 covers
+  the create path), but `update_commitment` needs a fresh proof
+  matching post-create state and there's no committed fixture
+  that does so.
+* `gen-tyranny-create-proof` / `gen-tyranny-update-proof` — both
+  the create and update circuits are tyranny-specific (admin-tree
+  binding, group_id_fr derivation). No coverage today.
+* `gen-oneonone-create-proof` — the 1v1 create circuit is its own
+  shape; without it, `verify_membership` can't be benched against
+  a known commitment we set via `create_group`.
 
-Trade-off vs V1: extra ~30 s of CI wall-time per contract for the
-proof gen, plus the cost of the proofs hitting BLS arithmetic in
-release mode. Tracked in the next-up follow-up issue.
+For the V2 contracts: generation adds ~30s wall-time per tier in
+CI (heavier at d=11). With three tiers per contract × two contracts
+× two op types (membership + update), the bench job grows from ~4 m
+in V1 to ~10–12 m in V2.
 
 ## File layout
 

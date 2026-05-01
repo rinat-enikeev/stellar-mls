@@ -5,13 +5,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
+BENCH_REPO_ROOT="$REPO_ROOT"
 
 BENCH_NETWORK="${BENCH_NETWORK:-testnet}"
 BENCH_DEPLOYER="${BENCH_DEPLOYER:-bench-gas-deployer}"
 BENCH_CONFIG_DIR="${BENCH_CONFIG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/bench-gas-config.XXXXXX")}"
 BENCH_ARTIFACT_DIR="${BENCH_ARTIFACT_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/bench-gas-artifacts.XXXXXX")}"
 
-export BENCH_NETWORK BENCH_DEPLOYER BENCH_CONFIG_DIR BENCH_ARTIFACT_DIR
+export BENCH_NETWORK BENCH_DEPLOYER BENCH_CONFIG_DIR BENCH_ARTIFACT_DIR BENCH_REPO_ROOT
 
 require_cmd() {
     if ! command -v "$1" >/dev/null 2>&1; then
@@ -59,9 +60,11 @@ for c in sep-anarchy sep-democracy sep-oligarchy sep-oneonone sep-tyranny; do
         --out-dir "$BENCH_ARTIFACT_DIR" >/dev/null
 done
 
-# V2 will compile `gen-membership-proof` / `gen-update-proof` here
-# once the deferred contract drivers consume them. V1 doesn't, so we
-# don't burn CI time on the `gen-proof-tool` feature build (and a
-# regression in those binaries can't fail the V1 bench).
+echo "==> building gen-proof-tool binaries (V2 drivers consume these)"
+cargo build --release \
+    --manifest-path "$REPO_ROOT/Cargo.toml" \
+    --features gen-proof-tool \
+    --bin gen-membership-proof \
+    --bin gen-update-proof >/dev/null
 
 echo "==> setup complete"

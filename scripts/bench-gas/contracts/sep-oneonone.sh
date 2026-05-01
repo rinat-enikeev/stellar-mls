@@ -22,26 +22,12 @@ FIXTURE_DIR="$REPO_ROOT/contracts/plonk-verifier/tests/fixtures"
 
 export BENCH_CURRENT_CONTRACT="sep-oneonone"
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/bench-gas-oneonone.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT INT TERM
-
-# ---- encode fixtures into CLI-ready JSON files ----
-# Constructor: (admin: Address) — no fixture args.
-#
-# create_group(caller, group_id, commitment, proof: BytesN<1601>,
-#              public_inputs: Vec<BytesN<32>>)
-# PI layout (2 fields × 32 bytes): [commitment, be32(epoch=0)]
-# Total file size: 64 bytes.
-bin_to_hex_json "$FIXTURE_DIR/oneonone-create-proof.bin" "$WORK/create-proof.json"
-pi_concat_to_json "$FIXTURE_DIR/oneonone-create-pi.bin" 2 "$WORK/create-pi.json"
-
+# ---- precompute hex encodings (no temp files; CLI takes hex inline) ----
+CREATE_PROOF_HEX="$(bin_hex "$FIXTURE_DIR/oneonone-create-proof.bin")"
+CREATE_PI_JSON="$(pi_concat_json_array "$FIXTURE_DIR/oneonone-create-pi.bin" 2)"
 CREATE_COMMITMENT_HEX="$(read_pi_field_hex "$FIXTURE_DIR/oneonone-create-pi.bin" 0)"
-hex_to_json "$CREATE_COMMITMENT_HEX" "$WORK/create-commitment.json"
-
 GROUP_ID_HEX="$(printf '42%.0s' $(seq 1 32))"
-hex_to_json "$GROUP_ID_HEX" "$WORK/group-id.json"
 
-# ---- deploy ----
 echo "==> [$BENCH_CURRENT_CONTRACT] deploy"
 CID="$(bench_deploy \
     "bench-gas-oneonone" \
@@ -54,28 +40,24 @@ if [ -z "$CID" ]; then
 fi
 echo "    contract: $CID"
 
-# ---- create_group ----
 echo "==> [$BENCH_CURRENT_CONTRACT] create_group"
 bench_invoke "$CID" "create_group" "n/a" "create_group" \
     --caller "$BENCH_DEPLOYER_ADDRESS" \
-    --group-id-file-path "$WORK/group-id.json" \
-    --commitment-file-path "$WORK/create-commitment.json" \
-    --proof-file-path "$WORK/create-proof.json" \
-    --public-inputs-file-path "$WORK/create-pi.json"
+    --group-id "$GROUP_ID_HEX" \
+    --commitment "$CREATE_COMMITMENT_HEX" \
+    --proof "$CREATE_PROOF_HEX" \
+    --public-inputs "$CREATE_PI_JSON"
 
-# ---- set_restricted_mode (admin op, on then off) ----
 echo "==> [$BENCH_CURRENT_CONTRACT] set_restricted_mode(true)"
 bench_invoke "$CID" "set_restricted_mode" "n/a" "set_restricted_mode" \
     --restricted true
 
-# ---- bump_group_ttl ----
 echo "==> [$BENCH_CURRENT_CONTRACT] bump_group_ttl"
 bench_invoke "$CID" "bump_group_ttl" "n/a" "bump_group_ttl" \
-    --group-id-file-path "$WORK/group-id.json"
+    --group-id "$GROUP_ID_HEX"
 
-# Read-only entrypoints (`get_commitment`, `get_history`) are skipped
-# intentionally — `stellar contract invoke` short-circuits to a local
-# simulation for them regardless of `--send yes`, so no tx is submitted
-# and no fee is charged.
+# Read-only entrypoints (`get_commitment`) are skipped — the CLI
+# short-circuits to local simulation regardless of `--send yes`, so
+# no tx is submitted and no fee is charged.
 
 echo "==> [$BENCH_CURRENT_CONTRACT] done"

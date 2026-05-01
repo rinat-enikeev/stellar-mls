@@ -285,7 +285,7 @@ impl SepTyrannyContract {
             return Err(Error::InvalidCommitmentEncoding);
         }
 
-        let group_id_fr = group_id_to_fr(&env, &group_id);
+        let group_id_fr = group_id_to_fr(&group_id);
 
         if public_inputs.len() != CREATE_PI_COUNT {
             return Err(Error::PublicInputsMismatch);
@@ -375,7 +375,7 @@ impl SepTyrannyContract {
             .get(&DataKey::AdminCommitment(group_id.clone()))
             .ok_or(Error::GroupNotFound)?;
         let new_epoch = current.epoch.checked_add(1).ok_or(Error::InvalidEpoch)?;
-        let group_id_fr = group_id_to_fr(&env, &group_id);
+        let group_id_fr = group_id_to_fr(&group_id);
 
         if public_inputs.len() != UPDATE_PI_COUNT {
             return Err(Error::PublicInputsMismatch);
@@ -483,6 +483,7 @@ impl SepTyrannyContract {
         group_id: BytesN<32>,
         max_entries: u32,
     ) -> Result<Vec<CommitmentEntry>, Error> {
+        Self::require_initialized(&env)?;
         if !Self::group_exists(&env, &group_id) {
             return Err(Error::GroupNotFound);
         }
@@ -624,6 +625,8 @@ const _: () = {
     assert!(G2_COMPRESSED_LEN == 96);
 };
 
+// Largest PI count across all VK kinds (currently UPDATE_PI_COUNT = 5).
+// Bump together with any new circuit whose PI count exceeds this.
 const MAX_PI_COUNT: usize = 5;
 
 fn verify_plonk_proof(
@@ -656,7 +659,7 @@ fn be32_from_u64(env: &Env, value: u64) -> BytesN<32> {
 
 /// Derive `group_id_fr` from `group_id` bytes — Fr-canonicalize the
 /// 32-byte BE encoding (zero high bits if needed).
-fn group_id_to_fr(env: &Env, group_id: &BytesN<32>) -> BytesN<32> {
+fn group_id_to_fr(group_id: &BytesN<32>) -> BytesN<32> {
     let fr = Fr::from_bytes(group_id.clone());
     fr.to_bytes()
 }

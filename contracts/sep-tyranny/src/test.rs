@@ -203,25 +203,14 @@ fn test_initialize() {
 // ================================================================
 
 /// Drive create_group on the canonical fixture for the given tier.
-fn run_create_happy_path(tier: u32, group_id_byte: u8) {
+fn run_create_happy_path(tier: u32) {
     let (env, client, _admin) = setup_env();
     let c = caller(&env);
     let group_id = canonical_group_id(&env);
     let pi = pi_create(&env, tier);
     let commitment = pi.get(0).unwrap();
     let admin_comm = pi.get(2).unwrap();
-    // Deduplicate: each test uses a distinct group_id for replay
-    // protection, but the canonical group_id must match the
-    // canonical witness's group_id_fr — change byte 23 instead so
-    // group_id_fr (low 8 bytes BE = 0x7777) is preserved.
-    let mut gid_arr = group_id.to_array();
-    gid_arr[16] = group_id_byte;
-    let _ = c;
-    let _ = gid_arr;
-    let _ = commitment;
-    let _ = admin_comm;
 
-    // Use canonical group_id for the load-bearing test.
     client.create_group(
         &c,
         &group_id,
@@ -240,17 +229,17 @@ fn run_create_happy_path(tier: u32, group_id_byte: u8) {
 
 #[test]
 fn test_create_group_happy_path_d5() {
-    run_create_happy_path(0, 0);
+    run_create_happy_path(0);
 }
 
 #[test]
 fn test_create_group_happy_path_d8() {
-    run_create_happy_path(1, 0);
+    run_create_happy_path(1);
 }
 
 #[test]
 fn test_create_group_happy_path_d11() {
-    run_create_happy_path(2, 0);
+    run_create_happy_path(2);
 }
 
 /// Drive update_commitment on the canonical fixture for `tier`.
@@ -405,6 +394,287 @@ fn test_update_commitment_rejects_unknown_group() {
     client.update_commitment(&group_id, &malformed_proof(&env), &pi);
 }
 
+#[test]
+#[should_panic(expected = "Error(Contract, #15)")]
+fn test_create_group_rejects_non_canonical_commitment() {
+    let (env, client, _admin) = setup_env();
+    let c = caller(&env);
+    let pi = pi_create(&env, 0);
+    let bad = BytesN::from_array(&env, &[0xffu8; 32]);
+    client.create_group(
+        &c,
+        &canonical_group_id(&env),
+        &bad,
+        &0u32,
+        &pi.get(2).unwrap(),
+        &malformed_proof(&env),
+        &pi,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #15)")]
+fn test_create_group_rejects_non_canonical_admin_pubkey_commitment() {
+    let (env, client, _admin) = setup_env();
+    let c = caller(&env);
+    let pi = pi_create(&env, 0);
+    let bad = BytesN::from_array(&env, &[0xffu8; 32]);
+    client.create_group(
+        &c,
+        &canonical_group_id(&env),
+        &pi.get(0).unwrap(),
+        &0u32,
+        &bad,
+        &malformed_proof(&env),
+        &pi,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn test_create_group_rejects_duplicate_group_id() {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let c = caller(&env);
+    let group_id = canonical_group_id(&env);
+    let pi = pi_create(&env, 0);
+    let commitment = pi.get(0).unwrap();
+    let admin_comm = pi.get(2).unwrap();
+    inject_group(&env, &contract_id, &group_id, &commitment, &admin_comm, 0, 0);
+    client.create_group(
+        &c,
+        &group_id,
+        &commitment,
+        &0u32,
+        &admin_comm,
+        &malformed_proof(&env),
+        &pi,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #13)")]
+fn test_create_group_enforces_tier_group_limit() {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let c = caller(&env);
+    let pi = pi_create(&env, 0);
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::GroupCount(0), &MAX_GROUPS_PER_TIER);
+    });
+    client.create_group(
+        &c,
+        &canonical_group_id(&env),
+        &pi.get(0).unwrap(),
+        &0u32,
+        &pi.get(2).unwrap(),
+        &malformed_proof(&env),
+        &pi,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #14)")]
+fn test_create_group_restricted_mode_rejects_non_admin() {
+    let (env, client, _admin) = setup_env();
+    client.set_restricted_mode(&true);
+    let c = caller(&env);
+    let pi = pi_create(&env, 0);
+    client.create_group(
+        &c,
+        &canonical_group_id(&env),
+        &pi.get(0).unwrap(),
+        &0u32,
+        &pi.get(2).unwrap(),
+        &malformed_proof(&env),
+        &pi,
+    );
+}
+
+#[test]
+fn test_create_group_restricted_mode_admin_can_create() {
+    let (env, client, admin) = setup_env();
+    client.set_restricted_mode(&true);
+    let group_id = canonical_group_id(&env);
+    let pi = pi_create(&env, 0);
+    let commitment = pi.get(0).unwrap();
+    let admin_comm = pi.get(2).unwrap();
+    client.create_group(
+        &admin,
+        &group_id,
+        &commitment,
+        &0u32,
+        &admin_comm,
+        &proof_for_tier(&env, 0, "create"),
+        &pi,
+    );
+    let entry = client.get_commitment(&group_id);
+    assert_eq!(entry.commitment, commitment);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #12)")]
+fn test_create_group_rejects_replayed_proof() {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let c = caller(&env);
+    let group_id = canonical_group_id(&env);
+    let pi = pi_create(&env, 0);
+    let proof = proof_for_tier(&env, 0, "create");
+    let preimage = Bytes::from_slice(&env, proof.to_array().as_slice());
+    let hash: BytesN<32> = env.crypto().sha256(&preimage).into();
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::UsedProof(hash), &true);
+    });
+    client.create_group(
+        &c,
+        &group_id,
+        &pi.get(0).unwrap(),
+        &0u32,
+        &pi.get(2).unwrap(),
+        &proof,
+        &pi,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn test_update_commitment_rejects_stale_c_old() {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = canonical_group_id(&env);
+    let upi = pi_update(&env, 0);
+    let admin_comm = upi.get(3).unwrap();
+    let other = BytesN::from_array(&env, &[7u8; 32]);
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &other,
+        &admin_comm,
+        0,
+        CANONICAL_EPOCH,
+    );
+    client.update_commitment(&group_id, &malformed_proof(&env), &upi);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn test_update_commitment_rejects_wrong_epoch_old() {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = canonical_group_id(&env);
+    let upi = pi_update(&env, 0);
+    let c_old = upi.get(0).unwrap();
+    let admin_comm = upi.get(3).unwrap();
+    inject_group(&env, &contract_id, &group_id, &c_old, &admin_comm, 0, 999);
+    client.update_commitment(&group_id, &malformed_proof(&env), &upi);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #15)")]
+fn test_update_commitment_rejects_non_canonical_c_new() {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = canonical_group_id(&env);
+    let upi = pi_update(&env, 0);
+    let c_old = upi.get(0).unwrap();
+    let admin_comm = upi.get(3).unwrap();
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &c_old,
+        &admin_comm,
+        0,
+        CANONICAL_EPOCH,
+    );
+    let bad = BytesN::from_array(&env, &[0xffu8; 32]);
+    let mut bad_pi = Vec::new(&env);
+    bad_pi.push_back(c_old);
+    bad_pi.push_back(upi.get(1).unwrap());
+    bad_pi.push_back(bad);
+    bad_pi.push_back(admin_comm);
+    bad_pi.push_back(upi.get(4).unwrap());
+    client.update_commitment(&group_id, &malformed_proof(&env), &bad_pi);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn test_update_commitment_rejects_epoch_overflow() {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = canonical_group_id(&env);
+    let upi = pi_update(&env, 0);
+    let c_old = upi.get(0).unwrap();
+    let admin_comm = upi.get(3).unwrap();
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &c_old,
+        &admin_comm,
+        0,
+        u64::MAX,
+    );
+    client.update_commitment(&group_id, &malformed_proof(&env), &upi);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #12)")]
+fn test_update_commitment_rejects_replayed_proof() {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = canonical_group_id(&env);
+    let upi = pi_update(&env, 0);
+    let c_old = upi.get(0).unwrap();
+    let admin_comm = upi.get(3).unwrap();
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &c_old,
+        &admin_comm,
+        0,
+        CANONICAL_EPOCH,
+    );
+    let proof = proof_for_tier(&env, 0, "update");
+    let preimage = Bytes::from_slice(&env, proof.to_array().as_slice());
+    let hash: BytesN<32> = env.crypto().sha256(&preimage).into();
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::UsedProof(hash), &true);
+    });
+    client.update_commitment(&group_id, &proof, &upi);
+}
+
+#[test]
+fn test_update_commitment_does_not_mutate_admin_pubkey_commitment() {
+    let (env, client, _admin) = setup_env();
+    let contract_id = client.address.clone();
+    let group_id = canonical_group_id(&env);
+    let upi = pi_update(&env, 0);
+    let c_old = upi.get(0).unwrap();
+    let admin_comm = upi.get(3).unwrap();
+    inject_group(
+        &env,
+        &contract_id,
+        &group_id,
+        &c_old,
+        &admin_comm,
+        0,
+        CANONICAL_EPOCH,
+    );
+    client.update_commitment(&group_id, &proof_for_tier(&env, 0, "update"), &upi);
+    let post_admin = client.get_admin_commitment(&group_id);
+    assert_eq!(post_admin, admin_comm);
+}
+
 // ================================================================
 // 4. Queries
 // ================================================================
@@ -452,21 +722,45 @@ fn test_vectors_consistency() {
     let errors = v["error_codes"]["vectors"].as_array().unwrap();
     let expected: &[(&str, u32)] = &[
         ("NotInitialized", Error::NotInitialized as u32),
+        ("AlreadyInitialized", Error::AlreadyInitialized as u32),
+        ("GroupAlreadyExists", Error::GroupAlreadyExists as u32),
+        ("GroupNotFound", Error::GroupNotFound as u32),
         ("InvalidProof", Error::InvalidProof as u32),
         ("InvalidTier", Error::InvalidTier as u32),
         ("PublicInputsMismatch", Error::PublicInputsMismatch as u32),
+        ("InvalidEpoch", Error::InvalidEpoch as u32),
+        ("ProofReplay", Error::ProofReplay as u32),
+        ("TierGroupLimitReached", Error::TierGroupLimitReached as u32),
+        ("AdminOnly", Error::AdminOnly as u32),
+        ("InvalidCommitmentEncoding", Error::InvalidCommitmentEncoding as u32),
     ];
     for (name, code) in expected {
-        if let Some(entry) = errors.iter().find(|e| e["name"].as_str() == Some(name)) {
-            let json_code = entry["code"].as_u64().unwrap() as u32;
-            assert_eq!(json_code, *code, "error code drift for {}", name);
-        }
+        let entry = errors
+            .iter()
+            .find(|e| e["name"].as_str() == Some(name))
+            .unwrap_or_else(|| panic!("test-vectors.json missing error code: {}", name));
+        let json_code = entry["code"].as_u64().unwrap() as u32;
+        assert_eq!(json_code, *code, "error code drift for {}", name);
     }
 
     let tiers = v["tier"]["vectors"].as_array().unwrap();
+    assert_eq!(tiers.len(), 3, "tier vectors must enumerate 3 tiers");
     for entry in tiers {
         let tier = entry["tier"].as_u64().unwrap() as u32;
         let expected_cap = entry["capacity"].as_u64().unwrap() as u32;
         assert_eq!(tier_capacity(tier), expected_cap, "tier_capacity({})", tier);
     }
+
+    // Pin PI counts against vk_kind_enum (ic_count = base + pi_count).
+    let vk_kinds = v["vk_kind_enum"]["vectors"].as_array().unwrap();
+    let pi_count_for = |name: &str| -> u32 {
+        let entry = vk_kinds
+            .iter()
+            .find(|e| e["name"].as_str() == Some(name))
+            .unwrap_or_else(|| panic!("test-vectors.json missing vk_kind: {}", name));
+        (entry["ic_count"].as_u64().unwrap() as u32) - 1
+    };
+    assert_eq!(pi_count_for("Membership"), MEMBERSHIP_PI_COUNT);
+    assert_eq!(pi_count_for("Create"), CREATE_PI_COUNT);
+    assert_eq!(pi_count_for("Update"), UPDATE_PI_COUNT);
 }

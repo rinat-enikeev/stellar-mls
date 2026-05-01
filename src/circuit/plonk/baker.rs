@@ -31,8 +31,9 @@ use crate::circuit::plonk::democracy::{
 };
 use crate::circuit::plonk::membership::{synthesize_membership, MembershipWitness};
 use crate::circuit::plonk::oligarchy::{
-    synthesize_oligarchy_create, synthesize_oligarchy_update, OligarchyCreateWitness,
-    OligarchyUpdateWitness,
+    synthesize_oligarchy_create, synthesize_oligarchy_update_quorum, OligarchyAdminSigner,
+    OligarchyCreateWitness, OligarchyUpdateQuorumWitness, OLIGARCHY_ADMIN_DEPTH,
+    OLIGARCHY_K_MAX,
 };
 use crate::circuit::plonk::oneonone_create::{
     synthesize_oneonone_create, OneOnOneCreateWitness, DEPTH as ONEONONE_DEPTH,
@@ -242,13 +243,23 @@ pub fn bake_democracy_update_vk(depth: usize) -> Result<Vec<u8>, BakeError> {
 }
 
 /// Pinned SHA-256 anchors for oligarchy create + update VK shapes.
-/// Single-tier (the simplified PLONK port doesn't use depth — the
-/// circuit's commitment binding is depth-agnostic since it doesn't
-/// open Merkle paths in this initial port).
+///
+/// **Single-tier across all 3 oligarchy member tiers.** The admin
+/// tree depth is fixed at 5 per design §4.6 (admin tier always
+/// Small, regardless of member tier), and the create / update
+/// circuits don't open Merkle paths against the member tree — only
+/// against the admin tree. So the circuit shape (and resulting VK)
+/// is independent of the member tier.
+///
+/// `OLIGARCHY_UPDATE_VK_SHA256_HEX` anchors the K-of-N quorum +
+/// count-delta + admin-tree-membership circuit
+/// (`synthesize_oligarchy_update_quorum`, PR #205). The simplified
+/// `synthesize_oligarchy_update` is no longer baked — it remains in
+/// `oligarchy.rs` as a migration reference.
 pub const OLIGARCHY_CREATE_VK_SHA256_HEX: &str =
     "07ca92baabded97d241d11e378203bb2d45c955a1641c02a581e2f2df42a1a25";
 pub const OLIGARCHY_UPDATE_VK_SHA256_HEX: &str =
-    "d11ba6ac3d30918b0d8ee29eec8de9f162fbc4a5d3614b0dfb1dcbfbf90c31b0";
+    "f89a3e30c48b6d81e9276dacd7f5b41b497ca954369426d5fa995f5343592cf4";
 
 pub fn build_canonical_oligarchy_create_witness() -> OligarchyCreateWitness {
     let occ = Fr::from(0xA110u64);
@@ -268,29 +279,94 @@ pub fn build_canonical_oligarchy_create_witness() -> OligarchyCreateWitness {
     }
 }
 
-pub fn build_canonical_oligarchy_update_witness() -> OligarchyUpdateWitness {
-    let member_root = Fr::from(0xCAFEu64);
+/// Canonical witness for the K-of-N quorum oligarchy update circuit.
+///
+/// **Non-boundary configuration on purpose** (lessons from PR #203's
+/// review). Both signers active (`K = K_MAX = 2`), `threshold = 1`
+/// → `slack = 1`; `count_new = count_old + 1`. Exercises the slack
+/// + threshold range gates and the count-delta product gate
+/// non-trivially through the production VK fixture, not just the
+/// trivial `K = threshold`, `diff = 0` boundary.
+///
+/// Single-tier — admin tree depth is fixed at 5 across all oligarchy
+/// member tiers, so the circuit (and resulting VK) is identical
+/// regardless of member tier.
+pub fn build_canonical_oligarchy_update_quorum_witness() -> OligarchyUpdateQuorumWitness {
+    let admin_secret_keys: Vec<Fr> = (1u64..=4).map(Fr::from).collect();
+    let epoch_old = 1234u64;
     let salt_old = Fr::from(0xEEEEu64);
     let salt_new = Fr::from(0xFFFFu64);
-    let occ_old = Fr::from(0xA110u64);
-    let occ_new = Fr::from(0xA111u64);
-    let epoch_old = 1234u64;
-    let threshold = 5u64;
+    let salt_oc_old = Fr::from(0x55u64);
+    let salt_oc_new = Fr::from(0x66u64);
+    let count_old = 5u64;
+    let count_new = 6u64;
+    let threshold = 1u64;
+    let member_root = Fr::from(0xCAFEu64);
+
+    // Build admin tree at fixed OLIGARCHY_ADMIN_DEPTH.
+    let admin_leaves: Vec<Fr> = admin_secret_keys.iter().map(poseidon_hash_one_v05).collect();
+    let num_admin_leaves = 1usize << OLIGARCHY_ADMIN_DEPTH;
+    let mut admin_nodes = vec![Fr::from(0u64); 2 * num_admin_leaves];
+    for (i, leaf) in admin_leaves.iter().enumerate() {
+        admin_nodes[num_admin_leaves + i] = *leaf;
+    }
+    for i in (1..num_admin_leaves).rev() {
+        admin_nodes[i] =
+            poseidon_hash_two_v05(&admin_nodes[2 * i], &admin_nodes[2 * i + 1]);
+    }
+    let admin_root = admin_nodes[1];
+
+    // Merkle paths for the K_MAX active admin signers.
+    let mut paths: Vec<Vec<Fr>> = Vec::with_capacity(OLIGARCHY_K_MAX);
+    for prover_index in 0..OLIGARCHY_K_MAX {
+        let mut path = Vec::with_capacity(OLIGARCHY_ADMIN_DEPTH);
+        let mut cur = num_admin_leaves + prover_index;
+        for _ in 0..OLIGARCHY_ADMIN_DEPTH {
+            let sib = if cur % 2 == 0 { cur + 1 } else { cur - 1 };
+            path.push(admin_nodes[sib]);
+            cur /= 2;
+        }
+        paths.push(path);
+    }
+
+    // Occupancy commitments (Poseidon binding for count + salt_oc).
+    let occ_old = poseidon_hash_two_v05(&Fr::from(count_old), &salt_oc_old);
+    let occ_new = poseidon_hash_two_v05(&Fr::from(count_new), &salt_oc_new);
+
+    // c_old / c_new — same chain as synthesize_oligarchy_create.
     let inner_old = poseidon_hash_two_v05(&member_root, &Fr::from(epoch_old));
     let mid_old = poseidon_hash_two_v05(&inner_old, &salt_old);
-    let c_old = poseidon_hash_two_v05(&mid_old, &occ_old);
+    let admin_mix_old = poseidon_hash_two_v05(&occ_old, &admin_root);
+    let c_old = poseidon_hash_two_v05(&mid_old, &admin_mix_old);
     let inner_new = poseidon_hash_two_v05(&member_root, &Fr::from(epoch_old + 1));
     let mid_new = poseidon_hash_two_v05(&inner_new, &salt_new);
-    let c_new = poseidon_hash_two_v05(&mid_new, &occ_new);
-    OligarchyUpdateWitness {
+    let admin_mix_new = poseidon_hash_two_v05(&occ_new, &admin_root);
+    let c_new = poseidon_hash_two_v05(&mid_new, &admin_mix_new);
+
+    let admin_signers: [OligarchyAdminSigner; OLIGARCHY_K_MAX] =
+        core::array::from_fn(|i| OligarchyAdminSigner {
+            secret_key: admin_secret_keys[i],
+            merkle_path: paths[i].clone(),
+            leaf_index: i,
+            active: true,
+        });
+
+    OligarchyUpdateQuorumWitness {
         c_old,
         epoch_old,
         c_new,
         occupancy_commitment_old: occ_old,
         occupancy_commitment_new: occ_new,
         admin_threshold_numerator: threshold,
+        admin_signers,
         member_root_old: member_root,
         member_root_new: member_root,
+        admin_root_old: admin_root,
+        admin_root_new: admin_root,
+        member_count_old: count_old,
+        member_count_new: count_new,
+        salt_oc_old,
+        salt_oc_new,
         salt_old,
         salt_new,
     }
@@ -311,10 +387,14 @@ pub fn bake_oligarchy_create_vk() -> Result<Vec<u8>, BakeError> {
     Ok(vk_bytes)
 }
 
+/// Bake the oligarchy update VK against the K-of-N quorum circuit
+/// (`synthesize_oligarchy_update_quorum`). Single-tier — admin tree
+/// depth is fixed across all oligarchy member tiers.
 pub fn bake_oligarchy_update_vk() -> Result<Vec<u8>, BakeError> {
-    let witness = build_canonical_oligarchy_update_witness();
+    let witness = build_canonical_oligarchy_update_quorum_witness();
     let mut circuit = PlonkCircuit::<Fr>::new_turbo_plonk();
-    synthesize_oligarchy_update(&mut circuit, &witness).map_err(BakeError::Synthesize)?;
+    synthesize_oligarchy_update_quorum(&mut circuit, &witness)
+        .map_err(BakeError::Synthesize)?;
     circuit
         .finalize_for_arithmetization()
         .map_err(BakeError::Synthesize)?;

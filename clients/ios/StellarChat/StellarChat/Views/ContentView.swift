@@ -40,7 +40,7 @@ struct ContentView: View {
 
             Tab("Settings", systemImage: "gearshape", value: .settings) {
                 NavigationStack {
-                    SettingsView()
+                    OnymSettingsHomeView()
                 }
             }
         }

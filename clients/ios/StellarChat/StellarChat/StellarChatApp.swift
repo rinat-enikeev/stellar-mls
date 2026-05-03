@@ -602,13 +602,6 @@ final class AppState {
         store.deleteGroup(id: id)
         chatMessages.removeValue(forKey: id)
         seenMessageIDs.removeValue(forKey: id)
-        // Suppress stale invitations for this group: drop any currently pending
-        // and remember the ID so relay-replayed invitation events aren't
-        // re-surfaced on next launch (Issue #110).
-        pendingInvitations.removeAll { invitation in
-            invitation.payload.groupID.map { String(format: "%02x", $0) }.joined() == id
-        }
-        declinedGroupIDs.insert(id)
     }
 
     func removePendingInvitation(id: String) {

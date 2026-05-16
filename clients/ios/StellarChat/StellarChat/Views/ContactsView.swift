@@ -1,3 +1,5 @@
+import Contacts
+import ContactsUI
 import SwiftUI
 
 struct ContactsView: View {
@@ -11,6 +13,7 @@ struct ContactsView: View {
     @State private var pickerTarget: PhoneContact?
     @State private var phoneFilter = ""
     @State private var resendError: String?
+    @State private var showLimitedAccessPicker = false
 
     private var activeContacts: [(pubkey: String, groupNames: String, lastSeen: Date)] {
         var map: [String: (groups: Set<String>, lastSeen: Date)] = [:]
@@ -58,6 +61,10 @@ struct ContactsView: View {
         .navigationTitle("Contacts")
         .sheet(item: $pickerTarget) { contact in
             TelegramInvitePickerView(contact: contact)
+        }
+        .contactAccessPicker(isPresented: $showLimitedAccessPicker) { _ in
+            contactsPermission = SystemContactsImporter.permission()
+            Task { await loadPhonebook() }
         }
         .alert("Set Name", isPresented: .init(
             get: { aliasTarget != nil },
@@ -223,6 +230,31 @@ struct ContactsView: View {
                 }
                 .padding(.vertical, 4)
 
+            case .limited:
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(phonebook.isEmpty
+                         ? "Onym only sees contacts you select. You haven't picked any yet — choose some to invite to encrypted chats."
+                         : "Onym only sees contacts you've selected. Add more anytime.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        showLimitedAccessPicker = true
+                    } label: {
+                        Label(phonebook.isEmpty ? "Select Contacts" : "Manage Selection",
+                              systemImage: "person.crop.circle.badge.plus")
+                            .fontWeight(.semibold)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                    if importing {
+                        HStack {
+                            ProgressView().controlSize(.small)
+                            Text("Loading contacts…")
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+
             case .authorized:
                 if importing {
                     HStack {
@@ -236,6 +268,8 @@ struct ContactsView: View {
                         Label("Load Contacts", systemImage: "arrow.clockwise")
                     }
                 }
+            }
+            if contactsPermission == .authorized || contactsPermission == .limited {
                 if let importError {
                     Text(importError)
                         .font(.caption)
@@ -271,7 +305,7 @@ struct ContactsView: View {
         } header: {
             Text("From Phonebook")
         } footer: {
-            if contactsPermission == .authorized, !phonebook.isEmpty {
+            if (contactsPermission == .authorized || contactsPermission == .limited), !phonebook.isEmpty {
                 Text("Tap Invite to open Telegram with an encrypted chat link pre-filled.")
                     .font(.caption2)
             }
@@ -346,10 +380,12 @@ struct ContactsView: View {
     }
 
     private func requestAndLoad() async {
-        let granted = await SystemContactsImporter.requestAccess()
-        contactsPermission = granted ? .authorized : .denied
-        if granted {
+        contactsPermission = await SystemContactsImporter.requestAccess()
+        switch contactsPermission {
+        case .authorized, .limited:
             await loadPhonebook()
+        case .denied, .notDetermined:
+            break
         }
     }
 

@@ -129,6 +129,7 @@ struct PhoneContact: Identifiable, Equatable {
 enum ContactsPermission {
     case notDetermined
     case denied
+    case limited
     case authorized
 }
 
@@ -140,18 +141,21 @@ enum SystemContactsImporter {
         case .notDetermined: return .notDetermined
         case .authorized: return .authorized
         #if compiler(>=5.9)
-        case .limited: return .authorized
+        case .limited: return .limited
         #endif
         case .denied, .restricted: return .denied
         @unknown default: return .denied
         }
     }
 
-    static func requestAccess() async -> Bool {
+    /// Returns the resulting permission state (not a bool) so callers can
+    /// distinguish full access from iOS 18 limited access, which may yield
+    /// zero contacts and needs a separate recovery UI.
+    static func requestAccess() async -> ContactsPermission {
         let store = CNContactStore()
         return await withCheckedContinuation { cont in
-            store.requestAccess(for: .contacts) { granted, _ in
-                cont.resume(returning: granted)
+            store.requestAccess(for: .contacts) { _, _ in
+                cont.resume(returning: permission())
             }
         }
     }

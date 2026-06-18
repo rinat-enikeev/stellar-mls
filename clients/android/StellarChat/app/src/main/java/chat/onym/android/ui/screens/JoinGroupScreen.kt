@@ -51,10 +51,11 @@ fun JoinGroupScreen(
     viewModel: JoinGroupViewModel,
     groupListViewModel: GroupListViewModel? = null,
     onBack: () -> Unit,
-    onGroupJoined: (ChatGroup) -> Unit
+    onGroupJoined: (ChatGroup) -> Unit,
+    startInScanner: Boolean = false
 ) {
     val context = LocalContext.current
-    var showScanner by remember { mutableStateOf(false) }
+    var showScanner by remember { mutableStateOf(startInScanner) }
 
     LaunchedEffect(Unit) {
         if (viewModel.inviteText.isBlank()) {

@@ -320,7 +320,14 @@ fun StellarChatNavHost(
                 )
             }
 
-            composable("join") {
+            composable(
+                "join?scan={scan}",
+                arguments = listOf(navArgument("scan") {
+                    type = NavType.BoolType
+                    defaultValue = false
+                })
+            ) { backStackEntry ->
+                val startInScanner = backStackEntry.arguments?.getBoolean("scan") ?: false
                 val joinViewModel: JoinGroupViewModel = viewModel()
                 // Pre-fill from deep link if available
                 if (deepLinkInviteCode != null && joinViewModel.inviteText.isEmpty()) {
@@ -329,7 +336,8 @@ fun StellarChatNavHost(
                 JoinGroupScreen(
                     viewModel = joinViewModel,
                     groupListViewModel = groupListViewModel,
-                    onBack = { navController.popBackStackIfResumed() },
+                    onBack = { navController.popBackStack() },
+                    startInScanner = startInScanner,
                     onGroupJoined = { group ->
                         // Mark as published if on-chain verification passed
                         if (joinViewModel.verificationResult is chat.onym.android.onchain.OnChainVerificationResult.Verified) {
@@ -377,7 +385,8 @@ fun StellarChatNavHost(
                     onOpenBlossom = { navController.navigate("blossom_servers") },
                     onOpenStellarContract = { navController.navigate("stellar_contract") },
                     onOpenAdvanced = { navController.navigate("advanced_settings") },
-                    onJoinGroup = { navController.navigate("join") }
+                    onJoinGroup = { navController.navigate("join") },
+                    onScanInvite = { navController.navigate("join?scan=true") }
                 )
             }
 

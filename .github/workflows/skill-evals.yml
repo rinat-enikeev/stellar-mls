@@ -1,0 +1,63 @@
+name: Skill Evals
+
+on:
+  pull_request:
+    paths:
+      - '.claude/skills/**'
+      - 'evals/**'
+      - '.github/workflows/skill-evals.yml'
+  workflow_dispatch:
+    inputs:
+      skill:
+        description: 'Skill name (under .claude/skills/)'
+        default: 'stellar-dev'
+        required: true
+      model:
+        description: 'Anthropic model'
+        default: 'claude-haiku-4-5'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'evals/requirements.txt'
+
+      - name: Install
+        run: pip install -r evals/requirements.txt
+
+      - name: Run skill evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVAL_MODEL: ${{ inputs.model || 'claude-haiku-4-5' }}
+        run: |
+          # Discover skills with fixture dirs and run each. Non-zero exit
+          # only when the average gap goes negative (skill regressed the
+          # base model — the only bar worth blocking CI on).
+          set -e
+          for skill_dir in evals/skills/*/; do
+            skill="$(basename "$skill_dir")"
+            if [ -d "$skill_dir/fixtures" ]; then
+              echo "::group::eval: $skill"
+              python evals/eval.py --skill "$skill" --save
+              echo "::endgroup::"
+            fi
+          done
+
+      - name: Upload eval outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-eval-outputs
+          path: evals/outputs/
+          retention-days: 7

@@ -1,0 +1,20 @@
+\begin{table}[t]
+  \centering
+  \caption{Proof size. Pairing-based Groth16 proofs are constant-size;
+    PLONK and Halo2 grow logarithmically; FRI-based proofs are the
+    largest at 50--200~KB.}
+  \label{tab:proof-size}
+  \begin{tabular}{lr}
+    \toprule
+    Configuration & Proof size \\
+    \midrule
+    C1  & 192 B (3 $\mathbb{G}_1$ + 1 $\mathbb{G}_2$, compressed) \\
+    C2  & 128 B (BN254 compressed) \\
+    C3  & TBD ($\sim$0.5--1 KB) \\
+    C4  & TBD ($\sim$10--20 KB, recursion overhead) \\
+    C5  & TBD ($\sim$50--100 KB) \\
+    C6  & TBD ($\sim$50--200 KB) \\
+    C7$^\dagger$ & TBD ($\sim$50--200 KB) \\
+    \bottomrule
+  \end{tabular}
+\end{table}

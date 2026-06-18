@@ -1,0 +1,46 @@
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented a Systematization of Knowledge for metadata-hiding group
+registries with SNARK-gated state changes, structured as a six-axis
+taxonomy that indexes by deployment constraint rather than by
+construction family. Across seven concrete configurations and five
+comparison dimensions, the dominant finding is that no configuration
+sits in every priority's preferred regime: the cheap-and-not-PQ
+regime (C1, C2), the PQ-ready-but-large-proof regime (C6), and the
+host-function-blocked hypothetical (C7) form a partial order, not a
+total one. The deployment recommendations of
+\S\ref{sec:recommendations} are accordingly profile-conditional, and
+two of the four profiles point to configurations that would not be
+selected under the profile-blind reading of the comparison tables.
+
+The contribution we believe is the most actionable for protocol
+designers is the cross-axis dependency analysis of
+\S\ref{sec:dimensions-deps}: fixing the anchor chain for
+non-cryptographic reasons implicitly fixes four of the six axes
+through the chain~$\to$~host~$\to$~curve~$\to$~SNARK~$\to$~setup
+chain, leaving only the in-circuit hash truly free. Designers who
+treat the chain choice as independent of the proof-system choice
+underestimate the constraint they have already accepted.
+
+The contribution we believe is the most actionable for the
+cryptographic-research community is the migration matrix of
+\S\ref{sec:migration-matrix} and the open-problem cluster of
+\S\ref{sec:open}: no column in the migration matrix is uniformly
+Class~(a), and the empty cheap-and-PQ-ready cell of
+\S\ref{sec:analysis-synthesis} is closed only by progress on either
+chain-host-function ABIs that admit FRI primitives, or on
+SNARK constructions that combine pairing-friendly verifier costs
+with hash-based post-quantum security. The path of least research
+risk is the chain-host axis; the path of greatest impact is the
+SNARK-construction axis.
+
+Future work in two directions is concrete enough to commit to a
+follow-up SoK. First, an updated taxonomy that admits a fourth
+post-quantum class --- lattice-based --- once a deployable
+construction in that class exists. Second, an extension of the
+abstraction to operator-aware metadata-hiding against
+jurisdiction-bound adversaries (open problem~8); the threat model in
+\S\ref{sec:problem} explicitly excludes this adversary class today,
+and the taxonomy will need a corresponding extension before that
+extension can be made.

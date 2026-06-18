@@ -1,0 +1,158 @@
+\section{Per-Dimension Analysis}
+\label{sec:analysis}
+
+This section populates five comparison tables across the seven
+configurations enumerated in \S\ref{sec:configurations}. The
+configurations are referred to throughout by their table-row label
+(C1 through C7) before they are formally introduced in
+\S\ref{sec:configurations}; readers wanting the full descriptions
+should jump ahead. Each table draws claims at one of two confidence
+levels: the row labeled C1 (Stellar~+~BLS12-381~+~Groth16) is
+generated from a first-party benchmark harness whose methodology is
+specified in Appendix~\ref{app:bench} and whose source lives in this
+paper's source tree under \texttt{benchmarks/c1/}; rows C2--C6 cite
+published numbers attributed inline; row C7 is
+a hypothetical configuration whose cells are model estimates derived
+in \S\ref{sec:migration}, included precisely to make the
+host-function constraint legible. All USD figures are anchored to
+2026-04 fee-market and spot-rate conditions; reviewers wanting
+contemporary numbers should re-run the harness and re-cite.
+
+\subsection{Verification cost}
+\label{sec:analysis-cost}
+
+Table~\ref{tab:cost} summarizes verification cost. Cells are placed
+at TBD pending the §4 measurement-pass refresh; the structural claims
+the table is designed to support are stable, and so we describe them
+in prose:
+
+\begin{itemize}
+  \item \textbf{Native pairing precompiles dominate the cheap end.}
+    Configurations whose verifier reduces to a small number of
+    pairings called via a host function (C1, C2) are one to two
+    orders of magnitude cheaper than configurations whose verifier
+    runs the same primitives in pure bytecode. The Stellar
+    BLS12-381 pairing host function~\cite{stellar-cap-0059} and the
+    Ethereum BN254 pairing precompile (EIP-197) are the load-bearing
+    components.
+  \item \textbf{Universal updatable schemes carry verifier overhead.}
+    PLONK-family verifiers require multiple G1 and G2 multi-scalar
+    multiplications beyond the pairing check; on chains without an
+    MSM precompile, this raises baseline verification cost by an
+    additional $2$--$5\times$ over Groth16.
+  \item \textbf{Transparent-setup configurations on
+    non-FRI-friendly chains are dominated.} C7 (the hypothetical
+    Stellar~+~Plonky3~+~FRI) would require a pure-WASM FRI verifier
+    on Stellar, with verification cost dominated by Merkle-path
+    hashing and field arithmetic that the BLS12-381 host functions
+    do not accelerate. The configuration is included in the table to
+    document the host-function gap, not as a viable production
+    target.
+\end{itemize}
+
+\input{tables/tab-cost-comparison}
+
+\subsection{Proof size}
+\label{sec:analysis-size}
+
+Table~\ref{tab:proof-size} ranks configurations by proof size.
+Groth16 is uniquely small at constant-size 192~B
+(C1)~\cite{groth-2016-onpairing} or 128~B with BN254 compressed
+encoding (C2). PLONK-family proofs are $\sim$0.5--1~KB. Recursive
+schemes (C4, Mina~+~Pickles) carry the recursion-frame overhead and
+land in the 10--20~KB range. FRI-based schemes (C5--C7) are the
+largest at 50--200~KB depending on the security level and FRI rate
+parameter; the Plonky2 and Plonky3 lines achieve smaller sizes than
+classical STARKs by aggressive use of small fields and recursion
+within the proof.
+
+\input{tables/tab-proof-size}
+
+The implication for registry design is direct: configurations whose
+proofs travel in transactions on a chain with per-byte fees pay for
+proof size linearly. C5--C7's 50--200~KB proofs are economical only
+on chains that subsidize ZK-rollup-style submissions; on a general
+L1, they are not.
+
+\subsection{Prover wall-clock}
+\label{sec:analysis-prover}
+
+Table~\ref{tab:prover-time} reports prover wall-clock for the
+canonical advancement relation at a medium ring size (64 members for
+systems with a member notion; ``one signal'' for Tornado-shaped
+systems). Single-threaded baseline on commodity x86\_64; multi-thread
+scaling is reported in Appendix~\ref{app:bench} for C1 and is cited
+inline for the others.
+
+The headline ordering is:
+\begin{enumerate}
+  \item Plonky2/3 (C5, C7) win on prover time at the cost of proof
+    size, by virtue of FRI's amenability to GPU- and SIMD-accelerated
+    NTT and Merkle-tree workloads on small fields.
+  \item Groth16 (C1, C2) is competitive in the medium-circuit regime
+    where the relation is well-tuned but degrades at large ring sizes
+    due to the cubic dependence of trusted setup time on circuit
+    size; the per-proof cost is dominated by the Multi-scalar
+    Multiplication on $\mathbb{G}_1$.
+  \item PLONK-family schemes (C3) introduce additional polynomial
+    commitment overhead and are typically $1.5$--$3\times$ slower
+    than Groth16 at equivalent constraint counts.
+  \item STARK over Goldilocks (C6) is competitive with Plonky2 in raw
+    prover throughput; the difference is a constant factor that
+    depends on the specific commitment scheme and the rate parameter.
+\end{enumerate}
+
+\input{tables/tab-prover-time}
+
+\subsection{Trust assumptions}
+\label{sec:analysis-trust}
+
+Table~\ref{tab:trust} summarizes trust posture along three axes:
+trusted-setup ceremony, validator set composition, and operationally
+realized censorship resistance.
+
+\input{tables/tab-trust-assumptions}
+
+The trust-assumption ranking is partial-order, not total: Ethereum L1
+(C2) wins on validator decentralization but loses to Mina (C4) on
+trusted setup; Mina wins on setup but loses to Ethereum on validator
+count. The deployment recommendations in
+\S\ref{sec:recommendations} navigate this partial order by deployment
+profile.
+
+\subsection{Post-quantum posture}
+\label{sec:analysis-pq}
+
+Table~\ref{tab:pq} classifies each configuration by the §3.4
+post-quantum class. The headline is uncomplicated: every
+pairing-based configuration (C1--C5, including the seemingly modern
+Plonky2~+~KZG~over~BN254 in C5) is broken under Shor at zero
+post-quantum security level; only the FRI-based configurations
+(C6, hypothetical C7) carry positive Grover-resistant security. This
+is despite some pairing-based systems being marketed as ``modern'' or
+``advanced''; modernity in the literature is uncorrelated with
+post-quantum readiness, because the post-quantum decision is
+orthogonal to construction novelty.
+
+\input{tables/tab-pq-posture}
+
+The careful caveat about hash-based configurations is that the
+Grover-resistant security level depends on the underlying hash, not
+on the FRI construction itself. Poseidon and Poseidon2 in their
+standard parameter sets target $\sim$128 classical bits, which under
+generic Grover speedup gives $\sim$64 post-quantum bits before
+parameter doubling. STARK-friendly hashes such as Rescue-Prime are
+typically parameterized for $\sim$100 PQ-bits at the cost of
+constraint count. The PQ posture column is therefore a property of
+the (SNARK $\times$ hash) joint choice, not of the SNARK alone.
+
+\subsection{Synthesis}
+\label{sec:analysis-synthesis}
+
+Across all five tables, the configurations group into three regimes:
+\emph{cheap pairing-based with native host functions} (C1, C2),
+\emph{moderate-cost universal-updatable on chains with sequencers}
+(C3, C5), and \emph{post-quantum-ready transparent} (C6 and the
+blocked C7). No configuration sits in the cheap-and-PQ-ready cell
+of this matrix; closing that gap is one of the open problems flagged
+in \S\ref{sec:open}.

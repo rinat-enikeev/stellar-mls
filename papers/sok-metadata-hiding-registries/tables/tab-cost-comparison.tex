@@ -1,0 +1,27 @@
+\begin{table*}[t]
+  \centering
+  \caption{Per-verification cost. C1 row generated from
+    \texttt{benchmarks/c1/results.json}; other rows cited. USD
+    anchored to 2026-04 fee market and
+    XLM/ETH/SOL spot rates; cells marked TBD pending §9
+    measurement-pass refresh.}
+  \label{tab:cost}
+  \begin{tabular}{llrrr}
+    \toprule
+    & Configuration & Native unit & USD (2026-04) & Source \\
+    \midrule
+    C1  & Stellar + BLS12-381 + Groth16            & TBD stroops    & TBD & \cite{sep-onym} (this work) \\
+    C2  & Ethereum L1 + BN254 + Groth16            & TBD gas        & TBD & TODO §4 cite \\
+    C3  & Aztec + UltraPlonk                       & TBD gas (L2)   & TBD & TODO §4 cite \\
+    C4  & Mina + Pickles                           & TBD            & TBD & TODO §4 cite \\
+    C5  & L2 + Plonky2 + KZG/BN254                 & TBD gas        & TBD & TODO §4 cite \\
+    C6  & STARK + Goldilocks                       & TBD gas        & TBD & TODO §4 cite \\
+    C7$^\dagger$ & Stellar + Plonky3 + FRI (hypothetical) & TBD WASM CPU instr.\ & TBD & §6.\ref{sec:migration} analysis \\
+    \bottomrule
+  \end{tabular}
+  \\[0.5em]
+  \footnotesize
+  $^\dagger$ C7 is not deployed; the cell is a model estimate
+  representing a pure-WASM verifier on Stellar without FRI host
+  functions. See \S\ref{sec:migration}.
+\end{table*}

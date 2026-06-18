@@ -1,0 +1,21 @@
+\begin{table*}[t]
+  \centering
+  \caption{Trust assumptions. ``Setup'' names the ceremony posture;
+    ``Validators'' summarizes the anchor chain's decentralization;
+    ``Censorship'' is the operationally-relevant dimension for
+    transactions reaching inclusion.}
+  \label{tab:trust}
+  \begin{tabular}{llll}
+    \toprule
+    & Setup ceremony           & Validator set                & Censorship resistance     \\
+    \midrule
+    C1 & Per-circuit MPC          & Stellar Validators ($\sim$30) & SCP quorum, low censorship      \\
+    C2 & Per-circuit MPC          & Ethereum L1 ($\sim$10$^6$ stakers) & Highest in surveyed set       \\
+    C3 & UltraPlonk universal     & Aztec sequencer (centralized in alpha) & Sequencer-mediated      \\
+    C4 & Transparent (Pickles)    & Mina ($\sim$300 block producers) & Moderate                      \\
+    C5 & KZG universal updatable  & L2 sequencer + L1 anchor   & L1-anchored fallback              \\
+    C6 & Transparent (FRI)        & Anchor-dependent          & Anchor-dependent                  \\
+    C7$^\dagger$ & Transparent (FRI) & Stellar Validators       & Same as C1                       \\
+    \bottomrule
+  \end{tabular}
+\end{table*}

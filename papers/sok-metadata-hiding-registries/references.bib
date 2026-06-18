@@ -1,0 +1,305 @@
+% SoK references — verified 2026-04-29.
+% Conventions:
+%   - Cite-key: firstauthor-year-shortword (e.g. groth-2016-onpairing)
+%   - DOI in the `doi` field; ePrint URL in the `note` field for IACR papers
+%   - For specs / blog posts, include access date and source URL in `note`
+
+% ─── §1, §3, §4, §5, §8 SNARK constructions ──────────────────────────
+
+@inproceedings{groth-2016-onpairing,
+  author    = {Jens Groth},
+  title     = {On the Size of Pairing-based Non-interactive Arguments},
+  booktitle = {Advances in Cryptology -- {EUROCRYPT} 2016},
+  year      = 2016,
+  pages     = {305--326},
+  doi       = {10.1007/978-3-662-49896-5\_11},
+  note      = {{IACR} {ePrint} {A}rchive Paper 2016/260,
+                \url{https://eprint.iacr.org/2016/260}.}
+}
+
+@misc{gabizon-2019-plonk,
+  author       = {Ariel Gabizon and Zachary J.\ Williamson and Oana Ciobotaru},
+  title        = {{PLONK}: Permutations over {L}agrange-bases for
+                  {O}ecumenical Noninteractive arguments of Knowledge},
+  year         = 2019,
+  howpublished = {Cryptology {ePrint} Archive, Paper 2019/953},
+  note         = {\url{https://eprint.iacr.org/2019/953}.}
+}
+
+@misc{bowe-2019-halo,
+  author       = {Sean Bowe and Jack Grigg and Daira Hopwood},
+  title        = {Halo: Recursive Proof Composition without a Trusted
+                  Setup},
+  year         = 2019,
+  howpublished = {Cryptology {ePrint} Archive, Paper 2019/1021},
+  note         = {\url{https://eprint.iacr.org/2019/1021}. {Halo}2 is
+                  the deployed iteration of these techniques in the
+                  {Z}cash and {E}thereum {PSE} stacks; we cite the
+                  original {Halo} paper for both unless a {Halo}2-
+                  specific construction detail is invoked.}
+}
+
+@misc{ben-sasson-2018-stark,
+  author       = {Eli Ben-Sasson and Iddo Bentov and Yinon Horesh and
+                  Michael Riabzev},
+  title        = {Scalable, transparent, and post-quantum secure
+                  computational integrity},
+  year         = 2018,
+  howpublished = {Cryptology {ePrint} Archive, Paper 2018/046},
+  note         = {\url{https://eprint.iacr.org/2018/046}.}
+}
+
+@misc{plonky2-2022,
+  author       = {{Polygon Zero}},
+  title        = {Plonky2: Fast Recursive Arguments with {PLONK} and {FRI}},
+  year         = 2022,
+  howpublished = {\url{https://github.com/0xPolygonZero/plonky2}},
+  note         = {Self-published technical paper; the upstream
+                  repository carries a deprecation notice as of 2025
+                  redirecting users to {Plonky}3 for new development.
+                  Cited here for the construction lineage that the
+                  C5 configuration in \S\ref{sec:configurations}
+                  inherits.}
+}
+
+@misc{plonky3-spec,
+  author       = {{Polygon Zero Team}},
+  title        = {Plonky3},
+  year         = 2024,
+  howpublished = {\url{https://github.com/Plonky3/Plonky3}},
+  note         = {Toolkit providing primitives (polynomial-commitment
+                  schemes, hash families, field abstractions) for
+                  implementing polynomial {IOP}s. Successor to
+                  {Plonky}2.}
+}
+
+@inproceedings{kothapalli-2022-nova,
+  author    = {Abhiram Kothapalli and Srinath Setty and Ioanna Tzialla},
+  title     = {{Nova}: Recursive Zero-Knowledge Arguments from
+                Folding Schemes},
+  booktitle = {Advances in Cryptology -- {CRYPTO} 2022},
+  year      = 2022,
+  doi       = {10.1007/978-3-031-15985-5\_13},
+  note      = {{IACR} {ePrint} 2021/370,
+                \url{https://eprint.iacr.org/2021/370}.}
+}
+
+@inproceedings{setty-2020-spartan,
+  author    = {Srinath T.\ V.\ Setty},
+  title     = {{Spartan}: Efficient and General-Purpose
+                {zkSNARKs} without Trusted Setup},
+  booktitle = {Advances in Cryptology -- {CRYPTO} 2020},
+  year      = 2020,
+  pages     = {704--737},
+  doi       = {10.1007/978-3-030-56877-1\_25},
+  note      = {{IACR} {ePrint} 2019/550,
+                \url{https://eprint.iacr.org/2019/550}.}
+}
+
+% ─── §3 curves and security ──────────────────────────────────────────
+
+@misc{bowe-2017-bls12381,
+  author       = {Sean Bowe},
+  title        = {{BLS12-381}: New zk-{SNARK} Elliptic Curve Construction},
+  year         = 2017,
+  month        = mar,
+  howpublished = {Electric Coin Company blog post, 11 March 2017},
+  note         = {\url{https://electriccoin.co/blog/new-snark-curve/}.
+                  Canonical attribution for the {BLS12-381} parameter
+                  choice used by C1 in \S\ref{sec:configurations}; the
+                  underlying curve family follows
+                  Barreto--Lynn--Scott~\cite{barreto-2003-bls}.}
+}
+
+@inproceedings{barreto-2003-bls,
+  author    = {Paulo S.\ L.\ M.\ Barreto and Ben Lynn and
+               Michael Scott},
+  title     = {Constructing Elliptic Curves with Prescribed
+               Embedding Degrees},
+  booktitle = {Security in Communication Networks -- {SCN} 2002},
+  year      = 2003,
+  pages     = {257--267},
+  doi       = {10.1007/3-540-36413-7\_19}
+}
+
+@inproceedings{barreto-2005-bn254,
+  author    = {Paulo S.\ L.\ M.\ Barreto and Michael Naehrig},
+  title     = {Pairing-Friendly Elliptic Curves of Prime Order},
+  booktitle = {Selected Areas in Cryptography -- {SAC} 2005},
+  year      = 2005,
+  doi       = {10.1007/11693383\_22},
+  note      = {{IACR} {ePrint} 2005/133,
+                \url{https://eprint.iacr.org/2005/133}. Conference
+                {SAC} 2005, Kingston, ON; Springer post-proceedings
+                volume 3897 published 2006.}
+}
+
+@inproceedings{kim-barbulescu-2016,
+  author    = {Taechan Kim and Razvan Barbulescu},
+  title     = {Extended Tower Number Field Sieve: A New
+                Complexity for the Medium Prime Case},
+  booktitle = {Advances in Cryptology -- {CRYPTO} 2016},
+  year      = 2016,
+  doi       = {10.1007/978-3-662-53018-4\_20},
+  note      = {{IACR} {ePrint} 2016/526,
+                \url{https://eprint.iacr.org/2016/526}.
+                Effectively reduced the practical security of {BN254}
+                from $\sim$128 classical bits to $\sim$100; load-
+                bearing for the C2 fit summary in
+                \S\ref{sec:cfg-c2}.}
+}
+
+@misc{hopwood-2020-pasta,
+  author       = {Daira Hopwood},
+  title        = {The {Pasta} Curves for {Halo}2 and Beyond},
+  year         = 2020,
+  howpublished = {Electric Coin Company blog post},
+  note         = {Originally at \url{electriccoin.co/blog/the-pasta-curves-for-halo-2-and-beyond/};
+                  ECC blog domain redirects to \texttt{zodl.com} as
+                  of 2026.}
+}
+
+@inproceedings{don-2019-fiat-shamir,
+  author    = {Jelle Don and Serge Fehr and Christian Majenz and
+                Christian Schaffner},
+  title     = {Security of the {F}iat-{S}hamir Transformation in the
+                Quantum Random-Oracle Model},
+  booktitle = {Advances in Cryptology -- {CRYPTO} 2019, Part {II}},
+  year      = 2019,
+  pages     = {356--383},
+  doi       = {10.1007/978-3-030-26951-7\_13},
+  note      = {{IACR} {ePrint} 2019/190,
+                \url{https://eprint.iacr.org/2019/190}.}
+}
+
+% ─── §3, §5, §6, §7, §8 host functions and chain protocol upgrades ───
+
+% Verified 2026-04-29 against the stellar-protocol repository and
+% the cap-0059.md / cap-0074.md / cap-0075.md source files. Earlier
+% drafts of this paper used the wrong CAP number (0058 → 0059); the
+% wrong number is no longer cited anywhere in the source tree.
+
+@misc{stellar-cap-0059,
+  author       = {Jay Geng},
+  title        = {{CAP-0059}: Host functions for {BLS12-381}},
+  year         = 2024,
+  howpublished = {Stellar Core Advancement Proposal, Final},
+  note         = {\url{https://github.com/stellar/stellar-protocol/blob/master/core/cap-0059.md}.
+                  Activated in Stellar Protocol 22. Adds 16 host
+                  functions across $\mathbb{G}_1$, $\mathbb{G}_2$,
+                  $\mathbb{F}_r$ scalar arithmetic, hash-to-curve, and
+                  the multi-pairing check that {C1} ($R_{\mathsf{Upd}}$
+                  verifier) reduces to.}
+}
+
+@misc{stellar-cap-0074,
+  author       = {{Stellar Development Foundation}},
+  title        = {{CAP-0074}: Host functions for {BN254}},
+  year         = 2025,
+  howpublished = {Stellar Core Advancement Proposal, Final},
+  note         = {\url{https://github.com/stellar/stellar-protocol/blob/master/core/cap-0074.md}.
+                  Activated in Stellar Protocol 25. Adds {BN254} G1
+                  point addition, scalar multiplication, and pairing
+                  check. Materially changes the migration cost of
+                  C2-on-Stellar (\S\ref{sec:mig-c2}).}
+}
+
+@misc{stellar-cap-0075,
+  author       = {{Stellar Development Foundation}},
+  title        = {{CAP-0075}: Cryptographic Primitives for
+                  {P}oseidon and {P}oseidon2 Hash Functions},
+  year         = 2025,
+  howpublished = {Stellar Core Advancement Proposal, Final},
+  note         = {\url{https://github.com/stellar/stellar-protocol/blob/master/core/cap-0075.md}.
+                  Activated in Stellar Protocol 25. Adds {P}oseidon
+                  and {P}oseidon2 \emph{permutation} primitives over
+                  {BLS12-381} $\mathbb{F}_r$ and {BN254}
+                  $\mathbb{F}_r$. The {CAP}'s rationale explicitly
+                  scopes \emph{out} {NTT}, {G}oldilocks-field
+                  arithmetic, and {FRI}-related primitives; this is
+                  the load-bearing host-function gap for the C7 row
+                  in \S\ref{sec:cfg-c7} and \S\ref{sec:mig-c7}.}
+}
+
+% ─── §5, §6 Ethereum host functions ──────────────────────────────────
+
+@misc{eip-2537,
+  author       = {Alex Vlasov and Kelly Olson and Alex Stokes and
+                  Antonio Sanso},
+  title        = {{EIP-2537}: Precompile for {BLS12-381} curve
+                  operations},
+  year         = 2020,
+  howpublished = {Ethereum Improvement Proposal, Standards Track},
+  note         = {Created 21 February 2020.
+                  \url{https://eips.ethereum.org/EIPS/eip-2537}. Not
+                  activated on Ethereum mainnet as of 2026-04; this
+                  is the load-bearing factual claim in
+                  \S\ref{sec:cfg-c2}'s observation that {C2} cannot
+                  migrate in place to {BLS12-381}.}
+}
+
+% ─── §1, §2, §5, §9 motivating systems and prior privacy primitives ──
+
+@misc{pertsev-2019-tornado,
+  author       = {Alexey Pertsev and Roman Semenov and Roman Storm},
+  title        = {Tornado {C}ash Privacy Solution Version 1.4},
+  year         = 2019,
+  month        = dec,
+  howpublished = {Project whitepaper, 17 December 2019},
+  note         = {Mirror at
+                  \url{https://berkeley-defi.github.io/assets/material/Tornado\%20Cash\%20Whitepaper.pdf};
+                  the original \texttt{tornado.cash} domain is no
+                  longer reachable as of 2026-04 due to operational
+                  status of the project.}
+}
+
+@misc{semaphore-2024,
+  author       = {{Privacy and Scaling Explorations}},
+  title        = {Semaphore Protocol Specification, Version 4},
+  year         = 2024,
+  howpublished = {\url{https://docs.semaphore.pse.dev/}},
+  note         = {Current major release {V}4 (announced 2024); the
+                  trusted-setup ceremony for {V}4 completed 13 July
+                  2024.}
+}
+
+@misc{aztec-2024,
+  author       = {{Aztec Network}},
+  title        = {Aztec Protocol Specification},
+  year         = 2024,
+  howpublished = {\url{https://docs.aztec.network/}},
+  note         = {Specification is in flux through the project's
+                  testnet phases; cited here for the
+                  verifier-as-rollup posture of the C3 configuration
+                  (\S\ref{sec:cfg-c3}). A specific spec version is
+                  not pinned because {C3}'s salient axis values are
+                  stable across the recent versions we surveyed.}
+}
+
+@misc{sep-onym,
+  author       = {Rinat Enikeev},
+  title        = {{SEP-XXXX}: SNARK-Gated Group Registry on Stellar},
+  year         = 2026,
+  howpublished = {Stellar Ecosystem Proposal Draft v0.0.6,
+                  30 March 2026},
+  note         = {Cite-key locked pending acceptance and
+                  {SEP}-number assignment. For double-blind
+                  submission, the \texttt{author} field of this
+                  entry must be redacted.}
+}
+
+@inproceedings{chase-2020-signal-pgs,
+  author    = {Melissa Chase and Trevor Perrin and Greg Zaverucha},
+  title     = {The Signal Private Group System and Anonymous
+                Credentials Supporting Efficient Verifiable
+                Encryption},
+  booktitle = {Proceedings of the 2020 {ACM} {SIGSAC} Conference on
+                Computer and Communications Security ({CCS} '20)},
+  year      = 2020,
+  doi       = {10.1145/3372297.3417887},
+  note      = {{IACR} {ePrint} 2019/1416,
+                \url{https://eprint.iacr.org/2019/1416}. Preprint
+                dates to 2019; {CCS} version published 2020 and is
+                the load-bearing prior-art reference for the
+                operator-removed framing in \S\ref{sec:related}.}
+}

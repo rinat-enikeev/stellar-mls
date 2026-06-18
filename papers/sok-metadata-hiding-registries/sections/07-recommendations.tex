@@ -1,0 +1,167 @@
+\section{Recommendations by Deployment Profile}
+\label{sec:recommendations}
+
+The taxonomy of \S\ref{sec:dimensions}, the cost and trust analysis
+of \S\ref{sec:analysis}, and the migration analysis of
+\S\ref{sec:migration} together imply that \emph{no configuration
+dominates}. Different deployment profiles --- different priorities
+weighted at different operational scales --- land on different
+configurations. We present four profiles. Each is intentionally
+narrow, so that a real deployment that lies between two profiles can
+inspect both and decide. Table~\ref{tab:recommendations} summarizes.
+
+\subsection{Cost-optimized profile}
+\label{sec:rec-cost}
+
+\textbf{Priority.} Minimize USD per verification at the deployed scale.
+PQ posture, validator decentralization, and jurisdictional
+constraints are accepted as given.
+
+\textbf{Recommendation.} \textbf{C1} (Stellar~+~BLS12-381~+~Groth16).
+The combination of native pairing host
+functions~\cite{stellar-cap-0059} and Stellar's flat-fee resource
+metering puts C1 at the cheap end of Table~\ref{tab:cost}. C2
+(Ethereum L1) is structurally similar but loses on the L1 fee
+market; the order of magnitude separating the two is consistent
+across the deployment-volume range we examined.
+
+\textbf{Trade-offs.} Per-circuit MPC ceremony is the dominant
+residual trust assumption; relation upgrades require fresh
+ceremonies. PQ posture is zero. Stellar's $\sim$30-validator SCP set
+is at the lower end of decentralization within the surveyed
+configurations.
+
+\textbf{Non-recommendation.} Cost-optimized deployments should not
+adopt C5 or C6: the L2-anchored configurations carry sequencer trust
+overhead the cost-optimized profile does not benefit from, and FRI
+proof sizes invert the per-byte fee economics on chains without FRI
+host functions.
+
+\subsection{Post-quantum-prioritized profile}
+\label{sec:rec-pq}
+
+\textbf{Priority.} Minimize residual cryptographic risk under a
+fault-tolerant adversary running Shor on the SNARK's underlying
+hardness assumption. Cost, validator count, and operational maturity
+are accepted as a function of the chosen anchor.
+
+\textbf{Recommendation.} \textbf{C6} (STARK over Goldilocks anchored
+on a FRI-aware chain). C6 is the unique configuration in the
+surveyed set that combines transparent setup with hash-based
+post-quantum security and a deployable verification host. Anchor
+selection within C6 is a sub-decision: StarkNet has a centralized
+prover and is changing rapidly; a self-hosted FRI-aware rollup is an
+option for deployments at scale.
+
+\textbf{Trade-offs.} Verification cost is one to two orders of
+magnitude higher than C1/C2 in absolute USD; proof sizes are 50--200
+KB; the operational stack (Cairo, the StarkNet runtime, and the
+proof aggregator) is distinct from the Ethereum-derived stacks the
+deployer's team is more likely to be familiar with.
+
+\textbf{Non-recommendation.} The PQ-prioritized profile should
+\emph{not} adopt C5 (Plonky2/3~+~KZG over BN254). The configuration's
+inner FRI prover is post-quantum-secure but its outer KZG wrap
+nullifies that property at the verification layer, and the
+configuration is sometimes marketed as PQ-ready in ways the actual
+verification chain does not support
+(\S\ref{sec:cfg-c5}).
+
+\subsection{Censorship-resistance-prioritized profile}
+\label{sec:rec-censorship}
+
+\textbf{Priority.} Maximize the difficulty of preventing an
+authorized state-transition transaction from reaching inclusion.
+Three sub-properties are weighted: validator-set size and stake
+distribution, sequencer / proposer dependence, and trusted-setup
+single-point-of-failure.
+
+\textbf{Recommendation.} \textbf{C2} (Ethereum L1~+~BN254~+~Groth16)
+\textbf{with a multi-contributor MPC ceremony}. Ethereum L1's
+$\sim$10$^6$-staker validator set dominates the censorship-resistance
+column of Table~\ref{tab:trust} by orders of magnitude over every
+other surveyed anchor. The per-circuit MPC trusted setup is the
+dominant residual single-point-of-failure: with at least one honest
+contributor, the trapdoor is unknown to any single adversary, and
+the censorship-resistance profile additively benefits from a
+ceremony with $n$ public, geographically and jurisdictionally
+diverse contributors.
+
+\textbf{Trade-offs.} Cost is higher than C1; the per-circuit
+ceremony cost is non-trivial and recurs on relation upgrades; PQ
+posture is zero.
+
+\textbf{Non-recommendation.} L2-anchored configurations (C3, C5)
+introduce sequencer dependence that the censorship-resistance
+profile cannot accept regardless of the L1-anchor-only fallback's
+operational properties; the fallback is a recovery path, not a
+real-time censorship resistance property. C6 anchored on StarkNet
+loses on the same axis.
+
+\subsection{Jurisdictional-constraints profile}
+\label{sec:rec-jurisdiction}
+
+\textbf{Priority.} Compliance with operational constraints imposed
+by regulation, sanctions enforcement, data-residency requirements,
+or contractual obligations to specific jurisdictions. The
+constraints are not cryptographic; the deployment question is
+whether any of the surveyed configurations are operationally
+acceptable.
+
+\textbf{Recommendation.} The honest answer is that the surveyed
+configurations \textbf{do not directly serve this profile}. A
+permissionless public chain hosts the registry whether or not the
+deploying entity wishes it, and the metadata-hiding properties the
+configuration provides operate against an adversary that includes
+regulators by definition. A jurisdiction-constrained deployment
+should consider:
+\begin{itemize}
+  \item A \textbf{private rollup} with the configuration's relation
+    structure preserved but the verifier hosted on permissioned
+    infrastructure. This sacrifices the metadata-hiding-against-the-
+    operator property in exchange for jurisdictional control.
+  \item An \textbf{off-chain registry} backed by a cryptographic
+    audit trail. The advancement abstraction degrades, but
+    verifiability against a public audit set is preserved.
+  \item A \textbf{redeployment on a permissioned anchor} (Hyperledger
+    Besu, Quorum, etc.) with the same SNARK family but
+    permissioned validation.
+\end{itemize}
+None of these are configurations in the surveyed taxonomy. We flag
+the gap rather than paper over it.
+
+\textbf{Non-recommendation.} A jurisdiction-constrained deployment
+should not adopt C1, C2, C3, C4, C5, or C6 without first answering
+the operator question: against whom are the metadata-hiding
+properties offered? If the answer includes a regulator, the
+metadata-hiding property and the regulatory-compliance property are
+in direct tension and must be resolved before any taxonomy choice.
+
+\subsection{Summary}
+\label{sec:rec-summary}
+
+\begin{table}[t]
+  \centering
+  \caption{Recommendations by deployment profile.}
+  \label{tab:recommendations}
+  \begin{tabularx}{\columnwidth}{@{}lXl@{}}
+    \toprule
+    Profile & Recommendation & Don't \\
+    \midrule
+    Cost              & C1 & C5, C6 \\
+    Post-quantum      & C6 & C5 \\
+    Censorship res.   & C2 (multi-ctb.\ MPC) & C3, C5, StarkNet-C6 \\
+    Jurisdictional    & None of C1--C6 & C1--C6 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+The table is intentionally short and the columns intentionally narrow.
+A deployment that does not match any single profile should treat the
+profiles as anchor points and weight between them. The migration
+analysis of \S\ref{sec:migration} provides the cost of moving from a
+chosen starting configuration toward an alternative profile; the
+combined reading is that profile-conditional recommendations are
+robust under small priority shifts, but flip to a different
+recommendation when the priority weighting changes more than one
+profile's worth.

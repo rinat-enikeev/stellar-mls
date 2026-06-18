@@ -1,0 +1,136 @@
+\section{Open Problems}
+\label{sec:open}
+
+The taxonomy of \S\ref{sec:dimensions}, the analysis of
+\S\ref{sec:analysis}, and the migration matrix of
+\S\ref{sec:migration} together make seven open problems legible. Some
+are research questions that have been studied but not closed; others
+are engineering gaps that no single deployer can close on their own.
+We list them in decreasing order of how directly they would
+unblock the recommendations of \S\ref{sec:recommendations}.
+
+\paragraph{(1) Cheap and post-quantum.} Section~\ref{sec:analysis}'s
+synthesis named three configuration regimes and observed that the
+cheap-and-PQ-ready cell is empty. No surveyed configuration combines
+native-host-function-cheap verification with hash-based
+post-quantum security. The closest candidates are C7 (blocked on
+host functions) and C6 (PQ-ready but at proof sizes that invert
+per-byte fee economics on most anchor chains). Closing this gap
+requires either a chain protocol upgrade adding FRI-friendly host
+functions to a chain that currently has only pairing host functions
+(\S\ref{sec:open-host} below), or a SNARK construction that targets
+both pairing-friendly verifier costs and post-quantum security
+simultaneously --- which is one phrasing of open problem (4).
+
+\paragraph{(2) Hash-based recursion at production proof
+sizes.} Plonky2~\cite{plonky2-2022} and
+Plonky3~\cite{plonky3-spec} achieve competitive prover wall-clock by
+aggressive use of small fields and FRI commitments, and they support
+recursion. However, recursive FRI proofs do not currently land at
+proof sizes competitive with KZG-wrapped equivalents on
+size-sensitive anchors. The lower bound on FRI proof size at fixed
+security level is a research-level question with active
+work; for an applied SoK reader, the operationally-relevant
+question is when the existing proof-size gap closes by a factor
+sufficient to make pure-FRI L1-anchored deployment economical.
+
+\paragraph{(3) Non-pairing host functions on chains whose existing
+host-function set is curve-centric.}
+\label{sec:open-host}
+Stellar's host-function trajectory is the cleanest illustration of the
+shape of this gap. Protocol 22 added {BLS12-381} host
+functions~\cite{stellar-cap-0059}; Protocol 25 added {BN254}
+host functions~\cite{stellar-cap-0074} and Poseidon / Poseidon2
+permutation primitives over {BLS12-381}~$\mathbb{F}_r$ and
+{BN254}~$\mathbb{F}_r$~\cite{stellar-cap-0075}. The
+trajectory tracks pairing-based and Poseidon-arithmetization
+deployments well; what it does not track is the FRI stack.
+{CAP-0075}'s rationale explicitly scopes \emph{out} {NTT}
+primitives, Goldilocks-field arithmetic, and FRI-related operations,
+on the grounds that exposing permutation primitives over the
+existing scalar fields is more flexible than introducing a new field
+arithmetic. The decision is defensible in isolation but it leaves
+the FRI configurations (C6, C7) with no host-function support on the
+chain. The right ABI for a chain that wants to support both
+pairing-based and FRI-based SNARKs simultaneously is itself an open
+design question, and surveys of which primitives are most reusable
+across SNARK families are currently missing from the literature.
+
+\paragraph{(4) Transparent-setup pairings.} Every pairing-based
+SNARK in current production deployment requires a setup ceremony,
+either per-circuit (C1, C2) or universal-updatable (C3, C5). A
+transparent-setup pairing-based construction --- one that preserves
+the verifier-cost properties that make pairing-based schemes
+attractive on chains with pairing precompiles, while eliminating the
+ceremony --- would land at a particularly useful point in the
+taxonomy. We are not aware of a deployed instantiation. Spartan
+without elliptic-curve commitments achieves transparent setup at the
+cost of pairing-friendly verification; closing the gap in either
+direction is open.
+
+\paragraph{(5) PQ migration without a proof-system change.} The §6
+migration matrix shows that every PQ-ward migration entails either an
+anchor-chain change or a SNARK-family change. A migration that
+preserves the proof system, the ceremony output, and the chain
+anchor while upgrading the post-quantum class --- by, for instance,
+replacing the underlying curve with a PQ-secure pairing analogue ---
+does not currently exist as a construction. Whether a curve-only
+substitution that preserves the Groth16 verifier shape is achievable
+is an open cryptographic question; if it is achievable, it would
+collapse the cost of \S\ref{sec:recommendations}'s
+PQ-prioritized recommendation by allowing C1 deployers to migrate in
+place.
+
+\paragraph{(6) Lattice-based SNARKs in production.} Lattice-based
+SNARK constructions are an active area of cryptographic research, but
+no production deployment we surveyed uses them. The reasons are
+operational: prover memory is high; verifier costs are not yet
+competitive with KZG-based schemes on chains with pairing precompiles;
+no compiler from a circuit DSL to a deployed verifier exists at the
+maturity level of the Groth16, PLONK, or STARK toolchains. Tracking
+lattice-SNARK readiness for inclusion in a future revision of the
+taxonomy is a moving target; the question is when, not whether, they
+become a deployable point.
+
+\paragraph{(7) Formal verification of the full SNARK pipeline.}
+Existing formal-verification work in the SoK literature largely
+covers the underlying relation: a correctness theorem that an honest
+prover can produce an accepting proof, a soundness theorem that no
+adversary can. The pipeline from the relation to the deployed
+verifier --- the circuit compiler, the proving-key serialization,
+the contract that calls host functions, the host-function semantics
+--- is verified piecemeal at best. End-to-end verification of a
+metadata-hiding registry deployment, from a high-level relation
+specification through to the on-chain verifier bytecode, is an
+engineering project at the scale of the seL4 verification effort and
+has not been attempted. The §7.3 censorship-resistance profile and
+the §7.4 jurisdictional profile would both materially benefit from
+such a verification existing.
+
+\paragraph{(8) Operator-aware metadata-hiding against
+jurisdiction-bound adversaries.} \S\ref{sec:rec-jurisdiction}
+identified an adversary class --- regulators, sanctions enforcement,
+contractual oversight bodies --- that the surveyed configurations'
+threat models do not address. The cryptographic literature on
+\emph{verifiable disclosure} and on \emph{auditable
+zero-knowledge}~\cite{don-2019-fiat-shamir} has begun to address this
+class, but none of those constructions is sufficiently mature to add
+to the taxonomy as a deployable configuration. A future SoK revision
+should treat jurisdictional-aware metadata-hiding as its own
+configuration class rather than as a non-recommendation. We flag
+this here so that future work can build on the present taxonomy
+without re-doing it.
+
+\subsection{Synthesis}
+
+The eight open problems above cluster into three groups: chain-host
+gaps (1, 3) that block deployment patterns the cryptography already
+supports; cryptographic-construction gaps (2, 4, 5, 6) that require
+research progress; and verification and threat-model gaps (7, 8) that
+require engineering at scale outside any single deployer's
+capacity. The taxonomy's value is partly in making the
+\emph{interactions} between these gaps visible: closing (3) without
+also closing (2) yields a deployable hypothetical C7 at competitive
+cost but inferior proof size; closing (5) without also closing (6)
+preserves the deployment shape of C1 / C2 but does not introduce a
+fundamentally new point in the design space.

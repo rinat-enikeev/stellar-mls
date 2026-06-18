@@ -1,0 +1,28 @@
+\begin{abstract}
+A metadata-hiding group registry --- a public-state object whose
+membership is recorded as an opaque commitment and whose state
+transitions are gated by zero-knowledge proofs against the prior state
+--- is an emerging primitive instantiated by Tornado Cash, Semaphore,
+Aztec, and the Stellar Ecosystem Proposal under recent discussion.
+The literature surveys these instantiations as bundled
+(curve, SNARK, chain) triples, leaving designers without a taxonomy
+indexed by the deployment constraints that in practice determine which
+proof system is reachable. We propose a six-axis taxonomy --- anchor
+chain, SNARK system, curve and in-circuit hash, post-quantum stance,
+trusted-setup model, and verification host --- and analyze seven
+concrete configurations across five comparison dimensions. The
+Stellar~+~BLS12-381~+~Groth16 configuration is measured by a
+first-party benchmark harness whose methodology is documented in the
+paper's source repository;
+all other configurations cite published benchmarks date-stamped to
+2026-04. Our central finding is that no configuration dominates: four
+deployment profiles --- cost-optimized, post-quantum-prioritized,
+censorship-resistance-prioritized, and jurisdiction-constrained ---
+each select a different point in the design space, and one (the
+jurisdiction-constrained profile) is not served by any surveyed
+configuration. We accompany the taxonomy with a migration-path
+catalogue that classifies each PQ-ward transformation as ready,
+blocked on chain host functions, blocked on tooling maturity, or open
+in cryptographic construction; the cheap-and-post-quantum-ready cell
+of the design space is currently empty.
+\end{abstract}

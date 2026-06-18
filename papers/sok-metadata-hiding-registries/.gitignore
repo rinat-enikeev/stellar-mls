@@ -1,0 +1,21 @@
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+
+# Generated PDF — regenerate locally with `make`. Drop from .gitignore
+# at submission time if a fixed PDF should accompany the source.
+main.pdf
+
+# Benchmark outputs — committed only when refreshed deliberately for
+# the SoK's reference-machine measurement; not during normal dev.
+benchmarks/c1/results.json
+benchmarks/c1/*.tex

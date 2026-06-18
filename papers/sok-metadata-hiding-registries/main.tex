@@ -1,0 +1,90 @@
+% SoK: Metadata-Hiding Group Registries with SNARK-Gated State Changes
+%
+% Working venue: IEEE S&P (most space-constrained of the candidate
+% venues — S&P, USENIX Security, CCS, FC). Final venue selected at
+% integration pass; class-file swap is mechanical.
+%
+% Build:  make           → main.pdf
+%         make clean
+%         make benchmarks → re-runs the C1 first-party row, regenerates
+%                           table cells from results.json
+
+\documentclass[conference]{IEEEtran}
+
+% ─── Anonymization toggle ────────────────────────────────────────────
+% Set to true for double-blind submission; author block collapses.
+\newif\ifanonymous
+\anonymousfalse  % flip to \anonymoustrue for submission
+
+% ─── Packages ────────────────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,shapes.geometric,fit}
+\usepackage{xcolor}
+\usepackage{cite}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+\usepackage{cleveref}
+
+% Theorem environments (used sparingly — this is a SoK, not a proofs paper).
+\newtheorem{property}{Property}
+\newtheorem{definition}{Definition}
+
+% ─── Title and authors ───────────────────────────────────────────────
+\title{SoK: Metadata-Hiding Group Registries with\\SNARK-Gated State Changes}
+
+\ifanonymous
+  \author{\IEEEauthorblockN{Anonymous Submission}}
+\else
+  \author{
+    \IEEEauthorblockN{TODO Author Name}
+    \IEEEauthorblockA{TODO Affiliation\\
+                      TODO email}
+  }
+\fi
+
+% ─── Document ────────────────────────────────────────────────────────
+\begin{document}
+\maketitle
+
+\input{sections/00-abstract}
+
+\input{sections/01-introduction}
+\input{sections/02-problem}
+\input{sections/03-design-dimensions}
+\input{sections/04-analysis}
+\input{sections/05-configurations}
+\input{sections/06-migration}
+\input{sections/07-recommendations}
+\input{sections/08-open-problems}
+\input{sections/09-related-work}
+\input{sections/10-conclusion}
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\appendices
+
+\section{Benchmark harness}
+\label{app:bench}
+
+The first-party measurements in row C1 of
+\S\ref{sec:analysis} are produced by the harness at
+\texttt{benchmarks/c1/} in this paper's source tree. \texttt{methodology.md} documents the measurement contract
+(what is and is not timed; hardware and software pinning;
+\texttt{results.json} schema). \texttt{run.sh} executes the harness
+and writes \texttt{results.json}, which the table cells in
+Tables~\ref{tab:cost}--\ref{tab:pq} consume via generated
+\texttt{.tex} snippets. Per-call sampling instrumentation is
+deferred from this draft pending a dedicated benchmark
+binary; the current harness reports a coarse
+\texttt{wall\_clock\_ms\_total} only.
+
+\end{document}
